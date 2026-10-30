@@ -9,15 +9,18 @@ AIME 评测数据在远端服务器上的**搬运、打包与看板**工程。
 
 ```
 servers.conf                    # 服务器清单（ssh 别名、端口、密钥路径）
-scripts/pack_aime_input.sh      # 把 1_aime 评测输入流式打成单个 tar.zst
+scripts/pack_aime_input.sh      # 把 AIME 评测输入流式打成单个 tar.zst
 docs/aime-input-packaging.md    # 打包流程、压缩基准、参数取舍、踩坑记录
+docs/aime-data-inventory.md     # 2026-10-30 那份数据的解压体量与目录拆解
+docs/manifests/                 # 历史包的逐文件清单（数据删了，清单留着）
 ```
 
 ## 快速开始
 
 ```bash
 scp scripts/pack_aime_input.sh eval_data:/tmp/
-ssh eval_data 'chmod +x /tmp/pack_aime_input.sh && /tmp/pack_aime_input.sh'
+# 打包范围由调用方显式给出（不传则默认两棵目录树，仅作省事用）
+ssh eval_data 'chmod +x /tmp/pack_aime_input.sh && /tmp/pack_aime_input.sh <目录…>'
 ```
 
 产物落在 `/mnt/fin_bench/aime_data/aime_input_<日期>.tar.zst`，旁边附 `.manifest.txt`
@@ -31,9 +34,11 @@ ssh eval_data 'chmod +x /tmp/pack_aime_input.sh && /tmp/pack_aime_input.sh'
 
 | 数据 | 位置（远端） | 规模 |
 |---|---|---|
-| AIME 流失用户输入 | `…/2_eval_input/1_lost_user_eval/.archive/` | 34 文件 / ~8.9 GB |
-| AIME 日常输入 | `…/2_eval_input/0_daily_eval_input/` | 83 文件 / ~11.6 GB |
-| 归档产物 | `/mnt/fin_bench/aime_data/` | `aime_input_20261030.tar.zst` 等 |
+| AIME 流失用户输入 | `…/2_eval_input/1_lost_user_eval/.archive/` | 34 文件 / 4.45 GB / 13,099 条 |
+| AIME 日常输入 | `…/2_eval_input/0_daily_eval_input/` | 83 文件 / 5.82 GB / 11,991 条 |
+| 归档产物 | `/mnt/fin_bench/aime_data/` | **已清空**（2026-10-30），按需重打 |
+
+解压后体量、目录结构、逐日期记录数见 [docs/aime-data-inventory.md](docs/aime-data-inventory.md)。
 
 `0_daily_eval_input` 是**实时目录**，流水线在持续写入；打包按快照语义处理，详见流程文档 §5。
 
