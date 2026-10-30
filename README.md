@@ -23,8 +23,9 @@ ssh eval_data 'chmod +x /tmp/pack_aime_input.sh && /tmp/pack_aime_input.sh'
 产物落在 `/mnt/fin_bench/aime_data/aime_input_<日期>.tar.zst`，旁边附 `.manifest.txt`
 （sha256、参数、耗时、还原命令、逐文件清单）。
 
-默认 `LEVEL=15`：10.3 GB 输入约 **95 秒 / 588 MB（19×）**。要压到极致用 `LEVEL=19`
-（395 秒 / 530 MB）。依据见 [docs/aime-input-packaging.md](docs/aime-input-packaging.md)。
+默认 `LEVEL=12`：10.3 GB 输入约 **47 秒 / 620 MB（16.6×）**。要更小用 `LEVEL=15`
+（129 秒 / 597 MB），极致压缩用 `LEVEL=19`（392 秒 / 539 MB / 19.06×）。
+依据见 [docs/aime-input-packaging.md](docs/aime-input-packaging.md)。
 
 ## 数据现状
 

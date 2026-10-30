@@ -3,8 +3,8 @@
 # pack_aime_input.sh — 把 AIME 评测输入目录流式打包成单个 tar.zst
 #
 # 用法（脚本在远端 eval_data 上执行，见 docs/aime-input-packaging.md）:
-#   ./pack_aime_input.sh                                  # 默认 -15 / nproc 线程
-#   LEVEL=19 ./pack_aime_input.sh --tag max               # 极致压缩档
+#   ./pack_aime_input.sh                                  # 默认 -12 / nproc 线程（10.3GB≈47s）
+#   LEVEL=19 ./pack_aime_input.sh --tag max               # 极致压缩档（10.3GB≈392s）
 #   ./pack_aime_input.sh --tag 1019 1_lost_user_eval/.archive
 #   OUT_FILE=/tmp/x.tar.zst ./pack_aime_input.sh --no-verify   # 演练
 #
@@ -18,7 +18,7 @@ set -Eeuo pipefail
 
 SRC_BASE=${SRC_BASE:-/mnt/fin_bench/eval_data/1_aime/2_eval_input}
 DST_DIR=${DST_DIR:-/mnt/fin_bench/aime_data}
-LEVEL=${LEVEL:-15}
+LEVEL=${LEVEL:-12}
 THREADS=${THREADS:-$(nproc 2>/dev/null || echo 8)}
 VERIFY=1
 TAG=""
@@ -99,8 +99,9 @@ mv -f "$PART" "$OUT_FILE"
 PACKED=$(stat -c%s "$OUT_FILE")
 SHA=$(sha256sum "$OUT_FILE" | cut -d' ' -f1)
 
-awk -v r="$RAW" -v p="$PACKED" 'BEGIN{printf "%.2f%%  (%.2fx)", p/r*100, r/p}' |
-  { read -r RATIO; say "完成 ${RATIO}  ${PACKED} B / ${RAW} B  用时 ${ELAPSED}s  平均 $(awk -v r="$RAW" -v t="$ELAPSED" 'BEGIN{printf "%.0f", r/t/1e6}') MB/s"; }
+RATIO=$(awk -v r="$RAW" -v p="$PACKED" -v t="$ELAPSED" \
+  'BEGIN{printf "%.2f%% (%.2fx)  %.0f MB/s", p/r*100, r/p, (t>0 ? r/t/1e6 : 0)}')
+say "完成  ${RATIO}  ${PACKED} B / ${RAW} B  用时 ${ELAPSED}s"
 
 cat >"${OUT_FILE%.tar.zst}.manifest.txt" <<EOF
 # $(basename "$OUT_FILE")
