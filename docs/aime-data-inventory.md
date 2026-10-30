@@ -1,9 +1,16 @@
 # AIME 输入数据拆解（2026-10-30 快照）
 
-本文件记录 2026-10-30 打进 `aime_input_20261030.tar.zst` 的那份数据的**解压后体量与结构**。
-压缩包已于同日按要求从 `aime_data` 删除；逐文件清单留在
-[`manifests/aime_input_20261030.manifest.txt`](manifests/aime_input_20261030.manifest.txt)，
-原始数据仍在 `…/2_eval_input/` 下，可随时按需重打。
+本文件记录 2026-10-30 那份数据的**解压后体量与结构**。
+
+`aime_data` 里现在放的是全量口径：`2_eval_input_20261030.tar.zst`，
+**287 文件 / 10,648,360,770 B / 675 MB（6.34% / 15.8×）**，包内结构与源目录逐层一致
+（顶层 `2_eval_input/`）。
+
+下面第 1–5 节的数字来自当天更早的**窄口径**包（只含 `1_lost_user_eval/.archive` 与
+`0_daily_eval_input`，117 文件 / 10,271,219,449 B），逐日期明细照旧可用；全量口径比它多
+170 个文件，即 `1_lost_user_eval/aime_expert`、`1_lost_user_eval/aime_fast` 及其
+`input_files/`、`output_files/` 附件，外加一个 `.package-pipeline.lock`。
+窄口径的逐文件清单保留在 [`manifests/aime_input_20261030.manifest.txt`](manifests/aime_input_20261030.manifest.txt)。
 
 ## 1. 体量
 
