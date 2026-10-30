@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="evalboard">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>评测看板 · 问财 / AIME</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230F766E'/%3E%3Crect x='7' y='14' width='4' height='11' rx='1.5' fill='white' opacity='.6'/%3E%3Crect x='14' y='8' width='4' height='17' rx='1.5' fill='white'/%3E%3Crect x='21' y='17' width='4' height='8' rx='1.5' fill='white' opacity='.4'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="app.css">
+</head>
+<body class="min-h-screen bg-[#f5f6f8] font-sans text-slate-900 antialiased">
+<div class="mx-auto flex h-screen min-h-[840px] max-w-[1720px] flex-col gap-3.5 px-5 py-3.5">
+
+  <header class="flex h-8 shrink-0 items-center justify-end">
+    <div class="flex items-center gap-3 text-[11px] text-slate-400">
+      <span id="runState" class="badge badge-sm gap-1.5 border-slate-200 bg-white text-[10px] font-medium text-slate-500"></span>
+      <span class="h-3 w-px bg-slate-200"></span>
+      <span>数据 <b id="updated" class="font-medium text-slate-500">—</b></span>
+      <span class="h-3 w-px bg-slate-200"></span>
+      <span>输入计数 <b id="counted" class="font-medium text-slate-500">—</b></span>
+    </div>
+  </header>
+
+  <!-- ============================ 问财 ============================ -->
+  <section class="flex min-h-0 flex-1 flex-col rounded-2xl border border-slate-200/80 bg-[#fbfcfd] p-3">
+    <div class="mb-2.5 flex h-8 shrink-0 items-center justify-between px-1">
+      <span class="badge badge-sm border-0 bg-wc-soft text-[10.5px] font-semibold tracking-wide text-wc">问财</span>
+      <dl id="wcKpis" class="flex items-stretch divide-x divide-slate-200/80"></dl>
+    </div>
+    <div class="grid min-h-0 flex-1 auto-rows-fr grid-cols-12 gap-3">
+      <article class="col-span-4 flex min-h-0 flex-col rounded-xl border border-slate-200/70 bg-white shadow-card">
+        <div class="flex shrink-0 items-center justify-between px-4 pb-0.5 pt-3">
+          <h2 class="text-[12px] font-semibold tracking-tight text-slate-700">输入趋势</h2>
+          <span id="wcInStat" class="text-[10.5px] text-slate-400"></span>
+        </div>
+        <div id="wcInLegend" class="flex shrink-0 items-center gap-3 px-4 pb-1 text-[10px] text-slate-500"></div>
+        <div id="wcInput" class="min-h-0 flex-1 px-1 pb-1"></div>
+      </article>
+
+      <article class="col-span-4 flex min-h-0 flex-col rounded-xl border border-slate-200/70 bg-white shadow-card">
+        <div class="flex shrink-0 items-center justify-between px-4 pb-0.5 pt-3">
+          <h2 class="text-[12px] font-semibold tracking-tight text-slate-700">对比结论</h2>
+          <span id="wcCmpStat" class="text-[10.5px] text-slate-400"></span>
+        </div>
+        <div id="wcCmpLegend" class="flex shrink-0 items-center gap-3 px-4 pb-1 text-[10px] text-slate-500"></div>
+        <div id="wcCompare" class="min-h-0 flex-1 px-1 pb-1"></div>
+      </article>
+
+      <article class="col-span-4 flex min-h-0 flex-col rounded-xl border border-slate-200/70 bg-white shadow-card">
+        <div class="flex shrink-0 items-center justify-between px-4 pb-0.5 pt-3">
+          <h2 class="text-[12px] font-semibold tracking-tight text-slate-700">归因</h2>
+          <span id="wcAttrStat" class="text-[10.5px] text-slate-400"></span>
+        </div>
+        <div class="flex shrink-0 items-center justify-between px-4 pb-1 text-[10px] text-slate-500">
+          <span id="wcAttrNote"></span>
+          <span id="wcAttrLegend" class="flex items-center gap-3"></span>
+        </div>
+        <div id="wcAttr" class="min-h-0 flex-1 px-1 pb-1"></div>
+      </article>
+    </div>
+  </section>
+
+  <!-- ============================ AIME ============================ -->
+  <section class="flex min-h-0 flex-1 flex-col rounded-2xl border border-slate-200/80 bg-[#fbfcfd] p-3">
+    <div class="mb-2.5 flex h-8 shrink-0 items-center justify-between px-1">
+      <span class="badge badge-sm border-0 bg-ai-soft text-[10.5px] font-semibold tracking-wide text-ai">AIME</span>
+      <dl id="aiKpis" class="flex items-stretch divide-x divide-slate-200/80"></dl>
+    </div>
+    <div class="grid min-h-0 flex-1 auto-rows-fr grid-cols-12 gap-3">
+      <article class="col-span-4 flex min-h-0 flex-col rounded-xl border border-slate-200/70 bg-white shadow-card">
+        <div class="flex shrink-0 items-center justify-between px-4 pb-0.5 pt-3">
+          <h2 class="text-[12px] font-semibold tracking-tight text-slate-700">输入结构</h2>
+          <span id="aiInStat" class="text-[10.5px] text-slate-400"></span>
+        </div>
+        <div id="aiInLegend" class="flex shrink-0 items-center gap-3 px-4 pb-1 text-[10px] text-slate-500"></div>
+        <div id="aiInput" class="min-h-0 flex-1 px-1 pb-1"></div>
+      </article>
+
+      <article class="col-span-4 flex min-h-0 flex-col rounded-xl border border-slate-200/70 bg-white shadow-card">
+        <div class="flex shrink-0 items-center justify-between px-4 pb-0.5 pt-3">
+          <h2 class="text-[12px] font-semibold tracking-tight text-slate-700">输出日历</h2>
+          <span id="aiOutStat" class="text-[10.5px] text-slate-400"></span>
+        </div>
+        <div id="aiOutLegend" class="flex shrink-0 items-center gap-3 px-4 pb-1 text-[10px] text-slate-500"></div>
+        <div id="aiOutput" class="min-h-0 flex-1 px-1 pb-1"></div>
+      </article>
+
+      <article class="col-span-4 flex min-h-0 flex-col rounded-xl border border-slate-200/70 bg-white shadow-card">
+        <div class="flex shrink-0 items-center justify-between px-4 pb-0.5 pt-3">
+          <h2 class="text-[12px] font-semibold tracking-tight text-slate-700">归因</h2>
+          <span id="aiAttrStat" class="text-[10.5px] text-slate-400"></span>
+        </div>
+        <div class="flex shrink-0 items-center justify-between px-4 pb-1 text-[10px] text-slate-500">
+          <span id="aiSevChips" class="flex items-center gap-2.5"></span>
+          <span class="flex items-center gap-1.5 text-[9.5px] text-slate-400">
+            P1 占比
+            <span class="h-1.5 w-14 rounded-full bg-gradient-to-r from-rose-100 to-rose-700"></span>
+            低 → 高
+          </span>
+        </div>
+        <div id="aiAttr" class="min-h-0 flex-1 px-1 pb-1"></div>
+      </article>
+    </div>
+  </section>
+</div>
+
+<div id="mask" class="fixed inset-0 z-10 grid place-items-center bg-[#f5f6f8]/90 text-[12px] text-slate-500">
+  <span>加载中…</span>
+</div>
+
+<script src="echarts.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

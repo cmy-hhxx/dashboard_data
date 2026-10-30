@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { -webkit-font-smoothing: antialiased; }
+  body { font-variant-numeric: tabular-nums; }
+}
+
+@layer components {
+  .metric {
+    @apply px-3.5 first:pl-0 last:pr-0;
+  }
+  .metric dt {
+    @apply text-[10px] font-medium uppercase tracking-wide text-slate-400;
+  }
+  .metric dd {
+    @apply mt-0.5 flex items-baseline gap-1 text-[15px] font-semibold leading-none text-slate-900;
+  }
+  .metric dd span {
+    @apply text-[10px] font-normal text-slate-400;
+  }
+}

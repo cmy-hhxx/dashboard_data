@@ -15,3 +15,8 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# 看板运行时产物（数据由服务器生成，不入库）
+dashboard/static/data.json
+dashboard/cache/
+dashboard/logs/

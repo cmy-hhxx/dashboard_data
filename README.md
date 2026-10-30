@@ -43,13 +43,26 @@ ssh eval_data 'chmod +x /tmp/pack_aime_input.sh && /tmp/pack_aime_input.sh <目�
 
 `0_daily_eval_input` 是**实时目录**，流水线在持续写入；打包按快照语义处理，详见流程文档 §5。
 
-## 后续：数据看板
+## 数据看板
 
-仓库以 ops 脚本起步，看板在其上推进。计划中的分层：
+`dashboard/` 是问财 / AIME 评测看板：静态页面 + ECharts，Python 标准库起服务，
+数据由 `prepare.py` 直接扫 `3_eval_output` 的评测产物生成。
 
-1. **取数层**：复用 `pack_aime_input.sh` 的 manifest / sha256，产出可追溯的数据快照；
-2. **指标层**：从 jsonl 抽 `request_time / agent_mode / usage / ok / status_code` 等字段，
-   落成按天的聚合表；
-3. **展示层**：Web 看板（技术栈待定，尚未选型，不在本仓库预置脚手架）。
+![dashboard](docs/dashboard.png)
 
-决定落地前先看 `docs/`，不要在没有指标定义的情况下先写 UI。
+```bash
+./dashboard/deploy.sh                                   # 同步到 /opt/eval_dashboard 并重启
+ssh eval_data 'python3 /opt/eval_dashboard/prepare.py'  # 手动重算 data.json
+```
+
+服务监听容器 `:5001`，对外是 `http://dashboard.example.com:2768/`。刷新周期 30 分钟。
+
+| 文件 | 作用 |
+|---|---|
+| `prepare.py` | 扫评测输出 / 对比判定 / 归因，产出 `static/data.json` |
+| `count_inputs.py` | 并行数 `2_eval_input` 的 jsonl 行数，落 `cache/input_counts.tsv`（50 GB，约 5 分钟，按需手动跑） |
+| `server.py` | `ThreadingHTTPServer` + 定时重算；`/healthz` 返回最近一次刷新状态 |
+| `static/` | 页面与 ECharts（离线包，服务器无外网） |
+
+口径：输入 = `2_eval_input` 的逐日输入条数；输出 = `3_eval_output` 各评测任务产物。
+问财取 2026-10-23 批次的 A/B 对比与归因，AIME 取日常 / 流失两套输出。
