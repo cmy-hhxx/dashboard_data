@@ -1,4 +1,4 @@
-/* Eval dashboard — two product sections, no bar charts. */
+/* Eval dashboard — two product sections, built from the curated datasets tree. */
 (function () {
   const $ = (id) => document.getElementById(id);
   const FONT = '-apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif';
@@ -6,7 +6,6 @@
   const relayout = [];
 
   const fmt = (n) => (n == null ? "—" : Number(n).toLocaleString("en-US"));
-  const fmtK = (v) => (v >= 1000 ? (v / 1000).toFixed(v >= 10000 ? 0 : 1) + "k" : v);
   const pct = (a, b) => (b ? (100 * a) / b : 0);
 
   const C = {
@@ -16,10 +15,40 @@
     sev0: "#7f1d1d", sev1: "#dc2626", sev2: "#f59e0b", sev3: "#94a3b8",
   };
 
+  const TEAL = ["#0f766e", "#12857c", "#1f9a90", "#3fb3a8", "#6cc8be", "#98dbd3", "#bfeae4", "#e0f5f1"];
+  const INDIGO = ["#4338ca", "#5548d4", "#6a5ede", "#8177e6", "#9a92ee", "#b4aef4", "#cdc9f8", "#e6e4fc"];
+
+  const CAT_MAP = {
+    AndroidAinvestAimeTab: "AIME·安卓",
+    AndroidScreenerAimeTab: "选股·安卓",
+    iOSAinvestAimeTab: "AIME·iOS",
+    iOSScreenerAimeTab: "选股·iOS",
+    insearchaimechat: "搜索内对话",
+    AndroidScreenerNewUserGuide: "新手引导·安卓",
+    "AndroidScreenerQuoteLiteInputEverywhere": "行情输入·安卓",
+    "material-production": "内容生产",
+    "newsroom-content-production": "资讯生产",
+    AndroidAinvestNavirobot: "导航机器人",
+    WebAinvestNavirobot: "导航机器人·Web",
+    evaluation: "评测",
+    其他: "其他",
+    未标注: "未标注",
+  };
+
+  const TASK_SHORT = {
+    交易建议: "交易", 事件解读: "事件", 复合意图: "复合", 客服问答: "客服",
+    事实探究核实类: "核实", 投教问答: "投教", 其它: "其它", 信息检索类: "检索",
+    操作指令类: "指令", 文件生成类: "文件", 数据查询类: "取数", 时间感知: "时间",
+    安全合规: "合规", 机会挖掘类: "机会", 诊断分析类: "诊断", 预测推演类: "预测",
+    确定性标的筛选: "选股", 标的推荐类: "荐股", 统计回测建模计算: "回测",
+    账户诊断优化: "账户", 情感表达: "情感", 资产配置建议: "配置",
+    金融逻辑推理: "推理", 目标跟踪执行类: "跟踪", 多模态问答: "多模态", 其他: "其他",
+  };
+
   const SHORT = {
-    "终稿生成轮": "终稿生成",
+    终稿生成轮: "终稿生成",
     "shell 代码解释器": "shell 解释器",
-    "中间推理处理": "中间推理",
+    中间推理处理: "中间推理",
     "web_search 网页检索": "网页检索",
     "web_fetch 网页抓取": "网页抓取",
     "finquery 取数服务": "finquery",
@@ -31,6 +60,7 @@
     "Expert 推理轮": "Expert 推理",
   };
   const short = (s) => SHORT[s] || (s.length > 11 ? s.slice(0, 11) + "…" : s);
+  const catShort = (s) => CAT_MAP[s] || (s.length > 9 ? s.slice(0, 9) + "…" : s);
 
   const tip = {
     backgroundColor: "rgba(15,23,42,.95)",
@@ -81,73 +111,99 @@
     const wc = d.wencai, ai = d.aime, cw = d.conclusion.wencai, ca = d.conclusion.aime;
     $("wcKpis").innerHTML = [
       metric("输入", fmt(wc.input.total), "条"),
-      metric("对比覆盖", cw.coverage.toFixed(1), "%"),
-      metric("胜场 A : B", `${cw.a_win}<span class="text-slate-300">:</span>${cw.b_win}`),
-      metric("归因", fmt(wc.output.problems), "问题"),
+      metric("已评测", fmt(wc.input.evaluated), "条"),
+      metric("待评测", fmt(wc.input.pending), "条"),
+      metric("覆盖", cw.coverage.toFixed(1), "%"),
     ].join("");
     $("aiKpis").innerHTML = [
       metric("输入", fmt(ai.input.total), "条"),
-      metric("输出", fmt(ai.output.answers), "条"),
-      metric("输出覆盖", ca.coverage.toFixed(1), "%"),
-      metric("P1 占比", ca.p1_share.toFixed(1), "%"),
+      metric("已评测", fmt(ai.input.evaluated), "条"),
+      metric("待评测", fmt(ai.input.pending), "条"),
+      metric("覆盖", ca.coverage.toFixed(1), "%"),
     ].join("");
   }
 
-  // ------------------------------------------------------- 问财 · 输入趋势
-  function renderWencaiInput(d) {
-    const inp = d.wencai.input;
-    const series = [
-      ["a_expert", "A·expert", C.a],
-      ["a_fast", "A·fast", C.aLight],
-      ["b_expert", "B·expert", C.b],
-      ["b_fast", "B·fast", C.bLight],
-    ];
-    $("wcInStat").textContent = `${fmt(inp.total)} 条 · ${(inp.bytes / 1e9).toFixed(1)} GB`;
-    $("wcInLegend").innerHTML = series.map(([, name, color]) => legendDot(name, color)).join("");
+  // ------------------------------------------------------- volume card (both)
+  function renderVolume(product, d) {
+    const isWc = product === "wencai";
+    const src = isWc ? d.wencai : d.aime;
+    const cats = isWc ? src.input.categories.task : src.input.categories.comefrom;
+    const palette = isWc ? TEAL : INDIGO;
+    const accent = isWc ? C.a : C.ai;
+    const evaluated = src.input.evaluated;
+    const pending = src.input.pending;
+    const total = src.input.total;
+    const coverage = pct(evaluated, total);
 
-    const gradient = (hex) =>
-      new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-        { offset: 0, color: hexA(hex, 0.55) },
-        { offset: 1, color: hexA(hex, 0.92) },
-      ]);
+    $(isWc ? "wcVolStat" : "aiVolStat").textContent = `已评测 ${fmt(evaluated)} · 待评测 ${fmt(pending)}`;
 
-    chart("wcInput", {
+    chart(isWc ? "wcRing" : "aiRing", {
       animationDuration: 700,
-      grid: { left: 36, right: 12, top: 10, bottom: 22 },
-      tooltip: {
-        ...tip,
-        trigger: "axis",
-        axisPointer: { type: "line", lineStyle: { color: "#cbd5e1", type: "dashed" } },
-        formatter: (ps) => {
-          const i = ps[0].dataIndex;
-          const total = series.reduce((s, [k]) => s + (inp.series[k][i] || 0), 0);
-          return (
-            tipHead(inp.days[i]) +
-            series.map(([k, name, color]) => tipRow(color, name, fmt(inp.series[k][i]))).join("") +
-            `<div class="mt-1 flex items-center border-t border-white/10 pt-1 leading-5"><span class="text-slate-400">合计</span><b class="ml-auto pl-5 font-semibold">${fmt(total)}</b></div>`
-          );
+      tooltip: { ...tip, formatter: (p) => tipHead(p.name) + tipRow(p.color, "条数", fmt(p.value)) },
+      title: {
+        text: coverage.toFixed(1) + "%",
+        subtext: "已评测",
+        left: "center",
+        top: "38%",
+        textAlign: "center",
+        textStyle: { fontSize: 17, fontWeight: 600, color: "#0f172a", fontFamily: FONT },
+        subtextStyle: { fontSize: 9.5, color: "#94a3b8", fontFamily: FONT },
+      },
+      series: [
+        {
+          type: "pie",
+          radius: ["60%", "80%"],
+          center: ["50%", "50%"],
+          avoidLabelOverlap: false,
+          label: { show: false },
+          labelLine: { show: false },
+          itemStyle: { borderColor: "#fff", borderWidth: 2 },
+          data: [
+            { value: evaluated, name: "已评测", itemStyle: { color: accent } },
+            { value: Math.max(0, pending), name: "待评测", itemStyle: { color: "#e9edf3" } },
+          ],
         },
-      },
-      xAxis: {
-        type: "category",
-        boundaryGap: false,
-        data: inp.days.map((x) => x.slice(5)),
-        axisLine: { lineStyle: { color: "#eef2f7" } },
-        axisTick: { show: false },
-        axisLabel: { ...axisStyle, interval: (i) => i % 3 === 0 },
-      },
-      yAxis: { type: "value", splitNumber: 3, axisLabel: { ...axisStyle, formatter: fmtK }, splitLine },
-      series: series.map(([k, name, color]) => ({
-        name,
-        type: "line",
-        stack: "in",
-        smooth: 0.35,
-        symbol: "none",
-        lineStyle: { width: 1, color: hexA(color, 0.85) },
-        areaStyle: { color: gradient(color) },
-        emphasis: { focus: "series" },
-        data: inp.series[k],
-      })),
+      ],
+    });
+
+    const n = (cats || []).length;
+    const items = (cats || []).map((c, i) => {
+      const t = n > 1 ? i / (n - 1) : 0;
+      return {
+        name: c.name,
+        value: c.value,
+        itemStyle: { color: lerpColor(isWc ? "#0b5f59" : "#312e81", isWc ? "#cdeee9" : "#dcd9fb", t) },
+        label: { color: t < 0.55 ? "#fff" : "#0f172a" },
+      };
+    });
+
+    chart(isWc ? "wcCats" : "aiCats", {
+      animationDuration: 700,
+      tooltip: { ...tip, formatter: (p) => tipHead(p.name) + tipRow(accent, "输入条数", fmt(p.value)) },
+      series: [
+        {
+          type: "treemap",
+          left: 0,
+          right: 0,
+          top: 2,
+          bottom: 2,
+          roam: false,
+          nodeClick: false,
+          breadcrumb: { show: false },
+          itemStyle: { borderColor: "#fff", borderWidth: 2, gapWidth: 2, borderRadius: 5 },
+          label: {
+            show: true,
+            fontSize: isWc ? 8.5 : 10,
+            lineHeight: isWc ? 11 : 13,
+            fontFamily: FONT,
+            formatter: (p) => {
+              const name = isWc ? TASK_SHORT[p.name] || p.name : catShort(p.name);
+              return `${name}\n${fmt(p.value)}`;
+            },
+          },
+          data: items,
+        },
+      ],
     });
   }
 
@@ -165,7 +221,9 @@
       { label: "核心达成 · fast", a: out.meets_core.a_fast, b: out.meets_core.b_fast },
       { label: "核心达成 · expert", a: out.meets_core.a_expert, b: out.meets_core.b_expert },
     ];
-    $("wcCmpStat").textContent = `${fmt(out.coverage.decided)} 已决 / ${fmt(out.coverage.planned)}`;
+    const aWin = fast.a_win + expert.a_win;
+    const bWin = fast.b_win + expert.b_win;
+    $("wcCmpStat").textContent = `${fmt(out.comparison_total)} 组 · A ${aWin} : B ${bWin}`;
     $("wcCmpLegend").innerHTML = [legendDot("A 组", C.a), legendDot("B 组", C.b)].join("");
 
     chart("wcCompare", {
@@ -176,7 +234,11 @@
         trigger: "item",
         formatter: (p) => {
           const r = rows[p.dataIndex];
-          return tipHead(r.label) + tipRow(C.a, "A 组", r.a.toFixed(1) + "%") + tipRow(C.b, "B 组", r.b.toFixed(1) + "%");
+          const counts = p.dataIndex < 2
+            ? [p.dataIndex === 0 ? fast.a_win : expert.a_win, p.dataIndex === 0 ? fast.b_win : expert.b_win]
+            : null;
+          const label = (v, n) => (n == null ? v.toFixed(1) + "%" : `${v.toFixed(1)}% · ${n} 组`);
+          return tipHead(r.label) + tipRow(C.a, "A 组", label(r.a, counts && counts[0])) + tipRow(C.b, "B 组", label(r.b, counts && counts[1]));
         },
       },
       xAxis: {
@@ -279,8 +341,8 @@
     });
     const otherA = totalA - sumA;
     const otherB = totalB - sumB;
-    if (otherA) links.push({ source: "A 组", target: "其他", value: otherA });
-    if (otherB) links.push({ source: "B 组", target: "其他", value: otherB });
+    if (otherA > 0) links.push({ source: "A 组", target: "其他", value: otherA });
+    if (otherB > 0) links.push({ source: "B 组", target: "其他", value: otherB });
 
     chart("wcAttr", {
       animationDuration: 700,
@@ -322,81 +384,6 @@
     });
   }
 
-  // ------------------------------------------------------- AIME · 输入结构
-  function renderAimeInput(d) {
-    const g = d.aime.input.groups || {};
-    const groups = [
-      ["日常", "daily", "#3730a3"],
-      ["流失", "lost", "#6d28d9"],
-      ["归档", "lost_archive", "#4f46e5"],
-    ];
-    $("aiInStat").textContent = `${fmt(d.aime.input.total)} 条 · ${d.aime.input.files} 文件`;
-
-
-    $("aiInLegend").innerHTML =
-      groups
-        .map(([name, key, color]) => {
-          const v = ((g[key] || {}).expert || 0) + ((g[key] || {}).fast || 0);
-          return `<span class="inline-flex items-center gap-1"><i class="inline-block h-1.5 w-1.5 rounded-sm" style="background:${color}"></i>${name} <b class="font-semibold text-slate-600">${fmt(v)}</b></span>`;
-        })
-        .join("") +
-      `<span class="ml-auto inline-flex items-center gap-2 text-slate-400">` +
-      `<span class="inline-flex items-center gap-1"><i class="inline-block h-1.5 w-1.5 rounded-sm bg-indigo-700"></i>expert</span>` +
-      `<span class="inline-flex items-center gap-1"><i class="inline-block h-1.5 w-1.5 rounded-sm bg-indigo-300"></i>fast</span></span>`;
-
-    const data = groups.map(([name, key, color]) => {
-      const expert = (g[key] || {}).expert || 0;
-      const fast = (g[key] || {}).fast || 0;
-      return {
-        name,
-        value: expert + fast,
-        itemStyle: { color },
-        label: { color: "#fff", rotate: 0, show: name !== "流失" },
-        children: [
-          { name: "expert", value: expert, itemStyle: { color: "#4338ca" } },
-          { name: "fast", value: fast, itemStyle: { color: "#a5b4fc" } },
-        ],
-      };
-    });
-
-    chart("aiInput", {
-      animationDuration: 700,
-      tooltip: {
-        ...tip,
-        formatter: (p) =>
-          tipHead(p.name) +
-          (p.data.children
-            ? p.data.children.map((c) => tipRow(c.itemStyle.color, c.name, fmt(c.value))).join("")
-            : tipRow(p.color, "条数", fmt(p.value))),
-      },
-      series: [
-        {
-          type: "sunburst",
-          radius: ["26%", "92%"],
-          center: ["50%", "52%"],
-          sort: null,
-          nodeClick: false,
-          data,
-          itemStyle: { borderColor: "#fff", borderWidth: 2 },
-          label: { fontFamily: FONT, minAngle: 8 },
-          levels: [
-            {},
-            {
-              r0: "26%",
-              r: "64%",
-              label: { rotate: 0, fontSize: 10.5, formatter: (p) => p.name },
-            },
-            {
-              r0: "64%",
-              r: "92%",
-              label: { show: false },
-            },
-          ],
-        },
-      ],
-    });
-  }
-
   // ------------------------------------------------------- AIME · 输出日历
   function renderAimeOutput(d) {
     const perDay = d.aime.output.per_day || [];
@@ -404,12 +391,11 @@
     const max = Math.max(1, ...values.map((x) => x.value));
     const map = new Map(values.map((x) => [x.date, x.value]));
 
-    $("aiOutStat").textContent = `${fmt(d.aime.output.answers)} 结果 · 覆盖 ${d.conclusion.aime.coverage.toFixed(1)}%`;
+    $("aiOutStat").textContent = `${fmt(d.aime.output.answers)} 结果`;
     const busiest = values.reduce((best, x) => (x.value > best.value ? x : best), { date: "—", value: 0 });
-    const activeDays = values.length;
     $("aiOutLegend").innerHTML =
       `<span class="inline-flex items-center gap-1"><i class="inline-block h-1.5 w-1.5 rounded-sm bg-ai"></i>峰值 <b class="font-semibold text-slate-600">${fmt(busiest.value)}</b> <span class="text-slate-400">${busiest.date.slice(5)}</span></span>` +
-      `<span class="inline-flex items-center gap-1 text-slate-400">活跃 <b class="font-semibold text-slate-600">${activeDays}</b> 天</span>`;
+      `<span class="inline-flex items-center gap-1 text-slate-400">活跃 <b class="font-semibold text-slate-600">${values.length}</b> 天</span>`;
 
     const el = $("aiOutput");
     const layout = () => {
@@ -429,18 +415,14 @@
     for (let i = 0; i < 61; i++) {
       const dt = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
       const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
-      const v = map.get(key) || 0;
-      seriesData.push([key, v]);
+      seriesData.push([key, map.get(key) || 0]);
     }
 
     const makeOption = () => {
       const l = layout();
       return {
         animationDuration: 700,
-        tooltip: {
-          ...tip,
-          formatter: (p) => tipHead(p.value[0]) + tipRow(C.ai, "输出", fmt(p.value[1]) + " 条"),
-        },
+        tooltip: { ...tip, formatter: (p) => tipHead(p.value[0]) + tipRow(C.ai, "输出", fmt(p.value[1]) + " 条") },
         visualMap: {
           min: 0,
           max,
@@ -508,25 +490,23 @@
       )
       .join("");
 
-    const maxP1 = Math.max(...comp.names.map((n) => pct(comp.severity[n].P1 || 0, comp.fast[comp.names.indexOf(n)] + comp.expert[comp.names.indexOf(n)])));
+    const totals = comp.names.map((_, i) => comp.fast[i] + comp.expert[i]);
+    const maxP1 = Math.max(...comp.names.map((n, i) => pct(comp.severity[n].P1 || 0, Math.max(1, totals[i]))));
     const items = comp.names.map((name, i) => {
-      const fast = comp.fast[i];
-      const expert = comp.expert[i];
-      const totalC = fast + expert;
+      const totalC = totals[i];
       const s = comp.severity[name];
       const p1 = pct(s.P1 || 0, totalC);
       const ratio = maxP1 ? p1 / maxP1 : 0;
       const color = lerpColor("#fee2e2", "#991b1b", Math.pow(ratio, 0.8));
-      const dark = ratio > 0.45;
       return {
         name,
         value: totalC,
         p1,
         severity: s,
-        fast,
-        expert,
+        fast: comp.fast[i],
+        expert: comp.expert[i],
         itemStyle: { color },
-        label: { color: dark ? "#fff" : "#7f1d1d" },
+        label: { color: ratio > 0.45 ? "#fff" : "#7f1d1d" },
       };
     });
 
@@ -580,6 +560,7 @@
       interrupted: ["中断", "text-amber-600", "bg-amber-500"],
       finished: ["完成", "text-emerald-600", "bg-emerald-500"],
       running: ["运行中", "text-emerald-600", "bg-emerald-500"],
+      snapshot: ["数据集快照", "text-slate-500", "bg-slate-400"],
     };
     const [text, cls, dot] = map[status] || [status || "—", "text-slate-500", "bg-slate-400"];
     $("runState").innerHTML = `<i class="inline-block h-1.5 w-1.5 rounded-full ${dot}"></i><span class="${cls}">${text}</span>`;
@@ -595,10 +576,10 @@
     .then((d) => {
       renderHeader(d);
       renderKpis(d);
-      renderWencaiInput(d);
+      renderVolume("wencai", d);
       renderWencaiCompare(d);
       renderWencaiAttr(d);
-      renderAimeInput(d);
+      renderVolume("aime", d);
       renderAimeOutput(d);
       renderAimeAttr(d);
       $("mask").classList.add("hidden");

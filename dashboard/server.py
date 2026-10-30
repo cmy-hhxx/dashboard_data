@@ -11,7 +11,8 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
 PREPARE = os.path.join(HERE, "prepare.py")
-COUNTS = os.path.join(HERE, "cache", "input_counts.tsv")
+COUNTS = os.path.join(HERE, "cache", "datasets.json")
+SCAN = os.path.join(HERE, "scan_datasets.py")
 PORT = int(os.environ.get("PORT", "5001"))
 REFRESH = int(os.environ.get("REFRESH_SECONDS", "1800"))
 
@@ -26,6 +27,10 @@ def refresh_once():
         _state["running"] = True
     started = time.time()
     try:
+        scan = subprocess.run([sys.executable, SCAN], capture_output=True, text=True, timeout=1800)
+        if scan.returncode != 0:
+            print("[refresh] scan failed:", (scan.stderr or "")[-500:], flush=True)
+            scan = None
         proc = subprocess.run(
             [sys.executable, PREPARE, "--counts", COUNTS],
             capture_output=True, text=True, timeout=1800,

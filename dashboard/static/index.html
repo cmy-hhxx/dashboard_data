@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="app.css">
 </head>
 <body class="min-h-screen bg-[#f5f6f8] font-sans text-slate-900 antialiased">
-<div class="mx-auto flex h-screen min-h-[840px] max-w-[1720px] flex-col gap-3.5 px-5 py-3.5">
+<div class="mx-auto flex h-screen min-h-[760px] max-w-[1720px] flex-col gap-3.5 px-5 py-3.5">
 
   <header class="flex h-8 shrink-0 items-center justify-end">
     <div class="flex items-center gap-3 text-[11px] text-slate-400">
@@ -28,12 +28,14 @@
     </div>
     <div class="grid min-h-0 flex-1 auto-rows-fr grid-cols-12 gap-3">
       <article class="col-span-4 flex min-h-0 flex-col rounded-xl border border-slate-200/70 bg-white shadow-card">
-        <div class="flex shrink-0 items-center justify-between px-4 pb-0.5 pt-3">
-          <h2 class="text-[12px] font-semibold tracking-tight text-slate-700">输入趋势</h2>
-          <span id="wcInStat" class="text-[10.5px] text-slate-400"></span>
+        <div class="flex shrink-0 items-center justify-between px-4 pb-1 pt-3">
+          <h2 class="text-[12px] font-semibold tracking-tight text-slate-700">数据量</h2>
+          <span id="wcVolStat" class="text-[10.5px] text-slate-400"></span>
         </div>
-        <div id="wcInLegend" class="flex shrink-0 items-center gap-3 px-4 pb-1 text-[10px] text-slate-500"></div>
-        <div id="wcInput" class="min-h-0 flex-1 px-1 pb-1"></div>
+        <div class="flex min-h-0 flex-1">
+          <div id="wcRing" class="h-full w-[34%]"></div>
+          <div id="wcCats" class="h-full min-w-0 flex-1 pb-1 pr-1"></div>
+        </div>
       </article>
 
       <article class="col-span-4 flex min-h-0 flex-col rounded-xl border border-slate-200/70 bg-white shadow-card">
@@ -67,12 +69,14 @@
     </div>
     <div class="grid min-h-0 flex-1 auto-rows-fr grid-cols-12 gap-3">
       <article class="col-span-4 flex min-h-0 flex-col rounded-xl border border-slate-200/70 bg-white shadow-card">
-        <div class="flex shrink-0 items-center justify-between px-4 pb-0.5 pt-3">
-          <h2 class="text-[12px] font-semibold tracking-tight text-slate-700">输入结构</h2>
-          <span id="aiInStat" class="text-[10.5px] text-slate-400"></span>
+        <div class="flex shrink-0 items-center justify-between px-4 pb-1 pt-3">
+          <h2 class="text-[12px] font-semibold tracking-tight text-slate-700">数据量</h2>
+          <span id="aiVolStat" class="text-[10.5px] text-slate-400"></span>
         </div>
-        <div id="aiInLegend" class="flex shrink-0 items-center gap-3 px-4 pb-1 text-[10px] text-slate-500"></div>
-        <div id="aiInput" class="min-h-0 flex-1 px-1 pb-1"></div>
+        <div class="flex min-h-0 flex-1">
+          <div id="aiRing" class="h-full w-[34%]"></div>
+          <div id="aiCats" class="h-full min-w-0 flex-1 pb-1 pr-1"></div>
+        </div>
       </article>
 
       <article class="col-span-4 flex min-h-0 flex-col rounded-xl border border-slate-200/70 bg-white shadow-card">
@@ -89,15 +93,17 @@
           <h2 class="text-[12px] font-semibold tracking-tight text-slate-700">归因</h2>
           <span id="aiAttrStat" class="text-[10.5px] text-slate-400"></span>
         </div>
-        <div class="flex shrink-0 items-center justify-between px-4 pb-1 text-[10px] text-slate-500">
+        <div class="flex shrink-0 items-center px-4 pb-1 text-[10px] text-slate-500">
           <span id="aiSevChips" class="flex items-center gap-2.5"></span>
-          <span class="flex items-center gap-1.5 text-[9.5px] text-slate-400">
-            P1 占比
-            <span class="h-1.5 w-14 rounded-full bg-gradient-to-r from-rose-100 to-rose-700"></span>
-            低 → 高
-          </span>
         </div>
-        <div id="aiAttr" class="min-h-0 flex-1 px-1 pb-1"></div>
+        <div class="relative min-h-0 flex-1">
+          <div id="aiAttr" class="h-full w-full px-1 pb-1"></div>
+          <div class="pointer-events-none absolute bottom-2 right-3 flex items-center gap-1.5 rounded-md bg-white/85 px-1.5 py-0.5 text-[9px] text-slate-400 backdrop-blur">
+            P1 占比
+            <span class="h-1.5 w-10 rounded-full bg-gradient-to-r from-rose-200 to-rose-800"></span>
+            低 → 高
+          </div>
+        </div>
       </article>
     </div>
   </section>

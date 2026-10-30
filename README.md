@@ -45,24 +45,25 @@ ssh eval_data 'chmod +x /tmp/pack_aime_input.sh && /tmp/pack_aime_input.sh <目�
 
 ## 数据看板
 
-`dashboard/` 是问财 / AIME 评测看板：静态页面 + ECharts，Python 标准库起服务，
-数据由 `prepare.py` 直接扫 `3_eval_output` 的评测产物生成。
+`dashboard/` 是问财 / AIME 评测看板：Tailwind + DaisyUI 页面、ECharts 图表、Python 标准库起服务。
+**唯一数据源**是 `/mnt/fin_bench/code_and_clean_data/datasets`（含评测输入与输出的成对文件）。
 
 ![dashboard](docs/dashboard.png)
 
 ```bash
-./dashboard/deploy.sh                                   # 同步到 /opt/eval_dashboard 并重启
-ssh eval_data 'python3 /opt/eval_dashboard/prepare.py'  # 手动重算 data.json
+./dashboard/deploy.sh                                    # 构建产物同步到 /opt/eval_dashboard 并重启
+ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
 ```
 
-服务监听容器 `:5001`，对外是 `http://dashboard.example.com:2768/`。刷新周期 30 分钟。
+服务监听容器 `:5001`，对外是 `http://dashboard.example.com:2768/`。服务每 30 分钟自动重扫数据集并重算。
 
 | 文件 | 作用 |
 |---|---|
-| `prepare.py` | 扫评测输出 / 对比判定 / 归因，产出 `static/data.json` |
-| `count_inputs.py` | 并行数 `2_eval_input` 的 jsonl 行数，落 `cache/input_counts.tsv`（50 GB，约 5 分钟，按需手动跑） |
+| `scan_datasets.py` | 扫 `datasets` 的输入/输出：逐文件条数、按模型×日期配对、meta 分类分布 → `cache/datasets.json` |
+| `prepare.py` | 解析输出侧的归因/对比/Token，合并扫描结果 → `static/data.json` |
 | `server.py` | `ThreadingHTTPServer` + 定时重算；`/healthz` 返回最近一次刷新状态 |
-| `static/` | 页面与 ECharts（离线包，服务器无外网） |
+| `static/` | 页面、ECharts 离线包、构建好的 `app.css` |
+| `build/` | Tailwind/DaisyUI 配置与构建入口（`npx tailwindcss -c tailwind.config.js -i input.css -o ../static/app.css --minify`） |
 
-口径：输入 = `2_eval_input` 的逐日输入条数；输出 = `3_eval_output` 各评测任务产物。
-问财取 2026-10-23 批次的 A/B 对比与归因，AIME 取日常 / 流失两套输出。
+口径：输入 = 数据集中的 `*_input.jsonl`；已评测 = 同模型同日期的 `*_output.jsonl` 条数；待评测 = 输入 − 已评测。
+问财按任务类型、AIME 按 comefrom 入口（归并为选股 / Ainvest / 模拟交易 / 搜索等）展示分布。
