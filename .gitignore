@@ -1,0 +1,16 @@
+# 本地 / 数据产物都不入库
+.DS_Store
+*.log
+
+# 打包产物（数据永远留在远端 ceph，不进仓库）
+*.tar.zst
+*.tar.zst.part
+*.tar.xz
+*.manifest.txt
+*.zst
+
+# Python（看板阶段会用到）
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
