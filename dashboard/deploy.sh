@@ -10,10 +10,10 @@ REMOTE="/opt/eval_dashboard"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 SSH=(ssh -i "$KEY" -p "$PORT" -o StrictHostKeyChecking=no -o ConnectTimeout=20)
-RSYNC=(rsync -az --delete --exclude 'data.json' --exclude 'server.pid' --exclude 'cache' --exclude 'logs' --exclude '*.log' --exclude '__pycache__' --exclude 'build'
+RSYNC=(rsync -az --delete --exclude 'data.json' --exclude 'data.json.gz' --exclude 'server.pid' --exclude 'cache' --exclude 'logs' --exclude '*.log' --exclude '__pycache__' --exclude 'build'
   -e "ssh -i $KEY -p $PORT -o StrictHostKeyChecking=no")
 
 "${SSH[@]}" "$HOST" "mkdir -p $REMOTE/static $REMOTE/cache $REMOTE/logs"
 "${RSYNC[@]}" "$HERE/" "$HOST:$REMOTE/"
-"${SSH[@]}" "$HOST" "chmod +x $REMOTE/start.sh $REMOTE/stop.sh && $REMOTE/start.sh"
+"${SSH[@]}" "$HOST" "chmod +x $REMOTE/start.sh $REMOTE/stop.sh $REMOTE/precompress.sh && $REMOTE/precompress.sh && $REMOTE/stop.sh && $REMOTE/start.sh"
 echo "deployed -> $REMOTE"

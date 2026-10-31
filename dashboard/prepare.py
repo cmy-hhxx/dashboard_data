@@ -12,6 +12,7 @@ Volumes / per-day counts / meta categories come from cache/datasets.json
 import argparse
 import collections
 import glob
+import gzip
 import json
 import os
 import re
@@ -24,6 +25,11 @@ TZ = timezone(timedelta(hours=8), "CST")
 WENCAI_MODELS = ["a_expert", "a_fast", "b_expert", "b_fast"]
 AIME_GROUPS = [("daily", "1_aime/eval_output/0_daily_eval_output"), ("lost", "1_aime/eval_output/1_lost_user_eval_output")]
 AIME_SEVERITIES = ["P0", "P1", "P2", "P3", "未分级"]
+
+CLUSTER_FILES = {
+    "wencai": f"{DATASETS}/0_wencai/eval_output/0_daily_eval_output/a_fast/cluster/cluster_tree.json",
+    "aime": f"{DATASETS}/1_aime/eval_output/0_daily_eval_output/aime_fast/cluster/cluster_tree.json",
+}
 
 
 def now_iso():
@@ -135,11 +141,25 @@ def build_wencai_components(raw, top_n=6):
         if comp not in top:
             continue
         groups["A" if version.startswith("a_") else "B"][comp] += n
+
+    names = top[:]
+    a_vals = [groups["A"][c] for c in top]
+    b_vals = [groups["B"][c] for c in top]
+
+    # Fold the long tail into one tile so A + B always equals the problem total.
+    rest_a = sum(n for (v, c), n in raw.items() if c not in top and v.startswith("a_"))
+    rest_b = sum(n for (v, c), n in raw.items() if c not in top and not v.startswith("a_"))
+    if rest_a or rest_b:
+        label = "其他" if "其他" not in names else "其余"
+        names.append(label)
+        a_vals.append(rest_a)
+        b_vals.append(rest_b)
+
     return {
-        "names": top,
-        "A": [groups["A"][c] for c in top],
-        "B": [groups["B"][c] for c in top],
-        "other": sum(n for (v, c), n in raw.items() if c not in top),
+        "names": names,
+        "A": a_vals,
+        "B": b_vals,
+        "other": rest_a + rest_b,
     }
 
 
@@ -149,12 +169,24 @@ def build_aime_components(raw, sev_raw, top_n=7):
     totals = collections.Counter()
     for (model, comp), n in raw.items():
         totals[comp] += n
-    names = [c for c, _ in totals.most_common(top_n)]
+    top = [c for c, _ in totals.most_common(top_n)]
+    names = top[:]
     out = {"names": names, "fast": [], "expert": [], "severity": {}}
     for name in names:
         out["fast"].append(raw.get(("fast", name), 0))
         out["expert"].append(raw.get(("expert", name), 0))
         out["severity"][name] = {s: sev_raw.get((name, s), 0) for s in AIME_SEVERITIES}
+
+    # Keep the tail visible as one tile so the treemap total equals out.problems.
+    rest = [c for c in totals if c not in top]
+    if rest:
+        label = "其他" if "其他" not in names else "其余"
+        names.append(label)
+        out["fast"].append(sum(raw.get(("fast", c), 0) for c in rest))
+        out["expert"].append(sum(raw.get(("expert", c), 0) for c in rest))
+        out["severity"][label] = {
+            s: sum(sev_raw.get((c, s), 0) for c in rest) for s in AIME_SEVERITIES
+        }
     return out
 
 
@@ -166,6 +198,9 @@ def aime_outputs():
     answers = 0
     tokens = 0
     durations = []
+    tasks = collections.Counter()
+    subtasks = collections.Counter()
+    task_subtasks = collections.defaultdict(collections.Counter)
 
     for group, rel in AIME_GROUPS:
         for path in sorted(glob.glob(f"{DATASETS}/{rel}/*/*_output.jsonl")):
@@ -180,8 +215,10 @@ def aime_outputs():
                         continue
                     answers += 1
                     per_day[date][model] += 1
+                    last_turn_meta = None
                     for turn in rec.get("turns") or []:
                         meta = turn.get("meta") or {}
+                        last_turn_meta = meta
                         tokens += meta.get("total_tokens") or 0
                         if meta.get("total_duration_ms"):
                             durations.append(meta["total_duration_ms"] / 1000.0)
@@ -198,6 +235,13 @@ def aime_outputs():
                         components[(model, comp)] += 1
                         sev_by_comp[(comp, sev)] += 1
 
+                    last_meta = last_turn_meta or rec.get("session_meta") or {}
+                    task = last_meta.get("task") or "未标注"
+                    subtask = last_meta.get("subtask") or "未标注"
+                    tasks[task] += 1
+                    subtasks[subtask] += 1
+                    task_subtasks[task][subtask] += 1
+
     totals = collections.Counter()
     for d in per_day.values():
         totals.update(d)
@@ -209,6 +253,10 @@ def aime_outputs():
         "severity": {s: severity.get(s, 0) for s in AIME_SEVERITIES},
         "problems": sum(severity.values()),
         "components": build_aime_components(components, sev_by_comp),
+        "tasks": dict(tasks),
+        "subtasks": dict(subtasks),
+        "task_subtask": {task: dict(subs) for task, subs in task_subtasks.items()},
+        "task_total": sum(tasks.values()),
         "p50": round(median(durations) or 0, 1),
         "density": round(sum(severity.values()) / answers, 2) if answers else 0,
     }
@@ -224,6 +272,16 @@ def top_categories(counts, top_n=None):
     if rest:
         out.append({"name": "其他", "value": rest})
     return out
+
+
+def input_days(product_scan):
+    counter = collections.Counter()
+    for meta in (product_scan.get("input") or {}).values():
+        for date, n in (meta.get("per_day") or {}).items():
+            counter[date] += n
+    days = [{"date": d, "value": n} for d, n in sorted(counter.items())]
+    date_range = {"start": days[0]["date"], "end": days[-1]["date"]} if days else None
+    return days, date_range
 
 
 def _surface_counts(raw):
@@ -248,6 +306,52 @@ def surface_of(name):
     return "其他"
 
 
+
+def compact_cluster(path, top_n=6):
+    """Trim a real cluster_tree.json to a 3-level demo for the dashboard."""
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path) as fh:
+            raw = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return None
+    meta = raw.get("meta") or {}
+    root = raw.get("tree") or {}
+
+    def trim(node, depth):
+        sessions = node.get("sessions")
+        if sessions is None:
+            sessions = node.get("count") or 0
+        items = node.get("count") or 0
+        kids = node.get("children") or []
+        out = {"name": node.get("name") or "未命名", "value": int(sessions), "items": int(items)}
+        if depth >= 3 or not kids:
+            return out
+        kids = sorted(
+            kids,
+            key=lambda x: (x.get("sessions") if x.get("sessions") is not None else x.get("count") or 0),
+            reverse=True,
+        )[:top_n]
+        children = [trim(k, depth + 1) for k in kids]
+        used = sum(c["value"] for c in children)
+        rest = max(0, int(sessions) - used)
+        if rest:
+            children.append({"name": "其他", "value": rest, "items": 0})
+        out["children"] = children
+        return out
+
+    tree = trim(root, 0)
+    return {
+        "meta": {
+            "total_sessions": meta.get("total_sessions") or tree["value"],
+            "total_items": meta.get("total_items") or tree["items"],
+            "depth": meta.get("depth") or 3,
+            "source": "a_fast",
+        },
+        "tree": tree,
+    }
+
 def build(counts_path, out_path):
     with open(counts_path) as fh:
         scan = json.load(fh)
@@ -258,6 +362,8 @@ def build(counts_path, out_path):
 
     wc_scan = scan["wencai"]
     ai_scan = scan["aime"]
+    wc_days, wc_range = input_days(wc_scan)
+    ai_days, ai_range = input_days(ai_scan)
 
     wc_input_total = wc_scan["total"]["input"]
     wc_evaluated = sum(v["answers"] for v in wc_versions.values())
@@ -272,10 +378,16 @@ def build(counts_path, out_path):
                 "total": wc_input_total,
                 "bytes": wc_scan["bytes"]["input"],
                 "files": wc_scan["files"]["input"],
+                "per_day": wc_days,
+                "date_range": wc_range,
                 "pending": max(0, wc_input_total - wc_evaluated),
                 "evaluated": wc_evaluated,
                 "categories": {
                     "task": top_categories(collections.Counter(wc_scan["categories"].get("task", {})), 14),
+                    "task_subtask": {
+                        task: top_categories(collections.Counter(subs), 8)
+                        for task, subs in (wc_scan["categories"].get("task_subtask") or {}).items()
+                    },
                     "difficulty": top_categories(collections.Counter(wc_scan["categories"].get("difficulty", {}))),
                 },
             },
@@ -289,6 +401,7 @@ def build(counts_path, out_path):
                 "meets_core": wc_meets,
             },
             "components": build_wencai_components(wc_components),
+            "cluster": compact_cluster(CLUSTER_FILES["wencai"]),
             "run": {"status": "snapshot", "name": "datasets · 2026-10-23"},
         },
         "aime": {
@@ -296,15 +409,24 @@ def build(counts_path, out_path):
                 "total": ai_input_total,
                 "bytes": ai_scan["bytes"]["input"],
                 "files": ai_scan["files"]["input"],
+                "per_day": ai_days,
+                "date_range": ai_range,
                 "pending": max(0, ai_input_total - ai_evaluated),
                 "evaluated": ai_evaluated,
                 "groups": ai_scan.get("input", {}),
                 "categories": {
+                    "task": top_categories(collections.Counter(aime_out["tasks"]), 14),
+                    "task_subtask": {
+                        task: top_categories(collections.Counter(subs), 8)
+                        for task, subs in aime_out["task_subtask"].items()
+                    },
+                    "task_total": aime_out["task_total"],
                     "comefrom": top_categories(collections.Counter(_surface_counts(ai_scan["categories"].get("comefrom", {})))),
                     "agent_mode": top_categories(collections.Counter(ai_scan["categories"].get("agent_mode", {}))),
                 },
             },
             "output": aime_out,
+            "cluster": compact_cluster(CLUSTER_FILES["aime"]),
         },
     }
 
@@ -334,10 +456,16 @@ def build(counts_path, out_path):
     }
 
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    payload = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     tmp = out_path + ".tmp"
-    with open(tmp, "w") as fh:
-        json.dump(data, fh, ensure_ascii=False, separators=(",", ":"))
+    with open(tmp, "wb") as fh:
+        fh.write(payload)
     os.replace(tmp, out_path)
+    # Precompressed twin for the static server; browsers get ~8 KB instead of ~40 KB.
+    gz_tmp = out_path + ".gz.tmp"
+    with gzip.open(gz_tmp, "wb", compresslevel=6) as fh:
+        fh.write(payload)
+    os.replace(gz_tmp, out_path + ".gz")
     return data
 
 

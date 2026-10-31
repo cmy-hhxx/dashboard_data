@@ -3,117 +3,285 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>评测看板 · 问财 / AIME</title>
+<title>评测数据看板 · 问财 / AIME</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230F766E'/%3E%3Crect x='7' y='14' width='4' height='11' rx='1.5' fill='white' opacity='.6'/%3E%3Crect x='14' y='8' width='4' height='17' rx='1.5' fill='white'/%3E%3Crect x='21' y='17' width='4' height='8' rx='1.5' fill='white' opacity='.4'/%3E%3C/svg%3E">
+<link rel="preload" href="echarts.min.js" as="script">
+<link rel="preload" href="app.js" as="script">
+<link rel="stylesheet" href="vendor/animate.min.css">
 <link rel="stylesheet" href="app.css">
 </head>
-<body class="min-h-screen bg-[#f5f6f8] font-sans text-slate-900 antialiased">
-<div class="mx-auto flex h-screen min-h-[760px] max-w-[1720px] flex-col gap-3.5 px-5 py-3.5">
+<body>
+<div class="app">
 
-  <header class="flex h-8 shrink-0 items-center justify-end">
-    <div class="flex items-center gap-3 text-[11px] text-slate-400">
-      <span id="runState" class="badge badge-sm gap-1.5 border-slate-200 bg-white text-[10px] font-medium text-slate-500"></span>
-      <span class="h-3 w-px bg-slate-200"></span>
-      <span>数据 <b id="updated" class="font-medium text-slate-500">—</b></span>
-      <span class="h-3 w-px bg-slate-200"></span>
-      <span>输入计数 <b id="counted" class="font-medium text-slate-500">—</b></span>
+  <header class="page-head">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none">
+          <rect x="4" y="13" width="3.4" height="7" rx="1.2" fill="white" opacity=".55"/>
+          <rect x="10.3" y="7" width="3.4" height="13" rx="1.2" fill="white"/>
+          <rect x="16.6" y="16" width="3.4" height="4" rx="1.2" fill="white" opacity=".4"/>
+        </svg>
+      </span>
+      <h1>评测数据看板</h1>
+    </div>
+    <div class="head-actions">
+      <button id="switchProduct" class="switch-btn" type="button">
+        <span id="switchLabel">切换到 AIME</span><i id="switchArrow" aria-hidden="true">→</i>
+      </button>
+      <div class="status-bar">
+        <i class="live-dot" aria-hidden="true"></i>
+        <span>更新</span>
+        <b id="updated">—</b>
+      </div>
     </div>
   </header>
 
-  <!-- ============================ 问财 ============================ -->
-  <section class="flex min-h-0 flex-1 flex-col rounded-2xl border border-slate-200/80 bg-[#fbfcfd] p-3">
-    <div class="mb-2.5 flex h-8 shrink-0 items-center justify-between px-1">
-      <span class="badge badge-sm border-0 bg-wc-soft text-[10.5px] font-semibold tracking-wide text-wc">问财</span>
-      <dl id="wcKpis" class="flex items-stretch divide-x divide-slate-200/80"></dl>
-    </div>
-    <div class="grid min-h-0 flex-1 auto-rows-fr grid-cols-12 gap-3">
-      <article class="col-span-4 flex min-h-0 flex-col rounded-xl border border-slate-200/70 bg-white shadow-card">
-        <div class="flex shrink-0 items-center justify-between px-4 pb-1 pt-3">
-          <h2 class="text-[12px] font-semibold tracking-tight text-slate-700">数据量</h2>
-          <span id="wcVolStat" class="text-[10.5px] text-slate-400"></span>
-        </div>
-        <div class="flex min-h-0 flex-1">
-          <div id="wcRing" class="h-full w-[34%]"></div>
-          <div id="wcCats" class="h-full min-w-0 flex-1 pb-1 pr-1"></div>
-        </div>
-      </article>
+  <main class="board">
 
-      <article class="col-span-4 flex min-h-0 flex-col rounded-xl border border-slate-200/70 bg-white shadow-card">
-        <div class="flex shrink-0 items-center justify-between px-4 pb-0.5 pt-3">
-          <h2 class="text-[12px] font-semibold tracking-tight text-slate-700">对比结论</h2>
-          <span id="wcCmpStat" class="text-[10.5px] text-slate-400"></span>
-        </div>
-        <div id="wcCmpLegend" class="flex shrink-0 items-center gap-3 px-4 pb-1 text-[10px] text-slate-500"></div>
-        <div id="wcCompare" class="min-h-0 flex-1 px-1 pb-1"></div>
-      </article>
+    <!-- ============================ 问财 ============================ -->
+    <section class="page is-active" data-product="wencai" aria-hidden="false">
+      <header class="product-head">
+        <div class="product-title"><i class="product-dot"></i>问财</div>
+      </header>
 
-      <article class="col-span-4 flex min-h-0 flex-col rounded-xl border border-slate-200/70 bg-white shadow-card">
-        <div class="flex shrink-0 items-center justify-between px-4 pb-0.5 pt-3">
-          <h2 class="text-[12px] font-semibold tracking-tight text-slate-700">归因</h2>
-          <span id="wcAttrStat" class="text-[10.5px] text-slate-400"></span>
-        </div>
-        <div class="flex shrink-0 items-center justify-between px-4 pb-1 text-[10px] text-slate-500">
-          <span id="wcAttrNote"></span>
-          <span id="wcAttrLegend" class="flex items-center gap-3"></span>
-        </div>
-        <div id="wcAttr" class="min-h-0 flex-1 px-1 pb-1"></div>
-      </article>
-    </div>
-  </section>
-
-  <!-- ============================ AIME ============================ -->
-  <section class="flex min-h-0 flex-1 flex-col rounded-2xl border border-slate-200/80 bg-[#fbfcfd] p-3">
-    <div class="mb-2.5 flex h-8 shrink-0 items-center justify-between px-1">
-      <span class="badge badge-sm border-0 bg-ai-soft text-[10.5px] font-semibold tracking-wide text-ai">AIME</span>
-      <dl id="aiKpis" class="flex items-stretch divide-x divide-slate-200/80"></dl>
-    </div>
-    <div class="grid min-h-0 flex-1 auto-rows-fr grid-cols-12 gap-3">
-      <article class="col-span-4 flex min-h-0 flex-col rounded-xl border border-slate-200/70 bg-white shadow-card">
-        <div class="flex shrink-0 items-center justify-between px-4 pb-1 pt-3">
-          <h2 class="text-[12px] font-semibold tracking-tight text-slate-700">数据量</h2>
-          <span id="aiVolStat" class="text-[10.5px] text-slate-400"></span>
-        </div>
-        <div class="flex min-h-0 flex-1">
-          <div id="aiRing" class="h-full w-[34%]"></div>
-          <div id="aiCats" class="h-full min-w-0 flex-1 pb-1 pr-1"></div>
-        </div>
-      </article>
-
-      <article class="col-span-4 flex min-h-0 flex-col rounded-xl border border-slate-200/70 bg-white shadow-card">
-        <div class="flex shrink-0 items-center justify-between px-4 pb-0.5 pt-3">
-          <h2 class="text-[12px] font-semibold tracking-tight text-slate-700">输出日历</h2>
-          <span id="aiOutStat" class="text-[10.5px] text-slate-400"></span>
-        </div>
-        <div id="aiOutLegend" class="flex shrink-0 items-center gap-3 px-4 pb-1 text-[10px] text-slate-500"></div>
-        <div id="aiOutput" class="min-h-0 flex-1 px-1 pb-1"></div>
-      </article>
-
-      <article class="col-span-4 flex min-h-0 flex-col rounded-xl border border-slate-200/70 bg-white shadow-card">
-        <div class="flex shrink-0 items-center justify-between px-4 pb-0.5 pt-3">
-          <h2 class="text-[12px] font-semibold tracking-tight text-slate-700">归因</h2>
-          <span id="aiAttrStat" class="text-[10.5px] text-slate-400"></span>
-        </div>
-        <div class="flex shrink-0 items-center px-4 pb-1 text-[10px] text-slate-500">
-          <span id="aiSevChips" class="flex items-center gap-2.5"></span>
-        </div>
-        <div class="relative min-h-0 flex-1">
-          <div id="aiAttr" class="h-full w-full px-1 pb-1"></div>
-          <div class="pointer-events-none absolute bottom-2 right-3 flex items-center gap-1.5 rounded-md bg-white/85 px-1.5 py-0.5 text-[9px] text-slate-400 backdrop-blur">
-            P1 占比
-            <span class="h-1.5 w-10 rounded-full bg-gradient-to-r from-rose-200 to-rose-800"></span>
-            低 → 高
+      <div class="page-grid">
+        <article class="card card--wide" data-card>
+          <header class="card-head">
+            <h2>数据量</h2>
+            <span class="card-meta" id="wcVolMeta"></span>
+          </header>
+          <div class="card-hero">
+            <span class="hero-num" id="wcTotal" data-count="0">0</span>
+            <span class="hero-unit">条输入</span>
           </div>
-        </div>
-      </article>
-    </div>
-  </section>
+          <div class="card-note">
+            <span class="note-left">
+              <button id="wcVolBack" class="drill-back" type="button" hidden>← 全部</button>
+              <span id="wcVolNote">最大类</span>
+            </span>
+            <span id="wcVolMax"></span>
+          </div>
+          <div class="task-list" id="wcTaskList" role="img" aria-label="问财任务类型分布"></div>
+          <div class="sub-list" id="wcSubList" hidden></div>
+        </article>
+
+        <article class="card card--wide" data-card>
+          <header class="card-head">
+            <h2>评测量</h2>
+          </header>
+          <div class="card-hero">
+            <span class="hero-num" id="wcEvaluated" data-count="0">0</span>
+            <span class="hero-unit">条已评测</span>
+            <span class="hero-side">待评测 <b id="wcPending">—</b> 条</span>
+          </div>
+          <div class="card-note">
+            <span>问题/回答</span>
+            <span id="wcEvalNote"></span>
+          </div>
+          <div class="cover-body">
+            <div class="ring-wrap">
+              <div class="chart-fill" id="wcCover" role="img" aria-label="问财评测覆盖率"></div>
+              <div class="ring-center">
+                <span class="ring-pct" id="wcCoverPct" data-count="0" data-decimals="1" data-suffix="%">0%</span>
+                <span class="ring-label">覆盖率</span>
+              </div>
+            </div>
+            <div class="eval-side">
+              <div class="model-list" id="wcModels"></div>
+              <div class="eval-stats" id="wcEvalStats"></div>
+            </div>
+          </div>
+        </article>
+
+        <article class="card card--third" data-card>
+          <header class="card-head">
+            <h2>归因体系</h2>
+          </header>
+          <div class="card-hero">
+            <span class="hero-num" id="wcProblems" data-count="0">0</span>
+            <span class="hero-unit">个问题</span>
+            <span class="hero-side" id="wcAttrSide"></span>
+          </div>
+          <div class="card-note card-note--legend">
+            <span></span>
+            <span class="legend-scale" aria-hidden="true">
+              <span>A 组</span><i class="legend-bar legend-bar--ab"></i><span>B 组</span>
+            </span>
+          </div>
+          <div class="attr-list" id="wcAttr" role="img" aria-label="问财归因体系"></div>
+        </article>
+
+        <article class="card card--third" data-card>
+          <header class="card-head">
+            <h2>聚类体系</h2>
+            <span class="card-meta">示例</span>
+          </header>
+          <div class="card-hero">
+            <span class="hero-num" id="wcClusterSessions" data-count="0">0</span>
+            <span class="hero-unit">会话</span>
+            <span class="hero-side" id="wcClusterSide"></span>
+          </div>
+          <div class="card-note">
+            <span class="note-left">
+              <button id="wcClusterBack" class="drill-back" type="button" hidden>← 全部</button>
+              <span id="wcClusterNote">5 环节</span>
+            </span>
+            <span id="wcClusterNoteR">3 层</span>
+          </div>
+          <div class="chart" id="wcCluster" role="img" aria-label="问财聚类体系"></div>
+        </article>
+
+        <article class="card card--third" data-card>
+          <header class="card-head">
+            <h2>预测体系</h2>
+            <span class="card-meta">示例</span>
+          </header>
+          <div class="card-hero">
+            <span class="hero-num" id="wcForecast" data-count="0">0</span>
+            <span class="hero-unit">条/日</span>
+            <span class="hero-side" id="wcForecastTrend"></span>
+          </div>
+          <div class="card-note">
+            <span>未来 7 天</span>
+            <span id="wcForecastNote"></span>
+          </div>
+          <div class="chart" id="wcForecastChart" role="img" aria-label="问财预测体系"></div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ============================ AIME ============================ -->
+    <section class="page" data-product="aime" aria-hidden="true">
+      <header class="product-head">
+        <div class="product-title"><i class="product-dot"></i>AIME</div>
+      </header>
+
+      <div class="page-grid">
+        <article class="card card--wide" data-card>
+          <header class="card-head">
+            <h2>数据量</h2>
+            <span class="card-meta" id="aiVolMeta"></span>
+          </header>
+          <div class="card-hero">
+            <span class="hero-num" id="aiTotal" data-count="0">0</span>
+            <span class="hero-unit">条输入</span>
+          </div>
+          <div class="card-note">
+            <span class="note-left">
+              <button id="aiVolBack" class="drill-back" type="button" hidden>← 全部</button>
+              <span id="aiVolNote">最大类</span>
+            </span>
+            <span id="aiVolMax"></span>
+          </div>
+          <div class="task-list" id="aiTaskList" role="img" aria-label="AIME 任务类型分布"></div>
+          <div class="sub-list" id="aiSubList" hidden></div>
+        </article>
+
+        <article class="card card--wide" data-card>
+          <header class="card-head">
+            <h2>评测量</h2>
+          </header>
+          <div class="card-hero">
+            <span class="hero-num" id="aiEvaluated" data-count="0">0</span>
+            <span class="hero-unit">条已评测</span>
+            <span class="hero-side">待评测 <b id="aiPending">—</b> 条</span>
+          </div>
+          <div class="card-note">
+            <span>问题/回答</span>
+            <span id="aiEvalNote"></span>
+          </div>
+          <div class="cover-body cover-body--aime">
+            <div class="ring-wrap">
+              <div class="chart-fill" id="aiCover" role="img" aria-label="AIME 评测覆盖率"></div>
+              <div class="ring-center">
+                <span class="ring-pct" id="aiCoverPct" data-count="0" data-decimals="1" data-suffix="%">0%</span>
+                <span class="ring-label">覆盖率</span>
+              </div>
+            </div>
+            <div class="eval-detail">
+              <div class="model-list" id="aiModels"></div>
+              <div class="spark">
+                <div class="spark-head">
+                  <span>近期产出</span>
+                  <span id="aiSparkPeak"></span>
+                </div>
+                <div class="spark-bars" id="aiSpark" role="img" aria-label="AIME 近期每日评测产出"></div>
+                <div class="spark-axis"><span id="aiSparkStart"></span><span id="aiSparkEnd"></span></div>
+              </div>
+              <div class="eval-stats" id="aiEvalStats"></div>
+            </div>
+          </div>
+        </article>
+
+        <article class="card card--third" data-card>
+          <header class="card-head">
+            <h2>归因体系</h2>
+          </header>
+          <div class="card-hero">
+            <span class="hero-num" id="aiProblems" data-count="0">0</span>
+            <span class="hero-unit">个问题</span>
+            <span class="hero-side" id="aiAttrSide"></span>
+          </div>
+          <div class="card-note card-note--legend">
+            <span class="severity-chips" id="aiSevChips"></span>
+            <span class="legend-scale" title="颜色 = P1 占比" aria-hidden="true">
+              <span>低</span><i class="legend-bar legend-bar--p1"></i><span>高</span>
+            </span>
+          </div>
+          <div class="attr-list" id="aiAttr" role="img" aria-label="AIME 归因体系"></div>
+        </article>
+
+        <article class="card card--third" data-card>
+          <header class="card-head">
+            <h2>聚类体系</h2>
+            <span class="card-meta">示例</span>
+          </header>
+          <div class="card-hero">
+            <span class="hero-num" id="aiClusterSessions" data-count="0">0</span>
+            <span class="hero-unit">会话</span>
+            <span class="hero-side" id="aiClusterSide"></span>
+          </div>
+          <div class="card-note">
+            <span class="note-left">
+              <button id="aiClusterBack" class="drill-back" type="button" hidden>← 全部</button>
+              <span id="aiClusterNote">6 环节</span>
+            </span>
+            <span id="aiClusterNoteR">3 层</span>
+          </div>
+          <div class="chart" id="aiCluster" role="img" aria-label="AIME 聚类体系"></div>
+        </article>
+
+        <article class="card card--third" data-card>
+          <header class="card-head">
+            <h2>预测体系</h2>
+            <span class="card-meta">示例</span>
+          </header>
+          <div class="card-hero">
+            <span class="hero-num" id="aiForecast" data-count="0">0</span>
+            <span class="hero-unit">条/日</span>
+            <span class="hero-side" id="aiForecastTrend"></span>
+          </div>
+          <div class="card-note">
+            <span>未来 7 天</span>
+            <span id="aiForecastNote"></span>
+          </div>
+          <div class="chart" id="aiForecastChart" role="img" aria-label="AIME 预测体系"></div>
+        </article>
+      </div>
+    </section>
+
+  </main>
 </div>
 
-<div id="mask" class="fixed inset-0 z-10 grid place-items-center bg-[#f5f6f8]/90 text-[12px] text-slate-500">
-  <span>加载中…</span>
+<div id="mask" class="mask">
+  <div class="mask-inner">
+    <span class="spinner" aria-hidden="true"></span>
+    <span>正在加载评测数据…</span>
+  </div>
 </div>
 
 <script src="echarts.min.js"></script>
+<script src="vendor/countUp.umd.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

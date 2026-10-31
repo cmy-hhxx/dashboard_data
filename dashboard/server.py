@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Eval dashboard server: static files + generated data.json on :5001."""
 import json
+import mimetypes
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -51,8 +53,6 @@ def refresh_once():
 
 
 def scheduler():
-    if os.environ.get("DISABLE_REFRESH") == "1":
-        return
     while True:
         try:
             refresh_once()
@@ -66,8 +66,36 @@ class Handler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=STATIC, **kwargs)
 
     def end_headers(self):
-        self.send_header("Cache-Control", "no-store")
+        path = self.path.split("?", 1)[0]
+        if path in ("/data.json", "/healthz"):
+            policy = "no-store"
+        elif path in ("/", "/index.html"):
+            policy = "no-cache"
+        elif path.startswith("/vendor/") or path == "/echarts.min.js":
+            policy = "public, max-age=31536000, immutable"
+        else:
+            policy = "no-cache"
+        self.send_header("Cache-Control", policy)
         super().end_headers()
+
+    def _serve_gzip(self, path):
+        gz = path + ".gz"
+        try:
+            stat = os.stat(gz)
+        except OSError:
+            return False
+        ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Encoding", "gzip")
+        self.send_header("Content-Length", str(stat.st_size))
+        self.send_header("Vary", "Accept-Encoding")
+        self.send_header("Last-Modified", self.date_time_string(stat.st_mtime))
+        self.end_headers()
+        with open(gz, "rb") as fh:
+            shutil.copyfileobj(fh, self.wfile)
+        self.log_request(200)
+        return True
 
     def do_GET(self):
         if self.path.startswith("/healthz"):
@@ -83,6 +111,15 @@ class Handler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if "gzip" in self.headers.get("Accept-Encoding", ""):
+            path = self.translate_path(self.path)
+            if os.path.isdir(path):
+                index = os.path.join(path, "index.html")
+                if os.path.isfile(index):
+                    path = index
+            if os.path.isfile(path) and os.path.isfile(path + ".gz"):
+                self._serve_gzip(path)
+                return
         super().do_GET()
 
     def log_message(self, fmt, *args):

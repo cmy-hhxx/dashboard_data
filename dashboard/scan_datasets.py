@@ -62,7 +62,11 @@ def scan_input(row):
                 continue
             meta = rec.get("meta") or {}
             if row["product"].startswith("0_wencai"):
-                counters[("task", meta.get("task") or "未标注")] += 1
+                task = meta.get("task") or "未标注"
+                subtask = meta.get("subtask") or "未标注"
+                counters[("task", task)] += 1
+                counters[("subtask", subtask)] += 1
+                counters[("task_subtask", f"{task}\x1f{subtask}")] += 1
                 counters[("difficulty", meta.get("difficulty") or "未标注")] += 1
             else:
                 counters[("comefrom", meta.get("comefrom") or "未标注")] += 1
@@ -108,7 +112,7 @@ def main():
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as pool:
         for row in pool.map(scan_input, inputs):
             b = bucket(row)
-            entry = b.setdefault(row["split"], {"total": 0, "bytes": 0, "files": 0, "models": {}, "per_day": {}, "task": {}, "difficulty": {}, "comefrom": {}, "agent_mode": {}})
+            entry = b.setdefault(row["split"], {"total": 0, "bytes": 0, "files": 0, "models": {}, "per_day": {}, "task": {}, "subtask": {}, "task_subtask": {}, "difficulty": {}, "comefrom": {}, "agent_mode": {}})
             entry["total"] += row["lines"]
             entry["bytes"] += row["bytes"]
             entry["files"] += 1
@@ -117,7 +121,13 @@ def main():
             model["per_day"][row["date"]] = model["per_day"].get(row["date"], 0) + row["lines"]
             entry["per_day"][row["date"]] = entry["per_day"].get(row["date"], 0) + row["lines"]
             for (cat, value), n in row["cats"].items():
-                if cat in entry:
+                if cat not in entry:
+                    continue
+                if cat == "task_subtask":
+                    task, subtask = value.split("\x1f", 1)
+                    task_map = entry[cat].setdefault(task, {})
+                    task_map[subtask] = task_map.get(subtask, 0) + n
+                else:
                     entry[cat][value] = entry[cat].get(value, 0) + n
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as pool:
@@ -139,11 +149,19 @@ def main():
         p["bytes"] = {"input": sum(v["bytes"] for v in p["input"].values()), "output": sum(v["bytes"] for v in p["output"].values())}
         p["files"] = {"input": sum(v["files"] for v in p["input"].values()), "output": sum(v["files"] for v in p["output"].values())}
         cats = collections.defaultdict(collections.Counter)
+        task_subtasks = collections.defaultdict(collections.Counter)
         for split, meta in p["input"].items():
-            for cat in ("task", "difficulty", "comefrom", "agent_mode"):
+            for cat in ("task", "subtask", "difficulty", "comefrom", "agent_mode"):
                 for k, n in meta.get(cat, {}).items():
                     cats[cat][k] += n
+            for task, subs in (meta.get("task_subtask") or {}).items():
+                for subtask, n in subs.items():
+                    task_subtasks[task][subtask] += n
         p["categories"] = {cat: dict(sorted(c.items(), key=lambda kv: -kv[1])) for cat, c in cats.items()}
+        p["categories"]["task_subtask"] = {
+            task: dict(sorted(subs.items(), key=lambda kv: -kv[1]))
+            for task, subs in task_subtasks.items()
+        }
 
         pending = 0
         pairs = []

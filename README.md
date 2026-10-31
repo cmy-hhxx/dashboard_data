@@ -56,14 +56,24 @@ ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
 ```
 
 服务监听容器 `:5001`，对外是 `http://dashboard.example.com:2768/`。服务每 30 分钟自动重扫数据集并重算。
+静态资源部署时预压缩（JS/CSS/HTML/data.json），ECharts/vendor 长缓存，`app.js`/`app.css` 校验缓存，`data.json` 不缓存。
 
 | 文件 | 作用 |
 |---|---|
 | `scan_datasets.py` | 扫 `datasets` 的输入/输出：逐文件条数、按模型×日期配对、meta 分类分布 → `cache/datasets.json` |
-| `prepare.py` | 解析输出侧的归因/对比/Token，合并扫描结果 → `static/data.json` |
+| `prepare.py` | 解析输出侧的归因/覆盖/Token，合并扫描结果 → `static/data.json` |
 | `server.py` | `ThreadingHTTPServer` + 定时重算；`/healthz` 返回最近一次刷新状态 |
-| `static/` | 页面、ECharts 离线包、构建好的 `app.css` |
+| `static/` | 页面、ECharts 离线包、animate.css / CountUp.js、构建好的 `app.css` |
+| `precompress.sh` | 部署时预压缩 JS/CSS/HTML；`prepare.py` 额外产出 `data.json.gz`，`server.py` 按 `Accept-Encoding` 直接发 `.gz` |
 | `build/` | Tailwind/DaisyUI 配置与构建入口（`npx tailwindcss -c tailwind.config.js -i input.css -o ../static/app.css --minify`） |
 
-口径：输入 = 数据集中的 `*_input.jsonl`；已评测 = 同模型同日期的 `*_output.jsonl` 条数；待评测 = 输入 − 已评测。
-问财按任务类型、AIME 按 comefrom 入口（归并为选股 / Ainvest / 模拟交易 / 搜索等）展示分布。
+口径：输入 = 数据集中的 `*_input.jsonl`；已评测 = 输出侧回答记录数（问财四个版本 answer 合计，
+不含 comparison 记录；AIME 输出记录数）；待评测 = 输入 − 已评测。
+问财 / AIME 都按 `meta.task` 展示任务分布：问财不展示「其他/其它」，AIME 把「其它」并进「其他」；
+AIME 的 task/subtask 取自输出 `turns[].meta` 最后一轮，与问财使用同一套标签。
+每个产品一页，页面采用 2+3：上排「数据量 / 评测量」，下排「归因体系 / 聚类体系 / 预测体系」。
+右上角按钮带翻页动画，在问财、AIME 两个完整页面之间切换；窄屏改为单列滚动。
+数据量与归因使用全名条形列表（task → subtask 下钻、A/B 或 P0-P3 堆叠），避免树图小标签只显示两个字。
+评测量看覆盖、模型/版本、Tokens 与 P50；聚类体系展示真实 cluster_tree 的三层结构，
+点击环节/机制逐层下钻，返回按钮恢复到上一级（演示原型）；预测体系展示未来 7 天趋势与置信区间（演示数据）。
+问财不再展示对战结论。

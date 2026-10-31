@@ -18,7 +18,11 @@ __pycache__/
 
 # 看板运行时产物（数据由服务器生成，不入库）
 dashboard/static/data.json
+dashboard/static/data.json.gz
 dashboard/cache/
 dashboard/build/node_modules/
 dashboard/build/.npm-cache/
 dashboard/logs/
+
+# 部署时预压缩产物
+dashboard/static/**/*.gz

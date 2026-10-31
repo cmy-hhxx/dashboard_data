@@ -1,97 +1,69 @@
-/* Eval dashboard — two product sections, built from the curated datasets tree. */
+/* Eval dashboard — 问财 / AIME, one visual system: 数据量 → 评测量 → 归因体系. */
 (function () {
   const $ = (id) => document.getElementById(id);
-  const FONT = '-apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif';
+  const FONT =
+    '"Inter","SF Pro Text",-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
+  const REDUCED = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const charts = [];
-  const relayout = [];
-
-  const fmt = (n) => (n == null ? "—" : Number(n).toLocaleString("en-US"));
-  const pct = (a, b) => (b ? (100 * a) / b : 0);
+  const volumeState = {
+    wencai: { src: null, task: null },
+    aime: { src: null, task: null },
+  };
+  const clusterState = {
+    wencai: { src: null, stack: [], root: null },
+    aime: { src: null, stack: [], root: null },
+  };
+  const clusterCharts = {};
+  let resizeRaf = 0;
+  const resizeQueue = new Set();
 
   const C = {
-    a: "#0f766e", aLight: "#7cc3b8",
-    b: "#ea580c", bLight: "#f6b48e",
-    ai: "#4338ca", aiMid: "#6366f1", aiLight: "#a5b4fc",
-    sev0: "#7f1d1d", sev1: "#dc2626", sev2: "#f59e0b", sev3: "#94a3b8",
+    a: "#0f766e",
+    aMid: "#3fb3a8",
+    b: "#ea580c",
+    bMid: "#f6b48e",
+    ai: "#4338ca",
+    aiMid: "#6366f1",
+    aiLight: "#a5b4fc",
   };
 
-  const TEAL = ["#0f766e", "#12857c", "#1f9a90", "#3fb3a8", "#6cc8be", "#98dbd3", "#bfeae4", "#e0f5f1"];
-  const INDIGO = ["#4338ca", "#5548d4", "#6a5ede", "#8177e6", "#9a92ee", "#b4aef4", "#cdc9f8", "#e6e4fc"];
-
-  const CAT_MAP = {
-    AndroidAinvestAimeTab: "AIME·安卓",
-    AndroidScreenerAimeTab: "选股·安卓",
-    iOSAinvestAimeTab: "AIME·iOS",
-    iOSScreenerAimeTab: "选股·iOS",
-    insearchaimechat: "搜索内对话",
-    AndroidScreenerNewUserGuide: "新手引导·安卓",
-    "AndroidScreenerQuoteLiteInputEverywhere": "行情输入·安卓",
-    "material-production": "内容生产",
-    "newsroom-content-production": "资讯生产",
-    AndroidAinvestNavirobot: "导航机器人",
-    WebAinvestNavirobot: "导航机器人·Web",
-    evaluation: "评测",
-    其他: "其他",
-    未标注: "未标注",
+  const AIME_SEVERITIES = ["P0", "P1", "P2", "P3", "未分级"];
+  const SEV_COLOR = {
+    P0: "#7f1d1d",
+    P1: "#dc2626",
+    P2: "#f59e0b",
+    P3: "#94a3b8",
+    未分级: "#cbd5e1",
   };
 
-  const TASK_SHORT = {
-    交易建议: "交易", 事件解读: "事件", 复合意图: "复合", 客服问答: "客服",
-    事实探究核实类: "核实", 投教问答: "投教", 其它: "其它", 信息检索类: "检索",
-    操作指令类: "指令", 文件生成类: "文件", 数据查询类: "取数", 时间感知: "时间",
-    安全合规: "合规", 机会挖掘类: "机会", 诊断分析类: "诊断", 预测推演类: "预测",
-    确定性标的筛选: "选股", 标的推荐类: "荐股", 统计回测建模计算: "回测",
-    账户诊断优化: "账户", 情感表达: "情感", 资产配置建议: "配置",
-    金融逻辑推理: "推理", 目标跟踪执行类: "跟踪", 多模态问答: "多模态", 其他: "其他",
+  const fmt = (n) => (n == null || Number.isNaN(Number(n)) ? "—" : Number(n).toLocaleString("en-US"));
+  const fmtFixed = (n, d) =>
+    Number(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+  const pct = (a, b) => (b ? (100 * a) / b : 0);
+  const fmtTokens = (n) => {
+    if (!n) return "—";
+    if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+    if (n >= 1e3) return Math.round(n / 1e3) + "K";
+    return String(n);
   };
-
-  const SHORT = {
-    终稿生成轮: "终稿生成",
-    "shell 代码解释器": "shell 解释器",
-    中间推理处理: "中间推理",
-    "web_search 网页检索": "网页检索",
-    "web_fetch 网页抓取": "网页抓取",
-    "finquery 取数服务": "finquery",
-    "其他工具（CodeInterpreter）": "CodeInterp.",
-    "planner-finquery 取数规划子模型": "plan-finquery",
-    "planner-search 检索规划子模型": "plan-search",
-    "其他工具（aime_memory_read）": "memory_read",
-    "其他工具（customer_services）": "customer_services",
-    "Expert 推理轮": "Expert 推理",
+  const dateRange = (r) => {
+    if (!r) return "—";
+    return r.start === r.end ? r.start : `${r.start.slice(5)} → ${r.end.slice(5)}`;
   };
-  const short = (s) => SHORT[s] || (s.length > 11 ? s.slice(0, 11) + "…" : s);
-  const catShort = (s) => CAT_MAP[s] || (s.length > 9 ? s.slice(0, 9) + "…" : s);
+  const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 
-  const tip = {
-    backgroundColor: "rgba(15,23,42,.95)",
-    borderWidth: 0,
-    padding: [9, 11],
-    textStyle: { color: "#fff", fontSize: 11, fontFamily: FONT },
-    extraCssText: "border-radius:10px;box-shadow:0 12px 30px rgba(15,23,42,.25);",
-  };
-  const tipRow = (color, label, value) =>
-    `<div class="flex items-center gap-1.5 leading-5"><i class="inline-block h-1.5 w-1.5 rounded-sm" style="background:${color}"></i>` +
-    `<span class="text-slate-300">${label}</span><b class="ml-auto pl-5 font-semibold text-white">${value}</b></div>`;
-  const tipHead = (t) => `<div class="mb-1 text-[10.5px] text-slate-400">${t}</div>`;
-
-  const axisStyle = { color: "#94a3b8", fontSize: 10, fontFamily: FONT };
-  const splitLine = { lineStyle: { color: "#f1f5f9" } };
-
-  function chart(id, option) {
-    const el = $(id);
-    if (!el) return null;
-    const c = echarts.init(el, null, { renderer: "canvas" });
-    c.setOption(option);
-    charts.push(c);
-    return c;
-  }
-
-  function legendDot(name, color) {
-    return `<span class="inline-flex items-center gap-1"><i class="inline-block h-1.5 w-1.5 rounded-sm" style="background:${color}"></i>${name}</span>`;
-  }
-
-  function metric(label, value, unit) {
-    return `<div class="metric"><dt>${label}</dt><dd>${value}${unit ? `<span>${unit}</span>` : ""}</dd></div>`;
+  function lerpColor(a, b, t) {
+    const pa = parseInt(a.slice(1), 16);
+    const pb = parseInt(b.slice(1), 16);
+    const mix = (s) =>
+      Math.round(((pa >> s) & 255) + (((pb >> s) & 255) - ((pa >> s) & 255)) * clamp(t, 0, 1));
+    return (
+      "#" +
+      [16, 8, 0]
+        .map((s) => mix(s).toString(16).padStart(2, "0"))
+        .join("")
+    );
   }
 
   function hexA(hex, alpha) {
@@ -99,507 +71,969 @@
     return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
   }
 
-  function lerpColor(a, b, t) {
-    const pa = parseInt(a.slice(1), 16);
-    const pb = parseInt(b.slice(1), 16);
-    const mix = (s) => Math.round(((pa >> s) & 255) + (((pb >> s) & 255) - ((pa >> s) & 255)) * t);
-    return `rgb(${mix(16)},${mix(8)},${mix(0)})`;
+  function isDark(hex) {
+    const n = parseInt(hex.slice(1), 16);
+    const r = (n >> 16) & 255;
+    const g = (n >> 8) & 255;
+    const b = n & 255;
+    return 0.299 * r + 0.587 * g + 0.114 * b < 150;
   }
 
-  // ------------------------------------------------------------ KPI strips
-  function renderKpis(d) {
-    const wc = d.wencai, ai = d.aime, cw = d.conclusion.wencai, ca = d.conclusion.aime;
-    $("wcKpis").innerHTML = [
-      metric("输入", fmt(wc.input.total), "条"),
-      metric("已评测", fmt(wc.input.evaluated), "条"),
-      metric("待评测", fmt(wc.input.pending), "条"),
-      metric("覆盖", cw.coverage.toFixed(1), "%"),
-    ].join("");
-    $("aiKpis").innerHTML = [
-      metric("输入", fmt(ai.input.total), "条"),
-      metric("已评测", fmt(ai.input.evaluated), "条"),
-      metric("待评测", fmt(ai.input.pending), "条"),
-      metric("覆盖", ca.coverage.toFixed(1), "%"),
-    ].join("");
+  const abColor = (bShare) =>
+    bShare <= 0.5
+      ? lerpColor(C.a, "#e2e8f0", bShare * 2)
+      : lerpColor("#e2e8f0", C.b, (bShare - 0.5) * 2);
+
+  // ---------------------------------------------------------------- tooltip
+  const tip = {
+    backgroundColor: "#ffffff",
+    borderColor: "#e7ecf2",
+    borderWidth: 1,
+    padding: 0,
+    textStyle: { color: "#0f172a", fontSize: 11.5, fontFamily: FONT },
+    extraCssText: "border-radius:12px;box-shadow:0 16px 36px -16px rgba(15,23,42,.35);",
+    appendToBody: true,
+    confine: false,
+  };
+  const tipCard = (html) => `<div class="tip-card">${html}</div>`;
+  const tipHead = (title, meta, color) =>
+    `<div class="tip-head"><i style="background:${color || "#94a3b8"}"></i><span>${title}</span>` +
+    `${meta ? `<em>${meta}</em>` : ""}</div>`;
+  const tipSep = () => `<div class="tip-sep"></div>`;
+  const tipRow = (color, label, value) =>
+    `<div class="tip-row"><i style="background:${color}"></i><span>${label}</span><b>${value}</b></div>`;
+
+  // ------------------------------------------------------------------ utils
+  function setNum(id, value, opts) {
+    const el = $(id);
+    if (!el) return;
+    el.dataset.count = String(value == null ? 0 : value);
+    if (opts && opts.decimals != null) el.dataset.decimals = String(opts.decimals);
+    if (opts && opts.suffix) el.dataset.suffix = opts.suffix;
   }
 
-  // ------------------------------------------------------- volume card (both)
+  function startCounters() {
+    const CU = (window.countUp && window.countUp.CountUp) || window.CountUp;
+    document.querySelectorAll("[data-count]").forEach((el) => {
+      const end = Number(el.dataset.count);
+      if (!Number.isFinite(end)) return;
+      const decimals = Number(el.dataset.decimals || 0);
+      const suffix = el.dataset.suffix || "";
+      if (REDUCED || !CU) {
+        el.textContent = fmtFixed(end, decimals) + suffix;
+        return;
+      }
+      const counter = new CU(el, end, {
+        duration: 1.1,
+        decimalPlaces: decimals,
+        separator: ",",
+        decimal: ".",
+        suffix,
+        useGrouping: true,
+      });
+      if (counter.error) {
+        el.textContent = fmtFixed(end, decimals) + suffix;
+      } else {
+        counter.start();
+      }
+    });
+  }
+
+  function animateTo(id, value, decimals) {
+    const el = $(id);
+    if (!el) return;
+    const d = decimals || 0;
+    el.dataset.count = String(value == null ? 0 : value);
+    const CU = (window.countUp && window.countUp.CountUp) || window.CountUp;
+    if (REDUCED || !CU) {
+      el.textContent = fmtFixed(value || 0, d);
+      return;
+    }
+    const counter = new CU(el, value || 0, {
+      duration: 0.45,
+      decimalPlaces: d,
+      separator: ",",
+      decimal: ".",
+      useGrouping: true,
+    });
+    if (counter.error) el.textContent = fmtFixed(value || 0, d);
+    else counter.start();
+  }
+
+  function scheduleResize(chart, el) {
+    if (!el.clientWidth || !el.clientHeight) return;
+    resizeQueue.add(chart);
+    if (resizeRaf) return;
+    resizeRaf = requestAnimationFrame(() => {
+      resizeRaf = 0;
+      resizeQueue.forEach((c) => c.resize());
+      resizeQueue.clear();
+    });
+  }
+
+  function chart(id, option) {
+    const el = $(id);
+    if (!el || typeof echarts === "undefined") return null;
+    const c = echarts.init(el, null, { renderer: "canvas" });
+    c.setOption(option);
+    charts.push(c);
+    if (window.ResizeObserver) {
+      new ResizeObserver(() => scheduleResize(c, el)).observe(el);
+    }
+    return c;
+  }
+
+  // ----------------------------------------------------------- volume drill
+  const TASK_HIDE = new Set(["其他", "其它", "未标注"]);
+
+  function tasksOf(src, isWc) {
+    let cats = [...((src.input.categories && src.input.categories.task) || [])]
+      .map((c) => ({ ...c }))
+      .filter((c) => c.name !== "未标注")
+      .sort((a, b) => (b.value || 0) - (a.value || 0));
+    if (isWc) {
+      cats = cats.filter((c) => !TASK_HIDE.has(c.name));
+    } else {
+      // AIME 的「其它」并进「其他」，避免两个同义块；其他保留，尾部仍有量。
+      const other = cats.find((c) => c.name === "其他");
+      const qita = cats.find((c) => c.name === "其它");
+      if (qita) {
+        if (other) other.value += qita.value;
+        else cats.push({ name: "其他", value: qita.value });
+        cats = cats.filter((c) => c.name !== "其它");
+      }
+      cats.sort((a, b) => (b.value || 0) - (a.value || 0));
+    }
+    return cats;
+  }
+
+  function subtasksOf(src, task, isWc) {
+    if (task === "其他" || task === "其它") return [];
+    const map = (src.input.categories && src.input.categories.task_subtask) || {};
+    const subs = (map[task] || []).filter((c) => c.name !== "未标注");
+    const taskValue = (tasksOf(src, isWc).find((t) => t.name === task) || {}).value || 0;
+    const sum = subs.reduce((n, c) => n + (c.value || 0), 0);
+    if (taskValue > sum) subs.push({ name: "其他", value: taskValue - sum });
+    return subs;
+  }
+
+  function isDrillable(src, task, isWc) {
+    return subtasksOf(src, task, isWc).length > 0;
+  }
+
+  function volumeColor(isWc, i, n) {
+    const from = isWc ? "#0b5f59" : "#312e81";
+    const to = isWc ? "#d9f0ec" : "#e0e7ff";
+    return lerpColor(from, to, n > 1 ? i / (n - 1) : 0);
+  }
+
+  function updateVolumeNote(product) {
+    const isWc = product === "wencai";
+    const st = volumeState[product];
+    const back = $(isWc ? "wcVolBack" : "aiVolBack");
+    const note = $(isWc ? "wcVolNote" : "aiVolNote");
+    const right = $(isWc ? "wcVolMax" : "aiVolMax");
+    if (st.task) {
+      back.hidden = false;
+      note.textContent = st.task;
+      const total = subtasksOf(st.src, st.task, isWc).reduce((n, c) => n + (c.value || 0), 0);
+      right.innerHTML = `${fmt(total)} <span>条</span>`;
+    } else {
+      back.hidden = true;
+      note.textContent = "最大类";
+      const top = tasksOf(st.src, isWc)[0];
+      right.innerHTML = top
+        ? `${top.name} <b>${pct(top.value, st.src.input.total).toFixed(1)}%</b>`
+        : "—";
+    }
+  }
+
+  function renderTaskList(product) {
+    const isWc = product === "wencai";
+    const st = volumeState[product];
+    const el = $(isWc ? "wcTaskList" : "aiTaskList");
+    if (!el) return;
+    const tasks = tasksOf(st.src, isWc);
+    const total = st.src.input.total || tasks.reduce((n, c) => n + (c.value || 0), 0) || 1;
+    const max = Math.max(1, ...tasks.map((c) => c.value || 0));
+    el.innerHTML =
+      `<div class="task-grid">` +
+      tasks
+        .map((c, i) => {
+          const share = pct(c.value, total);
+          const color = volumeColor(isWc, i, tasks.length);
+          return (
+            `<button class="task-row" type="button" data-task="${c.name}" title="${c.name} · ${fmt(c.value)} 条 · ${share.toFixed(1)}%">` +
+            `<span class="task-name">${c.name}</span>` +
+            `<span class="task-track"><i class="task-fill" data-w="${((100 * (c.value || 0)) / max).toFixed(1)}" style="background:${color}"></i></span>` +
+            `<span class="task-val">${fmt(c.value)}</span>` +
+            `<span class="task-pct">${share.toFixed(1)}%</span>` +
+            `</button>`
+          );
+        })
+        .join("") +
+      `</div>`;
+    const animate = () =>
+      el.querySelectorAll(".task-fill").forEach((f) => {
+        f.style.width = `${f.dataset.w}%`;
+      });
+    if (REDUCED) animate();
+    else requestAnimationFrame(animate);
+  }
+
+  function renderSubList(product) {
+    const isWc = product === "wencai";
+    const st = volumeState[product];
+    const list = $(isWc ? "wcSubList" : "aiSubList");
+    if (!list) return;
+    const subs = subtasksOf(st.src, st.task, isWc);
+    const total = subs.reduce((n, c) => n + (c.value || 0), 0) || 1;
+    const max = Math.max(1, ...subs.map((c) => c.value || 0));
+    list.innerHTML = subs
+      .map((c, i) => {
+        const share = pct(c.value, total);
+        const color = volumeColor(isWc, i, subs.length);
+        return (
+          `<div class="sub-row" title="${c.name} · ${fmt(c.value)} 条 · ${share.toFixed(1)}%">` +
+          `<span class="sub-name">${c.name}</span>` +
+          `<span class="sub-track"><i class="sub-fill" data-w="${((100 * (c.value || 0)) / max).toFixed(1)}" style="background:${color}"></i></span>` +
+          `<span class="sub-val">${fmt(c.value)}</span>` +
+          `<span class="sub-pct">${share.toFixed(1)}%</span>` +
+          `</div>`
+        );
+      })
+      .join("");
+    const animate = () =>
+      list.querySelectorAll(".sub-fill").forEach((f) => {
+        f.style.width = `${f.dataset.w}%`;
+      });
+    if (REDUCED) animate();
+    else requestAnimationFrame(animate);
+  }
+
+  function drawVolume(product) {
+    const isWc = product === "wencai";
+    const st = volumeState[product];
+    const taskList = $(isWc ? "wcTaskList" : "aiTaskList");
+    const subList = $(isWc ? "wcSubList" : "aiSubList");
+    if (!st.src || !taskList || !subList) return;
+    if (st.task) {
+      taskList.hidden = true;
+      subList.hidden = false;
+      renderSubList(product);
+    } else {
+      subList.hidden = true;
+      taskList.hidden = false;
+      renderTaskList(product);
+    }
+    updateVolumeNote(product);
+  }
+
+  // -------------------------------------------------------------- volume card
   function renderVolume(product, d) {
     const isWc = product === "wencai";
     const src = isWc ? d.wencai : d.aime;
-    const cats = isWc ? src.input.categories.task : src.input.categories.comefrom;
-    const palette = isWc ? TEAL : INDIGO;
-    const accent = isWc ? C.a : C.ai;
-    const evaluated = src.input.evaluated;
-    const pending = src.input.pending;
-    const total = src.input.total;
-    const coverage = pct(evaluated, total);
+    volumeState[product] = { src, task: null };
 
-    $(isWc ? "wcVolStat" : "aiVolStat").textContent = `已评测 ${fmt(evaluated)} · 待评测 ${fmt(pending)}`;
+    const taskList = $(isWc ? "wcTaskList" : "aiTaskList");
+    if (taskList) {
+      taskList.onclick = (ev) => {
+        const row = ev.target.closest(".task-row");
+        if (!row) return;
+        const st = volumeState[product];
+        if (!isDrillable(st.src, row.dataset.task, isWc)) return;
+        st.task = row.dataset.task;
+        drawVolume(product);
+      };
+    }
+    const back = $(isWc ? "wcVolBack" : "aiVolBack");
+    if (back) {
+      back.onclick = () => {
+        volumeState[product].task = null;
+        drawVolume(product);
+      };
+    }
 
-    chart(isWc ? "wcRing" : "aiRing", {
-      animationDuration: 700,
-      tooltip: { ...tip, formatter: (p) => tipHead(p.name) + tipRow(p.color, "条数", fmt(p.value)) },
-      title: {
-        text: coverage.toFixed(1) + "%",
-        subtext: "已评测",
-        left: "center",
-        top: "38%",
-        textAlign: "center",
-        textStyle: { fontSize: 17, fontWeight: 600, color: "#0f172a", fontFamily: FONT },
-        subtextStyle: { fontSize: 9.5, color: "#94a3b8", fontFamily: FONT },
+    drawVolume(product);
+    const input = src.input;
+    setNum(isWc ? "wcTotal" : "aiTotal", input.total);
+    $(isWc ? "wcVolMeta" : "aiVolMeta").textContent = dateRange(input.date_range);
+  }
+
+  // ------------------------------------------------------------ coverage card
+  function renderRing(id, evaluated, pending, color) {
+    const total = evaluated + pending;
+    chart(id, {
+      animationDuration: REDUCED ? 0 : 900,
+      animationEasing: "cubicOut",
+      animationDelay: REDUCED ? 0 : 160,
+      tooltip: {
+        ...tip,
+        formatter: (p) =>
+          tipCard(
+            tipHead(p.name, `${pct(p.value, total).toFixed(1)}%`, p.color) +
+              tipRow(p.color, "条数", fmt(p.value))
+          ),
       },
       series: [
         {
           type: "pie",
-          radius: ["60%", "80%"],
+          radius: ["72%", "94%"],
           center: ["50%", "50%"],
+          startAngle: 90,
           avoidLabelOverlap: false,
           label: { show: false },
           labelLine: { show: false },
-          itemStyle: { borderColor: "#fff", borderWidth: 2 },
+          itemStyle: { borderWidth: 0, borderRadius: 6 },
+          emphasis: {
+            scale: true,
+            scaleSize: 2,
+            itemStyle: { shadowBlur: 12, shadowColor: "rgba(15,23,42,.18)" },
+          },
           data: [
-            { value: evaluated, name: "已评测", itemStyle: { color: accent } },
-            { value: Math.max(0, pending), name: "待评测", itemStyle: { color: "#e9edf3" } },
+            { value: evaluated, name: "已评测", itemStyle: { color } },
+            { value: Math.max(0, pending), name: "待评测", itemStyle: { color: "#e9eef5" } },
           ],
         },
       ],
     });
-
-    const n = (cats || []).length;
-    const items = (cats || []).map((c, i) => {
-      const t = n > 1 ? i / (n - 1) : 0;
-      return {
-        name: c.name,
-        value: c.value,
-        itemStyle: { color: lerpColor(isWc ? "#0b5f59" : "#312e81", isWc ? "#cdeee9" : "#dcd9fb", t) },
-        label: { color: t < 0.55 ? "#fff" : "#0f172a" },
-      };
-    });
-
-    chart(isWc ? "wcCats" : "aiCats", {
-      animationDuration: 700,
-      tooltip: { ...tip, formatter: (p) => tipHead(p.name) + tipRow(accent, "输入条数", fmt(p.value)) },
-      series: [
-        {
-          type: "treemap",
-          left: 0,
-          right: 0,
-          top: 2,
-          bottom: 2,
-          roam: false,
-          nodeClick: false,
-          breadcrumb: { show: false },
-          itemStyle: { borderColor: "#fff", borderWidth: 2, gapWidth: 2, borderRadius: 5 },
-          label: {
-            show: true,
-            fontSize: isWc ? 8.5 : 10,
-            lineHeight: isWc ? 11 : 13,
-            fontFamily: FONT,
-            formatter: (p) => {
-              const name = isWc ? TASK_SHORT[p.name] || p.name : catShort(p.name);
-              return `${name}\n${fmt(p.value)}`;
-            },
-          },
-          data: items,
-        },
-      ],
-    });
   }
 
-  // ------------------------------------------------------- 问财 · 对比结论
-  function renderWencaiCompare(d) {
-    const out = d.wencai.output;
-    const cmp = out.comparisons || {};
-    const fast = cmp.a_fast_vs_b_fast;
-    const expert = cmp.a_expert_vs_b_expert;
-    if (!fast || !expert) return;
-
-    const rows = [
-      { label: "胜率 · fast", a: pct(fast.a_win, fast.n), b: pct(fast.b_win, fast.n) },
-      { label: "胜率 · expert", a: pct(expert.a_win, expert.n), b: pct(expert.b_win, expert.n) },
-      { label: "核心达成 · fast", a: out.meets_core.a_fast, b: out.meets_core.b_fast },
-      { label: "核心达成 · expert", a: out.meets_core.a_expert, b: out.meets_core.b_expert },
-    ];
-    const aWin = fast.a_win + expert.a_win;
-    const bWin = fast.b_win + expert.b_win;
-    $("wcCmpStat").textContent = `${fmt(out.comparison_total)} 组 · A ${aWin} : B ${bWin}`;
-    $("wcCmpLegend").innerHTML = [legendDot("A 组", C.a), legendDot("B 组", C.b)].join("");
-
-    chart("wcCompare", {
-      animationDuration: 700,
-      grid: { left: 96, right: 34, top: 16, bottom: 24 },
-      tooltip: {
-        ...tip,
-        trigger: "item",
-        formatter: (p) => {
-          const r = rows[p.dataIndex];
-          const counts = p.dataIndex < 2
-            ? [p.dataIndex === 0 ? fast.a_win : expert.a_win, p.dataIndex === 0 ? fast.b_win : expert.b_win]
-            : null;
-          const label = (v, n) => (n == null ? v.toFixed(1) + "%" : `${v.toFixed(1)}% · ${n} 组`);
-          return tipHead(r.label) + tipRow(C.a, "A 组", label(r.a, counts && counts[0])) + tipRow(C.b, "B 组", label(r.b, counts && counts[1]));
-        },
-      },
-      xAxis: {
-        type: "value",
-        min: 0,
-        max: 100,
-        axisLabel: { ...axisStyle, formatter: "{value}%" },
-        splitLine,
-        axisLine: { show: false },
-        axisTick: { show: false },
-      },
-      yAxis: {
-        type: "category",
-        inverse: true,
-        data: rows.map((r) => r.label),
-        axisLine: { show: false },
-        axisTick: { show: false },
-        axisLabel: { ...axisStyle, color: "#64748b", fontSize: 10.5 },
-      },
-      series: [
-        {
-          type: "custom",
-          z: 1,
-          silent: true,
-          data: rows.map((r, i) => [r.a, i]),
-          renderItem: (params, api) => {
-            const i = params.dataIndex;
-            const p1 = api.coord([rows[i].a, i]);
-            const p2 = api.coord([rows[i].b, i]);
-            return {
-              type: "line",
-              shape: { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1] },
-              style: { stroke: "#d7dee7", lineWidth: 5, lineCap: "round" },
-            };
-          },
-        },
-        {
-          name: "A 组",
-          type: "scatter",
-          z: 2,
-          symbolSize: 11,
-          data: rows.map((r, i) => [r.a, i]),
-          itemStyle: { color: C.a, borderColor: "#fff", borderWidth: 2 },
-          label: {
-            show: true,
-            position: "top",
-            distance: 9,
-            fontSize: 9.5,
-            color: C.a,
-            fontFamily: FONT,
-            formatter: (p) => p.value[0].toFixed(1) + "%",
-          },
-        },
-        {
-          name: "B 组",
-          type: "scatter",
-          z: 2,
-          symbolSize: 11,
-          data: rows.map((r, i) => [r.b, i]),
-          itemStyle: { color: C.b, borderColor: "#fff", borderWidth: 2 },
-          label: {
-            show: true,
-            position: "bottom",
-            distance: 9,
-            fontSize: 9.5,
-            color: C.b,
-            fontFamily: FONT,
-            formatter: (p) => p.value[0].toFixed(1) + "%",
-          },
-        },
-      ],
-    });
+  function renderModels(id, rows) {
+    const el = $(id);
+    if (!el) return;
+    const max = Math.max(1, ...rows.map((r) => r.value));
+    el.innerHTML = rows
+      .map(
+        (r) =>
+          `<div class="model-row" title="${r.name} · ${fmt(r.value)} 条">` +
+          `<span class="model-name">${r.name}</span>` +
+          `<span class="model-track"><i class="model-fill" data-w="${((100 * r.value) / max).toFixed(1)}" style="background:${r.color}"></i></span>` +
+          `<span class="model-val">${fmt(r.value)}</span>` +
+          `</div>`
+      )
+      .join("");
+    const animate = () =>
+      el.querySelectorAll(".model-fill").forEach((f) => {
+        f.style.width = `${f.dataset.w}%`;
+      });
+    if (REDUCED) animate();
+    else requestAnimationFrame(animate);
   }
 
-  // ------------------------------------------------------------ 问财 · 归因
+  function renderEvaluation(product, d) {
+    const isWc = product === "wencai";
+    const src = isWc ? d.wencai : d.aime;
+    const out = src.output;
+    const input = src.input;
+    const evaluated = input.evaluated || 0;
+    const pending = input.pending || 0;
+
+    setNum(isWc ? "wcEvaluated" : "aiEvaluated", evaluated);
+    setNum(isWc ? "wcCoverPct" : "aiCoverPct", pct(evaluated, input.total), {
+      decimals: 1,
+      suffix: "%",
+    });
+    $(isWc ? "wcPending" : "aiPending").textContent = fmt(pending);
+    $(isWc ? "wcEvalNote" : "aiEvalNote").innerHTML =
+      `<b>${(out.problems / Math.max(1, evaluated)).toFixed(1)}</b>`;
+
+    let p50 = out.p50 || 0;
+    if (isWc) {
+      const vals = Object.values(out.versions || {})
+        .map((v) => v.p50)
+        .filter((v) => v > 0);
+      p50 = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+    }
+    $(isWc ? "wcEvalStats" : "aiEvalStats").innerHTML = [
+      `问题 <b>${fmt(out.problems)}</b>`,
+      `Tokens <b>${fmtTokens(out.tokens || 0)}</b>`,
+      `P50 <b>${p50 ? p50.toFixed(1) + "s" : "—"}</b>`,
+    ]
+      .map((x) => `<span>${x}</span>`)
+      .join("");
+
+    renderRing(
+      isWc ? "wcCover" : "aiCover",
+      evaluated,
+      pending,
+      isWc ? C.a : C.ai
+    );
+
+    if (isWc) {
+      const defs = [
+        ["a_expert", "A·expert", C.a],
+        ["a_fast", "A·fast", C.aMid],
+        ["b_expert", "B·expert", C.b],
+        ["b_fast", "B·fast", C.bMid],
+      ];
+      renderModels(
+        "wcModels",
+        defs.map(([key, name, color]) => ({
+          name,
+          color,
+          value: (out.versions[key] && out.versions[key].answers) || 0,
+        }))
+      );
+    } else {
+      renderModels("aiModels", [
+        { name: "fast", color: C.aiMid, value: (out.by_model && out.by_model.fast) || 0 },
+        { name: "expert", color: C.aiLight, value: (out.by_model && out.by_model.expert) || 0 },
+      ]);
+      renderSpark(out.per_day || []);
+    }
+  }
+
+  function renderSpark(perDay) {
+    const values = perDay.map((x) => ({
+      date: x.date,
+      value: (x.fast || 0) + (x.expert || 0),
+    }));
+    const peak = values.reduce(
+      (best, x) => (x.value > best.value ? x : best),
+      { date: "—", value: 0 }
+    );
+    $("aiSparkPeak").innerHTML = `峰值 <b>${fmt(peak.value)}</b> · ${peak.date.slice(5)}`;
+    $("aiSparkStart").textContent = values.length ? values[0].date.slice(5) : "";
+    $("aiSparkEnd").textContent = values.length ? values[values.length - 1].date.slice(5) : "";
+    const max = Math.max(1, ...values.map((x) => x.value));
+    $("aiSpark").innerHTML = values
+      .map((x) => {
+        const ratio = x.value / max;
+        const h = Math.max(3, Math.round(ratio * 100));
+        const alpha = (0.3 + ratio * 0.7).toFixed(2);
+        return (
+          `<i class="spark-bar" style="--h:${h}%;background:linear-gradient(180deg,rgba(129,140,248,${alpha}),rgba(67,56,202,${alpha}))"` +
+          ` title="${x.date} · ${fmt(x.value)} 条"></i>`
+        );
+      })
+      .join("");
+    const animate = () =>
+      $("aiSpark")
+        .querySelectorAll(".spark-bar")
+        .forEach((b) => {
+          b.style.height = b.style.getPropertyValue("--h");
+        });
+    if (REDUCED) animate();
+    else requestAnimationFrame(animate);
+  }
+
+  // ---------------------------------------------------------- attribution kit
+  function renderAttrRows(id, rows, mode) {
+    const el = $(id);
+    if (!el) return;
+    const max = Math.max(1, ...rows.map((r) => r.value));
+    el.innerHTML = rows
+      .map((r) => {
+        let segs = "";
+        let title = `${r.name} · ${fmt(r.value)} 问题`;
+        if (mode === "wc") {
+          segs =
+            `<i class="attr-seg a" data-w="${((100 * r.a) / max).toFixed(2)}"></i>` +
+            `<i class="attr-seg b" data-w="${((100 * r.b) / max).toFixed(2)}"></i>`;
+          title += ` · A 组 ${fmt(r.a)} / B 组 ${fmt(r.b)}`;
+        } else {
+          segs = AIME_SEVERITIES.map(
+            (sev, i) =>
+              `<i class="attr-seg s${i}" data-w="${((100 * (r.severity[sev] || 0)) / max).toFixed(2)}"></i>`
+          ).join("");
+          title += ` · P1 ${fmt(r.severity.P1 || 0)}`;
+        }
+        return (
+          `<div class="attr-row" title="${title}">` +
+          `<span class="attr-name">${r.name}</span>` +
+          `<span class="attr-track">${segs}</span>` +
+          `<span class="attr-val">${fmt(r.value)}</span>` +
+          `</div>`
+        );
+      })
+      .join("");
+    const animate = () =>
+      el.querySelectorAll(".attr-seg").forEach((seg) => {
+        seg.style.width = `${seg.dataset.w}%`;
+      });
+    if (REDUCED) animate();
+    else requestAnimationFrame(animate);
+  }
+
   function renderWencaiAttr(d) {
     const comp = d.wencai.components;
     const out = d.wencai.output;
-    const names = comp.names.map(short);
-    const sumA = comp.A.reduce((s, v) => s + v, 0);
-    const sumB = comp.B.reduce((s, v) => s + v, 0);
-    const totalA = out.versions.a_expert.problems + out.versions.a_fast.problems;
-    const totalB = out.versions.b_expert.problems + out.versions.b_fast.problems;
+    const totalA = ["a_expert", "a_fast"].reduce(
+      (s, k) => s + ((out.versions[k] && out.versions[k].problems) || 0),
+      0
+    );
+    const totalB = ["b_expert", "b_fast"].reduce(
+      (s, k) => s + ((out.versions[k] && out.versions[k].problems) || 0),
+      0
+    );
 
-    $("wcAttrStat").textContent = `${fmt(out.problems)} 问题 / ${fmt(out.answers)} 回答`;
-    $("wcAttrNote").textContent = `A 组 ${fmt(totalA)} · B 组 ${fmt(totalB)}`;
-    $("wcAttrLegend").innerHTML = [legendDot("A 组", C.a), legendDot("B 组", C.b)].join("");
-
-    const nodes = [
-      { name: "A 组", itemStyle: { color: C.a }, label: { position: "left", color: C.a, fontWeight: 600 } },
-      { name: "B 组", itemStyle: { color: C.b }, label: { position: "left", color: C.b, fontWeight: 600 } },
-      ...names.map((n) => ({ name: n, itemStyle: { color: "#dbe2ea" } })),
-      { name: "其他", itemStyle: { color: "#eef2f7" }, label: { color: "#94a3b8" } },
-    ];
-
-    const links = [];
-    names.forEach((n, i) => {
-      if (comp.A[i]) links.push({ source: "A 组", target: n, value: comp.A[i] });
-      if (comp.B[i]) links.push({ source: "B 组", target: n, value: comp.B[i] });
-    });
-    const otherA = totalA - sumA;
-    const otherB = totalB - sumB;
-    if (otherA > 0) links.push({ source: "A 组", target: "其他", value: otherA });
-    if (otherB > 0) links.push({ source: "B 组", target: "其他", value: otherB });
-
-    chart("wcAttr", {
-      animationDuration: 700,
-      tooltip: {
-        ...tip,
-        trigger: "item",
-        formatter: (p) => {
-          if (p.dataType === "edge") {
-            const color = p.data.source === "A 组" ? C.a : C.b;
-            return tipHead(`${p.data.source} → ${p.data.target}`) + tipRow(color, "问题数", fmt(p.data.value));
-          }
-          return tipHead(p.name);
-        },
-      },
-      series: [
-        {
-          type: "sankey",
-          left: 46,
-          right: 112,
-          top: 12,
-          bottom: 12,
-          nodeWidth: 7,
-          nodeGap: 9,
-          nodeAlign: "justify",
-          draggable: false,
-          emphasis: { focus: "adjacency" },
-          label: {
-            fontSize: 10,
-            fontFamily: FONT,
-            color: "#475569",
-            distance: 5,
-            formatter: (p) => (p.name === "A 组" || p.name === "B 组" ? p.name : `${p.name}  ${fmt(p.value)}`),
-          },
-          lineStyle: { color: "gradient", opacity: 0.22, curveness: 0.52 },
-          data: nodes,
-          links,
-        },
-      ],
-    });
-  }
-
-  // ------------------------------------------------------- AIME · 输出日历
-  function renderAimeOutput(d) {
-    const perDay = d.aime.output.per_day || [];
-    const values = perDay.map((x) => ({ date: x.date, value: (x.expert || 0) + (x.fast || 0) }));
-    const max = Math.max(1, ...values.map((x) => x.value));
-    const map = new Map(values.map((x) => [x.date, x.value]));
-
-    $("aiOutStat").textContent = `${fmt(d.aime.output.answers)} 结果`;
-    const busiest = values.reduce((best, x) => (x.value > best.value ? x : best), { date: "—", value: 0 });
-    $("aiOutLegend").innerHTML =
-      `<span class="inline-flex items-center gap-1"><i class="inline-block h-1.5 w-1.5 rounded-sm bg-ai"></i>峰值 <b class="font-semibold text-slate-600">${fmt(busiest.value)}</b> <span class="text-slate-400">${busiest.date.slice(5)}</span></span>` +
-      `<span class="inline-flex items-center gap-1 text-slate-400">活跃 <b class="font-semibold text-slate-600">${values.length}</b> 天</span>`;
-
-    const el = $("aiOutput");
-    const layout = () => {
-      const w = el.clientWidth || 400;
-      const h = el.clientHeight || 260;
-      const weeks = 10;
-      const cell = Math.max(20, Math.min(36, Math.floor(Math.min((w - 64) / weeks, (h - 74) / 7))));
-      return {
-        cell,
-        left: Math.max(30, Math.round((w - weeks * cell) / 2)),
-        top: Math.max(24, Math.round((h - 7 * cell) / 2)),
-      };
-    };
-
-    const seriesData = [];
-    const start = new Date(2026, 8, 1);
-    for (let i = 0; i < 61; i++) {
-      const dt = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
-      const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
-      seriesData.push([key, map.get(key) || 0]);
+    const names = (comp.names || []).slice();
+    const A = (comp.A || []).slice();
+    const B = (comp.B || []).slice();
+    const sumA = A.reduce((s, v) => s + v, 0);
+    const sumB = B.reduce((s, v) => s + v, 0);
+    if (totalA > sumA || totalB > sumB) {
+      names.push("其他");
+      A.push(Math.max(0, totalA - sumA));
+      B.push(Math.max(0, totalB - sumB));
     }
 
-    const makeOption = () => {
-      const l = layout();
-      return {
-        animationDuration: 700,
-        tooltip: { ...tip, formatter: (p) => tipHead(p.value[0]) + tipRow(C.ai, "输出", fmt(p.value[1]) + " 条") },
-        visualMap: {
-          min: 0,
-          max,
-          show: true,
-          orient: "horizontal",
-          left: "center",
-          bottom: 2,
-          itemWidth: 12,
-          itemHeight: 110,
-          calculable: false,
-          text: ["多", "少"],
-          textStyle: { fontSize: 9, color: "#94a3b8", fontFamily: FONT },
-          inRange: { color: ["#f1f5f9", "#e0e7ff", "#a5b4fc", C.ai] },
-        },
-        calendar: {
-          range: ["2026-09-01", "2026-10-31"],
-          cellSize: [l.cell, l.cell],
-          left: l.left,
-          top: l.top,
-          splitLine: { show: false },
-          itemStyle: { color: "#fff", borderWidth: 2, borderColor: "#f8fafc" },
-          dayLabel: {
-            firstDay: 1,
-            nameMap: ["日", "一", "二", "三", "四", "五", "六"],
-            fontSize: 9,
-            color: "#94a3b8",
-            fontFamily: FONT,
-          },
-          monthLabel: { fontSize: 9.5, color: "#64748b", fontFamily: FONT, margin: 6 },
-          yearLabel: { show: false },
-        },
-        series: [
-          {
-            type: "heatmap",
-            coordinateSystem: "calendar",
-            data: seriesData,
-            itemStyle: { borderRadius: 5, borderWidth: 2, borderColor: "#fff" },
-          },
-        ],
-      };
-    };
-
-    const c = chart("aiOutput", makeOption());
-    if (c) relayout.push(() => c.setOption(makeOption(), { replaceMerge: ["calendar"] }));
-  }
-
-  // ------------------------------------------------------------ AIME · 归因
-  function renderAimeAttr(d) {
-    const out = d.aime.output;
-    const comp = out.components;
-    const sev = out.severity;
-    const total = out.problems;
-
-    $("aiAttrStat").textContent = `${fmt(total)} 问题 / ${fmt(out.answers)} 回答`;
-    const chips = [
-      ["P0", sev.P0 || 0, C.sev0],
-      ["P1", sev.P1 || 0, C.sev1],
-      ["P2", sev.P2 || 0, C.sev2],
-      ["P3", sev.P3 || 0, C.sev3],
-    ];
-    $("aiSevChips").innerHTML = chips
-      .map(
-        ([name, v, color]) =>
-          `<span class="inline-flex items-center gap-1"><i class="inline-block h-1.5 w-1.5 rounded-sm" style="background:${color}"></i>${name} <b class="font-semibold text-slate-600">${pct(v, total).toFixed(1)}%</b></span>`
-      )
-      .join("");
-
-    const totals = comp.names.map((_, i) => comp.fast[i] + comp.expert[i]);
-    const maxP1 = Math.max(...comp.names.map((n, i) => pct(comp.severity[n].P1 || 0, Math.max(1, totals[i]))));
-    const items = comp.names.map((name, i) => {
-      const totalC = totals[i];
-      const s = comp.severity[name];
-      const p1 = pct(s.P1 || 0, totalC);
-      const ratio = maxP1 ? p1 / maxP1 : 0;
-      const color = lerpColor("#fee2e2", "#991b1b", Math.pow(ratio, 0.8));
-      return {
-        name,
-        value: totalC,
-        p1,
-        severity: s,
-        fast: comp.fast[i],
-        expert: comp.expert[i],
-        itemStyle: { color },
-        label: { color: ratio > 0.45 ? "#fff" : "#7f1d1d" },
-      };
+    const rows = names.map((name, i) => {
+      const a = A[i] || 0;
+      const b = B[i] || 0;
+      return { name, a, b, value: a + b };
     });
 
-    chart("aiAttr", {
-      animationDuration: 700,
+    $("wcAttrSide").innerHTML = `A 组 <b>${fmt(totalA)}</b> · B 组 <b>${fmt(totalB)}</b>`;
+    setNum("wcProblems", out.problems);
+    renderAttrRows("wcAttr", rows, "wc");
+  }
+
+  function renderAimeAttr(d) {
+    const out = d.aime.output;
+    const comp = out.components || {};
+    const names = (comp.names || []).slice();
+    const fast = (comp.fast || []).slice();
+    const expert = (comp.expert || []).slice();
+    const severity = {};
+    names.forEach((n) => {
+      severity[n] = { ...(comp.severity[n] || {}) };
+    });
+
+    const componentTotal = fast.reduce((s, v) => s + v, 0) + expert.reduce((s, v) => s + v, 0);
+    if (out.problems > componentTotal) {
+      const rest = {};
+      AIME_SEVERITIES.forEach((s) => {
+        const known = names.reduce((acc, n) => acc + (severity[n][s] || 0), 0);
+        rest[s] = Math.max(0, (out.severity[s] || 0) - known);
+      });
+      names.push("其他");
+      severity["其他"] = rest;
+    }
+
+    const rows = names.map((name) => ({
+      name,
+      value: AIME_SEVERITIES.reduce((sum, s) => sum + (severity[name][s] || 0), 0),
+      severity: severity[name],
+    }));
+
+    $("aiAttrSide").innerHTML = `P1 <b>${(d.conclusion.aime.p1_share || 0).toFixed(1)}%</b>`;
+    setNum("aiProblems", out.problems);
+
+    $("aiSevChips").innerHTML = AIME_SEVERITIES.map((s) => {
+      const share = pct(out.severity[s] || 0, out.problems);
+      return (
+        `<span class="sev-chip"><i class="sev-dot" style="background:${SEV_COLOR[s]}"></i>` +
+        `${s} <b>${share.toFixed(1)}%</b></span>`
+      );
+    }).join("");
+
+    renderAttrRows("aiAttr", rows, "ai");
+  }
+
+  // ----------------------------------------------------------- cluster card
+  const CLUSTER_COLORS = {
+    wencai: ["#0f766e", "#0ea5e9", "#f59e0b", "#8b5cf6", "#ef4444", "#64748b"],
+    aime: ["#4338ca", "#0ea5e9", "#f59e0b", "#ec4899", "#14b8a6", "#64748b"],
+  };
+
+  function decorateCluster(node, color, depth) {
+    const bg = depth === 0 ? color : lerpColor(color, "#ffffff", 0.12 + depth * 0.08);
+    const out = {
+      id: node.id || node.name,
+      name: node.name,
+      value: node.value,
+      items: node.items || 0,
+      itemStyle: { color: bg },
+      label: { color: isDark(bg) ? "#ffffff" : "#0f172a" },
+    };
+    if (node.children && node.children.length) {
+      out.children = node.children.map((c) => decorateCluster(c, color, depth + 1));
+    }
+    return out;
+  }
+
+  function clusterLevels(data) {
+    const maxDepth = (nodes) =>
+      nodes.reduce((m, n) => Math.max(m, 1 + (n.children && n.children.length ? maxDepth(n.children) : 0)), 0);
+    const depth = maxDepth(data);
+    if (depth <= 1) {
+      return [{}, { r0: "30%", r: "94%", label: { rotate: 0, fontSize: 10, minAngle: 8 } }];
+    }
+    if (depth === 2) {
+      return [
+        {},
+        { r0: "26%", r: "60%", label: { rotate: 0, fontSize: 9, minAngle: 10 } },
+        { r0: "60%", r: "94%", label: { show: false } },
+      ];
+    }
+    return [
+      {},
+      { r0: "20%", r: "48%", label: { rotate: 0, fontSize: 9, minAngle: 10 } },
+      { r0: "48%", r: "70%", label: { show: false } },
+      { r0: "70%", r: "94%", label: { show: false } },
+    ];
+  }
+
+  function clusterOption(product) {
+    const isWc = product === "wencai";
+    const st = clusterState[product];
+    const current = st.stack.length ? st.stack[st.stack.length - 1] : st.root;
+    const branches = (current && current.children) || [];
+    const palette = CLUSTER_COLORS[isWc ? "wencai" : "aime"];
+    const data = branches.map((n, i) => decorateCluster(n, palette[i % palette.length], 0));
+    const total = st.meta ? st.meta.total_sessions : (current && current.value) || 1;
+
+    return {
+      animationDuration: REDUCED ? 0 : 850,
+      animationEasing: "cubicOut",
       tooltip: {
         ...tip,
         formatter: (p) => {
-          const it = items[p.dataIndex];
-          const s = it.severity;
-          return (
-            tipHead(p.name) +
-            tipRow("#fda4af", "合计", fmt(it.value)) +
-            tipRow(C.aiLight, "fast", fmt(it.fast)) +
-            tipRow(C.ai, "expert", fmt(it.expert)) +
-            `<div class="mt-1 border-t border-white/10 pt-1"></div>` +
-            tipRow(C.sev1, "P1", `${fmt(s.P1 || 0)} · ${it.p1.toFixed(1)}%`) +
-            tipRow(C.sev2, "P2", fmt(s.P2 || 0)) +
-            tipRow(C.sev3, "P3", fmt(s.P3 || 0))
+          const path = (p.treePathInfo || [])
+            .map((x) => x.name)
+            .filter((n) => n && n !== "归因聚类" && n !== "root")
+            .join(" / ");
+          return tipCard(
+            tipHead(p.name, `${pct(p.value, total).toFixed(1)}%`, p.color) +
+              tipRow("#94a3b8", "会话", fmt(p.value)) +
+              tipRow("#94a3b8", "条目", fmt((p.data && p.data.items) || 0)) +
+              (path ? `<div class="tip-path">${path}</div>` : "")
           );
         },
       },
       series: [
         {
-          type: "treemap",
-          left: 4,
-          right: 4,
-          top: 4,
-          bottom: 4,
-          roam: false,
+          type: "sunburst",
+          radius: ["20%", "94%"],
+          center: ["50%", "50%"],
+          data,
           nodeClick: false,
-          breadcrumb: { show: false },
-          itemStyle: { borderColor: "#fff", borderWidth: 2, gapWidth: 2, borderRadius: 6 },
+          sort: null,
+          itemStyle: { borderColor: "#fff", borderWidth: 1.5 },
           label: {
-            show: true,
-            fontFamily: FONT,
-            fontSize: 11,
-            lineHeight: 15,
-            formatter: (p) => `${SHORT[p.name] || p.name}\n${fmt(p.value)}`,
+            rotate: 0,
+            fontSize: 9,
+            minAngle: 10,
+            formatter: (p) => p.name,
           },
-          data: items,
+          levels: clusterLevels(data),
+          emphasis: { focus: "ancestor" },
+        },
+      ],
+    };
+  }
+
+  function updateClusterNote(product) {
+    const isWc = product === "wencai";
+    const st = clusterState[product];
+    const back = $(isWc ? "wcClusterBack" : "aiClusterBack");
+    const note = $(isWc ? "wcClusterNote" : "aiClusterNote");
+    const right = $(isWc ? "wcClusterNoteR" : "aiClusterNoteR");
+    const current = st.stack.length ? st.stack[st.stack.length - 1] : st.root;
+    if (st.stack.length) {
+      back.hidden = false;
+      const path = ["全部", ...st.stack.map((n) => n.name)].join(" / ");
+      note.textContent = path;
+      right.textContent = `${(current.children || []).length} 子类`;
+    } else {
+      back.hidden = true;
+      note.textContent = `${(st.root.children || []).length} 环节`;
+      right.textContent = `${(st.meta && st.meta.depth) || 3} 层`;
+    }
+  }
+
+  function drawCluster(product) {
+    const isWc = product === "wencai";
+    const st = clusterState[product];
+    const current = st.stack.length ? st.stack[st.stack.length - 1] : st.root;
+    const c = clusterCharts[product];
+    if (!c || !current) return;
+    c.setOption(clusterOption(product), true);
+    animateTo(isWc ? "wcClusterSessions" : "aiClusterSessions", current.value || 0);
+    $(isWc ? "wcClusterSide" : "aiClusterSide").innerHTML = `${fmt(current.items || 0)} <span>条目</span>`;
+    updateClusterNote(product);
+    const el = $(isWc ? "wcCluster" : "aiCluster");
+    el.style.cursor = (current.children || []).length ? "pointer" : "default";
+  }
+
+  function renderCluster(product, d) {
+    const isWc = product === "wencai";
+    const src = isWc ? d.wencai : d.aime;
+    const cl = src.cluster;
+    const root = (cl && cl.tree) || { name: "归因聚类", value: 0, items: 0, children: [] };
+    const meta = (cl && cl.meta) || {};
+    const nodeById = new Map();
+    const scan = (node) => {
+      nodeById.set(node.id || node.name, node);
+      (node.children || []).forEach(scan);
+    };
+    scan(root);
+
+    clusterState[product] = { src, root, meta, stack: [], nodeById };
+    const c = chart(isWc ? "wcCluster" : "aiCluster", clusterOption(product));
+    clusterCharts[product] = c;
+    if (c) {
+      c.on("click", (p) => {
+        const st = clusterState[product];
+        if (!(p.data && p.data.children && p.data.children.length)) return;
+        const names = (p.treePathInfo || [])
+          .map((x) => x.name)
+          .filter((n) => n && n !== "归因聚类" && n !== "root");
+        let node = st.root;
+        const stack = [];
+        for (const name of names) {
+          const next = (node.children || []).find((c) => c.name === name);
+          if (!next) break;
+          stack.push(next);
+          node = next;
+        }
+        if (!stack.length) return;
+        st.stack = stack;
+        drawCluster(product);
+      });
+    }
+
+    const back = $(isWc ? "wcClusterBack" : "aiClusterBack");
+    if (back) {
+      back.onclick = () => {
+        const st = clusterState[product];
+        st.stack.pop();
+        drawCluster(product);
+      };
+    }
+
+    drawCluster(product);
+  }
+
+  // -------------------------------------------------------- prediction card
+  const DEMO_SERIES = {
+    wencai: [62, 68, 65, 72, 78, 74, 81, 85, 83, 90, 94, 92, 99, 103],
+    aime: [820, 860, 845, 910, 960, 940, 1010, 1060, 1040, 1110, 1160, 1140, 1210, 1260],
+  };
+
+  function dayLabel(base, offset) {
+    const d = new Date(`${base}T00:00:00`);
+    if (Number.isNaN(d.getTime())) return "—";
+    d.setDate(d.getDate() + offset);
+    return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+
+  function renderPrediction(product, d) {
+    const isWc = product === "wencai";
+    const src = isWc ? d.wencai : d.aime;
+    const demo = DEMO_SERIES[isWc ? "wencai" : "aime"];
+    const n = demo.length;
+    const end = (src.input.date_range && src.input.date_range.end) || "2026-10-23";
+    const actualDates = demo.map((_, i) => dayLabel(end, i - n + 1));
+    const futureDates = Array.from({ length: 7 }, (_, i) => dayLabel(end, i + 1));
+    const labels = [...actualDates, ...futureDates];
+    const slope = (demo[n - 1] - demo[0]) / (n - 1);
+    const forecast = Array.from({ length: 7 }, (_, i) =>
+      Math.max(1, Math.round(demo[n - 1] + slope * (i + 1)))
+    );
+    const band = isWc ? 0.08 : 0.12;
+    const lower = forecast.map((v) => Math.round(v * (1 - band)));
+    const upper = forecast.map((v) => Math.round(v * (1 + band)));
+    const next = forecast[0];
+    const growth = pct(next - demo[n - 1], demo[n - 1]);
+    const accent = isWc ? C.a : C.ai;
+    const trendClass = growth >= 0 ? "trend-up" : "trend-down";
+
+    setNum(isWc ? "wcForecast" : "aiForecast", next);
+    $(isWc ? "wcForecastTrend" : "aiForecastTrend").innerHTML =
+      `<span class="${trendClass}">${growth >= 0 ? "+" : ""}${growth.toFixed(1)}%</span>`;
+    $(isWc ? "wcForecastNote" : "aiForecastNote").textContent = `±${Math.round(band * 100)}%`;
+
+    const actualData = [...demo, ...Array(7).fill(null)];
+    const forecastData = [...Array(n - 1).fill(null), demo[n - 1], ...forecast];
+    const lowerData = [...Array(n).fill(null), ...lower];
+    const bandData = [...Array(n).fill(null), ...upper.map((u, i) => u - lower[i])];
+
+    chart(isWc ? "wcForecastChart" : "aiForecastChart", {
+      animationDuration: REDUCED ? 0 : 950,
+      animationEasing: "cubicOut",
+      tooltip: {
+        ...tip,
+        trigger: "axis",
+        axisPointer: { type: "line", lineStyle: { color: "#e2e8f0" } },
+        formatter: (params) => {
+          const i = params[0].dataIndex;
+          const date = labels[i];
+          if (i >= n) {
+            const k = i - n;
+            return tipCard(
+              tipHead(date, "预测", "#f59e0b") +
+                tipRow("#f59e0b", "预测值", fmt(forecast[k])) +
+                tipRow("#94a3b8", "区间", `${fmt(lower[k])}–${fmt(upper[k])}`)
+            );
+          }
+          return tipCard(tipHead(date, "实际", accent) + tipRow(accent, "实际值", fmt(demo[i])));
+        },
+      },
+      grid: { left: 18, right: 16, top: 12, bottom: 20 },
+      xAxis: {
+        type: "category",
+        data: labels,
+        boundaryGap: false,
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { fontSize: 8.5, color: "#94a3b8", interval: 5, fontFamily: FONT },
+      },
+      yAxis: { type: "value", show: false, min: 0 },
+      series: [
+        {
+          name: "下界",
+          type: "line",
+          data: lowerData,
+          stack: "confidence",
+          symbol: "none",
+          lineStyle: { opacity: 0 },
+          areaStyle: { opacity: 0 },
+          silent: true,
+        },
+        {
+          name: "区间",
+          type: "line",
+          data: bandData,
+          stack: "confidence",
+          symbol: "none",
+          lineStyle: { opacity: 0 },
+          areaStyle: { color: hexA(accent, 0.12) },
+          silent: true,
+        },
+        {
+          name: "实际",
+          type: "line",
+          data: actualData,
+          smooth: 0.35,
+          symbol: "none",
+          lineStyle: { width: 2, color: accent },
+          areaStyle: { color: hexA(accent, 0.06) },
+        },
+        {
+          name: "预测",
+          type: "line",
+          data: forecastData,
+          smooth: 0.35,
+          symbol: "none",
+          lineStyle: { width: 1.8, type: "dashed", color: "#f59e0b" },
         },
       ],
     });
   }
 
-  // ------------------------------------------------------------------ boot
+  // ------------------------------------------------------------------ header
   function renderHeader(d) {
-    const status = (d.wencai.run && d.wencai.run.status) || "";
-    const map = {
-      interrupted: ["中断", "text-amber-600", "bg-amber-500"],
-      finished: ["完成", "text-emerald-600", "bg-emerald-500"],
-      running: ["运行中", "text-emerald-600", "bg-emerald-500"],
-      snapshot: ["数据集快照", "text-slate-500", "bg-slate-400"],
-    };
-    const [text, cls, dot] = map[status] || [status || "—", "text-slate-500", "bg-slate-400"];
-    $("runState").innerHTML = `<i class="inline-block h-1.5 w-1.5 rounded-full ${dot}"></i><span class="${cls}">${text}</span>`;
-    $("updated").textContent = (d.generated_at || "").slice(5, 16).replace("T", " ");
-    $("counted").textContent = d.counts_at || "—";
+    $("updated").textContent = (d.generated_at || "—").slice(5, 16).replace("T", " ");
   }
 
-  fetch("data.json?t=" + Date.now())
+  // ------------------------------------------------------------- page switch
+  let activeProduct = "wencai";
+  let switching = false;
+
+  function initSwitch() {
+    const btn = $("switchProduct");
+    if (!btn) return;
+    btn.addEventListener("click", () => {
+      if (switching) return;
+      const current = document.querySelector(".page.is-active");
+      const nextProduct = activeProduct === "wencai" ? "aime" : "wencai";
+      const next = document.querySelector(`.page[data-product="${nextProduct}"]`);
+      if (!current || !next) return;
+      activeProduct = nextProduct;
+      $("switchLabel").textContent = nextProduct === "wencai" ? "切换到 AIME" : "切换到 问财";
+      $("switchArrow").textContent = nextProduct === "wencai" ? "→" : "←";
+      current.setAttribute("aria-hidden", "true");
+      next.setAttribute("aria-hidden", "false");
+
+      if (REDUCED) {
+        current.classList.remove("is-active");
+        next.classList.add("is-active");
+        requestAnimationFrame(() => charts.forEach((c) => c.resize()));
+        return;
+      }
+
+      switching = true;
+      current.classList.add("animate__animated", "animate__flipOutY", "is-leaving");
+      current.style.animationDuration = "0.55s";
+      next.classList.add("is-active", "animate__animated", "animate__flipInY");
+      next.style.animationDuration = "0.55s";
+      requestAnimationFrame(() => charts.forEach((c) => c.resize()));
+
+      setTimeout(() => {
+        current.classList.remove(
+          "is-active",
+          "is-leaving",
+          "animate__animated",
+          "animate__flipOutY"
+        );
+        current.style.animationDuration = "";
+        next.classList.remove("animate__animated", "animate__flipInY");
+        next.style.animationDuration = "";
+        switching = false;
+        charts.forEach((c) => c.resize());
+      }, 580);
+    });
+  }
+
+  // -------------------------------------------------------------------- boot
+  function reveal() {
+    const mask = $("mask");
+    if (mask) {
+      mask.classList.add("is-hidden");
+      setTimeout(() => mask.remove(), 400);
+    }
+    if (!REDUCED) {
+      document.querySelectorAll("[data-card]").forEach((el, i) => {
+        el.classList.add("animate__animated", "animate__fadeInUp");
+        el.style.animationDelay = `${80 + i * 45}ms`;
+        el.style.animationDuration = "520ms";
+      });
+    }
+    setTimeout(startCounters, REDUCED ? 0 : 120);
+    setTimeout(() => {
+      window.__boardReady = true;
+    }, 700);
+  }
+
+  function fail(err) {
+    const mask = $("mask");
+    if (!mask) return;
+    mask.innerHTML =
+      `<div class="mask-inner mask-error"><span>数据加载失败：${err.message}</span>` +
+      `<button onclick="location.reload()">重试</button></div>`;
+    console.error(err);
+  }
+
+  fetch("data.json?t=" + Date.now(), { cache: "no-store" })
     .then((r) => {
       if (!r.ok) throw new Error("data.json " + r.status);
       return r.json();
     })
     .then((d) => {
       renderHeader(d);
-      renderKpis(d);
       renderVolume("wencai", d);
-      renderWencaiCompare(d);
+      renderEvaluation("wencai", d);
       renderWencaiAttr(d);
+      renderCluster("wencai", d);
+      renderPrediction("wencai", d);
       renderVolume("aime", d);
-      renderAimeOutput(d);
+      renderEvaluation("aime", d);
       renderAimeAttr(d);
-      $("mask").classList.add("hidden");
-      window.__boardReady = true;
+      renderCluster("aime", d);
+      renderPrediction("aime", d);
+      initSwitch();
+      requestAnimationFrame(reveal);
     })
-    .catch((err) => {
-      $("mask").innerHTML = `<span class="text-rose-500">数据加载失败：${err.message}</span>`;
-      console.error(err);
-    });
+    .catch(fail);
 
-  let raf = 0;
-  const resizeAll = () => {
-    cancelAnimationFrame(raf);
-    raf = requestAnimationFrame(() => {
+  window.addEventListener("resize", () => {
+    if (resizeRaf) return;
+    resizeRaf = requestAnimationFrame(() => {
+      resizeRaf = 0;
       charts.forEach((c) => c.resize());
-      relayout.forEach((fn) => fn());
     });
-  };
-  window.addEventListener("resize", resizeAll);
-  if (window.ResizeObserver) {
-    new ResizeObserver(resizeAll).observe(document.body);
-  }
+  });
 })();
