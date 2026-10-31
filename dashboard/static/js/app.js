@@ -5,6 +5,7 @@ import { initSystem, setSystemActive, refreshSystem } from "./system.js";
 import {
   initSamples,
   openSampleQuery,
+  samplesProductFor,
   setSamplesProduct,
   refreshSamples,
   setSamplesActive,
@@ -108,14 +109,25 @@ function applyRoute(route) {
     setSamplesActive(true);
     ensureSamples()
       .then(() => {
+        const effective = samplesProductFor(activeProduct);
+        if (effective !== activeProduct) {
+          setProduct(effective, false);
+          const params = Object.fromEntries(new URLSearchParams(location.search));
+          params.product = effective;
+          setRoute("samples", params, true);
+        }
+        const turn = route.params.get("turn");
         openSampleQuery({
-          product: activeProduct,
+          product: effective,
           component: route.params.get("component") || "",
           severity: route.params.get("severity") || "",
-          cluster: route.params.get("cluster") || "",
-          label: route.params.get("label") || "",
+          model: route.params.get("model") || "",
+          date: route.params.get("date") || "",
           case: route.params.get("case") || "",
           q: route.params.get("q") || "",
+          sort: route.params.get("sort") || "severity",
+          tab: route.params.get("tab") || "attr",
+          turn: turn == null || turn === "" ? null : Number(turn),
         });
       })
       .catch(() => {

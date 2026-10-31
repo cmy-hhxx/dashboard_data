@@ -17,6 +17,7 @@ COUNTS = os.path.join(HERE, "cache", "datasets.json")
 SCAN = os.path.join(HERE, "scan_datasets.py")
 SAMPLES = os.path.join(HERE, "prepare_samples.py")
 SAMPLES_JSON = os.path.join(STATIC, "samples.json")
+SAMPLES_DETAILS = os.path.join(STATIC, "samples")
 PORT = int(os.environ.get("PORT", "5001"))
 REFRESH = int(os.environ.get("REFRESH_SECONDS", "1800"))
 SAMPLES_REFRESH = int(os.environ.get("SAMPLES_REFRESH_SECONDS", "21600"))
@@ -87,7 +88,9 @@ def refresh_once():
             _state["error"] = (proc.stderr or "")[-500:]
             print("[refresh] failed:", _state["error"], flush=True)
         try:
-            refresh_samples(force=not os.path.exists(SAMPLES_JSON))
+            refresh_samples(
+                force=not os.path.exists(SAMPLES_JSON) or not os.path.isdir(SAMPLES_DETAILS)
+            )
         except Exception as exc:  # noqa: BLE001
             _state["samples_error"] = str(exc)
     except Exception as exc:  # noqa: BLE001 - keep serving regardless
@@ -178,7 +181,11 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 def main():
-    if not os.path.exists(os.path.join(STATIC, "data.json")) or not os.path.exists(SAMPLES_JSON):
+    if (
+        not os.path.exists(os.path.join(STATIC, "data.json"))
+        or not os.path.exists(SAMPLES_JSON)
+        or not os.path.isdir(SAMPLES_DETAILS)
+    ):
         print("[serve] data.json or samples.json missing, building once", flush=True)
         refresh_once()
     threading.Thread(target=scheduler, daemon=True).start()

@@ -31,10 +31,10 @@
 脚本按固定顺序完成：
 
 1. 建远端目录 `static/`、`cache/`、`logs/`。
-2. `rsync -az --delete` 同步代码，排除生成物与运行态：`data.json`、`samples.json`、`cache/`、
-   `logs/`、`server.pid`、`build/`、`__pycache__`、`*.log`。
+2. `rsync -az --delete` 同步代码，排除生成物与运行态：`data.json`、`samples.json`、
+   `static/samples/`、`cache/`、`logs/`、`server.pid`、`build/`、`__pycache__`、`*.log`。
 3. 远端执行 `prepare.py --counts cache/datasets.json`，生成 `static/data.json`。
-4. 远端执行 `prepare_samples.py`，生成 `static/samples.json`。
+4. 远端执行 `prepare_samples.py`，生成 `static/samples.json` 与逐样本详情 `static/samples/`。
 5. `precompress.sh` 为 JS/CSS/HTML/SVG 生成 `.gz`。
 6. `stop.sh` 停旧进程，`start.sh` 拉起新进程。
 7. 输出 `deployed -> /opt/eval_dashboard`。
@@ -83,15 +83,15 @@ ssh eval_data 'cd /opt/eval_dashboard && ./stop.sh'
 - `precompress.sh` 生成 `.gz`；客户端支持 gzip 时 `server.py` 直接发送。改过 `static/` 下的
   JS/CSS/HTML/SVG 后必须重新执行（`deploy.sh` 会自动做）。
 - 缓存头：`/data.json`、`/samples.json`、`/healthz` 为 `no-store`；`/`、`/index.html` 为
-  `no-cache`；`/vendor/` 与 `/echarts.min.js` 为一年 `immutable`；其余为 `no-cache`。
+  `no-cache`；`/vendor/` 与 `/echarts.min.js` 为一年 `immutable`；`/samples/` 详情与其余静态文件为 `no-cache`。
 - 日志：`logs/server.log`（服务输出）、`logs/prepare.log`、`logs/samples.log`；仓库没有日志轮转。
 
 ## 部署最佳实践
 
 1. **只通过 `deploy.sh` 发布**：远端部署目录不是 git 仓库，`rsync --delete` 会删掉远端多出来的文件。
    在远端手改的内容下次部署就会消失；回滚应从本地切回旧 commit 后重新部署。
-2. **生成物留在远端**：`data.json`、`samples.json`、`cache/`、`logs/` 已排除同步。数据在服务器侧
-   生成，避免本地旧数据覆盖远端，也避免传输大文件。
+2. **生成物留在远端**：`data.json`、`samples.json`、`samples/`、`cache/`、`logs/` 已排除同步。
+   数据在服务器侧生成，避免本地旧数据覆盖远端，也避免传输大文件。
 3. **先构建、后重启**：不要打乱 `deploy.sh` 的顺序，也不要在 `prepare` 未完成时手动 `start.sh`。
    构建失败时服务会带着旧数据启动，必须看日志，不能只看「启动成功」。
 4. **看 healthz 内容，不只看状态码**：`healthz` 永远 200；`ok=false` 查 `logs/prepare.log`，
@@ -106,7 +106,7 @@ ssh eval_data 'cd /opt/eval_dashboard && ./stop.sh'
 
 6. **强制刷新数据用重启**：`deploy.sh` 里的 `prepare.py` 用的是 `cache/datasets.json` 的缓存计数；
    服务启动后调度线程会立即重新 `scan` 再 `prepare`。需要强制重建样本时，先删
-   `static/samples.json` 再重启。
+   `static/samples.json` 与 `static/samples/` 再重启。
 7. **改端口要三处同步**：`server.py` / `start.sh` 的监听端口、容器平台端口映射、
    `servers.conf` 的 `dashboard_port_1`。对外继续走 2768，不要把 5001 直接暴露。
 8. **升级 ECharts 要换文件名或加版本**：`/echarts.min.js` 和 `/vendor/` 带一年 `immutable`
@@ -124,7 +124,7 @@ ssh eval_data 'cd /opt/eval_dashboard && ./stop.sh'
 |---|---|
 | 外网打不开 / 502 | `ssh eval_data` 后 `curl -s http://127.0.0.1:5001/healthz`；看 `logs/server.log`；`./start.sh` |
 | `ok=false` | 看 `logs/prepare.log` 最后一段；修复后重启触发重算 |
-| `samples_ok=false` | 看 `logs/samples.log`；删 `static/samples.json` 后重启可强制重建 |
+| `samples_ok=false` | 看 `logs/samples.log`；删 `static/samples.json` 与 `static/samples/` 后重启可强制重建 |
 | `start.sh` 说 already serving 但页面没更新 | `./stop.sh && ./start.sh` |
 | 静态资源没更新 | 确认远端 `.gz` 已重新生成；ECharts 按最佳实践第 8 条处理缓存 |
 | 数据停留在旧日期 | 看 healthz 的 `last_refresh`；重启触发立即扫描；确认 `datasets` 挂载可读 |
