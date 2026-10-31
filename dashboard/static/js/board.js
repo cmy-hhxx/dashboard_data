@@ -1,18 +1,22 @@
-/* Data board: volume rings, evaluation blocks, attribution Sankey, cluster tree and 3-part forecast. */
+/* Data board: concentric rings, evaluation coverage, attribution, cluster and prediction. */
 import {
-  $, FONT, REDUCED, fmt, fmtFixed, pct, clamp, fmtBytes, fmtTokens, dateRange, esc,
-  lerpColor, hexA, labelOn, readTokens, T, C, SEV_COLOR, AIME_SEVERITIES, tip, tipCard,
-  tipHead, tipRow, createChart, setNum, animateTo, tweenNumber, resizeAllCharts,
+  $, FONT, REDUCED, fmt, pct, clamp, fmtBytes, fmtTokens, dateRange, esc,
+  lerpColor, hexA, readTokens, T, C, SEV_COLOR, AIME_SEVERITIES, tip, tipCard,
+  tipHead, tipRow, createChart, setNum, resizeAllCharts,
 } from "./core.js";
+import { createRing } from "./ring.js";
 
 const board = {
   data: null,
   opts: {},
   product: "wencai",
-  volume: { wencai: { src: null, task: null, initialized: false }, aime: { src: null, task: null, initialized: false } },
-  cluster: { wencai: { src: null, root: null, meta: {}, stack: [] }, aime: { src: null, root: null, meta: {}, stack: [] } },
-  predict: { wencai: { dim: "volume" }, aime: { dim: "volume" } },
-  clusterCharts: {},
+  volume: { wencai: { task: null }, aime: { task: null } },
+  cluster: {
+    wencai: { src: null, root: null, meta: {}, stack: [] },
+    aime: { src: null, root: null, meta: {}, stack: [] },
+  },
+  predict: { wencai: { dim: "review" }, aime: { dim: "review" } },
+  rings: { wencai: { volume: null, cluster: null }, aime: { volume: null, cluster: null } },
 };
 
 const VERSION_DEFS = {
@@ -20,31 +24,18 @@ const VERSION_DEFS = {
   a_fast: { label: "A·fast", color: () => T.wcMid, group: "A" },
   b_expert: { label: "B·expert", color: () => T.b, group: "B" },
   b_fast: { label: "B·fast", color: () => T.bMid, group: "B" },
-  fast: { label: "fast", color: () => T.aiMid, group: "AI" },
+  fast: { label: "fast", color: () => T.predFast || T.aiMid, group: "AI" },
   expert: { label: "expert", color: () => T.ai, group: "AI" },
 };
 
-const TASK_COLORS = () => [
-  T.cl1, T.cl2, T.cl3, T.cl4, T.cl5, T.cl6,
-];
-
-const AIME_TASK_COLORS = () => [
-  T.cl1, T.cl2, T.cl3, T.cl4, T.cl5, T.cl6,
-];
-
 const isWc = (product) => product === "wencai";
 const getSrc = (product) => (isWc(product) ? board.data.wencai : board.data.aime);
-const taskPalette = (product) => (isWc(product) ? TASK_COLORS() : AIME_TASK_COLORS());
+const productLabel = (product) => (isWc(product) ? "问财" : "AIME");
 
 function recall(detail) {
   const d = { product: board.product, ...(detail || {}) };
   if (board.opts && board.opts.onRecall) board.opts.onRecall(d);
   else window.dispatchEvent(new CustomEvent("eval:recall", { detail: d }));
-}
-
-function emptyInto(el, text) {
-  if (!el) return;
-  el.innerHTML = `<div class="empty-state"><span class="empty-mark">∅</span><p>${esc(text)}</p></div>`;
 }
 
 function showChartEmpty(el, text) {
@@ -97,6 +88,59 @@ function taskSubs(product, taskName) {
   return subs;
 }
 
+function maybeNumber(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function tonalPalette(n) {
+  const stops = [T.cl1, T.cl2, T.cl3, T.cl4, T.cl5, T.cl6];
+  if (n <= 1) return [stops[0]];
+  return Array.from({ length: n }, (_, i) => {
+    const pos = (i / (n - 1)) * (stops.length - 1);
+    const a = Math.floor(pos);
+    const b = Math.min(stops.length - 1, a + 1);
+    return lerpColor(stops[a], stops[b], pos - a);
+  });
+}
+
+function indexTree(root) {
+  const map = new Map();
+  const walk = (node) => {
+    if (node.key) map.set(node.key, node);
+    (node.children || []).forEach(walk);
+  };
+  walk(root);
+  return map;
+}
+
+function markLegend(el, key) {
+  if (!el) return;
+  el.querySelectorAll(".rl-row").forEach((row) => {
+    row.classList.toggle("is-hover", Boolean(key) && row.dataset.key === key);
+  });
+}
+
+function bindLegendHover(el, getRing) {
+  if (!el) return;
+  el.querySelectorAll(".rl-row").forEach((row) => {
+    const enter = () => {
+      row.classList.add("is-hover");
+      const ring = getRing();
+      if (ring) ring.hover(row.dataset.key);
+    };
+    const leave = () => {
+      row.classList.remove("is-hover");
+      const ring = getRing();
+      if (ring) ring.clear();
+    };
+    row.addEventListener("pointerenter", enter);
+    row.addEventListener("pointerleave", leave);
+    row.addEventListener("focus", enter);
+    row.addEventListener("blur", leave);
+  });
+}
+
 /* ----------------------------------------------------------------- volume */
 
 function volumeTotal(product) {
@@ -104,412 +148,210 @@ function volumeTotal(product) {
   return src.input.total || taskList(product).reduce((n, t) => n + (t.value || 0), 0) || 1;
 }
 
-function ringNode(product, task, i) {
-  const pal = taskPalette(product);
-  const total = volumeTotal(product);
-  const color = pal[i % pal.length];
-  const selected = board.volume[product].task;
-  const dark = document.documentElement.dataset.mode === "dark";
-  const node = {
-    name: task.name,
-    value: task.value,
-    taskName: task.name,
-    ringLevel: 0,
-    share: pct(task.value, total),
-    itemStyle: { color },
-    label: { color: labelOn(color) },
-  };
-  if (selected === task.name) {
-    const fold = 6;
-    let subs = taskSubs(product, task.name);
-    if (subs.length > fold) {
-      const head = subs.slice(0, fold);
-      const rest = subs.slice(fold).reduce((n, c) => n + c.value, 0);
-      if (rest > 0) head.push({ name: "其他", value: rest });
-      subs = head;
-    }
-    node.children = subs.map((s, j) => ({
-      name: s.name,
-      value: s.value,
-      taskName: task.name,
-      ringLevel: 1,
-      share: pct(s.value, total),
-      itemStyle: { color: lerpColor(color, T.surface, dark ? 0.42 : 0.22 + j * 0.045) },
-      label: { color: T.ink2 },
-    }));
-  }
-  return node;
-}
-
-function renderVolumeLegend(product) {
-  const el = $(isWc(product) ? "wcVolumeLegend" : "aiVolumeLegend");
-  if (!el) return;
+function volumeTree(product) {
   const tasks = taskList(product);
   const total = volumeTotal(product);
-  const selected = tasks.find((t) => t.name === board.volume[product].task);
-  const pal = taskPalette(product);
-  if (selected) {
-    const subs = taskSubs(product, selected.name).sort((a, b) => b.value - a.value);
-    const subTotal = selected.value || subs.reduce((n, c) => n + c.value, 0) || 1;
-    const selectedIndex = tasks.findIndex((t) => t.name === selected.name);
-    const baseColor = pal[Math.max(0, selectedIndex) % pal.length];
-    el.innerHTML =
-      `<div class="vr-head"><span title="${esc(selected.name)}">子类明细</span><span>条数</span><span>占比</span></div>` +
-      subs
-        .map(
-          (x, i) =>
-            `<div class="vr-row is-static" data-volume-name="${esc(x.name)}" title="${esc(x.name)} · ${fmt(x.value)} 条 · ${pct(x.value, subTotal).toFixed(1)}%">` +
-            `<i class="vr-dot" style="background:${lerpColor(baseColor, T.surface, 0.22 + i * 0.06)}"></i>` +
-            `<span class="vr-name">${esc(x.name)}</span>` +
-            `<span class="vr-val">${fmt(x.value)}</span>` +
-            `<span class="vr-pct">${pct(x.value, subTotal).toFixed(1)}%</span>` +
-            `</div>`
-        )
-        .join("");
-    el.onclick = null;
+  const classified = tasks.reduce((n, t) => n + (t.value || 0), 0) || 1;
+  const palette = tonalPalette(tasks.length);
+  const root = { key: "vol-root", name: "全部任务", value: total, children: [] };
+  root.children = tasks.map((task, i) => {
+    const key = `task:${task.name}`;
+    const color = palette[i] || T.cl1;
+    const subs = taskSubs(product, task.name);
+    const subSum = subs.reduce((n, c) => n + (c.value || 0), 0) || 1;
+    return {
+      key,
+      name: task.name,
+      value: task.value,
+      color,
+      share: pct(task.value, classified),
+      children: subs.map((s, j) => ({
+        key: `${key}/${j}`,
+        name: s.name,
+        value: s.value,
+        color: lerpColor(color, T.surface, 0.34),
+        share: pct(s.value, subSum),
+      })),
+    };
+  });
+  return { root, tasks, total, classified, byKey: indexTree(root) };
+}
+
+function renderVolumeLegend(product, tree, focused) {
+  const el = $(isWc(product) ? "wcVolumeLegend" : "aiVolumeLegend");
+  if (!el) return;
+  const rows = focused ? focused.children || [] : tree.root.children;
+  if (!rows.length) {
+    el.innerHTML = "";
     return;
   }
-  el.innerHTML =
-    `<div class="vr-head"><span>任务</span><span>条数</span><span>占比</span></div>` +
-    tasks
-      .map(
-        (t, i) =>
-          `<button class="vr-row${selected === t.name ? " is-active" : ""}" type="button" data-task="${esc(t.name)}" data-volume-name="${esc(t.name)}" title="${esc(t.name)} · ${fmt(t.value)} 条 · ${pct(t.value, total).toFixed(1)}%">` +
-          `<i class="vr-dot" style="background:${pal[i % pal.length]}"></i>` +
-          `<span class="vr-name">${esc(t.name)}</span>` +
-          `<span class="vr-val">${fmt(t.value)}</span>` +
-          `<span class="vr-pct">${pct(t.value, total).toFixed(1)}%</span>` +
-          `</button>`
-      )
-      .join("");
+  const staticRows = Boolean(focused);
+  el.classList.toggle("is-single", staticRows);
+  el.innerHTML = rows
+    .map((node) => {
+      const title = `${node.name} · ${fmt(node.value)} 条 · ${Number(node.share || 0).toFixed(1)}%`;
+      const tag = staticRows ? "div" : "button";
+      const attrs = staticRows
+        ? `class="rl-row is-static"`
+        : `class="rl-row" type="button" aria-label="${esc(title)}"`;
+      return (
+        `<${tag} ${attrs} data-key="${esc(node.key)}" title="${esc(title)}">` +
+        `<i class="rl-dot" style="background:${node.color}"></i>` +
+        `<span class="rl-name">${esc(node.name)}</span>` +
+        `<span class="rl-pct">${Number(node.share || 0).toFixed(1)}%</span>` +
+        `</${tag}>`
+      );
+    })
+    .join("");
+
+  bindLegendHover(el, () => board.rings[product].volume);
   el.onclick = (ev) => {
-    const row = ev.target.closest(".vr-row");
-    if (!row) return;
-    const task = row.dataset.task;
-    board.volume[product].task = board.volume[product].task === task ? null : task;
+    const row = ev.target.closest("button.rl-row");
+    if (!row || staticRows) return;
+    const task = row.dataset.key.replace(/^task:/, "");
+    const state = board.volume[product];
+    state.task = state.task === task ? null : task;
     renderVolumeVisual(product);
   };
 }
 
 function renderVolumeVisual(product) {
-  const wc = isWc(product);
-  const total = volumeTotal(product);
-  const tasks = taskList(product);
-  const selected = tasks.find((t) => t.name === board.volume[product].task);
-  if (!selected) board.volume[product].task = null;
-  const current = selected ? selected.value : total;
+  const tree = volumeTree(product);
+  const state = board.volume[product];
+  let focused = tree.tasks.find((t) => t.name === state.task);
+  if (state.task && !focused) state.task = null;
+  focused = focused ? tree.byKey.get(`task:${state.task}`) : null;
+  if (!focused) state.task = null;
 
-  const valueEl = $(wc ? "wcRingValue" : "aiRingValue");
-  const labelEl = $(wc ? "wcRingLabel" : "aiRingLabel");
-  if (valueEl) valueEl.textContent = fmt(current);
-  if (labelEl) {
-    labelEl.textContent = selected ? selected.name : "条输入";
-    labelEl.title = selected ? selected.name : "全部任务";
-  }
+  const chartEl = $(isWc(product) ? "wcTaskChart" : "aiTaskChart");
+  const centerEl = $(isWc(product) ? "wcRingCenter" : "aiRingCenter");
+  const legendEl = $(isWc(product) ? "wcVolumeLegend" : "aiVolumeLegend");
+  if (!chartEl) return;
 
-  const note = $(wc ? "wcVolNote" : "aiVolNote");
-  const back = $(wc ? "wcVolBack" : "aiVolBack");
-  const right = $(wc ? "wcVolMax" : "aiVolMax");
-  if (back) back.hidden = !selected;
-  if (note) note.textContent = selected ? selected.name : "内环任务 · 点击展开子类";
-  if (right) {
-    right.innerHTML = selected
-      ? `${fmt(selected.value)} <span>条 · ${pct(selected.value, total).toFixed(1)}%</span>`
-      : (() => {
-          const top = tasks[0];
-          return top ? `最大类 ${esc(top.name)} <b>${pct(top.value, total).toFixed(1)}%</b>` : "—";
-        })();
-  }
-
-  renderVolumeLegend(product);
-
-  const el = $(wc ? "wcTaskChart" : "aiTaskChart");
-  if (!el) return;
-  const stage = el.closest(".volume-stage");
-  stage.classList.toggle("is-empty", !tasks.length);
-  if (!tasks.length) {
-    if (note) note.textContent = "任务分类";
-    showChartEmpty(el, "任务分类数据待接入");
+  if (!tree.tasks.length) {
+    showChartEmpty(chartEl, "任务分类数据待接入");
+    if (centerEl) {
+      centerEl.innerHTML = "";
+      centerEl.hidden = true;
+    }
+    if (legendEl) legendEl.innerHTML = "";
     return;
   }
-  el.innerHTML = "";
-  const data = tasks.map((t, i) => ringNode(product, t, i));
+  if (centerEl) centerEl.hidden = false;
 
-  const chart = createChart(el, {
-    animationDuration: REDUCED ? 0 : 680,
-    animationEasing: "cubicOut",
-    tooltip: {
-      ...tip,
-      position: (point, params, dom, rect, size) => {
-        const bounds = el.getBoundingClientRect();
-        const x = Math.max(12 - bounds.left, Math.min(point[0] + 12, window.innerWidth - bounds.left - size.contentSize[0] - 12));
-        const y = Math.max(12 - bounds.top, Math.min(point[1] + 16, window.innerHeight - bounds.top - size.contentSize[1] - 12));
-        return [x, y];
-      },
-      formatter: (p) => {
-        const share = p.data && p.data.share != null ? p.data.share : pct(p.value, total);
-        return `<div class="volume-tip"><span>${esc(p.name)}</span><b>${fmt(p.value)}</b><em>占全部 ${share.toFixed(1)}%</em></div>`;
-      },
-    },
-    series: [
-      {
-        type: "sunburst",
-        radius: ["38%", "92%"],
-        center: ["50%", "50%"],
-        data,
-        sort: null,
-        nodeClick: false,
-        roam: false,
-        itemStyle: { borderColor: T.surface, borderWidth: 2.4, borderRadius: 3 },
-        label: { show: false },
-        levels: [
-          {},
-          {
-            r0: "38%",
-            r: selected ? "68%" : "92%",
-            itemStyle: { borderWidth: 2.4 },
-            label: { show: false },
-          },
-          {
-            r0: "68%",
-            r: "92%",
-            itemStyle: { borderWidth: 2 },
-            label: { show: false },
-          },
-        ],
-        labelLayout: { hideOverlap: true },
-        emphasis: {
-          focus: "none",
-          itemStyle: { borderColor: T.ink2, borderWidth: 2, shadowBlur: 0 },
-        },
-      },
-    ],
-  });
-  if (chart) {
-    const legend = $(wc ? "wcVolumeLegend" : "aiVolumeLegend");
-    const highlight = (name) => {
-      legend.querySelectorAll(".vr-row").forEach((row) => {
-        row.classList.toggle("is-hovered", row.dataset.volumeName === name);
-      });
-    };
-    chart.on("mouseover", (p) => highlight(p.name));
-    chart.on("mouseout", () => highlight(null));
-    const hoverRow = (event) => {
-      const row = event.target.closest(".vr-row");
-      chart.dispatchAction({ type: "downplay", seriesIndex: 0 });
-      highlight(row ? row.dataset.volumeName : null);
-      if (row) chart.dispatchAction({ type: "highlight", seriesIndex: 0, name: row.dataset.volumeName });
-    };
-    legend.onmouseover = hoverRow;
-    legend.onfocusin = hoverRow;
-    legend.onmouseleave = legend.onfocusout = () => {
-      highlight(null);
-      chart.dispatchAction({ type: "downplay", seriesIndex: 0 });
-    };
-    chart.on("click", (p) => {
-      const task = p.data && p.data.taskName;
-      if (!task) return;
-      if (p.data.ringLevel === 0) {
-        board.volume[product].task = board.volume[product].task === task ? null : task;
-      } else {
-        board.volume[product].task = task;
+  board.rings[product].volume = createRing(chartEl, centerEl, {
+    root: tree.root,
+    maxDepth: 2,
+    hole: 24.5,
+    bandWeights: [1.15, 0.85],
+    unit: "条",
+    restValue: tree.total,
+    restLabel: "条输入",
+    shareTotal: tree.classified,
+    focusKey: focused ? focused.key : null,
+    centerNode: focused || null,
+    canBack: Boolean(focused),
+    ariaLabel: `${productLabel(product)}数据量同心圆`,
+    onHover: (arc) => markLegend(legendEl, arc ? (arc.depth === 1 ? arc.key : arc.topKey) : null),
+    onSelect: (node, arc) => {
+      if (!node) return;
+      const top = arc.depth === 1 ? node : tree.byKey.get(arc.topKey);
+      if (!top) return;
+      if (arc.depth === 1) {
+        state.task = state.task === top.name ? null : top.name;
+      } else if (state.task !== top.name) {
+        state.task = top.name;
       }
       renderVolumeVisual(product);
-    });
-    el.style.cursor = tasks.length ? "pointer" : "default";
-  }
+    },
+    onBack: () => {
+      state.task = null;
+      renderVolumeVisual(product);
+    },
+  });
+
+  renderVolumeLegend(product, tree, focused);
 }
 
 function renderVolume(product) {
-  const wc = isWc(product);
   const src = getSrc(product);
   const total = maybeNumber(src.input.total);
-  board.volume[product].src = src;
   const tasks = taskList(product);
-  if (board.volume[product].task && !tasks.some((t) => t.name === board.volume[product].task)) {
-    board.volume[product].task = null;
-  }
-  if (!board.volume[product].initialized) {
-    board.volume[product].task = null;
-    board.volume[product].initialized = true;
-  }
+  const classified = tasks.reduce((n, t) => n + (t.value || 0), 0);
+  const state = board.volume[product];
+  if (state.task && !tasks.some((t) => t.name === state.task)) state.task = null;
 
-  setNum(wc ? "wcTotal" : "aiTotal", total);
-  const meta = $(wc ? "wcVolMeta" : "aiVolMeta");
-  if (meta) meta.textContent = dateRange(src.input.date_range);
-  const days = (src.input.per_day && src.input.per_day.length) || 1;
-  const side = $(wc ? "wcVolSide" : "aiVolSide");
-  if (side) side.innerHTML = `活跃日均 <b>${fmt(Math.round(total / days))}</b> 条`;
-  const stats = $(wc ? "wcVolStats" : "aiVolStats");
+  const meta = $(isWc(product) ? "wcVolMeta" : "aiVolMeta");
+  if (meta) meta.textContent = dateRange(src.input.date_range).replace(/^\d{4}-/, "");
+
+  const stats = $(isWc(product) ? "wcVolStats" : "aiVolStats");
   if (stats) {
+    const useClassified = classified > 0 && classified < total;
     stats.innerHTML = [
       ["体量", fmtBytes(src.input.bytes)],
-      ["文件", fmt(src.input.files)],
-      ["活跃", `${fmt(days)} 天`],
+      [useClassified ? "已归类" : "文件", useClassified ? fmt(classified) : fmt(src.input.files)],
       ["已评测", fmt(src.input.evaluated)],
     ]
       .map(([label, value]) => `<span>${label} <b>${value}</b></span>`)
       .join("");
   }
-  const back = $(wc ? "wcVolBack" : "aiVolBack");
-  if (back) {
-    back.onclick = () => {
-      board.volume[product].task = null;
-      renderVolumeVisual(product);
-    };
-  }
   renderVolumeVisual(product);
-}
-
-function maybeNumber(v) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
 }
 
 /* ------------------------------------------------------------- evaluation */
 
-function renderRing(id, evaluated, pending, color) {
-  const total = evaluated + pending;
-  const el = $(id);
+function renderEvalVersions(product) {
+  const out = getSrc(product).output || {};
+  const el = $(isWc(product) ? "wcModels" : "aiModels");
   if (!el) return;
-  return createChart(el, {
-    animationDuration: REDUCED ? 0 : 660,
-    animationEasing: "cubicOut",
-    animationDelay: REDUCED ? 0 : 100,
-    tooltip: {
-      ...tip,
-      formatter: (p) =>
-        tipCard(
-          tipHead(p.name, `${pct(p.value, total).toFixed(1)}%`, p.color) +
-            tipRow(p.color, "条数", fmt(p.value))
-        ),
-    },
-    series: [
-      {
-        type: "pie",
-        radius: ["73%", "94%"],
-        center: ["50%", "50%"],
-        startAngle: 90,
-        avoidLabelOverlap: false,
-        label: { show: false },
-        labelLine: { show: false },
-        itemStyle: { borderWidth: 0, borderRadius: 6 },
-        emphasis: { scale: true, scaleSize: 2 },
-        data: [
-          { value: evaluated, name: "已评测", itemStyle: { color } },
-          { value: Math.max(0, pending), name: "待评测", itemStyle: { color: T.track } },
-        ],
-      },
-    ],
-  });
-}
+  let rows;
+  if (isWc(product)) {
+    rows = ["a_expert", "a_fast", "b_expert", "b_fast"].map((key) => {
+      const v = out.versions[key] || {};
+      return {
+        name: VERSION_DEFS[key].label,
+        color: VERSION_DEFS[key].color(),
+        answers: v.answers || 0,
+        core: (out.meets_core && out.meets_core[key]) || 0,
+        p50: v.p50 || 0,
+        tokens: v.tokens || 0,
+      };
+    });
+  } else {
+    rows = ["fast", "expert"].map((key) => ({
+      name: key,
+      color: VERSION_DEFS[key].color(),
+      answers: (out.by_model && out.by_model[key]) || 0,
+      core: 0,
+      p50: 0,
+      tokens: 0,
+    }));
+  }
 
-function dotGrid(value, count, color, label) {
-  const filled = Math.round((clamp(value, 0, 100) * count) / 100);
-  return (
-    `<div class="dot-grid" role="img" aria-label="${esc(label)} ${Math.round(value)}%">` +
-    Array.from({ length: count }, (_, i) => `<i class="${i < filled ? "is-on" : ""}" style="--dot:${color}"></i>`).join("") +
-    `</div>`
-  );
-}
-
-function renderVersionBlocks(out) {
-  const el = $("wcModels");
-  if (!el) return;
-  const defs = [
-    ["a_expert", "A·expert", C.a],
-    ["a_fast", "A·fast", C.aMid],
-    ["b_expert", "B·expert", C.b],
-    ["b_fast", "B·fast", C.bMid],
-  ];
-  const rows = defs.map(([key, name, color]) => {
-    const v = out.versions[key] || {};
-    return {
-      key,
-      name,
-      color,
-      answers: v.answers || 0,
-      p50: v.p50 || 0,
-      core: (out.meets_core && out.meets_core[key]) || 0,
-      tokens: v.tokens || 0,
-    };
-  });
-  const total = rows.reduce((n, r) => n + r.answers, 0) || 1;
-  const bestCore = Math.max(0, ...rows.map((r) => r.core));
-  el.innerHTML = rows
-    .map(
-      (r) =>
-        `<div class="eval-block" style="--accent:${r.color}" title="${esc(r.name)} · ${fmt(r.answers)} 条 · 核心达标 ${r.core.toFixed(1)}% · P50 ${r.p50.toFixed(1)}s">` +
-        `<div class="eb-top"><i class="eb-dot" style="background:${r.color}"></i><span>${esc(r.name)}</span><em>${pct(r.answers, total).toFixed(0)}%</em></div>` +
-        `<div class="eb-main"><b>${fmt(r.answers)}</b><span>条回答</span></div>` +
-        `<div class="eb-grid-row">${dotGrid(r.core, 50, r.color, `${r.name} 核心达标`)}<span class="eb-core${r.core === bestCore ? " is-best" : ""}">${r.core ? r.core.toFixed(1) + "%" : "—"}<em>核心</em></span></div>` +
-        `<div class="eb-foot"><span>P50 <b>${r.p50 ? r.p50.toFixed(1) + "s" : "—"}</b></span><span>Tokens <b>${fmtTokens(r.tokens)}</b></span></div>` +
-        `</div>`
-    )
-    .join("");
-}
-
-function renderModelBlocks(out) {
-  const el = $("aiModels");
-  if (!el) return;
-  const rows = [
-    { name: "fast", color: C.aiMid, value: (out.by_model && out.by_model.fast) || 0 },
-    { name: "expert", color: C.ai, value: (out.by_model && out.by_model.expert) || 0 },
-  ];
-  const total = rows.reduce((n, r) => n + r.value, 0) || 1;
-  const max = Math.max(1, ...rows.map((r) => r.value));
-  el.innerHTML = rows
-    .map(
-      (r) =>
-        `<div class="eval-block eval-block--model" style="--accent:${r.color};flex-grow:${Math.max(1, r.value / max)}" title="${r.name} · ${fmt(r.value)} 条 · ${pct(r.value, total).toFixed(1)}%">` +
-        `<div class="eb-top"><i class="eb-dot" style="background:${r.color}"></i><span>${r.name}</span><em>${pct(r.value, total).toFixed(0)}%</em></div>` +
-        `<div class="eb-main"><b>${fmt(r.value)}</b><span>条回答</span></div>` +
-        `<div class="eb-grid-row">${dotGrid((r.value / total) * 100, 50, r.color, `${r.name} 占比`)}<span class="eb-core">${pct(r.value, total).toFixed(1)}%<em>占比</em></span></div>` +
-        `<div class="eb-foot"><span>共享 P50 <b>${out.p50 ? out.p50.toFixed(1) + "s" : "—"}</b></span><span>密度 <b>${(out.density || 0).toFixed(2)}</b></span></div>` +
-        `</div>`
-    )
-    .join("");
-}
-
-function renderTaskMini(out) {
-  const el = $("aiEvalTasks");
-  if (!el) return;
-  const source = out.subtasks && Object.keys(out.subtasks).length ? out.subtasks : out.tasks || {};
-  const all = Object.entries(source);
-  const total = all.reduce((n, [, v]) => n + v, 0) || out.task_total || 1;
-  const rows = all
-    .filter(([name]) => !["其它", "未标注", "其他"].includes(name))
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 4);
-  if (!rows.length) {
-    el.innerHTML = "";
+  const grid = el.closest(".eval-grid");
+  const empty = !rows.some((r) => r.answers > 0);
+  if (grid) grid.classList.toggle("is-empty", empty);
+  if (empty) {
+    el.innerHTML = `<div class="ev-empty">评测输出待接入</div>`;
     return;
   }
-  const max = Math.max(1, ...rows.map(([, v]) => v));
-  el.innerHTML =
-    `<div class="mini-head"><span>评测子任务 Top 4</span><span>${fmt(out.task_total || total)} 条</span></div>` +
-    rows
-      .map(([name, value]) => {
-        const ratio = value / max;
-        const size = (4 + ratio * 4).toFixed(1);
-        const alpha = (0.3 + ratio * 0.65).toFixed(2);
-        return (
-          `<div class="mini-row" title="${esc(name)} · ${fmt(value)} 条 · ${pct(value, total).toFixed(1)}%">` +
-          `<i class="mini-bubble" style="width:${size}px;height:${size}px;background:${hexA(C.aiMid, alpha)}"></i>` +
-          `<span class="mini-name">${esc(name)}</span>` +
-          `<span class="mini-val">${fmt(value)}</span>` +
-          `<span class="mini-pct">${pct(value, total).toFixed(1)}%</span>` +
-          `</div>`
-        );
-      })
-      .join("");
+
+  el.innerHTML = rows
+    .map(
+      (r) =>
+        `<div class="ev-row" style="--c:${r.color}" title="${esc(r.name)} · ${fmt(r.answers)} 条回答 · 核心 ${r.core ? r.core.toFixed(1) + "%" : "—"} · P50 ${r.p50 ? r.p50.toFixed(1) + "s" : "—"} · Tokens ${fmtTokens(r.tokens)}">` +
+        `<span class="ev-name"><i></i>${esc(r.name)}</span>` +
+        `<span class="ev-count">${fmt(r.answers)}</span>` +
+        `<span class="ev-core">${r.core ? r.core.toFixed(1) + "%" : "—"}</span>` +
+        `</div>`
+    )
+    .join("");
 }
 
-function renderDifficulty(src) {
-  const el = $("wcDifficulty");
+function renderDifficulty(product) {
+  const el = $(isWc(product) ? "wcDifficulty" : "aiDifficulty");
   if (!el) return;
-  const order = ["简单", "中等", "困难", "复杂"];
-  const colors = { 简单: T.wcMid, 中等: T.wc, 困难: T.bMid, 复杂: T.b };
+  const src = getSrc(product);
   const counts = {};
   let total = 0;
   Object.values((src.output && src.output.versions) || {}).forEach((v) => {
@@ -522,77 +364,27 @@ function renderDifficulty(src) {
     el.innerHTML = "";
     return;
   }
+  const order = ["简单", "中等", "困难", "复杂"];
+  const colors = { 简单: T.wcMid, 中等: T.wc, 困难: T.bMid, 复杂: T.b };
   el.innerHTML =
-    `<div class="diff-head"><span>难度构成</span><span>${fmt(total)} 条</span></div>` +
+    `<div class="diff-head">难度构成</div>` +
+    `<div class="diff-bar" role="img" aria-label="难度构成">` +
+    order
+      .filter((k) => counts[k])
+      .map(
+        (k) =>
+          `<i style="width:${pct(counts[k] || 0, total).toFixed(2)}%;background:${colors[k]}" title="${k} · ${fmt(counts[k] || 0)} 条 · ${pct(counts[k] || 0, total).toFixed(1)}%"></i>`
+      )
+      .join("") +
+    `</div>` +
+    `<div class="diff-legend">` +
     order
       .map(
         (k) =>
-          `<div class="diff-tile" title="${k} · ${fmt(counts[k] || 0)} 条 · ${pct(counts[k] || 0, total).toFixed(1)}%">` +
-          `<span class="dt-head"><i class="dt-dot" style="background:${colors[k]}"></i>${k}</span>` +
-          `<b class="dt-value">${pct(counts[k] || 0, total).toFixed(0)}%</b>` +
-          `<span class="dt-count">${fmt(counts[k] || 0)} 条</span>` +
-          `</div>`
+          `<span title="${k} · ${fmt(counts[k] || 0)} 条"><i style="background:${colors[k]}"></i>${k} <b>${pct(counts[k] || 0, total).toFixed(0)}%</b></span>`
       )
-      .join("");
-}
-
-function renderEvalInsights(out, defs) {
-  const el = $("wcEvalInsights");
-  if (!el) return;
-  const rows = defs.map(([key, name]) => {
-    const v = out.versions[key] || {};
-    return { name, p50: v.p50 || 0, core: (out.meets_core && out.meets_core[key]) || 0 };
-  });
-  const valid = rows.filter((r) => r.p50 > 0);
-  if (!valid.length) {
-    el.innerHTML = "";
-    return;
-  }
-  const fast = valid.reduce((a, b) => (a.p50 <= b.p50 ? a : b));
-  const slow = valid.reduce((a, b) => (a.p50 >= b.p50 ? a : b));
-  const cores = rows.map((r) => r.core).filter((v) => v > 0);
-  const coreMin = cores.length ? Math.min(...cores) : 0;
-  const coreMax = cores.length ? Math.max(...cores) : 0;
-  el.innerHTML =
-    `<div class="ei-head"><span>版本极值</span><span>P50 / 核心</span></div>` +
-    `<div class="ei-row"><span>最快 P50</span><b>${fast.name} · ${fast.p50.toFixed(1)}s</b></div>` +
-    `<div class="ei-row"><span>最慢 P50</span><b>${slow.name} · ${slow.p50.toFixed(1)}s</b></div>` +
-    `<div class="ei-row"><span>核心区间</span><b>${coreMin.toFixed(1)}–${coreMax.toFixed(1)}%</b></div>`;
-}
-
-function renderSpark(perDay) {
-  const values = (perDay || []).map((x) => ({
-    date: x.date,
-    value: (x.fast || 0) + (x.expert || 0),
-  }));
-  const peak = values.reduce((best, x) => (x.value > best.value ? x : best), { date: "—", value: 0 });
-  const peakEl = $("aiSparkPeak");
-  if (peakEl) peakEl.innerHTML = `峰值 <b>${fmt(peak.value)}</b> · ${peak.date.slice(5)}`;
-  const startEl = $("aiSparkStart");
-  const endEl = $("aiSparkEnd");
-  if (startEl) startEl.textContent = values.length ? values[0].date.slice(5) : "";
-  if (endEl) endEl.textContent = values.length ? values[values.length - 1].date.slice(5) : "";
-  const max = Math.max(1, ...values.map((x) => x.value));
-  const spark = $("aiSpark");
-  if (!spark) return;
-  spark.innerHTML = values
-    .slice(-28)
-    .map((x) => {
-      const ratio = x.value / max;
-      const h = Math.max(3, Math.round(ratio * 100));
-      const alpha = (0.3 + ratio * 0.7).toFixed(2);
-      return (
-        `<i class="spark-bar" style="--h:${h}%;background:${hexA(T.ai, alpha)}"` +
-        ` title="${x.date} · ${fmt(x.value)} 条"></i>`
-      );
-    })
-    .join("");
-  const animate = () =>
-    spark.querySelectorAll(".spark-bar").forEach((b) => {
-      b.style.height = b.style.getPropertyValue("--h");
-    });
-  if (REDUCED) animate();
-  else requestAnimationFrame(animate);
+      .join("") +
+    `</div>`;
 }
 
 function outputP50(src) {
@@ -610,11 +402,19 @@ function outputP50(src) {
   return valid.reduce((n, v) => n + Number(v.p50) * Math.max(1, Number(v.answers) || 1), 0) / total;
 }
 
-function outputDensity(src) {
-  if (src.output && src.output.density) return Number(src.output.density);
-  const answers = Number(src.input && src.input.evaluated) || 0;
-  const problems = Number(src.output && src.output.problems) || 0;
-  return answers ? problems / answers : 0;
+function renderEvalFacts(product) {
+  const src = getSrc(product);
+  const out = src.output || {};
+  const p50 = outputP50(src);
+  const el = $(isWc(product) ? "wcEvalStats" : "aiEvalStats");
+  if (!el) return;
+  el.innerHTML = [
+    ["问题", fmt(out.problems || 0)],
+    ["Tokens", fmtTokens(out.tokens || 0)],
+    ["P50", p50 ? p50.toFixed(1) + "s" : "—"],
+  ]
+    .map(([label, value]) => `<span><em>${label}</em><b>${value}</b></span>`)
+    .join("");
 }
 
 function renderEvaluation(product) {
@@ -624,70 +424,50 @@ function renderEvaluation(product) {
   const input = src.input;
   const evaluated = input.evaluated || 0;
   const pending = input.pending || 0;
+  const total = input.total || 0;
+  const cover = clamp(pct(evaluated, total), 0, 100);
 
   setNum(wc ? "wcEvaluated" : "aiEvaluated", evaluated);
-  setNum(wc ? "wcCoverPct" : "aiCoverPct", pct(evaluated, input.total), { decimals: 1, suffix: "%" });
-  const pendingEl = $(wc ? "wcPending" : "aiPending");
-  if (pendingEl) pendingEl.textContent = fmt(pending);
-  const note = $(wc ? "wcEvalNote" : "aiEvalNote");
-  if (note) note.innerHTML = `<b>${(out.problems / Math.max(1, evaluated)).toFixed(1)}</b> 问题/回答`;
+  setNum(wc ? "wcCoverPct" : "aiCoverPct", cover, { decimals: 1, suffix: "%" });
+
+  const inputTotal = $(wc ? "wcInputTotal" : "aiInputTotal");
+  if (inputTotal) inputTotal.textContent = fmt(total);
+  const done = $(wc ? "wcCoverDone" : "aiCoverDone");
+  if (done) done.textContent = fmt(evaluated);
+  const rest = $(wc ? "wcCoverPending" : "aiCoverPending");
+  if (rest) rest.textContent = fmt(pending);
+  const fill = $(wc ? "wcCoverFill" : "aiCoverFill");
+  if (fill) fill.style.width = `${cover.toFixed(2)}%`;
+  const coverBar = $(wc ? "wcCoverBar" : "aiCoverBar");
+  if (coverBar) {
+    coverBar.setAttribute(
+      "aria-label",
+      `评测覆盖率 ${cover.toFixed(1)}%，已评测 ${fmt(evaluated)} 条，共 ${fmt(total)} 条`
+    );
+  }
+
+  const days = (out.per_day || []).filter((d) => Number(d.answers) > 0);
+  const batchEl = $(wc ? "wcCoverBatch" : "aiCoverBatch");
+  if (batchEl) {
+    batchEl.textContent = days.length ? `${days[days.length - 1].date.slice(5)} 批次` : "输出待接入";
+  }
   const meta = $(wc ? "wcEvalMeta" : "aiEvalMeta");
-  if (meta) meta.textContent = wc
-    ? `比对 ${fmt(out.comparison_total)} 组`
-    : `密度 ${(out.density || 0).toFixed(2)} 条/回答`;
+  if (meta) meta.textContent = "";
 
-  const p50 = outputP50(src);
-  const stats = $(wc ? "wcEvalStats" : "aiEvalStats");
-  if (stats) {
-    stats.innerHTML = (
-      wc
-        ? [
-            ["问题", fmt(out.problems)],
-            ["Tokens", fmtTokens(out.tokens || 0)],
-            ["P50", p50 ? p50.toFixed(1) + "s" : "—"],
-            ["覆盖率", pct(evaluated, input.total).toFixed(1) + "%"],
-          ]
-        : [
-            ["问题", fmt(out.problems)],
-            ["Tokens", fmtTokens(out.tokens || 0)],
-            ["P50", p50 ? p50.toFixed(1) + "s" : "—"],
-            ["密度", outputDensity(src).toFixed(2)],
-          ]
-    )
-      .map(([label, value]) => `<span><em>${label}</em><b>${value}</b></span>`)
-      .join("");
-  }
-
-  renderRing(wc ? "wcCover" : "aiCover", evaluated, pending, wc ? C.a : C.ai);
-
-  if (wc) {
-    const defs = [
-      ["a_expert", "A·expert", C.a],
-      ["a_fast", "A·fast", C.aMid],
-      ["b_expert", "B·expert", C.b],
-      ["b_fast", "B·fast", C.bMid],
-    ];
-    renderVersionBlocks(out);
-    renderDifficulty(src);
-    renderEvalInsights(out, defs);
-  } else {
-    renderModelBlocks(out);
-    renderSpark(out.per_day || []);
-    renderTaskMini(out);
-  }
+  renderEvalVersions(product);
+  renderDifficulty(product);
+  renderEvalFacts(product);
 }
 
 /* ----------------------------------------------------------- attribution */
 
 function shortComp(name) {
-  return String(name || "")
-    .replace(/ 取数服务$/, "")
-    .replace(/ 代码解释器$/, "")
-    .replace(/ 网页检索$/, "")
-    .replace(/ 网页抓取$/, "")
-    .replace(/ 取数规划子模型$/, "")
-    .replace(/ 检索规划子模型$/, "")
-    .replace(/^其他工具（(.+)）$/, "$1");
+  const s = String(name || "");
+  const paren = s.match(/^其他工具（(.+)）$/);
+  if (paren) return paren[1];
+  const latin = s.match(/^[A-Za-z0-9_.-]+\s+(.+)$/);
+  if (latin) return latin[1];
+  return s;
 }
 
 function versionLabel(id) {
@@ -701,7 +481,7 @@ function buildSankey(product) {
   const nodes = [];
   const links = [];
   const seen = new Set();
-  const addNode = (name, display, color, col, tipMeta) => {
+  const addNode = (name, display, color, col, tipMeta, labelPos) => {
     if (seen.has(name)) return;
     seen.add(name);
     nodes.push({
@@ -709,7 +489,7 @@ function buildSankey(product) {
       display: display || name,
       depth: col,
       itemStyle: { color },
-      label: { position: col === 0 ? "left" : col === 2 ? "right" : "top" },
+      label: { position: labelPos || (col === 0 ? "left" : "right") },
       tipMeta: tipMeta || "",
     });
   };
@@ -732,8 +512,8 @@ function buildSankey(product) {
         const def = VERSION_DEFS[id];
         addNode(versionLabel(id), versionLabel(id), def.color(), 0, id);
       });
-      top.forEach((name) => addNode(name, shortComp(name), T.mode === "dark" ? T.surface3 : T.track, 1, name));
-      if (extra.length) addNode("其他环节", "其他环节", T.mode === "dark" ? T.surface3 : T.track, 1, `${extra.length} 类长尾`);
+      top.forEach((name) => addNode(name, shortComp(name), T.mode === "dark" ? T.surface3 : T.track, 1, name, "right"));
+      if (extra.length) addNode("其他环节", "其他环节", T.mode === "dark" ? T.surface3 : T.track, 1, `${extra.length} 类长尾`, "right");
       versions.forEach((id) => {
         const def = VERSION_DEFS[id];
         top.forEach((name) => {
@@ -748,14 +528,13 @@ function buildSankey(product) {
       });
       return { nodes, links, cols: 2, labels: ["版本", "环节"] };
     }
-    const totalA = (comp.A || []).reduce((n, v) => n + v, 0);
     const totalB = (comp.B || []).reduce((n, v) => n + v, 0);
     addNode("A 组", "A 组", C.a, 0, "A");
     if (totalB > 0) addNode("B 组", "B 组", C.b, 0, "B");
     (comp.names || []).forEach((name, i) => {
       const value = (comp.A[i] || 0) + (comp.B[i] || 0);
       if (value <= 0) return;
-      addNode(name, shortComp(name), T.mode === "dark" ? T.surface3 : T.track, 1, name);
+      addNode(name, shortComp(name), T.mode === "dark" ? T.surface3 : T.track, 1, name, "right");
     });
     (comp.names || []).forEach((name, i) => {
       if (!seen.has(name)) return;
@@ -778,7 +557,7 @@ function buildSankey(product) {
   models.forEach((m) => addNode(m, m, VERSION_DEFS[m].color(), 0, m));
   names.forEach((name) => {
     const total = models.reduce((n, m) => n + Number((byModel[m] || {})[name] || 0), 0);
-    if (total > 0) addNode(name, shortComp(name), T.mode === "dark" ? T.surface3 : T.track, 1, name);
+    if (total > 0) addNode(name, shortComp(name), T.mode === "dark" ? T.surface3 : T.track, 1, name, hasSeverity ? "top" : "right");
   });
   models.forEach((m) => {
     names.forEach((name) => {
@@ -825,7 +604,7 @@ function buildSankey(product) {
   return { nodes, links, cols: 2, labels: ["模型", "环节"] };
 }
 
-function sankeyOption(product, graph) {
+function sankeyOption(graph) {
   const { nodes, links, cols } = graph;
   return {
     animationDuration: REDUCED ? 0 : 650,
@@ -855,12 +634,12 @@ function sankeyOption(product, graph) {
     series: [
       {
         type: "sankey",
-        left: 50,
-        right: cols === 3 ? 52 : 74,
-        top: 16,
-        bottom: 3,
+        left: 56,
+        right: cols === 3 ? 58 : 92,
+        top: 14,
+        bottom: 2,
         nodeWidth: 8,
-        nodeGap: 8,
+        nodeGap: 9,
         layoutIterations: 40,
         nodeAlign: "justify",
         draggable: false,
@@ -869,10 +648,10 @@ function sankeyOption(product, graph) {
         lineStyle: { curveness: 0.55, opacity: 0.5 },
         itemStyle: { borderWidth: 0, borderRadius: 2 },
         label: {
-          fontSize: 8.4,
+          fontSize: 10,
           fontFamily: FONT,
           color: T.ink2,
-          distance: 4,
+          distance: 5,
           overflow: "truncate",
           formatter: (p) => (p.data && p.data.display) || p.name,
         },
@@ -886,13 +665,8 @@ function sankeyOption(product, graph) {
   };
 }
 
-function sankeyClick(product, p) {
-  const src = getSrc(product);
-  const graph = buildSankey(product);
-  const compNames = new Set([
-    ...((src.components && src.components.names) || []),
-    ...((src.output && src.output.components && src.output.components.names) || []),
-  ]);
+function sankeyClick(p, graph) {
+  const compNames = new Set((graph.nodes || []).filter((n) => n.depth === 1).map((n) => n.name));
   const sevNames = new Set(AIME_SEVERITIES);
   let component = "";
   let severity = "";
@@ -917,36 +691,21 @@ function renderAttribution(product) {
   const id = wc ? "wcAttr" : "aiAttr";
   const el = $(id);
   const graph = buildSankey(product);
-  const total = graph.links.reduce((n, l) => n + l.value, 0) || 1;
 
-  if (wc) {
-    const comp = src.components || {};
-    const totalA = (comp.A || []).reduce((n, v) => n + v, 0);
-    const totalB = (comp.B || []).reduce((n, v) => n + v, 0);
-    setNum("wcProblems", out.problems || total);
-    const side = $("wcAttrSide");
-    if (side) side.innerHTML = `A 组 <b>${fmt(totalA)}</b> · B 组 <b>${fmt(totalB)}</b>`;
-    const meta = $("wcAttrMeta");
-    if (meta) meta.textContent = `${(comp.names || []).length} 类环节`;
-    const hint = $("wcAttrHint");
-    if (hint) hint.textContent = "版本 → 环节 · 流宽 = 问题数 · 点击召回";
-  } else {
-    setNum("aiProblems", out.problems || total);
-    const meta = $("aiAttrMeta");
-    if (meta) meta.textContent = "P0–P3 分级";
-    const hint = $("aiAttrHint");
-    if (hint) hint.textContent = "模型 → 环节 → 严重度 · 点击召回";
-    const side = $("aiAttrSide");
-    if (side) side.innerHTML = `P1 <b>${(out.severity && out.problems ? pct(out.severity.P1 || 0, out.problems) : 0).toFixed(1)}%</b>`;
+  setNum(wc ? "wcProblems" : "aiProblems", out.problems || graph.links.reduce((n, l) => n + l.value, 0));
+
+  if (!wc) {
     const chips = $("aiSevChips");
     if (chips) {
-      chips.innerHTML = AIME_SEVERITIES.map((s) => {
-        const share = pct((out.severity && out.severity[s]) || 0, out.problems || 1);
-        return (
-          `<span class="sev-chip"><i class="sev-dot" style="background:${SEV_COLOR[s]}"></i>` +
-          `${s} <b>${share.toFixed(1)}%</b></span>`
-        );
-      }).join("");
+      chips.innerHTML = out.problems
+        ? AIME_SEVERITIES.map((s) => {
+            const share = pct((out.severity && out.severity[s]) || 0, out.problems || 1);
+            return (
+              `<span class="sev-chip"><i class="sev-dot" style="background:${SEV_COLOR[s]}"></i>` +
+              `${s} <b>${share.toFixed(0)}%</b></span>`
+            );
+          }).join("")
+        : "";
     }
   }
 
@@ -956,9 +715,9 @@ function renderAttribution(product) {
     return;
   }
   el.innerHTML = "";
-  const chart = createChart(el, sankeyOption(product, graph));
+  const chart = createChart(el, sankeyOption(graph));
   if (chart) {
-    chart.on("click", (p) => sankeyClick(product, p));
+    chart.on("click", (p) => sankeyClick(p, graph));
     el.style.cursor = "pointer";
   }
 }
@@ -973,25 +732,16 @@ function decorateCluster(node, color, depth, parentPath) {
   const path = [...parentPath, node.name];
   const value = clusterValue(node);
   const out = {
-    id: node.id || path.join("/"),
+    key: node.id || path.join("/"),
+    clusterKey: node.id || path.join("/"),
     name: node.name,
     value,
     items: Number(node.items != null ? node.items : node.count || 0),
-    clusterKey: node.id || path.join("/"),
     clusterPath: path,
-    itemStyle: { color: depth === 0 ? color : lerpColor(color, T.surface, 0.12 + depth * 0.09) },
+    color: depth === 0 ? color : lerpColor(color, T.surface, 0.14 + depth * 0.1),
   };
   if (node.children && node.children.length) out.children = node.children.map((c) => decorateCluster(c, color, depth + 1, path));
   return out;
-}
-
-function clusterLevels(data) {
-  const maxDepth = (nodes) =>
-    nodes.reduce((m, n) => Math.max(m, 1 + (n.children && n.children.length ? maxDepth(n.children) : 0)), 0);
-  const depth = maxDepth(data);
-  if (depth <= 1) return [{}, { r0: "28%", r: "94%", label: { show: false } }];
-  if (depth === 2) return [{}, { r0: "26%", r: "60%", label: { show: false } }, { r0: "60%", r: "94%", label: { show: false } }];
-  return [{}, { r0: "22%", r: "50%", label: { show: false } }, { r0: "50%", r: "72%", label: { show: false } }, { r0: "72%", r: "94%", label: { show: false } }];
 }
 
 function clusterCurrent(product) {
@@ -1001,7 +751,7 @@ function clusterCurrent(product) {
 
 function findClusterNode(root, key) {
   if (!root) return null;
-  if (root.clusterKey === key) return root;
+  if (root.key === key || root.clusterKey === key) return root;
   for (const child of root.children || []) {
     const hit = findClusterNode(child, key);
     if (hit) return hit;
@@ -1009,153 +759,78 @@ function findClusterNode(root, key) {
   return null;
 }
 
-function clusterOption(product) {
-  const st = board.cluster[product];
-  const current = clusterCurrent(product);
-  const data = (current && current.children) || [];
-  const total = (st.meta && st.meta.total_sessions) || (st.root && st.root.value) || 1;
-  return {
-    animationDuration: REDUCED ? 0 : 640,
-    animationEasing: "cubicOut",
-    tooltip: {
-      ...tip,
-      formatter: (p) => {
-        const path = (p.treePathInfo || []).map((x) => x.name).filter((n) => n && n !== "归因聚类" && n !== "root").join(" / ");
-        return tipCard(
-          tipHead(p.name, `${pct(p.value, total).toFixed(1)}%`, p.color) +
-            tipRow(T.muted, "会话", fmt(p.value)) +
-            tipRow(T.muted, "条目", fmt((p.data && p.data.items) || 0)) +
-            (path ? `<div class="tip-path">${esc(path)}</div>` : "") +
-            `<div class="tip-path">${(p.data && p.data.children) ? "点击下钻" : "点击召回该簇样本"}</div>`
-        );
-      },
-    },
-    graphic: [
-      {
-        type: "text",
-        left: "center",
-        top: "middle",
-        style: {
-          text: `${fmt(current ? current.value : 0)}\n会话`,
-          textAlign: "center",
-          fill: T.ink,
-          font: `600 12px ${FONT}`,
-          lineHeight: 15,
-        },
-        silent: true,
-      },
-    ],
-    series: [
-      {
-        type: "sunburst",
-        radius: ["25%", "96%"],
-        center: ["50%", "50%"],
-        data,
-        nodeClick: false,
-        sort: null,
-        itemStyle: { borderColor: T.surface, borderWidth: 2, borderRadius: 3 },
-        label: { show: false },
-        levels: clusterLevels(data),
-        emphasis: {
-          focus: "ancestor",
-          itemStyle: { shadowBlur: 10, shadowColor: hexA(T.ink, 0.18) },
-        },
-      },
-    ],
-  };
-}
-
-function renderClusterLegend(product) {
-  const wc = isWc(product);
-  const el = $(wc ? "wcClusterLegend" : "aiClusterLegend");
-  const st = board.cluster[product];
-  if (!el || !st.root) return;
-  const current = clusterCurrent(product);
-  const children = current.children || [];
-  if (!children.length) {
+function renderClusterLegend(product, current) {
+  const el = $(isWc(product) ? "wcClusterLegend" : "aiClusterLegend");
+  if (!el) return;
+  const rows = (current && current.children) || [];
+  if (!rows.length) {
     el.innerHTML = `<div class="cl-empty">没有更细的聚类节点</div>`;
     return;
   }
-  const total = current.value || 1;
-  const palette = [T.cl1, T.cl2, T.cl3, T.cl4, T.cl5, T.cl6];
-  el.innerHTML =
-    `<div class="cl-head"><span></span><span>环节</span><span>会话</span><span>占比</span></div>` +
-    children
-      .map((n, i) => {
-        const drillable = (n.children || []).length > 0;
-        const color = palette[i % palette.length];
-        return (
-          `<button class="cl-row" type="button" data-key="${esc(n.clusterKey)}" data-drill="${drillable ? 1 : 0}"` +
-          ` title="${esc(n.name)} · ${fmt(n.value)} 会话 · ${pct(n.value, total).toFixed(1)}%${drillable ? " · 点击下钻" : " · 点击召回样本"}">` +
-          `<i class="cl-dot" style="background:${color}"></i>` +
-          `<span class="cl-name">${esc(n.name)}</span>` +
-          `<span class="cl-val">${fmt(n.value)}</span>` +
-          `<span class="cl-pct">${pct(n.value, total).toFixed(1)}%</span>` +
-          `</button>`
-        );
-      })
-      .join("");
+  el.innerHTML = rows
+    .map(
+      (node) =>
+        `<button class="rl-row" type="button" data-key="${esc(node.key)}" title="${esc(node.name)} · ${fmt(node.value)} 会话 · ${Number(node.share || 0).toFixed(1)}%" aria-label="${esc(node.name)}，${fmt(node.value)} 会话">` +
+        `<i class="rl-dot" style="background:${node.color}"></i>` +
+        `<span class="rl-name">${esc(node.name)}</span>` +
+        `<span class="rl-val">${fmt(node.value)}</span>` +
+        `</button>`
+    )
+    .join("");
+  bindLegendHover(el, () => board.rings[product].cluster);
   el.onclick = (ev) => {
-    const row = ev.target.closest(".cl-row");
+    const row = ev.target.closest(".rl-row");
     if (!row) return;
-    const node = findClusterNode(st.root, row.dataset.key);
+    const node = findClusterNode(current, row.dataset.key);
     if (!node) return;
     if ((node.children || []).length) drillCluster(product, node);
-    else recall({ cluster: node.clusterKey });
+    else recall({ cluster: node.key });
   };
 }
 
-function updateClusterNote(product) {
-  const wc = isWc(product);
+function drawCluster(product) {
   const st = board.cluster[product];
   const current = clusterCurrent(product);
-  const back = $(wc ? "wcClusterBack" : "aiClusterBack");
-  const note = $(wc ? "wcClusterNote" : "aiClusterNote");
-  const right = $(wc ? "wcClusterNoteR" : "aiClusterNoteR");
-  if (back) back.hidden = !st.stack.length;
-  if (note) note.textContent = st.stack.length
-    ? ["全部", ...st.stack.map((n) => n.name)].join(" / ")
-    : `${(st.root && st.root.children ? st.root.children.length : 0)} 环节`;
-  if (right) right.textContent = st.stack.length
-    ? `${(current && current.children ? current.children.length : 0)} 子类`
-    : `${(st.meta && st.meta.depth) || 3} 层`;
-  const sampleBtn = $(wc ? "wcClusterSamples" : "aiClusterSamples");
+  const chartEl = $(isWc(product) ? "wcCluster" : "aiCluster");
+  const centerEl = $(isWc(product) ? "wcClusterCenter" : "aiClusterCenter");
+  const legendEl = $(isWc(product) ? "wcClusterLegend" : "aiClusterLegend");
+  if (!chartEl || !current) return;
+
+  const rootTotal = (st.root && st.root.value) || current.value || 1;
+  board.rings[product].cluster = createRing(chartEl, centerEl, {
+    root: current,
+    maxDepth: 3,
+    hole: 24.5,
+    bandWeights: [1, 0.8, 0.62],
+    unit: "会话",
+    restValue: current.value,
+    restLabel: "会话",
+    shareTotal: rootTotal,
+    centerNode: st.stack.length ? current : null,
+    canBack: st.stack.length > 0,
+    ariaLabel: `${productLabel(product)}聚类体系`,
+    onHover: (arc) => markLegend(legendEl, arc ? (arc.depth === 1 ? arc.key : arc.topKey) : null),
+    onSelect: (node) => {
+      if (!node) return;
+      if ((node.children || []).length) drillCluster(product, node);
+      else recall({ cluster: node.key });
+    },
+    onBack: () => {
+      st.stack.pop();
+      drawCluster(product);
+    },
+  });
+
+  const stats = $(isWc(product) ? "wcClusterStats" : "aiClusterStats");
+  if (stats) stats.innerHTML = `<span>${fmt(current.items || 0)} <em>条目</em></span>`;
+  renderClusterLegend(product, current);
+
+  const sampleBtn = $(isWc(product) ? "wcClusterSamples" : "aiClusterSamples");
   if (sampleBtn) {
     sampleBtn.onclick = () => {
       const node = clusterCurrent(product);
-      recall({ cluster: node && node !== st.root ? node.clusterKey : "" });
+      recall({ cluster: node && node !== st.root ? node.key : "" });
     };
-  }
-}
-
-function drawCluster(product) {
-  const wc = isWc(product);
-  const st = board.cluster[product];
-  const current = clusterCurrent(product);
-  const el = $(wc ? "wcCluster" : "aiCluster");
-  if (!el || !current) return;
-  const chart = createChart(el, clusterOption(product));
-  board.clusterCharts[product] = chart;
-  animateTo(wc ? "wcClusterSessions" : "aiClusterSessions", current.value || 0);
-  const side = $(wc ? "wcClusterSide" : "aiClusterSide");
-  if (side) side.innerHTML = `${fmt(current.items || 0)} <span>条目</span>`;
-  updateClusterNote(product);
-  renderClusterLegend(product);
-  el.style.cursor = (current.children || []).length ? "pointer" : "default";
-  if (chart) {
-    chart.on("click", (p) => {
-      const st2 = board.cluster[product];
-      const names = (p.treePathInfo || []).map((x) => x.name).filter((n) => n && n !== "归因聚类" && n !== "root");
-      let node = st2.root;
-      for (const name of names) {
-        const hit = findClusterNode(node, name);
-        if (hit) node = hit;
-        else break;
-      }
-      if (!node || node === st2.root) return;
-      if ((node.children || []).length) drillCluster(product, node);
-      else recall({ cluster: node.clusterKey });
-    });
   }
 }
 
@@ -1190,41 +865,47 @@ function renderCluster(product) {
   const meta = (cl && cl.meta) || {};
   const root = (cl && cl.tree) || null;
   const base = board.cluster[product];
-  const stackKey = base.stack.length ? base.stack[base.stack.length - 1].clusterKey : "";
-  board.cluster[product] = {
-    src,
-    root,
-    meta,
-    stack: [],
-  };
-  const metaEl = $(wc ? "wcClusterMeta" : "aiClusterMeta");
-  if (metaEl) metaEl.textContent = "聚类快照";
+  const stackKey = base.stack.length ? base.stack[base.stack.length - 1].key : "";
+  board.cluster[product] = { src, root: null, meta, stack: [] };
+
   const chartEl = $(wc ? "wcCluster" : "aiCluster");
+  const centerEl = $(wc ? "wcClusterCenter" : "aiClusterCenter");
+  const metaEl = $(wc ? "wcClusterMeta" : "aiClusterMeta");
+  if (metaEl) metaEl.textContent = "";
+
   if (!root || !clusterValue(root)) {
     if (chartEl) showChartEmpty(chartEl, "聚类数据待接入");
+    if (centerEl) {
+      centerEl.innerHTML = "";
+      centerEl.hidden = true;
+    }
     const legend = $(wc ? "wcClusterLegend" : "aiClusterLegend");
     if (legend) legend.innerHTML = "";
-    const back = $(wc ? "wcClusterBack" : "aiClusterBack");
-    if (back) back.hidden = true;
-    const note = $(wc ? "wcClusterNote" : "aiClusterNote");
-    if (note) note.textContent = "待接入";
-    const right = $(wc ? "wcClusterNoteR" : "aiClusterNoteR");
-    if (right) right.textContent = "—";
+    const stats = $(wc ? "wcClusterStats" : "aiClusterStats");
+    if (stats) stats.textContent = "";
     const sampleBtn = $(wc ? "wcClusterSamples" : "aiClusterSamples");
-    if (sampleBtn) sampleBtn.onclick = () => recall({ cluster: "" });
+    if (sampleBtn) sampleBtn.disabled = true;
     return;
   }
-  const palette = [T.cl1, T.cl2, T.cl3, T.cl4, T.cl5, T.cl6];
+  if (centerEl) centerEl.hidden = false;
+
+  const palette = tonalPalette(5);
+  const total = clusterValue(root);
   const prepared = {
-    id: root.id || root.name,
+    key: "cluster-root",
+    clusterKey: "cluster-root",
     name: root.name,
-    value: clusterValue(root),
+    value: total,
     items: Number(root.items != null ? root.items : root.count || 0),
-    clusterKey: root.id || root.name,
     clusterPath: [root.name],
-    itemStyle: { color: palette[0] },
+    color: palette[0],
     children: (root.children || []).map((c, i) => decorateCluster(c, palette[i % palette.length], 0, [])),
   };
+  const setShare = (node) => {
+    node.share = pct(node.value, total);
+    (node.children || []).forEach(setShare);
+  };
+  setShare(prepared);
   board.cluster[product].root = prepared;
 
   if (stackKey) {
@@ -1246,311 +927,320 @@ function renderCluster(product) {
     }
   }
 
-  const back = $(wc ? "wcClusterBack" : "aiClusterBack");
-  if (back) {
-    back.onclick = () => {
-      board.cluster[product].stack.pop();
-      drawCluster(product);
-    };
-  }
+  const sampleBtn = $(wc ? "wcClusterSamples" : "aiClusterSamples");
+  if (sampleBtn) sampleBtn.disabled = false;
   drawCluster(product);
 }
 
 /* ------------------------------------------------------------ prediction */
 
-function parseDay(value) {
-  const d = new Date(`${value}T00:00:00`);
-  return Number.isNaN(d.getTime()) ? null : d;
+const PRED_MOCK = {
+  wencai: {
+    total: 312,
+    inputTotal: 2400,
+    reviewed: 268,
+    pending: 44,
+    days: [
+      ["10-10", 8], ["10-11", 12], ["10-12", 15], ["10-13", 10], ["10-14", 18],
+      ["10-15", 22], ["10-16", 14], ["10-17", 26], ["10-18", 20], ["10-19", 18],
+      ["10-20", 24], ["10-21", 16], ["10-22", 22], ["10-23", 43],
+    ],
+    trend: {
+      dates: ["09-04", "09-11", "09-18", "09-25", "10-02", "10-09", "10-16", "10-23"],
+      models: [
+        { key: "a_expert", values: [58, 61, 60, 64, 66, 68, 71, 74] },
+        { key: "a_fast", values: [55, 57, 59, 58, 62, 64, 65, 69] },
+        { key: "b_expert", values: [52, 55, 54, 58, 57, 61, 63, 66] },
+        { key: "b_fast", values: [49, 51, 52, 54, 56, 55, 58, 60] },
+      ],
+    },
+    attribution: {
+      models: ["a_expert", "a_fast", "b_expert", "b_fast"],
+      errors: ["方向错误", "依据不足", "幅度偏差", "过度自信", "时点错配"],
+      flows: {
+        a_expert: [42, 32, 20, 18, 6],
+        a_fast: [34, 26, 18, 16, 10],
+        b_expert: [22, 22, 18, 18, 10],
+        b_fast: [18, 18, 14, 12, 16],
+      },
+    },
+  },
+  aime: {
+    total: 2146,
+    inputTotal: 17243,
+    reviewed: 1538,
+    pending: 608,
+    days: [
+      ["10-18", 62], ["10-19", 74], ["10-20", 88], ["10-21", 96], ["10-22", 110],
+      ["10-23", 120], ["10-24", 104], ["10-25", 132], ["10-26", 118], ["10-27", 126],
+      ["10-28", 140], ["10-29", 112], ["10-30", 128], ["10-31", 128],
+    ],
+    trend: {
+      dates: ["09-12", "09-19", "09-26", "10-03", "10-10", "10-17", "10-24", "10-31"],
+      models: [
+        { key: "fast", values: [63, 65, 64, 68, 70, 69, 72, 74] },
+        { key: "expert", values: [67, 69, 71, 70, 74, 76, 75, 78] },
+      ],
+    },
+    attribution: {
+      models: ["fast", "expert"],
+      errors: ["抽取错误", "方向错误", "幅度偏差", "依据不足"],
+      flows: {
+        fast: [28, 28, 24, 40],
+        expert: [22, 26, 22, 40],
+      },
+    },
+  },
+};
+
+const PRED_ERROR_COLORS = () => [T.sev0, T.sev1, T.sev2, T.sev3, T.cl4];
+
+function predMock(product) {
+  return PRED_MOCK[product];
 }
 
-function dayLabel(base, offset) {
-  const d = parseDay(base);
-  if (!d) return "—";
-  d.setDate(d.getDate() + offset);
-  return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-function dayISO(base, offset) {
-  const d = parseDay(base);
-  if (!d) return "—";
-  d.setDate(d.getDate() + offset);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-function synthSeries(n, base, seed, amp = 0.12, trend = 0) {
-  const out = [];
-  for (let i = 0; i < n; i += 1) {
-    const t = n > 1 ? i / (n - 1) : 0;
-    const wave = Math.sin(i * 0.92 + seed) * amp + Math.cos(i * 1.73 + seed * 2.1) * amp * 0.38;
-    out.push(Math.max(0, base * (1 + trend * (t - 0.5) + wave)));
-  }
-  return out;
-}
-
-function forecastSeries(values, horizon, opts = {}) {
-  const n = values.length;
-  const decimals = opts.decimals == null ? 0 : opts.decimals;
-  const min = opts.min == null ? 0 : opts.min;
-  const max = opts.max == null ? Infinity : opts.max;
-  if (!n) {
-    return { values: Array(horizon).fill(0), lower: Array(horizon).fill(0), upper: Array(horizon).fill(0) };
-  }
-  let slope = 0;
-  let intercept = values[n - 1];
-  if (n >= 3) {
-    const xMean = (n - 1) / 2;
-    const yMean = values.reduce((a, b) => a + b, 0) / n;
-    let num = 0;
-    let den = 0;
-    values.forEach((y, i) => {
-      num += (i - xMean) * (y - yMean);
-      den += (i - xMean) ** 2;
-    });
-    slope = den ? num / den : 0;
-    intercept = yMean - slope * xMean;
-  }
-  const residuals = values.map((y, i) => y - (intercept + slope * i));
-  const sigma = Math.sqrt(residuals.reduce((a, r) => a + r * r, 0) / Math.max(1, n - 1));
-  const fv = [];
-  const lower = [];
-  const upper = [];
-  for (let h = 0; h < horizon; h += 1) {
-    const damp = Math.pow(0.93, h);
-    const raw = values[n - 1] + slope * (h + 1) * damp;
-    const value = clamp(raw, min, max);
-    const band = Math.max(
-      Math.abs(value) * 0.035,
-      1.96 * sigma * Math.sqrt(1 + (h + 1) / n),
-      n < 3 ? Math.abs(value) * 0.08 : 0
-    );
-    const round = (x) => Number(clamp(x, min, max).toFixed(decimals));
-    fv.push(round(value));
-    lower.push(round(value - band));
-    upper.push(round(value + band));
-  }
-  return { values: fv, lower, upper };
-}
-
-function volumeForecast(product) {
-  const src = getSrc(product);
-  const total = volumeTotal(product);
-  const raw = (src.input.per_day || [])
-    .map((x) => ({ date: x.date, value: Number(x.value) || 0 }))
-    .filter((x) => x.value > 0);
-  const end = (raw.length ? raw[raw.length - 1].date : null) || (src.input.date_range && src.input.date_range.end) || "2026-10-23";
-  let points;
-  let synthetic = false;
-  let smoothed = false;
-  if (raw.length >= 4) {
-    const recent = raw.slice(-14);
-    const values = recent.map((p) => p.value);
-    const mean = values.reduce((a, b) => a + b, 0) / values.length;
-    const sd = Math.sqrt(values.reduce((a, b) => a + (b - mean) ** 2, 0) / values.length);
-    const cv = mean ? sd / mean : 0;
-    if (cv > 0.5 && raw.length >= 10) {
-      // Batchy data: use a trailing 7-day mean so one release spike does not own the forecast.
-      const windowRaw = raw.slice(-28);
-      const rolled = [];
-      for (let i = 6; i < windowRaw.length; i += 1) {
-        const window = windowRaw.slice(i - 6, i + 1);
-        rolled.push({ date: windowRaw[i].date, value: window.reduce((a, b) => a + b.value, 0) / window.length });
-      }
-      points = rolled.slice(-14);
-      smoothed = true;
-    } else {
-      points = recent;
-    }
-  } else {
-    synthetic = true;
-    const days = Math.max(1, raw.length || 1);
-    const base = raw.length ? raw.reduce((a, b) => a + b.value, 0) / days : Math.max(1, total / 14);
-    const values = synthSeries(14, base, isWc(product) ? 1.4 : 2.6, 0.11, 0.16);
-    points = values.map((value, i) => ({ date: dayISO(end, i - 13), value }));
-  }
-  const values = points.map((p) => p.value);
-  const fc = forecastSeries(values, 7, { min: 0, decimals: 0 });
-  const lastDate = points.length ? points[points.length - 1].date : end;
-  const futureDates = Array.from({ length: 7 }, (_, i) => dayISO(lastDate, i + 1));
-  return {
-    dates: [...points.map((p) => p.date), ...futureDates],
-    values,
-    forecast: fc,
-    synthetic,
-    smoothed,
-    last: values[values.length - 1] || 0,
-  };
-}
-
-function performanceForecast(product) {
-  const src = getSrc(product);
-  const inputDays = (src.input.per_day || []).map((x) => ({ date: x.date, value: Number(x.value) || 0 })).filter((x) => x.value > 0);
-  const outDays = src.output.per_day || [];
-  const outMap = new Map();
-  outDays.forEach((d) => {
-    const answers = d.answers != null ? Number(d.answers) : (Number(d.fast) || 0) + (Number(d.expert) || 0);
-    if (answers > 0) outMap.set(d.date, answers);
-  });
-  const actual = [];
-  let cumIn = 0;
-  let cumOut = 0;
-  inputDays.forEach((d) => {
-    cumIn += d.value;
-    cumOut += outMap.get(d.date) || 0;
-    if (!cumIn) return;
-    actual.push({ date: d.date, value: clamp((100 * cumOut) / cumIn, 0, 100) });
-  });
-  const currentCoverage = pct(src.input.evaluated || 0, src.input.total || 1);
-  const end = (src.input.date_range && src.input.date_range.end) || (actual.length ? actual[actual.length - 1].date : "2026-10-23");
-  let points;
-  let synthetic = false;
-  if (actual.length >= 4) {
-    points = actual.slice(-14);
-  } else {
-    synthetic = true;
-    const base = clamp(currentCoverage || 0.5, 0.5, 100);
-    const values = synthSeries(14, base, isWc(product) ? 4.1 : 3.2, 0.035, 0.07).map((v) => clamp(v, 0, 100));
-    points = values.map((value, i) => ({ date: dayISO(end, i - 13), value }));
-  }
-  const values = points.map((p) => p.value);
-  const fc = forecastSeries(values, 7, { min: 0, max: 100, decimals: 1 });
-  const futureDates = Array.from({ length: 7 }, (_, i) => dayISO(end, i + 1));
-
-  const p50Raw = outDays.map((d) => Number(d.p50)).filter((v) => v > 0);
-  const p50 = outputP50(src);
-  let p50Points;
-  let p50Synthetic = false;
-  if (p50Raw.length >= 4) {
-    p50Points = p50Raw.slice(-14);
-  } else {
-    p50Synthetic = true;
-    p50Points = synthSeries(14, p50 || 1, isWc(product) ? 5.2 : 6.1, 0.05, 0.04);
-  }
-  const p50Fc = forecastSeries(p50Points, 7, { min: 0.1, decimals: 1 });
-  return {
-    dates: [...points.map((p) => p.date), ...futureDates],
-    values,
-    forecast: fc,
-    synthetic,
-    p50,
-    p50Forecast: p50Fc.values[0],
-    p50Synthetic,
-    density: outputDensity(src),
-    last: values[values.length - 1] || 0,
-  };
-}
-
-function attributionForecast(product) {
-  const src = getSrc(product);
-  const wc = isWc(product);
-  let cats;
-  if (wc) {
-    const comp = src.components || {};
-    const names = comp.names || [];
-    const pairs = names
-      .map((name, i) => ({ name, value: (comp.A[i] || 0) + (comp.B[i] || 0) }))
-      .filter((x) => x.value > 0)
-      .sort((a, b) => b.value - a.value);
-    const top = pairs.slice(0, 3);
-    const rest = pairs.slice(3).reduce((n, x) => n + x.value, 0);
-    if (rest > 0) top.push({ name: "其他环节", value: rest });
-    const palette = [T.wc, T.wcMid, T.bMid, T.b];
-    cats = top.map((x, i) => ({ name: x.name, value: x.value, color: palette[i % palette.length] }));
-  } else {
-    const sev = src.output.severity || {};
-    cats = AIME_SEVERITIES.map((s) => ({ name: s, value: sev[s] || 0, color: SEV_COLOR[s] })).filter((x) => x.value > 0);
-  }
-  const sum = cats.reduce((n, c) => n + c.value, 0) || 1;
-  const base = cats.map((c) => (100 * c.value) / sum);
-  const outDays = (src.output.per_day || []).filter((d) => {
-    if (!d.severity) return false;
-    return (Number(d.severity.P0) || 0) + (Number(d.severity.P1) || 0) + (Number(d.severity.P2) || 0) + (Number(d.severity.P3) || 0) > 0;
-  });
-  const end = (src.input.date_range && src.input.date_range.end) || (src.output.per_day && src.output.per_day.length ? src.output.per_day[src.output.per_day.length - 1].date : "2026-10-23");
-  const n = 14;
-  let dates;
-  let actual;
-  let synthetic = false;
-  const usable = !wc && outDays.length >= 3;
-  if (usable) {
-    const days = outDays.slice(-n);
-    dates = days.map((d) => d.date);
-    actual = cats.map((cat) =>
-      days.map((d) => {
-        const total = Object.values(d.severity).reduce((a, b) => a + (Number(b) || 0), 0) || 1;
-        return (100 * (Number(d.severity[cat.name]) || 0)) / total;
-      })
-    );
-  } else {
-    synthetic = true;
-    dates = Array.from({ length: n }, (_, i) => dayISO(end, i - n + 1));
-    actual = cats.map((cat, ci) => {
-      const baseShare = base[ci];
-      return Array.from({ length: n }, (_, i) => {
-        const wave = Math.sin(i * 0.7 + ci * 1.9) * 0.03 + Math.cos(i * 1.2 + ci) * 0.018;
-        return Math.max(0, baseShare * (1 + wave));
-      });
-    });
-  }
-  // Normalize each historical day to 100%.
-  for (let i = 0; i < dates.length; i += 1) {
-    const sumDay = actual.reduce((a, row) => a + (row[i] || 0), 0) || 1;
-    actual.forEach((row) => { row[i] = (100 * (row[i] || 0)) / sumDay; });
-  }
-  const futureDates = Array.from({ length: 7 }, (_, i) => dayISO(end, i + 1));
-  const forecasts = actual.map((row) => forecastSeries(row, 7, { min: 0, max: 100, decimals: 1 }));
-  for (let h = 0; h < 7; h += 1) {
-    const sumDay = forecasts.reduce((a, f) => a + f.values[h], 0) || 1;
-    forecasts.forEach((f) => { f.values[h] = (100 * f.values[h]) / sumDay; });
-  }
-  const futureAvg = cats.map((cat, ci) => forecasts[ci].values.reduce((a, b) => a + b, 0) / 7);
-  const topIndex = futureAvg.indexOf(Math.max(...futureAvg));
-  const lastActual = actual.map((row) => row[row.length - 1] || 0);
-  return {
-    cats,
-    dates: [...dates, ...futureDates],
-    actual,
-    forecasts,
-    synthetic,
-    topIndex,
-    topShare: futureAvg[topIndex] || 0,
-    topChange: (futureAvg[topIndex] || 0) - (lastActual[topIndex] || 0),
-    lastActualDate: dates[dates.length - 1],
-  };
-}
-
-function setPredictHero(product, { value, decimals, suffix, unit, trend, trendClass }) {
-  const wc = isWc(product);
-  const id = wc ? "wcForecast" : "aiForecast";
-  const el = $(id);
-  setNum(id, value, { decimals, suffix });
-  if (el) {
-    lockHero(el, value, decimals, suffix);
-    if (REDUCED) el.textContent = fmtFixed(value, decimals) + suffix;
-    else tweenNumber(el, value, decimals, suffix, 520);
-  }
-  const unitEl = $(wc ? "wcForecastUnit" : "aiForecastUnit");
-  if (unitEl) unitEl.textContent = unit;
-  const trendEl = $(wc ? "wcForecastTrend" : "aiForecastTrend");
-  if (trendEl) trendEl.innerHTML = `<span class="${trendClass}">${trend}</span>`;
-}
-
-function lockHero(el, value, decimals, suffix) {
-  const s = fmtFixed(value || 0, decimals || 0) + (suffix || "");
-  el.style.minWidth = `${Math.max(2, s.length - (s.includes(",") ? 0.35 : 0)).toFixed(2)}ch`;
-}
-
-function predictStats(rows) {
-  return rows
-    .map(([label, value, color]) =>
-      `<span class="predict-stat${color ? " has-dot" : ""}">` +
-      `${color ? `<i style="background:${color}"></i>` : ""}` +
-      `<em>${esc(label)}</em><b>${value}</b></span>`
+function predStats(el, rows) {
+  if (!el) return;
+  el.innerHTML = rows
+    .map(
+      ([label, value, color]) =>
+        `<span class="predict-stat${color ? " has-dot" : ""}">` +
+        `${color ? `<i style="background:${color}"></i>` : ""}` +
+        `<em>${esc(label)}</em><b title="${esc(String(value))}">${value}</b></span>`
     )
     .join("");
 }
 
+function predErrorTotals(product) {
+  const m = predMock(product).attribution;
+  const totals = {};
+  m.errors.forEach((error, i) => {
+    totals[error] = m.models.reduce(
+      (n, key) => n + (Number((m.flows[key] || [])[i]) || 0),
+      0
+    );
+  });
+  return totals;
+}
+
+function predSankey(product) {
+  const m = predMock(product).attribution;
+  const modelColors = Object.fromEntries(m.models.map((key) => [key, VERSION_DEFS[key].color()]));
+  const errorColors = PRED_ERROR_COLORS();
+  const errorColor = Object.fromEntries(m.errors.map((e, i) => [e, errorColors[i % errorColors.length]]));
+  const nodes = [];
+  const links = [];
+  m.models.forEach((key) => {
+    nodes.push({
+      name: VERSION_DEFS[key].label,
+      display: VERSION_DEFS[key].label,
+      itemStyle: { color: modelColors[key] },
+      label: { position: "left", width: 48 },
+    });
+  });
+  m.errors.forEach((error) => {
+    nodes.push({
+      name: error,
+      display: error,
+      itemStyle: { color: errorColor[error] },
+      label: { position: "right" },
+    });
+  });
+  m.models.forEach((key) => {
+    const label = VERSION_DEFS[key].label;
+    m.errors.forEach((error, i) => {
+      const value = Number((m.flows[key] || [])[i]) || 0;
+      if (value <= 0) return;
+      links.push({
+        source: label,
+        target: error,
+        value,
+        lineStyle: { color: hexA(modelColors[key], 0.4), opacity: 0.55 },
+      });
+    });
+  });
+  return { nodes, links };
+}
+
+function renderPredReview(product, chartEl) {
+  const m = predMock(product);
+  const max = Math.max(1, ...m.days.map(([, v]) => v));
+  const share = pct(m.reviewed, m.total);
+  chartEl.innerHTML =
+    `<div class="pred-review">` +
+    `<div class="pr-top"><span>已评阅 <b>${fmt(m.reviewed)}</b> / ${fmt(m.total)}</span><span>${share.toFixed(1)}%</span></div>` +
+    `<div class="pr-bar"><i style="width:${clamp(share, 0, 100).toFixed(2)}%"></i></div>` +
+    `<div class="pr-bars" role="img" aria-label="近 14 天每日评阅量">` +
+    m.days
+      .map(
+        ([date, value]) =>
+          `<i class="pr-bar-col" style="--h:${((value / max) * 100).toFixed(1)}%" title="${date} · ${fmt(value)} 题"></i>`
+      )
+      .join("") +
+    `</div>` +
+    `<div class="pr-axis"><span>${m.days[0][0]}</span><span>${m.days[m.days.length - 1][0]}</span></div>` +
+    `</div>`;
+  predStats($(isWc(product) ? "wcForecastStats" : "aiForecastStats"), [
+    ["近 14 天", `${fmt(m.reviewed)} 题`],
+    ["单日峰值", `${fmt(max)} 题`],
+    ["剩余", `${fmt(m.pending)} 题`],
+  ]);
+}
+
+function renderPredCapability(product, chartEl) {
+  const m = predMock(product).trend;
+  const series = m.models.map((model) => {
+    const color = VERSION_DEFS[model.key].color();
+    return {
+      name: VERSION_DEFS[model.key].label,
+      type: "line",
+      data: model.values,
+      smooth: 0.3,
+      symbol: "circle",
+      symbolSize: 5,
+      showSymbol: false,
+      lineStyle: { width: 2, color },
+      itemStyle: { color, borderColor: T.surface, borderWidth: 2 },
+      emphasis: { focus: "series" },
+    };
+  });
+  createChart(chartEl, {
+    animationDuration: REDUCED ? 0 : 650,
+    animationEasing: "cubicOut",
+    tooltip: {
+      ...tip,
+      trigger: "axis",
+      axisPointer: { type: "line", lineStyle: { color: T.hairline } },
+      formatter: (params) =>
+        tipCard(
+          tipHead(params[0] ? params[0].axisValue : "", "预测准确率", T.forecast) +
+            params
+              .slice()
+              .sort((a, b) => (b.value || 0) - (a.value || 0))
+              .map((p) => tipRow(p.color, p.seriesName, `${Number(p.value).toFixed(0)}%`))
+              .join("")
+        ),
+    },
+    legend: {
+      top: 0,
+      left: 0,
+      itemWidth: 8,
+      itemHeight: 8,
+      icon: "circle",
+      itemGap: 12,
+      textStyle: { fontSize: 10.5, color: T.muted, fontFamily: FONT },
+    },
+    grid: { left: 34, right: 24, top: 30, bottom: 18 },
+    xAxis: {
+      type: "category",
+      data: m.dates,
+      boundaryGap: false,
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { fontSize: 9.5, color: T.faint, fontFamily: FONT, interval: 0, margin: 8 },
+    },
+    yAxis: {
+      type: "value",
+      min: 40,
+      max: 85,
+      splitNumber: 3,
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { fontSize: 9.5, color: T.faint, fontFamily: FONT, formatter: "{value}%" },
+      splitLine: { lineStyle: { color: T.hairline, type: "solid" } },
+    },
+    series,
+  });
+
+  const latest = m.models.map((model) => ({
+    key: model.key,
+    name: VERSION_DEFS[model.key].label,
+    value: model.values[model.values.length - 1],
+    prev: model.values[model.values.length - 2] || model.values[model.values.length - 1],
+  }));
+  const best = latest.reduce((a, b) => (b.value >= a.value ? b : a), latest[0]);
+  const avg = latest.reduce((n, x) => n + x.value, 0) / Math.max(1, latest.length);
+  const delta = best.value - best.prev;
+  predStats($(isWc(product) ? "wcForecastStats" : "aiForecastStats"), [
+    ["最佳模型", `${best.name} ${best.value}%`],
+    ["模型均值", `${avg.toFixed(1)}%`],
+    ["最佳环比", `${delta >= 0 ? "+" : ""}${delta.toFixed(0)}pp`],
+  ]);
+}
+
+function renderPredAttribution(product, chartEl) {
+  const graph = predSankey(product);
+  const foot = $(isWc(product) ? "wcForecastStats" : "aiForecastStats");
+  const totals = predErrorTotals(product);
+  const total = graph.links.filter((l) => totals[l.target] != null).reduce((n, l) => n + l.value, 0);
+  const top = Object.entries(totals).sort((a, b) => b[1] - a[1])[0] || ["—", 0];
+  const modelCount = predMock(product).attribution.models.length;
+  const baseStats = () => [
+    ["主因", `${top[0]} ${pct(top[1], total).toFixed(1)}%`],
+    ["错误项合计", fmt(total)],
+    ["涉及模型", `${modelCount} 个`],
+  ];
+  predStats(foot, baseStats());
+
+  const chart = createChart(chartEl, {
+    animationDuration: REDUCED ? 0 : 650,
+    animationEasing: "cubicOut",
+    tooltip: {
+      ...tip,
+      formatter: (p) => {
+        if (p.dataType === "edge") {
+          return tipCard(
+            tipHead(`${p.data.source} → ${p.data.target}`, fmt(p.value), T.forecast) +
+              tipRow(T.forecast, "错误数", fmt(p.value))
+          );
+        }
+        return tipCard(tipHead(p.name, "", T.forecast) + tipRow(T.forecast, "错误数", fmt(p.value)));
+      },
+    },
+    series: [
+      {
+        type: "sankey",
+        left: 62,
+        right: 70,
+        top: 8,
+        bottom: 2,
+        nodeWidth: 8,
+        nodeGap: 12,
+        layoutIterations: 32,
+        nodeAlign: "justify",
+        draggable: false,
+        data: graph.nodes,
+        links: graph.links,
+        lineStyle: { curveness: 0.55, opacity: 0.5 },
+        itemStyle: { borderWidth: 0, borderRadius: 2 },
+        label: {
+          fontSize: 10,
+          fontFamily: FONT,
+          color: T.ink2,
+          distance: 4,
+          overflow: "truncate",
+          formatter: (p) => (p.data && p.data.display) || p.name,
+        },
+        emphasis: { focus: "adjacency", lineStyle: { opacity: 0.8 } },
+      },
+    ],
+  });
+  if (chart) {
+    chart.on("click", (p) => {
+      const label = p.dataType === "edge" ? `${p.data.source} → ${p.data.target}` : p.name;
+      predStats(foot, [
+        ["已选", label],
+        ["错误数", fmt(p.value)],
+        ["错误项合计", fmt(total)],
+      ]);
+    });
+    chartEl.style.cursor = "pointer";
+  }
+}
+
 function renderPrediction(product) {
   const wc = isWc(product);
+  const m = predMock(product);
   const dim = board.predict[product].dim;
   const tabs = $(wc ? "wcPredictTabs" : "aiPredictTabs");
   if (tabs) {
@@ -1560,264 +1250,37 @@ function renderPrediction(product) {
       tab.setAttribute("aria-selected", String(on));
     });
   }
-  const metaEl = $(wc ? "wcForecastMeta" : "aiForecastMeta");
-  const statsEl = $(wc ? "wcForecastStats" : "aiForecastStats");
+
+  setNum(wc ? "wcPredTotal" : "aiPredTotal", m.total);
+  const share = pct(m.total, m.inputTotal);
+  const shareEl = $(wc ? "wcPredShare" : "aiPredShare");
+  if (shareEl) shareEl.textContent = `占全部 ${share.toFixed(1)}%`;
+  const reviewed = $(wc ? "wcPredReviewed" : "aiPredReviewed");
+  if (reviewed) reviewed.textContent = fmt(m.reviewed);
+  const pending = $(wc ? "wcPredPending" : "aiPredPending");
+  if (pending) pending.textContent = fmt(m.pending);
+  const bar = $(wc ? "wcPredBar" : "aiPredBar");
+  if (bar) {
+    bar.style.width = `${clamp(share, 0, 100).toFixed(2)}%`;
+    const track = bar.parentElement;
+    if (track) track.setAttribute("aria-label", `预测题占全部输入的 ${share.toFixed(1)}%`);
+  }
+
   const chartEl = $(wc ? "wcForecastChart" : "aiForecastChart");
-  const accent = wc ? C.a : C.ai;
-
-  if (dim === "volume") {
-    const p = volumeForecast(product);
-    const next = p.forecast.values[0] || 0;
-    const growth = p.last ? (100 * (next - p.last)) / p.last : 0;
-    setPredictHero(product, {
-      value: next,
-      decimals: 0,
-      suffix: "",
-      unit: "条/日",
-      trend: `${growth >= 0 ? "+" : ""}${growth.toFixed(1)}% vs 昨日`,
-      trendClass: growth >= 0 ? "trend-up" : "trend-down",
-    });
-    if (metaEl) metaEl.textContent = `未来 7 天${p.smoothed ? " · 7 日平滑" : ""}${p.synthetic ? " · 原型" : ""}`;
-    if (statsEl) {
-      const total7 = p.forecast.values.reduce((a, b) => a + b, 0);
-      const peak = Math.max(...p.forecast.values);
-      statsEl.innerHTML = predictStats([
-        ["7 日合计", fmt(total7)],
-        ["峰值", fmt(peak)],
-        ["日均", fmt(Math.round(total7 / 7))],
-      ]);
-    }
-    const n = p.values.length;
-    const actualData = [...p.values, ...Array(7).fill(null)];
-    const forecastData = [...Array(n - 1).fill(null), p.values[n - 1], ...p.forecast.values];
-    const lowerData = [...Array(n).fill(null), ...p.forecast.lower];
-    const bandData = [...Array(n).fill(null), ...p.forecast.upper.map((u, i) => u - p.forecast.lower[i])];
-    if (!chartEl) return;
-    chartEl.innerHTML = "";
-    createChart(chartEl, {
-      animationDuration: REDUCED ? 0 : 680,
-      animationEasing: "cubicOut",
-      tooltip: {
-        ...tip,
-        trigger: "axis",
-        axisPointer: { type: "line", lineStyle: { color: T.track } },
-        formatter: (params) => {
-          const i = params[0].dataIndex;
-          const date = p.dates[i];
-          if (i >= n) {
-            const k = i - n;
-            return tipCard(
-              tipHead(date, "预测", T.forecast) +
-                tipRow(T.forecast, "数据量", fmt(p.forecast.values[k])) +
-                tipRow(T.muted, "区间", `${fmt(p.forecast.lower[k])}–${fmt(p.forecast.upper[k])}`) +
-                (p.synthetic ? `<div class="tip-path">历史样本不足，按原型趋势外推</div>` : "")
-            );
-          }
-          return tipCard(tipHead(date, "实际", accent) + tipRow(accent, "数据量", fmt(p.values[i])));
-        },
-      },
-      grid: { left: 28, right: 7, top: 8, bottom: 16 },
-      xAxis: {
-        type: "category",
-        data: p.dates,
-        boundaryGap: false,
-        axisLine: { show: false },
-        axisTick: { show: false },
-        axisLabel: { fontSize: 7.5, color: T.faint, interval: 3, fontFamily: FONT },
-      },
-      yAxis: {
-        type: "value",
-        min: 0,
-        splitNumber: 3,
-        axisLine: { show: false },
-        axisTick: { show: false },
-        axisLabel: { fontSize: 7.5, color: T.faint, fontFamily: FONT, margin: 4 },
-        splitLine: { lineStyle: { color: T.hairline, type: "dashed" } },
-      },
-      series: [
-        { name: "下界", type: "line", data: lowerData, stack: "ci", symbol: "none", lineStyle: { opacity: 0 }, areaStyle: { opacity: 0 }, silent: true },
-        { name: "区间", type: "line", data: bandData, stack: "ci", symbol: "none", lineStyle: { opacity: 0 }, areaStyle: { color: hexA(accent, 0.13) }, silent: true },
-        {
-          name: "实际", type: "line", data: actualData, smooth: 0.35, symbol: "none",
-          lineStyle: { width: 2, color: accent }, areaStyle: { color: hexA(accent, 0.06) },
-          markLine: { silent: true, symbol: "none", lineStyle: { color: T.faint, type: "dashed", width: 1, opacity: 0.55 }, label: { show: false }, data: [{ xAxis: p.dates[n - 1] }] },
-        },
-        { name: "预测", type: "line", data: forecastData, smooth: 0.35, symbol: "none", lineStyle: { width: 1.8, type: "dashed", color: T.forecast } },
-      ],
-    });
-    return;
-  }
-
-  if (dim === "performance") {
-    const p = performanceForecast(product);
-    const next = p.forecast.values[0] || 0;
-    const delta = next - p.last;
-    setPredictHero(product, {
-      value: next,
-      decimals: 1,
-      suffix: "%",
-      unit: "覆盖率",
-      trend: `${delta >= 0 ? "+" : ""}${delta.toFixed(1)} pp vs 昨日`,
-      trendClass: delta >= 0 ? "trend-up" : "trend-down",
-    });
-    if (metaEl) metaEl.textContent = `未来 7 天${p.synthetic ? " · 原型" : ""}`;
-    if (statsEl) {
-      statsEl.innerHTML = predictStats([
-        ["当前 P50", p.p50 ? p.p50.toFixed(1) + "s" : "—"],
-        ["7 日 P50", p.p50Forecast ? p.p50Forecast.toFixed(1) + "s" : "—"],
-        ["问题密度", (p.density || 0).toFixed(2)],
-      ]);
-    }
-    const n = p.values.length;
-    const actualData = [...p.values, ...Array(7).fill(null)];
-    const forecastData = [...Array(n - 1).fill(null), p.values[n - 1], ...p.forecast.values];
-    const lowerData = [...Array(n).fill(null), ...p.forecast.lower];
-    const bandData = [...Array(n).fill(null), ...p.forecast.upper.map((u, i) => u - p.forecast.lower[i])];
-    if (!chartEl) return;
-    chartEl.innerHTML = "";
-    createChart(chartEl, {
-      animationDuration: REDUCED ? 0 : 680,
-      animationEasing: "cubicOut",
-      tooltip: {
-        ...tip,
-        trigger: "axis",
-        axisPointer: { type: "line", lineStyle: { color: T.track } },
-        formatter: (params) => {
-          const i = params[0].dataIndex;
-          const date = p.dates[i];
-          if (i >= n) {
-            const k = i - n;
-            return tipCard(
-              tipHead(date, "预测", T.forecast) +
-                tipRow(T.forecast, "覆盖率", p.forecast.values[k].toFixed(1) + "%") +
-                tipRow(T.muted, "区间", `${p.forecast.lower[k].toFixed(1)}–${p.forecast.upper[k].toFixed(1)}%`)
-            );
-          }
-          return tipCard(tipHead(date, "实际", accent) + tipRow(accent, "覆盖率", p.values[i].toFixed(1) + "%"));
-        },
-      },
-      grid: { left: 30, right: 7, top: 8, bottom: 16 },
-      xAxis: {
-        type: "category",
-        data: p.dates,
-        boundaryGap: false,
-        axisLine: { show: false },
-        axisTick: { show: false },
-        axisLabel: { fontSize: 7.5, color: T.faint, interval: 3, fontFamily: FONT },
-      },
-      yAxis: {
-        type: "value",
-        min: 0,
-        max: 100,
-        splitNumber: 3,
-        axisLine: { show: false },
-        axisTick: { show: false },
-        axisLabel: { fontSize: 7.5, color: T.faint, formatter: "{value}%", fontFamily: FONT, margin: 4 },
-        splitLine: { lineStyle: { color: T.hairline, type: "dashed" } },
-      },
-      series: [
-        { name: "下界", type: "line", data: lowerData, stack: "ci", symbol: "none", lineStyle: { opacity: 0 }, areaStyle: { opacity: 0 }, silent: true },
-        { name: "区间", type: "line", data: bandData, stack: "ci", symbol: "none", lineStyle: { opacity: 0 }, areaStyle: { color: hexA(accent, 0.13) }, silent: true },
-        {
-          name: "实际", type: "line", data: actualData, smooth: 0.35, symbol: "none",
-          lineStyle: { width: 2, color: accent }, areaStyle: { color: hexA(accent, 0.07) },
-          markLine: { silent: true, symbol: "none", lineStyle: { color: T.faint, type: "dashed", width: 1, opacity: 0.55 }, label: { show: false }, data: [{ xAxis: p.dates[n - 1] }] },
-        },
-        { name: "预测", type: "line", data: forecastData, smooth: 0.35, symbol: "none", lineStyle: { width: 1.8, type: "dashed", color: T.forecast } },
-      ],
-    });
-    return;
-  }
-
-  const p = attributionForecast(product);
-  const top = p.cats[p.topIndex];
-  setPredictHero(product, {
-    value: p.topShare,
-    decimals: 1,
-    suffix: "%",
-    unit: "主因占比",
-    trend: `${p.topChange >= 0 ? "+" : ""}${p.topChange.toFixed(1)} pp vs 昨日`,
-    trendClass: p.topChange >= 0 ? "trend-up" : "trend-down",
-  });
-  if (metaEl) metaEl.textContent = `未来 7 天${p.synthetic ? " · 原型" : " · 分级日"}`;
-  if (statsEl) {
-    statsEl.innerHTML = predictStats([
-      ["主要归因", top ? top.name : "—", top ? top.color : null],
-      ["7 日均值", p.topShare.toFixed(1) + "%"],
-      ["类别数", `${p.cats.length} 类`],
-    ]);
-  }
   if (!chartEl) return;
+  const dimLabel = { review: "预测题评阅数据", capability: "预测能力趋势", attribution: "预测归因" }[dim];
+  chartEl.setAttribute("aria-label", `${productLabel(product)}${dimLabel}`);
   chartEl.innerHTML = "";
-  const futureStart = p.dates[p.actual[0].length];
-  const series = p.cats.map((cat, i) => ({
-    name: cat.name,
-    type: "line",
-    stack: "share",
-    data: [...p.actual[i], ...p.forecasts[i].values],
-    smooth: 0.25,
-    symbol: "none",
-    lineStyle: { width: 1.1, color: hexA(cat.color, 0.8) },
-    areaStyle: { color: hexA(cat.color, i === p.topIndex ? 0.3 : 0.18) },
-    emphasis: { focus: "series" },
-    markArea: i === 0 ? {
-      silent: true,
-      itemStyle: { color: hexA(T.ink, T.mode === "dark" ? 0.04 : 0.025) },
-      data: [[{ xAxis: futureStart }, { xAxis: p.dates[p.dates.length - 1] }]],
-    } : undefined,
-    markLine: i === 0 ? {
-      silent: true,
-      symbol: "none",
-      lineStyle: { color: T.faint, type: "dashed", width: 1, opacity: 0.5 },
-      label: { show: false },
-      data: [{ xAxis: futureStart }],
-    } : undefined,
-  }));
-  createChart(chartEl, {
-    animationDuration: REDUCED ? 0 : 680,
-    animationEasing: "cubicOut",
-    tooltip: {
-      ...tip,
-      trigger: "axis",
-      axisPointer: { type: "line", lineStyle: { color: T.track } },
-      formatter: (params) => {
-        const i = params[0].dataIndex;
-        const date = p.dates[i];
-        const future = i >= p.actual[0].length;
-        const rows = params
-          .filter((x) => x.value != null)
-          .sort((a, b) => b.value - a.value)
-          .map((x) => tipRow(x.color, x.seriesName, Number(x.value).toFixed(1) + "%"))
-          .join("");
-        return tipCard(tipHead(date, future ? "预测构成" : "实际构成", T.forecast) + rows + (p.synthetic ? `<div class="tip-path">历史分日数据不足，按原型分布外推</div>` : ""));
-      },
-    },
-    grid: { left: 30, right: 7, top: 8, bottom: 16 },
-    xAxis: {
-      type: "category",
-      data: p.dates,
-      boundaryGap: false,
-      axisLine: { show: false },
-      axisTick: { show: false },
-      axisLabel: { fontSize: 7.5, color: T.faint, interval: 3, fontFamily: FONT },
-    },
-    yAxis: {
-      type: "value",
-      min: 0,
-      max: 100,
-      splitNumber: 3,
-      axisLine: { show: false },
-      axisTick: { show: false },
-      axisLabel: { fontSize: 7.5, color: T.faint, formatter: "{value}%", fontFamily: FONT, margin: 4 },
-      splitLine: { lineStyle: { color: T.hairline, type: "dashed" } },
-    },
-    series,
-  });
+  chartEl.style.cursor = "default";
+  if (dim === "review") renderPredReview(product, chartEl);
+  else if (dim === "capability") renderPredCapability(product, chartEl);
+  else renderPredAttribution(product, chartEl);
 }
 
 function bindPredictTabs(product) {
   const tabs = $(isWc(product) ? "wcPredictTabs" : "aiPredictTabs");
   if (!tabs) return;
+  const order = ["review", "capability", "attribution"];
   tabs.onclick = (ev) => {
     const tab = ev.target.closest(".predict-tab");
     if (!tab) return;
@@ -1827,7 +1290,6 @@ function bindPredictTabs(product) {
   tabs.onkeydown = (ev) => {
     if (ev.key !== "ArrowLeft" && ev.key !== "ArrowRight") return;
     ev.preventDefault();
-    const order = ["volume", "performance", "attribution"];
     const i = order.indexOf(board.predict[product].dim);
     const next = order[(i + (ev.key === "ArrowRight" ? 1 : order.length - 1)) % order.length];
     board.predict[product].dim = next;
@@ -1865,7 +1327,7 @@ export function initBoard(data, opts = {}) {
 export function setBoardProduct(product) {
   if (!["wencai", "aime"].includes(product)) return;
   board.product = product;
-  document.querySelectorAll('.view--data .page').forEach((page) => {
+  document.querySelectorAll(".view--data .page").forEach((page) => {
     const on = page.dataset.product === product;
     page.classList.toggle("is-active", on);
     page.setAttribute("aria-hidden", String(!on));

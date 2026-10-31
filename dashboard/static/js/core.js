@@ -97,7 +97,7 @@ export function readTokens() {
   const names = [
     "bg", "surface", "surface-2", "surface-3", "tooltip", "track", "hairline",
     "ink", "ink-2", "muted", "faint",
-    "wc", "wc-mid", "wc-soft", "ai", "ai-mid", "ai-light", "ai-soft",
+    "wc", "wc-mid", "wc-soft", "ai", "ai-mid", "ai-light", "ai-soft", "pred-fast",
     "b", "b-mid", "forecast", "sev-0", "sev-1", "sev-2", "sev-3", "sev-4",
     "cl-1", "cl-2", "cl-3", "cl-4", "cl-5", "cl-6",
   ];

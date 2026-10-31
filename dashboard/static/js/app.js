@@ -278,15 +278,17 @@ function setFreshness(data) {
   const stamp = (x) => String(x.date || x.at || "—").slice(5, 10);
   const stale = Boolean(input.stale || a.stale || c.stale);
   const outputMissing = !a.date && !a.at;
-  el.classList.toggle("is-stale", stale);
-  const inputLabel = input.date ? `输入 ${stamp(input)}` : "输入 —";
   const statusLabel = outputMissing ? "输出待落盘" : stale ? "待刷新" : "已同步";
-  el.textContent = `${inputLabel} · 归因 ${stamp(a)} · 聚类 ${stamp(c)} · ${statusLabel}`;
+  el.classList.toggle("is-stale", stale);
+  el.dataset.state = outputMissing ? "pending" : stale ? "stale" : "ok";
   el.title = [
+    `数据状态：${statusLabel}`,
     `输入：${input.label || input.at || "未知"}${input.stale ? "（仍在更新）" : ""}`,
     `归因：${a.label || a.at || "未知"}${a.stale ? "（非最新批次）" : ""}`,
     `聚类：${c.label || c.at || "未知"}${c.stale ? "（非最新批次）" : ""}`,
+    `更新：${(data.generated_at || "—").slice(5, 16).replace("T", " ")}`,
   ].join("\n");
+  el.setAttribute("aria-label", `数据状态：${statusLabel}。输入 ${stamp(input)}，归因 ${stamp(a)}，聚类 ${stamp(c)}`);
 }
 
 function renderAll() {
@@ -300,7 +302,6 @@ function renderAll() {
     navigate,
   });
   setFreshness(DATA);
-  $("updated").textContent = (DATA.generated_at || "—").slice(5, 16).replace("T", " ");
   setProduct(activeProduct, false);
   applyRoute(parseRoute());
 }

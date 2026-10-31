@@ -1,33 +1,58 @@
-/* Three-board shell: navigation, view geometry and shared page chrome. */
+/* Unified app bar + three-view geometry. */
+
+.page-head {
+  gap: 16px;
+}
+
 .head-left {
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: 16px;
   min-width: 0;
 }
 
-.view-switch {
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.brand {
+  gap: 9px;
+}
+
+.brand h1 {
+  white-space: nowrap;
+}
+
+/* Segmented controls: one geometry for view and product switches. */
+.view-switch,
+.product-switch {
   position: relative;
   display: inline-grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: center;
-  height: 30px;
-  padding: 2px;
-  border-radius: var(--r-md);
-  background: var(--surface-2);
+  padding: 3px;
   isolation: isolate;
 }
 
-.view-tab {
+.view-switch {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.product-switch {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.view-tab,
+.product-tab {
   position: relative;
   z-index: 1;
-  height: 26px;
-  padding: 0 13px;
+  min-width: 0;
+  padding: 0 12px;
   border: 0;
-  border-radius: 7px;
   background: transparent;
   font: inherit;
-  font-size: 11.5px;
   font-weight: var(--fw-strong);
   color: var(--muted);
   white-space: nowrap;
@@ -35,66 +60,96 @@
   transition: color var(--dur-snap) var(--ease-snap);
 }
 
-.view-tab.is-active {
+.product-tab {
+  min-width: 56px;
+}
+
+.view-tab.is-active,
+.product-tab.is-active {
   color: var(--ink);
 }
 
-.view-tab:focus-visible {
+.view-tab:focus-visible,
+.product-tab:focus-visible {
   outline: 2px solid var(--accent, var(--wc));
   outline-offset: 1px;
 }
 
-.view-knob {
+.view-knob,
+.switch-knob {
   position: absolute;
   z-index: 0;
-  top: 2px;
-  left: 2px;
-  width: calc(33.3333% - 1.34px);
-  height: 26px;
-  border-radius: 7px;
+  top: 3px;
+  left: 3px;
+  height: calc(100% - 6px);
   background: var(--surface);
-  box-shadow: var(--shadow-knob);
   transform: translateX(0);
-  transition: transform var(--dur-swift) var(--ease-snap), width var(--dur-swift) var(--ease-snap);
+  transition: transform var(--dur-swift) var(--ease-snap);
+}
+
+.view-knob {
+  width: calc((100% - 6px) / 3);
+}
+
+.switch-knob {
+  width: calc((100% - 6px) / 2);
 }
 
 .view-switch[data-active="system"] .view-knob {
-  transform: translateX(calc(100% + 0.67px));
-  width: calc(33.3333% - 1.34px);
+  transform: translateX(100%);
 }
 
 .view-switch[data-active="samples"] .view-knob {
-  transform: translateX(calc(200% + 1.34px));
-  width: calc(33.3333% - 1.34px);
+  transform: translateX(200%);
 }
 
+.product-switch[data-active="aime"] .switch-knob {
+  transform: translateX(100%);
+}
+
+/* Status is a dot with a full tooltip/aria label, not a line of chrome. */
 .freshness-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 24px;
-  padding: 0 9px;
-  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: help;
+  transition: background var(--dur-snap) var(--ease-snap);
+}
+
+.freshness-chip:hover {
   background: var(--surface-2);
-  font-size: 9.5px;
-  color: var(--muted);
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
 }
 
 .freshness-chip::before {
-  content: "";
-  width: 5px;
-  height: 5px;
-  border-radius: 999px;
-  background: var(--wc-mid);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wc) 12%, transparent);
+  content: none;
 }
 
-.freshness-chip.is-stale::before {
-  background: #f59e0b;
-  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.14);
+.freshness-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--wc-mid);
+  transition: background var(--dur-swift) var(--ease-out), box-shadow var(--dur-swift) var(--ease-out);
 }
+
+.freshness-chip[data-state="stale"] .freshness-dot {
+  background: #d97706;
+  box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.14);
+}
+
+.freshness-chip[data-state="pending"] .freshness-dot {
+  background: var(--faint);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--faint) 16%, transparent);
+}
+
+.head-actions .icon-btn {
+  flex: none;
+}
+
+/* --------------------------------------------------------------- view body */
 
 .view {
   position: absolute;
@@ -147,100 +202,137 @@ body[data-view="system"] .freshness-chip {
   .view--data {
     position: relative;
   }
+
   .view--data .page {
     position: relative;
     inset: auto;
   }
+
   .view {
     overflow: visible;
   }
-}
 
-@media (max-width: 1320px) {
   .view--system,
   .view--samples {
     position: relative;
     inset: auto;
     overflow: visible;
-    min-height: calc(100dvh - 86px);
+    min-height: calc(100dvh - 80px);
   }
+
   .system-root,
   .samples-root {
     height: auto;
-    min-height: calc(100dvh - 86px);
+    min-height: calc(100dvh - 80px);
   }
+
   .sample-shell {
-    height: calc(100dvh - 86px);
+    height: calc(100dvh - 80px);
     min-height: 0;
   }
 }
 
 @media (max-width: 1100px) {
-  .view--system {
-    min-height: calc(100dvh - 96px);
-  }
+  .view--system,
   .system-root {
-    min-height: calc(100dvh - 96px);
+    min-height: calc(100dvh - 80px);
   }
 }
 
-@media (max-width: 1040px) {
+@media (max-width: 900px) {
+  .page-head {
+    gap: 12px;
+  }
+
   .head-left {
     gap: 12px;
   }
-  .view-tab {
-    padding: 0 9px;
-    font-size: 11px;
-  }
-  .freshness-chip {
-    display: none;
+
+  .view-tab,
+  .product-tab {
+    padding: 0 10px;
   }
 }
 
-@media (max-width: 820px) {
+@media (max-width: 700px) {
   .page-head {
-    height: auto;
-    min-height: 44px;
     flex-wrap: wrap;
+    height: auto;
+    padding: 8px 10px;
     row-gap: 8px;
   }
+
   .head-left {
-    flex: 1 1 100%;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    row-gap: 7px;
+    display: contents;
   }
+
+  .brand {
+    order: 1;
+    flex: 1;
+  }
+
+  .head-actions {
+    order: 2;
+  }
+
   .view-switch {
     order: 3;
     flex: 1 1 100%;
-    display: flex;
+    display: grid;
+    height: 36px;
   }
+
   .view-tab {
-    flex: 1 1 0;
+    height: 30px;
   }
+
   .view-knob {
-    width: calc(33.3333% - 1.34px);
+    top: 3px;
+    height: 30px;
   }
-  .head-actions {
-    margin-left: auto;
+
+  .product-switch {
+    height: 36px;
+  }
+
+  .product-tab {
+    height: 30px;
+  }
+
+  .switch-knob {
+    top: 3px;
+    height: 30px;
+  }
+
+  .freshness-chip {
+    width: 36px;
+    height: 36px;
+  }
+
+  .head-actions .icon-btn {
+    width: 36px;
+    height: 36px;
+  }
+
+  .view--system,
+  .view--samples,
+  .system-root,
+  .samples-root {
+    min-height: calc(100dvh - 124px);
+  }
+
+  .sample-shell {
+    height: calc(100dvh - 124px);
   }
 }
 
 @media (max-width: 560px) {
   .brand h1 {
-    display: none;
+    display: none !important;
   }
-  .brand {
-    gap: 7px;
-  }
-  .head-actions {
-    gap: 6px;
-  }
-  .status-bar {
-    display: none;
-  }
+
   .product-tab {
-    min-width: 48px;
+    min-width: 50px;
     padding: 0 9px;
   }
 }
