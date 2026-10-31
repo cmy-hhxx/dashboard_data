@@ -53,7 +53,7 @@ ssh eval_data 'chmod +x /tmp/pack_aime_input.sh && /tmp/pack_aime_input.sh <目�
 |---|---|---|
 | 数据 | `?view=data` | 问财 / AIME 的 2+3 Bento：数据量、评测量、归因、聚类、预测 |
 | 评测体系 | `?view=system` | 基于 `eval_agent_harness` 与 `cluster_algorithm` 的动画化结构说明 |
-| 样本 | `?view=samples` | 按归因 / 聚类召回真实样本；输入卡 + 输出信息卡 + 归因卡 |
+| 样本 | `?view=samples` | 归因 / 紧凑轨迹双视图的三栏样本工作台：召回 → 评测输入 → 评测输出 |
 
 ```bash
 ./dashboard/deploy.sh                                    # 同步、生成 data.json/samples.json、重启
@@ -61,8 +61,8 @@ ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
 ```
 
 服务监听容器 `:5001`，对外是 `http://dashboard.example.com:2768/`。服务每 30 分钟重扫数据集；
-`samples.json` 默认每 6 小时重算（`SAMPLES_REFRESH_SECONDS`），缺失时启动即生成。
-部署时预压缩 JS/CSS/HTML，`data.json`/`samples.json` 不缓存。
+样本默认每 6 小时重算（`SAMPLES_REFRESH_SECONDS`），`samples.json` 或 `samples/` 缺失时启动即生成。
+部署时预压缩 JS/CSS/HTML；`data.json`、`samples.json` 与逐样本详情不缓存。
 端口映射、部署流程、验证方式和部署最佳实践见
 [docs/dashboard-deployment.md](docs/dashboard-deployment.md)。
 
@@ -75,7 +75,7 @@ ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
 - 评测量：版本「积木」方框图，面积/占比 = 回答数，点阵 = 核心达标率；配覆盖率环、难度四格、
   AIME fast/expert 双块 + 产出 spark + 子任务 Top 4。
 - 归因体系：桑基图。问财 `版本 → 环节`，AIME `模型 → 环节 → 严重度`；节点/流可点击直接召回样本。
-- 聚类体系：旭日图 + 图例下钻；簇内节点可「该簇样本 →」召回，叶子点击也可召回。
+- 聚类体系：旭日图 + 图例下钻；叶子点击跳到样本页（demo_data 暂无聚类树，样本页不再按簇筛选）。
 - 预测体系：同一卡片内三个维度，`数据量 / 性能 / 归因` 标签切换：
   数据量给 7 日预测 + 置信区间；性能预测覆盖率（累计口径），附 P50 / 问题密度；
   归因预测严重度或环节构成。历史不足时明确标「原型」；AIME 批量尖峰用 7 日平滑并标注。
@@ -89,21 +89,26 @@ ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
 - 聚类与质量：9 环节 × 7 机制矩阵、133 模式 / 124 叶子、α=0.918、91.3% 双盲一致率；
   「召回样本」直接跳到样本页。版本事实标 r486 / taxonomy v3.0.0，不冒充实时测量。
 
-**3. 具体样本页**：三栏召回工作台。
+**3. 具体样本页**：三栏工作台，重点是评测输入与评测输出。
 
-- 左栏：全文搜索、按归因（组件 / 严重度）、按聚类（树形路径）筛选；当前条件可逐项清除。
-- 中栏：样本列表；问题、模型、日期、簇、严重度、问题数；键盘 ↑↓ / Enter 选择。
-- 右栏：左侧一张「评测输入」大卡（原问、meta、工具、system/reasoning/tool call/工具返回、
-  最终回答，长文折叠）；右侧两张上下卡：上「评测输出 · 信息卡」（判词、指标、逐轮/会话总结），
-  下「评测输出 · 归因卡」（聚类路径、全部 Problem、严重度、定义/理由/证据引文）。
-- 归因桑基点击、聚类召回、体系页 CTA 都通过 `?view=samples&product=…&component=…&severity=…&cluster=…`
-  深链进入；筛选和选中 case 同步到 URL，可直接分享。
+- 左栏（召回）：Trace / Session / 问题关键词搜索；模型、严重度、环节、日期筛选与排序；
+  当前条件逐项清除；列表显示问题、模型/日期、最严重等级、问题数与环节；↑↓ / Enter 选择。
+- 中栏（评测输入）：原问与中文翻译、任务/难度/用量；多轮可切换；按 System / User / Reason /
+  Tool / Return / Answer 图标展开时间线；系统提示、思考、调用参数、结构化返回默认折叠，
+  最终回答超长折叠；缺失输入显式提示。
+- 右栏（评测输出）：归因 / 紧凑轨迹两个视图。归因展示会话结论、严重度构成、逐轮问题与证据；
+  紧凑轨迹展示会话概览、规划、执行、工具错误、反思与组件。两者共同组成一个样本的评测输出。
+- User / Session / Trace ID 不在页面展示，只提供复制按钮；样本 URL 使用短 slug。
+- 归因/体系页通过 `?view=samples&product=…&component=…&severity=…&case=…` 深链进入；
+  搜索、筛选、轮次与输出 tab 同步到 URL。
+- 详情按样本懒加载：`samples.json` 只含召回索引与筛选面，选中后取
+  `samples/<slug>.json(.gz)`；首屏不再携带全部 trace。
 
 | 文件 | 作用 |
 |---|---|
 | `scan_datasets.py` | 扫 `datasets` 的输入/输出：逐文件条数、按模型×日期配对、meta 分类分布 → `cache/datasets.json` |
 | `prepare.py` | 解析归因/覆盖/Token/逐日指标/桑基分量，合并扫描结果 → `static/data.json` |
-| `prepare_samples.py` | 从 cluster_tree 叶子样本 + 输出 JSONL + 输入 trace 组装真实样本 → `static/samples.json(.gz)` |
+| `prepare_samples.py` | demo_data 的 attribution + compact 按 session_id 配对 → `static/samples.json(.gz)`；逐样本详情 → `static/samples/<slug>.json(.gz)` |
 | `dataset_layout.py` | 解析 datasets 布局：demo_data → legacy → `.archive` 逐级回退，供三个生成脚本共用 |
 | `server.py` | `ThreadingHTTPServer` + 定时重算；`/healthz` 返回 data/samples 双刷新状态 |
 | `static/` | 三页入口、ES modules、ECharts 离线包、构建好的 `app.css` 与页面 CSS |
@@ -111,19 +116,19 @@ ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
 | `precompress.sh` | 部署时预压缩 JS/CSS/HTML；`prepare.py`/`prepare_samples.py` 另产 `.gz` |
 | `build/` | Tailwind/DaisyUI 配置与构建入口（`npx tailwindcss -c tailwind.config.js -i input.css -o ../static/app.css --minify`） |
 
-AIME 输出以 `1_aime/eval_output/demo_data/<model>/<model>_attribution-<date>.jsonl` 为准（demo 格式，后续沿用）；
-旧 `eval_output/<split>/...` 与 `.archive/` 只作回退。问财暂无 demo_data，回退到
-`0_wencai/.archive/eval_output/0_daily_eval_output`；AIME lost 与聚类树也按 demo → legacy → archive 解析。
-`demo_data` 目前没有 `cluster_tree`，聚类/样本页沿用最近的归档聚类快照，freshness 会标 stale。
+AIME 输出以 `1_aime/eval_output/demo_data/<model>/<model>_attribution-<date>.jsonl` 与
+`compact/<model>_compact-<date>.jsonl` 为准（demo 格式，后续沿用）；
+旧 `eval_output/<split>/...` 与 `.archive/` 只作回退。问财暂无 demo_data 样本。
+`demo_data` 目前没有 `cluster_tree`；数据板块聚类沿用最近的归档聚类快照，样本页不再依赖聚类树。
 
 口径：输入 = 数据集中的 `*_input.jsonl`，以及 AIME 新布局的 `<date>.jsonl`；已评测 = 输出侧回答记录数（问财四个版本 answer 合计，
 不含 comparison / compact 汇总记录；AIME 统计 `*_attribution-YYYY-MM-DD.jsonl`）；待评测 = 输入 − 已评测。
 问财 / AIME 都按 `meta.task` 展示任务分布：问财不展示「其他/其它」，AIME 把「其它」并进「其他」。
-样本页从 cluster 叶子/条目索引反查 `src_file:src_line`，再按 trace_id 回接输入；不补造缺失内容。
+样本 = demo_data 的 attribution + compact 按 session_id 配对；输入按 trace_id/session_id 回接，不补造缺失内容。
 当前真实快照：输入覆盖至 2026-10-31；AIME 日常归因（demo_data）覆盖至 2026-10-31，
 问财归因回退归档（至 2026-10-23），AIME lost 回退归档（至 2026-10-14）；聚类产物生成于
-2026-10-30（v2.5.0），聚类覆盖至 2026-10-23，顶栏因此标「待刷新」。问财原始输出没有 severity 字段，
-样本页对问财显式显示「无分级」；AIME 日更批次也无 severity，只有 lost-user 批次有 P0–P3。
+2026-10-30（v2.5.0），聚类覆盖至 2026-10-23，顶栏因此标「待刷新」。
+AIME demo 归因带 P0–P4（P4 为提示级）；问财暂无 demo 样本。
 
 ### 设计规则（可复现的 token）
 
