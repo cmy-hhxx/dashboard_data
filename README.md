@@ -45,46 +45,82 @@ ssh eval_data 'chmod +x /tmp/pack_aime_input.sh && /tmp/pack_aime_input.sh <目�
 
 ## 数据看板
 
-`dashboard/` 是问财 / AIME 评测看板：Tailwind + DaisyUI 页面、ECharts 图表、Python 标准库起服务。
-**唯一数据源**是 `/mnt/fin_bench/code_and_clean_data/datasets`（含评测输入与输出的成对文件）。
+`dashboard/` 是问财 / AIME 评测看板：原生 ES modules + ECharts + Python 标准库起服务。
+**唯一数据源**是 `/mnt/fin_bench/code_and_clean_data/datasets`（评测输入、输出、cluster_tree、item_index）。
+入口分三块，顶部导航切换，Hash 路由可直接分享：
 
-![dashboard](docs/dashboard.png)
+| 页面 | 路由 | 内容 |
+|---|---|---|
+| 数据 | `#/data` | 问财 / AIME 的 2+3 Bento：数据量、评测量、归因、聚类、预测 |
+| 评测体系 | `#/system` | 基于 `eval_agent_harness` 与 `cluster_algorithm` 的动画化结构说明 |
+| 样本 | `#/samples` | 按归因 / 聚类召回真实样本；输入卡 + 输出信息卡 + 归因卡 |
 
 ```bash
-./dashboard/deploy.sh                                    # 构建产物同步到 /opt/eval_dashboard 并重启
+./dashboard/deploy.sh                                    # 同步、生成 data.json/samples.json、重启
 ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
 ```
 
-服务监听容器 `:5001`，对外是 `http://dashboard.example.com:2768/`。服务每 30 分钟自动重扫数据集并重算。
-静态资源部署时预压缩（JS/CSS/HTML/data.json），ECharts/vendor 长缓存，`app.js`/`app.css` 校验缓存，`data.json` 不缓存。
+服务监听容器 `:5001`，对外是 `http://dashboard.example.com:2768/`。服务每 30 分钟重扫数据集；
+`samples.json` 默认每 6 小时重算（`SAMPLES_REFRESH_SECONDS`），缺失时启动即生成。
+部署时预压缩 JS/CSS/HTML，`data.json`/`samples.json` 不缓存。
+
+### 三个板块
+
+**1. 数据板块**：每产品 2+3 Bento，上排数据量 / 评测量，下排归因 / 聚类 / 预测。
+
+- 数据量：可下钻同心圆。内环任务、外环当前任务子类；点击任务切换，`← 全部` 回到总览；
+  右侧图例与圆环同色。
+- 评测量：版本「积木」方框图，面积/占比 = 回答数，点阵 = 核心达标率；配覆盖率环、难度四格、
+  AIME fast/expert 双块 + 产出 spark + 子任务 Top 4。
+- 归因体系：桑基图。问财 `版本 → 环节`，AIME `模型 → 环节 → 严重度`；节点/流可点击直接召回样本。
+- 聚类体系：旭日图 + 图例下钻；簇内节点可「该簇样本 →」召回，叶子点击也可召回。
+- 预测体系：同一卡片内三个维度，`数据量 / 性能 / 归因` 标签切换：
+  数据量给 7 日预测 + 置信区间；性能预测覆盖率（累计口径），附 P50 / 问题密度；
+  归因预测严重度或环节构成。历史不足时明确标「原型」；AIME 批量尖峰用 7 日平滑并标注。
+
+**2. 评测体系说明页**：三幕动画，实际在动。
+
+- 总览：输入 → Criteria / Compact → Trace 归因 → Session 归因 → JSONL；五个下游消费者；
+  节点逐段点亮、流上有运动粒子，支持播放 / 暂停 / 单步。
+- 归因链：原始消息 → Compact 字段 → Trace 审查 → Session 审查 → 引文回跳原始坐标；
+  展示 `trace/message/path/evidence_id` 与 400 字引文约束。
+- 聚类与质量：9 环节 × 7 机制矩阵、133 模式 / 124 叶子、α=0.918、91.3% 双盲一致率；
+  「召回样本」直接跳到样本页。版本事实标 r486 / taxonomy v3.0.0，不冒充实时测量。
+
+**3. 具体样本页**：三栏召回工作台。
+
+- 左栏：全文搜索、按归因（组件 / 严重度）、按聚类（树形路径）筛选；当前条件可逐项清除。
+- 中栏：样本列表；问题、模型、日期、簇、严重度、问题数；键盘 ↑↓ / Enter 选择。
+- 右栏：左侧一张「评测输入」大卡（原问、meta、工具、system/reasoning/tool call/工具返回、
+  最终回答，长文折叠）；右侧两张上下卡：上「评测输出 · 信息卡」（判词、指标、逐轮/会话总结），
+  下「评测输出 · 归因卡」（聚类路径、全部 Problem、严重度、定义/理由/证据引文）。
+- 归因桑基点击、聚类召回、体系页 CTA 都通过 `#/samples?product=…&component=…&severity=…&cluster=…`
+  深链进入；筛选和选中 case 同步到 URL，可直接分享。
 
 | 文件 | 作用 |
 |---|---|
 | `scan_datasets.py` | 扫 `datasets` 的输入/输出：逐文件条数、按模型×日期配对、meta 分类分布 → `cache/datasets.json` |
-| `prepare.py` | 解析输出侧的归因/覆盖/Token，合并扫描结果 → `static/data.json` |
-| `server.py` | `ThreadingHTTPServer` + 定时重算；`/healthz` 返回最近一次刷新状态 |
-| `static/` | 页面、ECharts 离线包、构建好的 `app.css`（数字补间与动效均为原生实现，无额外前端依赖） |
-| `precompress.sh` | 部署时预压缩 JS/CSS/HTML；`prepare.py` 额外产出 `data.json.gz`，`server.py` 按 `Accept-Encoding` 直接发 `.gz` |
+| `prepare.py` | 解析归因/覆盖/Token/逐日指标/桑基分量，合并扫描结果 → `static/data.json` |
+| `prepare_samples.py` | 从 cluster_tree 叶子样本 + 输出 JSONL + 输入 trace 组装真实样本 → `static/samples.json(.gz)` |
+| `server.py` | `ThreadingHTTPServer` + 定时重算；`/healthz` 返回 data/samples 双刷新状态 |
+| `static/` | 三页入口、ES modules、ECharts 离线包、构建好的 `app.css` 与页面 CSS |
+| `static/js/` | `app.js` 路由/主题/数据加载，`board.js` 数据板块，`system.js` 体系页，`samples.js` 样本页，`core.js` 共享 token/图表/数字动效 |
+| `precompress.sh` | 部署时预压缩 JS/CSS/HTML；`prepare.py`/`prepare_samples.py` 另产 `.gz` |
 | `build/` | Tailwind/DaisyUI 配置与构建入口（`npx tailwindcss -c tailwind.config.js -i input.css -o ../static/app.css --minify`） |
 
 口径：输入 = 数据集中的 `*_input.jsonl`；已评测 = 输出侧回答记录数（问财四个版本 answer 合计，
 不含 comparison 记录；AIME 输出记录数）；待评测 = 输入 − 已评测。
-问财 / AIME 都按 `meta.task` 展示任务分布：问财不展示「其他/其它」，AIME 把「其它」并进「其他」；
-AIME 的 task/subtask 取自输出 `turns[].meta` 最后一轮，与问财使用同一套标签。
-每个产品一页，页面采用 2+3 Bento：上排「数据量 / 评测量」，下排「归因体系 / 聚类体系 / 预测体系」。
-顶部是分段式产品切换（滑块吸附，不再用 3D 翻页），桌面固定 2×6 网格，≤1320px 变两列滚动，≤760px 单列。
-右上角可切浅色 / 深色，默认跟随系统。
-数据量卡片改为 treemap（面积 = 条数，点击方块下钻），底部补体量、文件数、活跃天数与已评测；
-归因卡片改为「环节 × A/B 或 P0–P3」热力矩阵（行内总量热力 + 列内热力），不再每行一条进度条，
-问财显示 A/B 拆量，AIME 显示 P0–P3 与未分级；评测量用版本指标矩阵（回答/P50/核心/Tokens）+
-难度四格卡 + 四格指标条，高分屏再补版本极值；AIME 评测量用 fast/expert 双卡 + 产出 spark +
-子任务 Top 4 气泡表；聚类体系改为环形图 + 可点击图例（图例即下钻入口），预测体系补上置信区间、
-切分线与 7 日汇总。问财仍只展示 A/B 拆分，不再展示对战结论。
+问财 / AIME 都按 `meta.task` 展示任务分布：问财不展示「其他/其它」，AIME 把「其它」并进「其他」。
+样本页从 cluster 叶子/条目索引反查 `src_file:src_line`，再按 trace_id 回接输入；不补造缺失内容。
+当前真实快照：输入/归因覆盖至 2026-10-23，聚类产物生成于 2026-10-30（v2.5.0，覆盖旧快照），
+预期 2026-10-30 日更批次缺失，顶栏因此标「待刷新」。问财原始输出没有 severity 字段，
+样本页对问财显式显示「无分级」；AIME 日更批次也无 severity，只有 lost-user 批次有 P0–P3。
 
 ### 设计规则（可复现的 token）
 
-- **一卡一主视觉**：数据量用面积图（treemap），评测量用指标矩阵/环形图，归因用热力矩阵，
-  聚类用旭日图，预测用折线图；主视图不再统一画进度条，避免同质化和视觉疲劳。
+- **一卡一主视觉**：数据量用同心圆，评测量用积木方框 + 点阵，归因用桑基图，
+  聚类用旭日图，预测用折线/堆叠面积；不再统一画横向进度条。
+- **体系页用「活图」**：节点逐段点亮、流上粒子运动、播放/暂停/单步；不是静态截图。
 - **层级不靠边框**：背景 / 卡片 / 内层三档微差灰阶（亮色 `#f1f3f6 → #fafbfc → #f2f4f7`，
   暗色 `#0e1217 → #151b22 → #1b232c`），卡片不再使用 1px 实线，只保留约 2%~3.5% 的明度差和极轻投影。
 - **同心圆角**：卡片 18px，内层 12 / 9 / 6px 逐级递减；按钮与 chip 共用更小一级，避免“外大内大”的断层。

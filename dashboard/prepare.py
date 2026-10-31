@@ -30,6 +30,14 @@ CLUSTER_FILES = {
     "wencai": f"{DATASETS}/0_wencai/eval_output/0_daily_eval_output/a_fast/cluster/cluster_tree.json",
     "aime": f"{DATASETS}/1_aime/eval_output/0_daily_eval_output/aime_fast/cluster/cluster_tree.json",
 }
+LOST_CLUSTER = f"{DATASETS}/1_aime/eval_output/1_lost_user_eval_output/aime_fast/cluster/cluster_tree.json"
+
+WENCAI_INPUT_GLOB = f"{DATASETS}/0_wencai/eval_input/*/*/*_input.jsonl"
+AIME_INPUT_GLOB = f"{DATASETS}/1_aime/eval_input/*/*/*_input.jsonl"
+WENCAI_OUTPUT_GLOB = f"{DATASETS}/0_wencai/eval_output/0_daily_eval_output/*/*_output.jsonl"
+WENCAI_COMPARE_GLOB = f"{DATASETS}/0_wencai/eval_output/0_daily_eval_output/comparison/*/*_output.jsonl"
+AIME_DAILY_OUTPUT_GLOB = f"{DATASETS}/1_aime/eval_output/0_daily_eval_output/*/*_output.jsonl"
+AIME_LOST_OUTPUT_GLOB = f"{DATASETS}/1_aime/eval_output/1_lost_user_eval_output/*/*_output.jsonl"
 
 
 def now_iso():
@@ -44,11 +52,153 @@ def median(vals):
     return statistics.median(vals) if vals else None
 
 
+def file_date(path):
+    """YYYY-MM-DD carried by an eval file name, or None."""
+    match = re.search(r"(\d{4}-\d{2}-\d{2})", os.path.basename(path or ""))
+    return match.group(1) if match else None
+
+
+def iso_cst(ts):
+    return datetime.fromtimestamp(ts, TZ).isoformat(timespec="seconds") if ts else None
+
+
+def artifact_summary(paths):
+    """(newest mtime ISO, newest data date, file count) for a batch of files."""
+    newest, dates = None, []
+    for path in paths:
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            continue
+        newest = mtime if newest is None else max(newest, mtime)
+        date = file_date(path)
+        if date:
+            dates.append(date)
+    return iso_cst(newest), max(dates) if dates else None, len(paths)
+
+
+def read_cluster_meta(path):
+    try:
+        with open(path) as fh:
+            raw = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return None
+    meta = raw.get("meta") or {}
+    return {
+        "generated_at": meta.get("generated_at"),
+        "pipeline_version": meta.get("pipeline_version"),
+        "total_sessions": meta.get("total_sessions"),
+        "total_items": meta.get("total_items"),
+    }
+
+
+def build_freshness():
+    """Conservative freshness of input / attribution / cluster artefacts.
+
+    A section is stale when the newest data it covers is older than the
+    expected daily batch (yesterday, CST), when attribution lags its input, or
+    when a cluster was generated before the attribution it should describe.
+    """
+    now = datetime.now(TZ)
+    expected = (now - timedelta(days=1)).date().isoformat()
+
+    input_at, input_date, _ = artifact_summary(
+        glob.glob(WENCAI_INPUT_GLOB) + glob.glob(AIME_INPUT_GLOB)
+    )
+    wencai_out = glob.glob(WENCAI_OUTPUT_GLOB)
+    compare_out = glob.glob(WENCAI_COMPARE_GLOB)
+    aime_daily_out = glob.glob(AIME_DAILY_OUTPUT_GLOB)
+    aime_lost_out = glob.glob(AIME_LOST_OUTPUT_GLOB)
+    attribution_at, attribution_date, _ = artifact_summary(
+        wencai_out + compare_out + aime_daily_out + aime_lost_out
+    )
+
+    coverage = {
+        "wencai": max((file_date(p) for p in wencai_out if file_date(p)), default=None),
+        "aime_daily": max((file_date(p) for p in aime_daily_out if file_date(p)), default=None),
+        "aime_lost": max((file_date(p) for p in aime_lost_out if file_date(p)), default=None),
+    }
+    cluster_sources = []
+    for name, path in (
+        ("wencai", CLUSTER_FILES["wencai"]),
+        ("aime_daily", CLUSTER_FILES["aime"]),
+        ("aime_lost", LOST_CLUSTER),
+    ):
+        meta = read_cluster_meta(path)
+        if meta:
+            cluster_sources.append({"name": name, **meta})
+    cluster_at = max((s["generated_at"] for s in cluster_sources if s.get("generated_at")), default=None)
+    versions = sorted({s["pipeline_version"] for s in cluster_sources if s.get("pipeline_version")})
+    cluster_version = versions[0] if len(versions) == 1 else (" / ".join(versions) or None)
+    cluster_date = max((d for d in coverage.values() if d), default=None)
+
+    input_reasons = []
+    if not input_date:
+        input_reasons.append("未发现输入文件")
+    elif input_date < expected:
+        input_reasons.append(f"最新输入 {input_date} 早于预期日更批次 {expected}")
+    attribution_reasons = []
+    if not attribution_date:
+        attribution_reasons.append("未发现归因输出文件")
+    elif attribution_date < expected:
+        attribution_reasons.append(f"归因覆盖至 {attribution_date}，{expected} 批次缺失")
+    if input_date and attribution_date and attribution_date < input_date:
+        attribution_reasons.append(f"归因覆盖 {attribution_date} 落后于输入 {input_date}")
+    cluster_reasons = []
+    if not cluster_at:
+        cluster_reasons.append("未发现聚类树")
+    if cluster_date and cluster_date < expected:
+        cluster_reasons.append(f"聚类数据覆盖至 {cluster_date}，{expected} 批次缺失")
+    if cluster_at and attribution_at and cluster_at < attribution_at:
+        cluster_reasons.append("聚类生成早于最新归因产物")
+
+    def at_label(at):
+        return at[:16].replace("T", " ") if at else "—"
+
+    return {
+        "as_of": now.isoformat(timespec="seconds"),
+        "expected_date": expected,
+        "input": {
+            "at": input_at,
+            "date": input_date,
+            "label": f"输入覆盖至 {input_date or '—'} · 文件 {at_label(input_at)} 入库",
+            "stale": bool(input_reasons),
+            "reason": "；".join(input_reasons),
+        },
+        "attribution": {
+            "at": attribution_at,
+            "date": attribution_date,
+            "label": f"归因覆盖至 {attribution_date or '—'} · {at_label(attribution_at)} 生成",
+            "stale": bool(attribution_reasons),
+            "version": None,
+            "version_source": "unmarked",
+            "reason": "；".join(attribution_reasons),
+        },
+        "cluster": {
+            "at": cluster_at,
+            "date": cluster_date,
+            "label": (
+                f"聚类 {at_label(cluster_at)} 生成 · v{cluster_version or '—'} · "
+                f"覆盖至 {cluster_date or '—'}"
+            ),
+            "stale": bool(cluster_reasons),
+            "version": cluster_version,
+            "coverage": coverage,
+            "sources": cluster_sources,
+            "reason": "；".join(cluster_reasons),
+        },
+        "note": "保守判定：数据未跟上预期日更批次即标 stale，不以产物生成时间代替数据覆盖时间。",
+    }
+
+
 # ----------------------------------------------------------------- wencai out
 
 def wencai_outputs():
     versions = {}
     components = collections.Counter()  # (version, component)
+    labels = collections.defaultdict(collections.Counter)  # version -> label
+    per_day = {}  # date -> counters + latencies
+    severity_available = False
     for model in WENCAI_MODELS:
         answers = 0
         ok = 0
@@ -57,6 +207,10 @@ def wencai_outputs():
         latency = []
         difficulty = collections.Counter()
         for path in sorted(glob.glob(f"{DATASETS}/0_wencai/eval_output/0_daily_eval_output/{model}/*_output.jsonl")):
+            day = per_day.setdefault(
+                file_date(path) or "未知",
+                {"answers": 0, "problems": 0, "tokens": 0, "latency": []},
+            )
             with open(path) as fh:
                 for line in fh:
                     try:
@@ -65,19 +219,31 @@ def wencai_outputs():
                         continue
                     meta = rec.get("session_meta") or {}
                     answers += 1
+                    day["answers"] += 1
                     ok += 1 if meta.get("ok") else 0
-                    tokens += (meta.get("usage") or {}).get("total_tokens") or 0
+                    used = (meta.get("usage") or {}).get("total_tokens") or 0
+                    tokens += used
+                    day["tokens"] += used
                     cost = meta.get("finish_answer_time_cost")
                     if cost:
                         latency.append(cost / 1000.0)
+                        day["latency"].append(cost / 1000.0)
                     difficulty[meta.get("difficulty") or "未标注"] += 1
                     for p in rec.get("session_problem") or []:
                         problems += 1
+                        day["problems"] += 1
                         components[(model, p.get("component") or "未标注")] += 1
+                        labels[model][p.get("label") or "未标注"] += 1
+                        if p.get("severity"):
+                            severity_available = True
                     for turn in rec.get("turns") or []:
                         for p in turn.get("problem") or []:
                             problems += 1
+                            day["problems"] += 1
                             components[(model, p.get("component") or "未标注")] += 1
+                            labels[model][p.get("label") or "未标注"] += 1
+                            if p.get("severity"):
+                                severity_available = True
         versions[model] = {
             "answers": answers,
             "ok": ok,
@@ -87,7 +253,27 @@ def wencai_outputs():
             "p50": round(median(latency) or 0, 1),
             "difficulty": dict(difficulty),
         }
-    return versions, components
+    per_day_out = [
+        {
+            "date": date,
+            "answers": day["answers"],
+            "problems": day["problems"],
+            "p50": round(median(day["latency"]) or 0, 1),
+            "tokens": day["tokens"],
+        }
+        for date, day in sorted(per_day.items())
+    ]
+    top_labels = {
+        model: [{"name": name, "value": n} for name, n in labels[model].most_common(10)]
+        for model in WENCAI_MODELS
+    }
+    return {
+        "versions": versions,
+        "components": components,
+        "labels": top_labels,
+        "per_day": per_day_out,
+        "severity_available": severity_available,
+    }
 
 
 def wencai_comparison():
@@ -163,6 +349,25 @@ def build_wencai_components(raw, top_n=6):
     }
 
 
+def build_wencai_by_version(raw):
+    """Model -> component counter, keeping every component (no 其他 folding)."""
+    out = {}
+    for version in WENCAI_MODELS:
+        comps = {comp: n for (v, comp), n in raw.items() if v == version}
+        out[version] = dict(sorted(comps.items(), key=lambda kv: -kv[1]))
+    return out
+
+
+def percentile(values, q):
+    if not values:
+        return None
+    ordered = sorted(values)
+    pos = (len(ordered) - 1) * q
+    low = int(pos)
+    high = min(low + 1, len(ordered) - 1)
+    return round(ordered[low] + (ordered[high] - ordered[low]) * (pos - low), 1)
+
+
 # -------------------------------------------------------------------- aime
 
 def build_aime_components(raw, sev_raw, top_n=7):
@@ -194,7 +399,10 @@ def aime_outputs():
     severity = collections.Counter()
     components = collections.Counter()  # (model, component)
     sev_by_comp = collections.Counter()  # (component, severity)
-    per_day = collections.defaultdict(lambda: collections.Counter())
+    components_by_model = collections.defaultdict(collections.Counter)
+    sev_by_model_comp = collections.defaultdict(lambda: collections.defaultdict(collections.Counter))
+    composite_skipped = 0
+    per_day = {}
     answers = 0
     tokens = 0
     durations = []
@@ -207,6 +415,18 @@ def aime_outputs():
             base = os.path.basename(path)
             model = base.split("-")[0].replace("aime_", "")
             date = re.search(r"(\d{4}-\d{2}-\d{2})", base).group(1)
+            day = per_day.setdefault(
+                date,
+                {
+                    "answers": 0,
+                    "problems": 0,
+                    "tokens": 0,
+                    "latency": [],
+                    "severity": collections.Counter(),
+                    "fast": 0,
+                    "expert": 0,
+                },
+            )
             with open(path) as fh:
                 for line in fh:
                     try:
@@ -214,26 +434,45 @@ def aime_outputs():
                     except json.JSONDecodeError:
                         continue
                     answers += 1
-                    per_day[date][model] += 1
+                    day[model] += 1
+                    day["answers"] += 1
+                    record_tokens = 0
                     last_turn_meta = None
                     for turn in rec.get("turns") or []:
                         meta = turn.get("meta") or {}
                         last_turn_meta = meta
-                        tokens += meta.get("total_tokens") or 0
+                        used = meta.get("total_tokens") or 0
+                        tokens += used
+                        record_tokens += used
                         if meta.get("total_duration_ms"):
                             durations.append(meta["total_duration_ms"] / 1000.0)
+                            day["latency"].append(meta["total_duration_ms"] / 1000.0)
                         for p in turn.get("problem") or []:
                             sev = p.get("severity") or "未分级"
                             comp = p.get("component") or "未标注"
                             severity[sev] += 1
                             components[(model, comp)] += 1
                             sev_by_comp[(comp, sev)] += 1
+                            components_by_model[model][comp] += 1
+                            sev_by_model_comp[model][comp][sev] += 1
+                            day["problems"] += 1
+                            day["severity"][sev] += 1
                     for p in rec.get("session_problem") or []:
                         sev = p.get("severity") or "未分级"
                         comp = p.get("component") or "未标注"
                         severity[sev] += 1
                         components[(model, comp)] += 1
                         sev_by_comp[(comp, sev)] += 1
+                        # session_problem may carry a cross-stage chain
+                        # ("A / B"); keep it out of the single-stage Sankey.
+                        if " / " in comp:
+                            composite_skipped += 1
+                        else:
+                            components_by_model[model][comp] += 1
+                            sev_by_model_comp[model][comp][sev] += 1
+                        day["problems"] += 1
+                        day["severity"][sev] += 1
+                    day["tokens"] += record_tokens
 
                     last_meta = last_turn_meta or rec.get("session_meta") or {}
                     task = last_meta.get("task") or "未标注"
@@ -244,21 +483,76 @@ def aime_outputs():
 
     totals = collections.Counter()
     for d in per_day.values():
-        totals.update(d)
+        totals.update({k: v for k, v in d.items() if k in ("fast", "expert")})
+    per_day_out = []
+    for date, day in sorted(per_day.items()):
+        per_day_out.append({
+            "date": date,
+            "fast": day["fast"],
+            "expert": day["expert"],
+            "answers": day["answers"],
+            "problems": day["problems"],
+            "p50": round(median(day["latency"]) or 0, 1),
+            "tokens": day["tokens"],
+            "severity": {s: day["severity"].get(s, 0) for s in AIME_SEVERITIES},
+        })
+
+    by_model_components = {
+        model: dict(sorted(components_by_model[model].items(), key=lambda kv: -kv[1]))
+        for model in ("fast", "expert")
+    }
+    by_model_severity = {
+        model: {
+            comp: {s: sev_by_model_comp[model][comp].get(s, 0) for s in AIME_SEVERITIES}
+            for comp in by_model_components[model]
+        }
+        for model in ("fast", "expert")
+    }
+    comp = build_aime_components(components, sev_by_comp)
+    comp["by_model"] = by_model_components
+    comp["severity_by_model"] = by_model_severity
+    comp["composite_skipped"] = composite_skipped
+    comp["by_model_note"] = (
+        "by_model / severity_by_model 只统计单一环节 component；"
+        "session_problem 的跨环节组合（A / B）不进入 model→component→severity Sankey"
+    )
+
+    problems = sum(severity.values())
     return {
         "answers": answers,
         "tokens": tokens,
-        "per_day": [{"date": d, **dict(v)} for d, v in sorted(per_day.items())],
+        "per_day": per_day_out,
         "by_model": dict(totals),
         "severity": {s: severity.get(s, 0) for s in AIME_SEVERITIES},
-        "problems": sum(severity.values()),
-        "components": build_aime_components(components, sev_by_comp),
+        "problems": problems,
+        "components": comp,
         "tasks": dict(tasks),
         "subtasks": dict(subtasks),
         "task_subtask": {task: dict(subs) for task, subs in task_subtasks.items()},
         "task_total": sum(tasks.values()),
         "p50": round(median(durations) or 0, 1),
-        "density": round(sum(severity.values()) / answers, 2) if answers else 0,
+        "p90": percentile(durations, 0.9),
+        "density": round(problems / answers, 2) if answers else 0,
+        "performance": {
+            "answers": answers,
+            "problems": problems,
+            "tokens": tokens,
+            "p50": round(median(durations) or 0, 1),
+            "p90": percentile(durations, 0.9),
+            "tokens_per_answer": round(tokens / answers) if answers else 0,
+            "problems_per_answer": round(problems / answers, 2) if answers else 0,
+            "severity_mix": {s: severity.get(s, 0) for s in AIME_SEVERITIES},
+        },
+        "forecast_inputs": [
+            {
+                "date": day["date"],
+                "answers": day["answers"],
+                "problems": day["problems"],
+                "p50": day["p50"],
+                "tokens": day["tokens"],
+            }
+            for day in per_day_out
+        ],
     }
 
 
@@ -356,7 +650,9 @@ def build(counts_path, out_path):
     with open(counts_path) as fh:
         scan = json.load(fh)
 
-    wc_versions, wc_components = wencai_outputs()
+    wc_out = wencai_outputs()
+    wc_versions = wc_out["versions"]
+    wc_components = wc_out["components"]
     wc_pairs, wc_meets = wencai_comparison()
     aime_out = aime_outputs()
 
@@ -371,6 +667,7 @@ def build(counts_path, out_path):
     ai_evaluated = aime_out["answers"]
 
     data = {
+        "schema_version": 2,
         "generated_at": now_iso(),
         "counts_at": scan.get("generated_at", "—"),
         "wencai": {
@@ -399,6 +696,12 @@ def build(counts_path, out_path):
                 "comparisons": wc_pairs,
                 "comparison_total": sum(p["n"] for p in wc_pairs.values()),
                 "meets_core": wc_meets,
+                "components": {
+                    "by_version": build_wencai_by_version(wc_components),
+                    "labels": wc_out["labels"],
+                },
+                "per_day": wc_out["per_day"],
+                "severity_available": wc_out["severity_available"],
             },
             "components": build_wencai_components(wc_components),
             "cluster": compact_cluster(CLUSTER_FILES["wencai"]),
@@ -428,6 +731,7 @@ def build(counts_path, out_path):
             "output": aime_out,
             "cluster": compact_cluster(CLUSTER_FILES["aime"]),
         },
+        "freshness": build_freshness(),
     }
 
     a_win = sum(p["a_win"] for p in wc_pairs.values())

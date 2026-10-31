@@ -26,3 +26,6 @@ dashboard/logs/
 
 # 部署时预压缩产物
 dashboard/static/**/*.gz
+
+dashboard/static/samples.json
+dashboard/static/samples.json.gz
