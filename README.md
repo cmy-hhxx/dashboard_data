@@ -12,6 +12,8 @@ servers.conf                    # 服务器清单（ssh 别名、端口、密钥
 scripts/pack_aime_input.sh      # 把 AIME 评测输入流式打成单个 tar.zst
 docs/aime-input-packaging.md    # 打包流程与参数说明
 docs/aime-data-inventory.md     # 2026-10-30 那份数据的解压体量与目录拆解
+docs/design-principles.md       # 界面设计原则：层级、字重、数字与动效
+docs/dashboard-deployment.md    # 看板部署、端口、启动与运维手册
 ```
 
 ## 快速开始
@@ -61,6 +63,8 @@ ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
 服务监听容器 `:5001`，对外是 `http://dashboard.example.com:2768/`。服务每 30 分钟重扫数据集；
 `samples.json` 默认每 6 小时重算（`SAMPLES_REFRESH_SECONDS`），缺失时启动即生成。
 部署时预压缩 JS/CSS/HTML，`data.json`/`samples.json` 不缓存。
+端口映射、部署流程、验证方式和部署最佳实践见
+[docs/dashboard-deployment.md](docs/dashboard-deployment.md)。
 
 ### 三个板块
 
@@ -115,6 +119,8 @@ ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
 样本页对问财显式显示「无分级」；AIME 日更批次也无 severity，只有 lost-user 批次有 P0–P3。
 
 ### 设计规则（可复现的 token）
+
+通用原则见 [docs/design-principles.md](docs/design-principles.md)；以下是落到本项目的具体 token。
 
 - **一卡一主视觉**：数据量用同心圆，评测量用积木方框 + 点阵，归因用桑基图，
   聚类用旭日图，预测用折线/堆叠面积；不再统一画横向进度条。
