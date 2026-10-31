@@ -14,27 +14,78 @@
     aime: { src: null, stack: [], root: null },
   };
   const clusterCharts = {};
+  const volumeCharts = {};
   let resizeRaf = 0;
   const resizeQueue = new Set();
+  let DATA = null;
 
-  const C = {
-    a: "#0f766e",
-    aMid: "#3fb3a8",
-    b: "#ea580c",
-    bMid: "#f6b48e",
-    ai: "#4338ca",
-    aiMid: "#6366f1",
-    aiLight: "#a5b4fc",
-  };
+  // ------------------------------------------------------- design tokens
+  // 颜色/字重/动效全部来自 CSS 变量，暗色模式下自动换一套；
+  // 图表不能吃 CSS，所以通过 getComputedStyle 把 token 读给 ECharts。
+  let T = {};
+  let C = {};
+  let SEV_COLOR = {};
+  let tip = {};
+
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  function readTokens() {
+    const names = [
+      "bg", "surface", "surface-2", "surface-3", "tooltip", "track", "hairline",
+      "ink", "ink-2", "muted", "faint",
+      "wc", "wc-mid", "wc-soft", "ai", "ai-mid", "ai-light", "ai-soft",
+      "b", "b-mid", "forecast", "sev-0", "sev-1", "sev-2", "sev-3", "sev-4",
+      "cl-1", "cl-2", "cl-3", "cl-4", "cl-5", "cl-6",
+    ];
+    T = {};
+    names.forEach((n) => {
+      const key = n.replace(/-(\w)/g, (_, c) => c.toUpperCase());
+      // 保留原 key + camelCase 两份，写图表配置时更省事
+      T[key] = cssVar(`--${n}`);
+    });
+    T.mode = document.documentElement.dataset.mode || "light";
+
+    C = {
+      a: T.wc,
+      aMid: T.wcMid,
+      b: T.b,
+      bMid: T.bMid,
+      ai: T.ai,
+      aiMid: T.aiMid,
+      aiLight: T.aiLight,
+    };
+
+    SEV_COLOR = {
+      P0: T.sev0,
+      P1: T.sev1,
+      P2: T.sev2,
+      P3: T.sev3,
+      未分级: T.sev4,
+    };
+
+    tip = {
+      backgroundColor: T.tooltip,
+      borderColor: "transparent",
+      borderWidth: 0,
+      padding: 0,
+      textStyle: { color: T.ink, fontSize: 11, fontFamily: FONT },
+      extraCssText: `border-radius:12px;box-shadow:0 16px 36px -16px ${
+        T.mode === "dark" ? "rgba(0,0,0,.8)" : "rgba(15,23,42,.35)"
+      };`,
+      appendToBody: true,
+      confine: false,
+    };
+  }
+
+  function chartPalette() {
+    return {
+      cluster: [T.cl1, T.cl2, T.cl3, T.cl4, T.cl5, T.cl6],
+    };
+  }
 
   const AIME_SEVERITIES = ["P0", "P1", "P2", "P3", "未分级"];
-  const SEV_COLOR = {
-    P0: "#7f1d1d",
-    P1: "#dc2626",
-    P2: "#f59e0b",
-    P3: "#94a3b8",
-    未分级: "#cbd5e1",
-  };
 
   const fmt = (n) => (n == null || Number.isNaN(Number(n)) ? "—" : Number(n).toLocaleString("en-US"));
   const fmtFixed = (n, d) =>
@@ -71,72 +122,120 @@
     return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
   }
 
-  function isDark(hex) {
+  function labelOn(hex) {
     const n = parseInt(hex.slice(1), 16);
-    const r = (n >> 16) & 255;
-    const g = (n >> 8) & 255;
-    const b = n & 255;
-    return 0.299 * r + 0.587 * g + 0.114 * b < 150;
+    const lin = (c) => {
+      const v = c / 255;
+      return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    };
+    const L =
+      0.2126 * lin((n >> 16) & 255) +
+      0.7152 * lin((n >> 8) & 255) +
+      0.0722 * lin(n & 255);
+    const white = 1.05 / (L + 0.05);
+    const black = (L + 0.05) / 0.05;
+    return white >= black ? "#ffffff" : T.mode === "dark" ? "#0e1217" : T.ink;
   }
 
   const abColor = (bShare) =>
     bShare <= 0.5
-      ? lerpColor(C.a, "#e2e8f0", bShare * 2)
-      : lerpColor("#e2e8f0", C.b, (bShare - 0.5) * 2);
+      ? lerpColor(C.a, T.track, bShare * 2)
+      : lerpColor(T.track, C.b, (bShare - 0.5) * 2);
+
+  readTokens();
 
   // ---------------------------------------------------------------- tooltip
-  const tip = {
-    backgroundColor: "#ffffff",
-    borderColor: "#e7ecf2",
-    borderWidth: 1,
-    padding: 0,
-    textStyle: { color: "#0f172a", fontSize: 11.5, fontFamily: FONT },
-    extraCssText: "border-radius:12px;box-shadow:0 16px 36px -16px rgba(15,23,42,.35);",
-    appendToBody: true,
-    confine: false,
-  };
   const tipCard = (html) => `<div class="tip-card">${html}</div>`;
   const tipHead = (title, meta, color) =>
-    `<div class="tip-head"><i style="background:${color || "#94a3b8"}"></i><span>${title}</span>` +
+    `<div class="tip-head"><i style="background:${color || T.muted}"></i><span>${title}</span>` +
     `${meta ? `<em>${meta}</em>` : ""}</div>`;
   const tipSep = () => `<div class="tip-sep"></div>`;
   const tipRow = (color, label, value) =>
     `<div class="tip-row"><i style="background:${color}"></i><span>${label}</span><b>${value}</b></div>`;
 
   // ------------------------------------------------------------------ utils
+  const fmtBytes = (n) => {
+    if (!n) return "—";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let v = Number(n);
+    let i = 0;
+    while (v >= 1024 && i < units.length - 1) {
+      v /= 1024;
+      i += 1;
+    }
+    return `${v >= 100 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+  };
+
+  // 数字锁宽：tabular-nums 保证单个数字等宽，min-width 兜住位数变化，
+  // 计数动画和集群下钻都不会把右侧元素推来推去。
+  function lockNum(el, value, decimals) {
+    if (!el) return;
+    const s = fmtFixed(Number(value) || 0, decimals || 0);
+    const width = s.length - (s.includes(",") ? 0.35 : 0);
+    el.style.minWidth = `${Math.max(2, width).toFixed(2)}ch`;
+  }
+
   function setNum(id, value, opts) {
     const el = $(id);
     if (!el) return;
     el.dataset.count = String(value == null ? 0 : value);
     if (opts && opts.decimals != null) el.dataset.decimals = String(opts.decimals);
     if (opts && opts.suffix) el.dataset.suffix = opts.suffix;
+    lockNum(el, value, (opts && opts.decimals) || 0);
   }
 
-  function startCounters() {
-    const CU = (window.countUp && window.countUp.CountUp) || window.CountUp;
+  function settleCounters() {
+    document.querySelectorAll("[data-count]").forEach((el) => {
+      const end = Number(el.dataset.count);
+      if (!Number.isFinite(end)) return;
+      const decimals = Number(el.dataset.decimals || 0);
+      el._numToken = (el._numToken || 0) + 1;
+      el.textContent = fmtFixed(end, decimals) + (el.dataset.suffix || "");
+    });
+  }
+
+  // 自绘数字补间：只有一条 rAF 链，结束帧强制写终值，
+  // 不会出现 CountUp 最后一帧差 1 的问题，也不会和 tabular 锁宽打架。
+  function tweenNumber(el, end, decimals, suffix, duration) {
+    const d = decimals || 0;
+    const token = (el._numToken = (el._numToken || 0) + 1);
+    const started = performance.now();
+    const ms = Math.max(1, duration);
+    const step = (now) => {
+      if (el._numToken !== token) return;
+      const p = Math.min(1, (now - started) / ms);
+      const eased = 1 - Math.pow(1 - p, 3);
+      if (p >= 1) {
+        el.textContent = fmtFixed(end, d) + suffix;
+        return;
+      }
+      el.textContent = fmtFixed(end * eased, d) + suffix;
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
+  function startCounters(duration) {
     document.querySelectorAll("[data-count]").forEach((el) => {
       const end = Number(el.dataset.count);
       if (!Number.isFinite(end)) return;
       const decimals = Number(el.dataset.decimals || 0);
       const suffix = el.dataset.suffix || "";
-      if (REDUCED || !CU) {
+      lockNum(el, end, decimals);
+      if (REDUCED) {
         el.textContent = fmtFixed(end, decimals) + suffix;
         return;
       }
-      const counter = new CU(el, end, {
-        duration: 1.1,
-        decimalPlaces: decimals,
-        separator: ",",
-        decimal: ".",
-        suffix,
-        useGrouping: true,
-      });
-      if (counter.error) {
-        el.textContent = fmtFixed(end, decimals) + suffix;
-      } else {
-        counter.start();
-      }
+      tweenNumber(el, end, decimals, suffix, (duration || 0.8) * 1000);
     });
+  }
+
+  function bump(el) {
+    if (!el || REDUCED) return;
+    el.classList.remove("is-bump");
+    void el.offsetWidth;
+    el.classList.add("is-bump");
+    window.setTimeout(() => el.classList.remove("is-bump"), 380);
   }
 
   function animateTo(id, value, decimals) {
@@ -144,20 +243,13 @@
     if (!el) return;
     const d = decimals || 0;
     el.dataset.count = String(value == null ? 0 : value);
-    const CU = (window.countUp && window.countUp.CountUp) || window.CountUp;
-    if (REDUCED || !CU) {
+    lockNum(el, value, d);
+    bump(el);
+    if (REDUCED) {
       el.textContent = fmtFixed(value || 0, d);
       return;
     }
-    const counter = new CU(el, value || 0, {
-      duration: 0.45,
-      decimalPlaces: d,
-      separator: ",",
-      decimal: ".",
-      useGrouping: true,
-    });
-    if (counter.error) el.textContent = fmtFixed(value || 0, d);
-    else counter.start();
+    tweenNumber(el, value || 0, d, "", 450);
   }
 
   function scheduleResize(chart, el) {
@@ -178,7 +270,9 @@
     c.setOption(option);
     charts.push(c);
     if (window.ResizeObserver) {
-      new ResizeObserver(() => scheduleResize(c, el)).observe(el);
+      const ro = new ResizeObserver(() => scheduleResize(c, el));
+      c.__ro = ro;
+      ro.observe(el);
     }
     return c;
   }
@@ -222,9 +316,9 @@
   }
 
   function volumeColor(isWc, i, n) {
-    const from = isWc ? "#0b5f59" : "#312e81";
-    const to = isWc ? "#d9f0ec" : "#e0e7ff";
-    return lerpColor(from, to, n > 1 ? i / (n - 1) : 0);
+    const from = isWc ? T.wc : T.ai;
+    const to = T.mode === "dark" ? T.surface3 : T.track;
+    return lerpColor(from, to, n > 1 ? (i / (n - 1)) * 0.72 : 0);
   }
 
   function updateVolumeNote(product) {
@@ -237,48 +331,132 @@
       back.hidden = false;
       note.textContent = st.task;
       const total = subtasksOf(st.src, st.task, isWc).reduce((n, c) => n + (c.value || 0), 0);
-      right.innerHTML = `${fmt(total)} <span>条</span>`;
+      right.innerHTML = `${fmt(total)} <span>条 · ${pct(total, st.src.input.total).toFixed(1)}%</span>`;
     } else {
       back.hidden = true;
-      note.textContent = "最大类";
+      note.textContent = "面积 = 条数";
       const top = tasksOf(st.src, isWc)[0];
       right.innerHTML = top
-        ? `${top.name} <b>${pct(top.value, st.src.input.total).toFixed(1)}%</b>`
+        ? `最大类 ${top.name} <b>${pct(top.value, st.src.input.total).toFixed(1)}%</b>`
         : "—";
     }
   }
 
-  function renderTaskList(product) {
+  function disposeVolumeChart(product) {
+    const c = volumeCharts[product];
+    if (!c) return;
+    const i = charts.indexOf(c);
+    if (i >= 0) charts.splice(i, 1);
+    resizeQueue.delete(c);
+    if (c.__ro) c.__ro.disconnect();
+    try {
+      c.dispose();
+    } catch (e) {}
+    delete volumeCharts[product];
+  }
+
+  function renderTaskTreemap(product) {
     const isWc = product === "wencai";
     const st = volumeState[product];
-    const el = $(isWc ? "wcTaskList" : "aiTaskList");
+    const id = isWc ? "wcTaskChart" : "aiTaskChart";
+    const el = $(id);
     if (!el) return;
     const tasks = tasksOf(st.src, isWc);
     const total = st.src.input.total || tasks.reduce((n, c) => n + (c.value || 0), 0) || 1;
-    const max = Math.max(1, ...tasks.map((c) => c.value || 0));
-    el.innerHTML =
-      `<div class="task-grid">` +
-      tasks
-        .map((c, i) => {
-          const share = pct(c.value, total);
-          const color = volumeColor(isWc, i, tasks.length);
-          return (
-            `<button class="task-row" type="button" data-task="${c.name}" title="${c.name} · ${fmt(c.value)} 条 · ${share.toFixed(1)}%">` +
-            `<span class="task-name">${c.name}</span>` +
-            `<span class="task-track"><i class="task-fill" data-w="${((100 * (c.value || 0)) / max).toFixed(1)}" style="background:${color}"></i></span>` +
-            `<span class="task-val">${fmt(c.value)}</span>` +
-            `<span class="task-pct">${share.toFixed(1)}%</span>` +
-            `</button>`
-          );
-        })
-        .join("") +
-      `</div>`;
-    const animate = () =>
-      el.querySelectorAll(".task-fill").forEach((f) => {
-        f.style.width = `${f.dataset.w}%`;
+    const data = tasks.map((c, i) => {
+      const color = volumeColor(isWc, i, tasks.length);
+      return {
+        name: c.name,
+        value: c.value,
+        drillable: isDrillable(st.src, c.name, isWc),
+        itemStyle: { color },
+        label: { color: labelOn(color) },
+      };
+    });
+    disposeVolumeChart(product);
+    const c = chart(id, {
+      animationDuration: REDUCED ? 0 : 560,
+      animationEasing: "cubicOut",
+      tooltip: {
+        ...tip,
+        formatter: (p) =>
+          tipCard(
+            tipHead(p.name, `${pct(p.value, total).toFixed(1)}%`, p.color) +
+              tipRow(p.color, "条数", fmt(p.value)) +
+              (p.data && p.data.drillable ? `<div class="tip-path">点击方块查看子类</div>` : "")
+          ),
+      },
+      series: [
+        {
+          type: "treemap",
+          left: 0,
+          right: 0,
+          top: 0,
+          bottom: 0,
+          roam: false,
+          nodeClick: false,
+          breadcrumb: { show: false },
+          sort: "desc",
+          itemStyle: {
+            borderColor: T.surface,
+            borderWidth: 2,
+            gapWidth: 2,
+            borderRadius: 6,
+          },
+          label: {
+            show: true,
+            fontSize: 10.5,
+            lineHeight: 14.5,
+            overflow: "truncate",
+            formatter: (p) => {
+              const share = pct(p.value, total);
+              if (share >= 4) return `${p.name}\n${fmt(p.value)} · ${share.toFixed(1)}%`;
+              if (share >= 2) return p.name;
+              return fmt(p.value);
+            },
+          },
+          upperLabel: { show: false },
+          emphasis: {
+            itemStyle: { borderColor: T.ink2, borderWidth: 1 },
+          },
+          data,
+        },
+      ],
+    });
+    volumeCharts[product] = c;
+    if (c) {
+      c.on("click", (p) => {
+        const st2 = volumeState[product];
+        if (!p.data || !p.data.name) return;
+        if (!isDrillable(st2.src, p.data.name, isWc)) return;
+        st2.task = p.data.name;
+        drawVolume(product);
       });
-    if (REDUCED) animate();
-    else requestAnimationFrame(animate);
+    }
+    el.style.cursor = data.some((d) => d.drillable) ? "pointer" : "default";
+  }
+
+  function renderTaskCompact(product) {
+    const isWc = product === "wencai";
+    const st = volumeState[product];
+    const el = $(isWc ? "wcTaskCompact" : "aiTaskCompact");
+    if (!el) return;
+    const tasks = tasksOf(st.src, isWc);
+    const total = st.src.input.total || tasks.reduce((n, c) => n + (c.value || 0), 0) || 1;
+    el.innerHTML = tasks
+      .map((c) => {
+        const share = pct(c.value, total);
+        const drillable = isDrillable(st.src, c.name, isWc);
+        return (
+          `<button class="tc-row" type="button" data-task="${c.name}" data-drill="${drillable ? 1 : 0}"` +
+          ` title="${c.name} · ${fmt(c.value)} 条 · ${share.toFixed(1)}%">` +
+          `<span class="tc-name">${c.name}</span>` +
+          `<span class="tc-val">${fmt(c.value)}</span>` +
+          `<span class="tc-pct">${share.toFixed(1)}%</span>` +
+          `</button>`
+        );
+      })
+      .join("");
   }
 
   function renderSubList(product) {
@@ -292,39 +470,43 @@
     list.innerHTML = subs
       .map((c, i) => {
         const share = pct(c.value, total);
-        const color = volumeColor(isWc, i, subs.length);
+        const ratio = (c.value || 0) / max;
+        const a = T.mode === "dark" ? 0.04 + ratio * 0.18 : 0.025 + ratio * 0.14;
+        const bg = hexA(isWc ? T.wc : T.ai, a.toFixed(3));
         return (
-          `<div class="sub-row" title="${c.name} · ${fmt(c.value)} 条 · ${share.toFixed(1)}%">` +
+          `<div class="sub-row" style="background:${bg}" title="${c.name} · ${fmt(c.value)} 条 · ${share.toFixed(1)}%">` +
+          `<span class="sub-rank">${i + 1}</span>` +
           `<span class="sub-name">${c.name}</span>` +
-          `<span class="sub-track"><i class="sub-fill" data-w="${((100 * (c.value || 0)) / max).toFixed(1)}" style="background:${color}"></i></span>` +
           `<span class="sub-val">${fmt(c.value)}</span>` +
           `<span class="sub-pct">${share.toFixed(1)}%</span>` +
           `</div>`
         );
       })
       .join("");
-    const animate = () =>
-      list.querySelectorAll(".sub-fill").forEach((f) => {
-        f.style.width = `${f.dataset.w}%`;
-      });
-    if (REDUCED) animate();
-    else requestAnimationFrame(animate);
   }
 
-  function drawVolume(product) {
+  function drawVolume(product, rebuild) {
     const isWc = product === "wencai";
     const st = volumeState[product];
-    const taskList = $(isWc ? "wcTaskList" : "aiTaskList");
+    const chartEl = $(isWc ? "wcTaskChart" : "aiTaskChart");
+    const compactEl = $(isWc ? "wcTaskCompact" : "aiTaskCompact");
     const subList = $(isWc ? "wcSubList" : "aiSubList");
-    if (!st.src || !taskList || !subList) return;
+    if (!st.src || !chartEl || !compactEl || !subList) return;
     if (st.task) {
-      taskList.hidden = true;
+      chartEl.hidden = true;
+      compactEl.hidden = true;
       subList.hidden = false;
       renderSubList(product);
     } else {
       subList.hidden = true;
-      taskList.hidden = false;
-      renderTaskList(product);
+      chartEl.hidden = false;
+      compactEl.hidden = false;
+      if (rebuild || !volumeCharts[product]) renderTaskTreemap(product);
+      renderTaskCompact(product);
+      requestAnimationFrame(() => {
+        const c = volumeCharts[product];
+        if (c) c.resize();
+      });
     }
     updateVolumeNote(product);
   }
@@ -333,13 +515,14 @@
   function renderVolume(product, d) {
     const isWc = product === "wencai";
     const src = isWc ? d.wencai : d.aime;
-    volumeState[product] = { src, task: null };
+    const prev = volumeState[product];
+    volumeState[product] = { src, task: (prev && prev.task) || null };
 
-    const taskList = $(isWc ? "wcTaskList" : "aiTaskList");
-    if (taskList) {
-      taskList.onclick = (ev) => {
-        const row = ev.target.closest(".task-row");
-        if (!row) return;
+    const compact = $(isWc ? "wcTaskCompact" : "aiTaskCompact");
+    if (compact) {
+      compact.onclick = (ev) => {
+        const row = ev.target.closest(".tc-row");
+        if (!row || row.dataset.drill === "0") return;
         const st = volumeState[product];
         if (!isDrillable(st.src, row.dataset.task, isWc)) return;
         st.task = row.dataset.task;
@@ -350,23 +533,34 @@
     if (back) {
       back.onclick = () => {
         volumeState[product].task = null;
-        drawVolume(product);
+        drawVolume(product, true);
       };
     }
 
-    drawVolume(product);
+    drawVolume(product, true);
     const input = src.input;
+    const days = (input.per_day && input.per_day.length) || 1;
     setNum(isWc ? "wcTotal" : "aiTotal", input.total);
     $(isWc ? "wcVolMeta" : "aiVolMeta").textContent = dateRange(input.date_range);
+    $(isWc ? "wcVolSide" : "aiVolSide").innerHTML =
+      `活跃日均 <b>${fmt(Math.round(input.total / days))}</b> 条`;
+    $(isWc ? "wcVolStats" : "aiVolStats").innerHTML = [
+      ["体量", fmtBytes(input.bytes)],
+      ["文件", fmt(input.files)],
+      ["活跃", `${fmt(days)} 天`],
+      ["已评测", fmt(input.evaluated)],
+    ]
+      .map(([label, value]) => `<span>${label} <b>${value}</b></span>`)
+      .join("");
   }
 
   // ------------------------------------------------------------ coverage card
   function renderRing(id, evaluated, pending, color) {
     const total = evaluated + pending;
     chart(id, {
-      animationDuration: REDUCED ? 0 : 900,
+      animationDuration: REDUCED ? 0 : 660,
       animationEasing: "cubicOut",
-      animationDelay: REDUCED ? 0 : 160,
+      animationDelay: REDUCED ? 0 : 120,
       tooltip: {
         ...tip,
         formatter: (p) =>
@@ -392,35 +586,64 @@
           },
           data: [
             { value: evaluated, name: "已评测", itemStyle: { color } },
-            { value: Math.max(0, pending), name: "待评测", itemStyle: { color: "#e9eef5" } },
+            { value: Math.max(0, pending), name: "待评测", itemStyle: { color: T.track } },
           ],
         },
       ],
     });
   }
 
-  function renderModels(id, rows) {
-    const el = $(id);
+  function renderVersionTable(out, defs) {
+    const el = $("wcModels");
     if (!el) return;
-    const max = Math.max(1, ...rows.map((r) => r.value));
+    const rows = defs.map(([key, name, color]) => ({
+      name,
+      color,
+      value: (out.versions[key] && out.versions[key].answers) || 0,
+      p50: (out.versions[key] && out.versions[key].p50) || 0,
+      core: (out.meets_core && out.meets_core[key]) || 0,
+      tokens: (out.versions[key] && out.versions[key].tokens) || 0,
+    }));
+    const p50s = rows.map((r) => r.p50).filter((v) => v > 0);
+    const fastest = p50s.length ? Math.min(...p50s) : 0;
+    const slowest = p50s.length ? Math.max(...p50s) : 0;
+    const bestCore = Math.max(0, ...rows.map((r) => r.core));
+    el.innerHTML =
+      `<div class="v-head"><span>版本</span><span>回答</span><span>P50</span><span>核心</span><span>Tokens</span></div>` +
+      rows
+        .map(
+          (r) =>
+            `<div class="v-row" title="${r.name} · ${fmt(r.value)} 条 · P50 ${r.p50.toFixed(1)}s · 核心 ${r.core.toFixed(1)}% · ${fmt(r.tokens)} tokens">` +
+            `<span class="v-name"><i class="v-dot" style="background:${r.color}"></i>${r.name}</span>` +
+            `<span class="v-val">${fmt(r.value)}</span>` +
+            `<span class="v-p50${r.p50 === fastest ? " is-fast" : ""}${r.p50 === slowest ? " is-slow" : ""}">${r.p50 ? r.p50.toFixed(1) + "s" : "—"}</span>` +
+            `<span class="v-core${r.core === bestCore ? " is-best" : ""}">${r.core ? r.core.toFixed(1) + "%" : "—"}</span>` +
+            `<span class="v-tokens">${fmtTokens(r.tokens)}</span>` +
+            `</div>`
+        )
+        .join("");
+  }
+
+  function renderModelTiles(out) {
+    const el = $("aiModels");
+    if (!el) return;
+    el.classList.add("model-tiles");
+    const rows = [
+      { name: "fast", color: C.aiMid, value: (out.by_model && out.by_model.fast) || 0 },
+      { name: "expert", color: C.aiLight, value: (out.by_model && out.by_model.expert) || 0 },
+    ];
+    const total = rows.reduce((n, r) => n + r.value, 0) || 1;
     el.innerHTML = rows
       .map(
         (r) =>
-          `<div class="model-row" title="${r.name} · ${fmt(r.value)} 条">` +
-          `<span class="model-name">${r.name}</span>` +
-          `<span class="model-track"><i class="model-fill" data-w="${((100 * r.value) / max).toFixed(1)}" style="background:${r.color}"></i></span>` +
-          `<span class="model-val">${fmt(r.value)}</span>` +
+          `<div class="model-tile" title="${r.name} · ${fmt(r.value)} 条 · ${pct(r.value, total).toFixed(1)}%">` +
+          `<span class="mt-head"><i class="mt-dot" style="background:${r.color}"></i>${r.name}</span>` +
+          `<b class="mt-value">${fmt(r.value)}</b>` +
+          `<span class="mt-share">${pct(r.value, total).toFixed(1)}% · ${fmt(r.value)} 条</span>` +
           `</div>`
       )
       .join("");
-    const animate = () =>
-      el.querySelectorAll(".model-fill").forEach((f) => {
-        f.style.width = `${f.dataset.w}%`;
-      });
-    if (REDUCED) animate();
-    else requestAnimationFrame(animate);
   }
-
   function renderEvaluation(product, d) {
     const isWc = product === "wencai";
     const src = isWc ? d.wencai : d.aime;
@@ -436,7 +659,10 @@
     });
     $(isWc ? "wcPending" : "aiPending").textContent = fmt(pending);
     $(isWc ? "wcEvalNote" : "aiEvalNote").innerHTML =
-      `<b>${(out.problems / Math.max(1, evaluated)).toFixed(1)}</b>`;
+      `<b>${(out.problems / Math.max(1, evaluated)).toFixed(1)}</b> 问题/回答`;
+    $(isWc ? "wcEvalMeta" : "aiEvalMeta").textContent = isWc
+      ? `比对 ${fmt(out.comparison_total)} 组`
+      : `密度 ${(out.density || 0).toFixed(2)} 条/回答`;
 
     let p50 = out.p50 || 0;
     if (isWc) {
@@ -445,12 +671,33 @@
         .filter((v) => v > 0);
       p50 = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
     }
-    $(isWc ? "wcEvalStats" : "aiEvalStats").innerHTML = [
-      `问题 <b>${fmt(out.problems)}</b>`,
-      `Tokens <b>${fmtTokens(out.tokens || 0)}</b>`,
-      `P50 <b>${p50 ? p50.toFixed(1) + "s" : "—"}</b>`,
-    ]
-      .map((x) => `<span>${x}</span>`)
+    let core = 0;
+    if (isWc) {
+      let num = 0;
+      let den = 0;
+      Object.entries(out.meets_core || {}).forEach(([key, value]) => {
+        const n = (out.versions[key] && out.versions[key].answers) || 0;
+        num += value * n;
+        den += n;
+      });
+      core = den ? num / den : 0;
+    }
+    $(isWc ? "wcEvalStats" : "aiEvalStats").innerHTML = (
+      isWc
+        ? [
+            ["问题", fmt(out.problems)],
+            ["Tokens", fmtTokens(out.tokens || 0)],
+            ["P50", p50 ? p50.toFixed(1) + "s" : "—"],
+            ["核心达标", core ? core.toFixed(1) + "%" : "—"],
+          ]
+        : [
+            ["问题", fmt(out.problems)],
+            ["Tokens", fmtTokens(out.tokens || 0)],
+            ["P50", p50 ? p50.toFixed(1) + "s" : "—"],
+            ["密度", (out.density || 0).toFixed(2)],
+          ]
+    )
+      .map(([label, value]) => `<span><em>${label}</em><b>${value}</b></span>`)
       .join("");
 
     renderRing(
@@ -467,21 +714,108 @@
         ["b_expert", "B·expert", C.b],
         ["b_fast", "B·fast", C.bMid],
       ];
-      renderModels(
-        "wcModels",
-        defs.map(([key, name, color]) => ({
-          name,
-          color,
-          value: (out.versions[key] && out.versions[key].answers) || 0,
-        }))
-      );
+      renderVersionTable(out, defs);
+      renderDifficulty(d);
+      renderEvalInsights(out, defs);
     } else {
-      renderModels("aiModels", [
-        { name: "fast", color: C.aiMid, value: (out.by_model && out.by_model.fast) || 0 },
-        { name: "expert", color: C.aiLight, value: (out.by_model && out.by_model.expert) || 0 },
-      ]);
+      renderModelTiles(out);
       renderSpark(out.per_day || []);
+      renderTaskMini(out);
     }
+  }
+
+  function renderTaskMini(out) {
+    const el = $("aiEvalTasks");
+    if (!el) return;
+    const source =
+      out.subtasks && Object.keys(out.subtasks).length ? out.subtasks : out.tasks || {};
+    const all = Object.entries(source);
+    const total = all.reduce((n, [, v]) => n + v, 0) || out.task_total || 1;
+    const rows = all
+      .filter(([name]) => name !== "其它" && name !== "未标注" && name !== "其他")
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4);
+    if (!rows.length) {
+      el.innerHTML = "";
+      return;
+    }
+    const max = Math.max(1, ...rows.map(([, v]) => v));
+    el.innerHTML =
+      `<div class="mini-head"><span>评测子任务 Top 4</span><span>${fmt(out.task_total || total)} 条</span></div>` +
+      rows
+        .map(([name, value]) => {
+          const ratio = value / max;
+          const size = (4 + ratio * 4).toFixed(1);
+          const alpha = (0.3 + ratio * 0.65).toFixed(2);
+          return (
+            `<div class="mini-row" title="${name} · ${fmt(value)} 条 · ${pct(value, total).toFixed(1)}%">` +
+            `<i class="mini-bubble" style="width:${size}px;height:${size}px;background:${hexA(C.aiMid, alpha)}"></i>` +
+            `<span class="mini-name">${name}</span>` +
+            `<span class="mini-val">${fmt(value)}</span>` +
+            `<span class="mini-pct">${pct(value, total).toFixed(1)}%</span>` +
+            `</div>`
+          );
+        })
+        .join("");
+  }
+
+  function renderEvalInsights(out, defs) {
+    const el = $("wcEvalInsights");
+    if (!el) return;
+    const rows = defs.map(([key, name]) => {
+      const v = out.versions[key] || {};
+      return {
+        name,
+        p50: v.p50 || 0,
+        core: (out.meets_core && out.meets_core[key]) || 0,
+      };
+    });
+    const valid = rows.filter((r) => r.p50 > 0);
+    if (!valid.length) {
+      el.innerHTML = "";
+      return;
+    }
+    const fast = valid.reduce((a, b) => (a.p50 <= b.p50 ? a : b));
+    const slow = valid.reduce((a, b) => (a.p50 >= b.p50 ? a : b));
+    const cores = rows.map((r) => r.core).filter((v) => v > 0);
+    const coreMin = cores.length ? Math.min(...cores) : 0;
+    const coreMax = cores.length ? Math.max(...cores) : 0;
+    el.innerHTML =
+      `<div class="ei-head"><span>版本极值</span><span>P50 / 核心</span></div>` +
+      `<div class="ei-row"><span>最快 P50</span><b>${fast.name} · ${fast.p50.toFixed(1)}s</b></div>` +
+      `<div class="ei-row"><span>最慢 P50</span><b>${slow.name} · ${slow.p50.toFixed(1)}s</b></div>` +
+      `<div class="ei-row"><span>核心区间</span><b>${coreMin.toFixed(1)}–${coreMax.toFixed(1)}%</b></div>`;
+  }
+
+  function renderDifficulty(d) {
+    const el = $("wcDifficulty");
+    if (!el) return;
+    const order = ["简单", "中等", "困难", "复杂"];
+    const colors = { 简单: T.wcMid, 中等: T.wc, 困难: T.bMid, 复杂: T.b };
+    const counts = {};
+    let total = 0;
+    Object.values(d.wencai.output.versions || {}).forEach((v) => {
+      Object.entries(v.difficulty || {}).forEach(([k, n]) => {
+        counts[k] = (counts[k] || 0) + n;
+        total += n;
+      });
+    });
+    if (!total) {
+      el.innerHTML = "";
+      return;
+    }
+    el.innerHTML =
+      `<div class="diff-head"><span>难度构成</span><span>${fmt(total)} 条</span></div>` +
+      order
+        .map(
+          (k) =>
+            `<div class="diff-tile" title="${k} · ${fmt(counts[k] || 0)} 条 · ${pct(counts[k] || 0, total).toFixed(1)}%">` +
+            `<span class="dt-head"><i class="dt-dot" style="background:${colors[k]}"></i>${k}</span>` +
+            `<b class="dt-value">${pct(counts[k] || 0, total).toFixed(0)}%</b>` +
+            `<span class="dt-count">${fmt(counts[k] || 0)} 条</span>` +
+            `</div>`
+        )
+        .join("");
   }
 
   function renderSpark(perDay) {
@@ -503,7 +837,7 @@
         const h = Math.max(3, Math.round(ratio * 100));
         const alpha = (0.3 + ratio * 0.7).toFixed(2);
         return (
-          `<i class="spark-bar" style="--h:${h}%;background:linear-gradient(180deg,rgba(129,140,248,${alpha}),rgba(67,56,202,${alpha}))"` +
+          `<i class="spark-bar" style="--h:${h}%;background:linear-gradient(180deg,${hexA(T.aiMid, alpha)},${hexA(T.ai, alpha)})"` +
           ` title="${x.date} · ${fmt(x.value)} 条"></i>`
         );
       })
@@ -522,38 +856,84 @@
   function renderAttrRows(id, rows, mode) {
     const el = $(id);
     if (!el) return;
-    const max = Math.max(1, ...rows.map((r) => r.value));
-    el.innerHTML = rows
-      .map((r) => {
-        let segs = "";
-        let title = `${r.name} · ${fmt(r.value)} 问题`;
-        if (mode === "wc") {
-          segs =
-            `<i class="attr-seg a" data-w="${((100 * r.a) / max).toFixed(2)}"></i>` +
-            `<i class="attr-seg b" data-w="${((100 * r.b) / max).toFixed(2)}"></i>`;
-          title += ` · A 组 ${fmt(r.a)} / B 组 ${fmt(r.b)}`;
-        } else {
-          segs = AIME_SEVERITIES.map(
-            (sev, i) =>
-              `<i class="attr-seg s${i}" data-w="${((100 * (r.severity[sev] || 0)) / max).toFixed(2)}"></i>`
-          ).join("");
-          title += ` · P1 ${fmt(r.severity.P1 || 0)}`;
-        }
-        return (
-          `<div class="attr-row" title="${title}">` +
-          `<span class="attr-name">${r.name}</span>` +
-          `<span class="attr-track">${segs}</span>` +
-          `<span class="attr-val">${fmt(r.value)}</span>` +
-          `</div>`
-        );
-      })
-      .join("");
-    const animate = () =>
-      el.querySelectorAll(".attr-seg").forEach((seg) => {
-        seg.style.width = `${seg.dataset.w}%`;
+    el.className = `attr-matrix ${mode}`;
+    const sum = rows.reduce((n, r) => n + (r.value || 0), 0) || 1;
+    const maxTotal = Math.max(1, ...rows.map((r) => r.value || 0));
+    const heatA = (ratio) => {
+      const a = T.mode === "dark" ? 0.1 + ratio * 0.38 : 0.06 + ratio * 0.32;
+      return hexA(T.wc, a.toFixed(2));
+    };
+    const heatB = (ratio) => {
+      const a = T.mode === "dark" ? 0.1 + ratio * 0.38 : 0.06 + ratio * 0.32;
+      return hexA(T.b, a.toFixed(2));
+    };
+    const rowTint = (ratio) => {
+      const base = mode === "wc" ? T.wc : T.ink2;
+      const a = T.mode === "dark" ? 0.03 + ratio * 0.06 : 0.015 + ratio * 0.045;
+      return hexA(base, a.toFixed(3));
+    };
+
+    let head = "";
+    let body = "";
+    if (mode === "wc") {
+      const maxA = Math.max(1, ...rows.map((r) => r.a || 0));
+      const maxB = Math.max(1, ...rows.map((r) => r.b || 0));
+      head =
+        `<div class="am-row am-head-row">` +
+        `<div class="am-head am-name">环节</div>` +
+        `<div class="am-head"><i class="am-dot" style="background:${T.wc}"></i>A 组</div>` +
+        `<div class="am-head"><i class="am-dot" style="background:${T.b}"></i>B 组</div>` +
+        `<div class="am-head">合计</div><div class="am-head">占比</div>` +
+        `</div>`;
+      body = rows
+        .map((r) => {
+          const share = pct(r.value, sum);
+          return (
+            `<div class="am-row" style="background:${rowTint((r.value || 0) / maxTotal)}">` +
+            `<div class="am-name" title="${r.name}">${r.name}</div>` +
+            `<div class="am-cell${r.a ? "" : " is-zero"}" style="background:${r.a ? heatA(r.a / maxA) : ""}" title="${r.name} · A 组 ${fmt(r.a)}">${r.a ? fmt(r.a) : "·"}</div>` +
+            `<div class="am-cell${r.b ? "" : " is-zero"}" style="background:${r.b ? heatB(r.b / maxB) : ""}" title="${r.name} · B 组 ${fmt(r.b)}">${r.b ? fmt(r.b) : "·"}</div>` +
+            `<div class="am-total">${fmt(r.value)}</div>` +
+            `<div class="am-pct">${share.toFixed(1)}%</div>` +
+            `</div>`
+          );
+        })
+        .join("");
+    } else {
+      const maxSev = {};
+      AIME_SEVERITIES.forEach((s) => {
+        maxSev[s] = Math.max(1, ...rows.map((r) => r.severity[s] || 0));
       });
-    if (REDUCED) animate();
-    else requestAnimationFrame(animate);
+      head =
+        `<div class="am-row am-head-row">` +
+        `<div class="am-head am-name">环节</div>` +
+        AIME_SEVERITIES.map(
+          (s) =>
+            `<div class="am-head"><i class="am-dot" style="background:${SEV_COLOR[s]}"></i>${s}</div>`
+        ).join("") +
+        `<div class="am-head">合计</div><div class="am-head">占比</div>` +
+        `</div>`;
+      body = rows
+        .map((r) => {
+          const share = pct(r.value, sum);
+          const cells = AIME_SEVERITIES.map((s) => {
+            const v = r.severity[s] || 0;
+            const ratio = v / maxSev[s];
+            const a = T.mode === "dark" ? 0.09 + ratio * 0.4 : 0.05 + ratio * 0.36;
+            return `<div class="am-cell${v ? "" : " is-zero"}" style="background:${v ? hexA(SEV_COLOR[s], a.toFixed(2)) : ""}" title="${r.name} · ${s} ${fmt(v)}">${v ? fmt(v) : "·"}</div>`;
+          }).join("");
+          return (
+            `<div class="am-row" style="background:${rowTint((r.value || 0) / maxTotal)}">` +
+            `<div class="am-name" title="${r.name}">${r.name}</div>` +
+            cells +
+            `<div class="am-total">${fmt(r.value)}</div>` +
+            `<div class="am-pct">${share.toFixed(1)}%</div>` +
+            `</div>`
+          );
+        })
+        .join("");
+    }
+    el.innerHTML = head + body;
   }
 
   function renderWencaiAttr(d) {
@@ -586,6 +966,7 @@
     });
 
     $("wcAttrSide").innerHTML = `A 组 <b>${fmt(totalA)}</b> · B 组 <b>${fmt(totalB)}</b>`;
+    $("wcAttrMeta").textContent = `${rows.length} 类环节`;
     setNum("wcProblems", out.problems);
     renderAttrRows("wcAttr", rows, "wc");
   }
@@ -619,6 +1000,7 @@
     }));
 
     $("aiAttrSide").innerHTML = `P1 <b>${(d.conclusion.aime.p1_share || 0).toFixed(1)}%</b>`;
+    $("aiAttrMeta").textContent = "P0–P3 分级";
     setNum("aiProblems", out.problems);
 
     $("aiSevChips").innerHTML = AIME_SEVERITIES.map((s) => {
@@ -633,20 +1015,14 @@
   }
 
   // ----------------------------------------------------------- cluster card
-  const CLUSTER_COLORS = {
-    wencai: ["#0f766e", "#0ea5e9", "#f59e0b", "#8b5cf6", "#ef4444", "#64748b"],
-    aime: ["#4338ca", "#0ea5e9", "#f59e0b", "#ec4899", "#14b8a6", "#64748b"],
-  };
-
   function decorateCluster(node, color, depth) {
-    const bg = depth === 0 ? color : lerpColor(color, "#ffffff", 0.12 + depth * 0.08);
+    const bg = depth === 0 ? color : lerpColor(color, T.surface, 0.12 + depth * 0.08);
     const out = {
       id: node.id || node.name,
       name: node.name,
       value: node.value,
       items: node.items || 0,
       itemStyle: { color: bg },
-      label: { color: isDark(bg) ? "#ffffff" : "#0f172a" },
     };
     if (node.children && node.children.length) {
       out.children = node.children.map((c) => decorateCluster(c, color, depth + 1));
@@ -659,34 +1035,33 @@
       nodes.reduce((m, n) => Math.max(m, 1 + (n.children && n.children.length ? maxDepth(n.children) : 0)), 0);
     const depth = maxDepth(data);
     if (depth <= 1) {
-      return [{}, { r0: "30%", r: "94%", label: { rotate: 0, fontSize: 10, minAngle: 8 } }];
+      return [{}, { r0: "30%", r: "94%", label: { show: false } }];
     }
     if (depth === 2) {
       return [
         {},
-        { r0: "26%", r: "60%", label: { rotate: 0, fontSize: 9, minAngle: 10 } },
+        { r0: "26%", r: "60%", label: { show: false } },
         { r0: "60%", r: "94%", label: { show: false } },
       ];
     }
     return [
       {},
-      { r0: "20%", r: "48%", label: { rotate: 0, fontSize: 9, minAngle: 10 } },
+      { r0: "20%", r: "48%", label: { show: false } },
       { r0: "48%", r: "70%", label: { show: false } },
       { r0: "70%", r: "94%", label: { show: false } },
     ];
   }
 
   function clusterOption(product) {
-    const isWc = product === "wencai";
     const st = clusterState[product];
     const current = st.stack.length ? st.stack[st.stack.length - 1] : st.root;
     const branches = (current && current.children) || [];
-    const palette = CLUSTER_COLORS[isWc ? "wencai" : "aime"];
+    const palette = chartPalette().cluster;
     const data = branches.map((n, i) => decorateCluster(n, palette[i % palette.length], 0));
     const total = st.meta ? st.meta.total_sessions : (current && current.value) || 1;
 
     return {
-      animationDuration: REDUCED ? 0 : 850,
+      animationDuration: REDUCED ? 0 : 620,
       animationEasing: "cubicOut",
       tooltip: {
         ...tip,
@@ -697,8 +1072,8 @@
             .join(" / ");
           return tipCard(
             tipHead(p.name, `${pct(p.value, total).toFixed(1)}%`, p.color) +
-              tipRow("#94a3b8", "会话", fmt(p.value)) +
-              tipRow("#94a3b8", "条目", fmt((p.data && p.data.items) || 0)) +
+              tipRow(T.muted, "会话", fmt(p.value)) +
+              tipRow(T.muted, "条目", fmt((p.data && p.data.items) || 0)) +
               (path ? `<div class="tip-path">${path}</div>` : "")
           );
         },
@@ -706,22 +1081,78 @@
       series: [
         {
           type: "sunburst",
-          radius: ["20%", "94%"],
+          radius: ["20%", "96%"],
           center: ["50%", "50%"],
           data,
           nodeClick: false,
           sort: null,
-          itemStyle: { borderColor: "#fff", borderWidth: 1.5 },
-          label: {
-            rotate: 0,
-            fontSize: 9,
-            minAngle: 10,
-            formatter: (p) => p.name,
-          },
+          itemStyle: { borderColor: T.surface, borderWidth: 2 },
+          label: { show: false },
           levels: clusterLevels(data),
-          emphasis: { focus: "ancestor" },
+          emphasis: {
+            focus: "ancestor",
+            itemStyle: { shadowBlur: 10, shadowColor: "rgba(15,23,42,.18)" },
+          },
         },
       ],
+    };
+  }
+
+  function clusterPath(root, target) {
+    if (!root || !target) return null;
+    if (root === target) return [];
+    for (const child of root.children || []) {
+      if (child === target) return [child];
+      const rest = clusterPath(child, target);
+      if (rest) return [child, ...rest];
+    }
+    return null;
+  }
+
+  function drillCluster(product, node) {
+    const st = clusterState[product];
+    const path = clusterPath(st.root, node);
+    if (!path || !path.length) return;
+    st.stack = path;
+    drawCluster(product);
+  }
+
+  function renderClusterLegend(product) {
+    const isWc = product === "wencai";
+    const el = $(isWc ? "wcClusterLegend" : "aiClusterLegend");
+    const st = clusterState[product];
+    if (!el || !st.root) return;
+    const current = st.stack.length ? st.stack[st.stack.length - 1] : st.root;
+    const children = current.children || [];
+    const total = current.value || 1;
+    const palette = chartPalette().cluster;
+    if (!children.length) {
+      el.innerHTML = "";
+      return;
+    }
+    el.innerHTML =
+      `<div class="cl-head"><span></span><span>环节</span><span>会话</span><span>占比</span></div>` +
+      children
+        .map((n, i) => {
+          const drillable = (n.children || []).length > 0;
+          const color = palette[i % palette.length];
+          return (
+            `<button class="cl-row${drillable ? "" : " is-static"}" type="button" data-idx="${i}"` +
+            `${drillable ? "" : ' tabindex="-1" aria-disabled="true"'}` +
+            ` title="${n.name} · ${fmt(n.value)} 会话 · ${pct(n.value, total).toFixed(1)}%">` +
+            `<i class="cl-dot" style="background:${color}"></i>` +
+            `<span class="cl-name">${n.name}</span>` +
+            `<span class="cl-val">${fmt(n.value)}</span>` +
+            `<span class="cl-pct">${pct(n.value, total).toFixed(1)}%</span>` +
+            `</button>`
+          );
+        })
+        .join("");
+    el.onclick = (ev) => {
+      const row = ev.target.closest(".cl-row");
+      if (!row || row.classList.contains("is-static")) return;
+      const node = children[Number(row.dataset.idx)];
+      if (node) drillCluster(product, node);
     };
   }
 
@@ -754,6 +1185,7 @@
     animateTo(isWc ? "wcClusterSessions" : "aiClusterSessions", current.value || 0);
     $(isWc ? "wcClusterSide" : "aiClusterSide").innerHTML = `${fmt(current.items || 0)} <span>条目</span>`;
     updateClusterNote(product);
+    renderClusterLegend(product);
     const el = $(isWc ? "wcCluster" : "aiCluster");
     el.style.cursor = (current.children || []).length ? "pointer" : "default";
   }
@@ -771,7 +1203,15 @@
     };
     scan(root);
 
-    clusterState[product] = { src, root, meta, stack: [], nodeById };
+    clusterState[product] = {
+      src,
+      root,
+      meta,
+      stack: ((clusterState[product] && clusterState[product].stack) || []).filter(
+        (n) => clusterPath(root, n) !== null
+      ),
+      nodeById,
+    };
     const c = chart(isWc ? "wcCluster" : "aiCluster", clusterOption(product));
     clusterCharts[product] = c;
     if (c) {
@@ -782,16 +1222,13 @@
           .map((x) => x.name)
           .filter((n) => n && n !== "归因聚类" && n !== "root");
         let node = st.root;
-        const stack = [];
         for (const name of names) {
           const next = (node.children || []).find((c) => c.name === name);
           if (!next) break;
-          stack.push(next);
           node = next;
         }
-        if (!stack.length) return;
-        st.stack = stack;
-        drawCluster(product);
+        if (node === st.root) return;
+        drillCluster(product, node);
       });
     }
 
@@ -844,7 +1281,16 @@
     setNum(isWc ? "wcForecast" : "aiForecast", next);
     $(isWc ? "wcForecastTrend" : "aiForecastTrend").innerHTML =
       `<span class="${trendClass}">${growth >= 0 ? "+" : ""}${growth.toFixed(1)}%</span>`;
-    $(isWc ? "wcForecastNote" : "aiForecastNote").textContent = `±${Math.round(band * 100)}%`;
+    $(isWc ? "wcForecastNote" : "aiForecastNote").textContent = `±${Math.round(band * 100)}% 区间`;
+    const total7 = forecast.reduce((a, b) => a + b, 0);
+    const peak7 = Math.max(...forecast);
+    $(isWc ? "wcForecastStats" : "aiForecastStats").innerHTML = [
+      ["7 日合计", fmt(total7)],
+      ["峰值", fmt(peak7)],
+      ["日均", fmt(Math.round(total7 / 7))],
+    ]
+      .map(([label, value]) => `<span><em>${label}</em><b>${value}</b></span>`)
+      .join("");
 
     const actualData = [...demo, ...Array(7).fill(null)];
     const forecastData = [...Array(n - 1).fill(null), demo[n - 1], ...forecast];
@@ -852,36 +1298,44 @@
     const bandData = [...Array(n).fill(null), ...upper.map((u, i) => u - lower[i])];
 
     chart(isWc ? "wcForecastChart" : "aiForecastChart", {
-      animationDuration: REDUCED ? 0 : 950,
+      animationDuration: REDUCED ? 0 : 680,
       animationEasing: "cubicOut",
       tooltip: {
         ...tip,
         trigger: "axis",
-        axisPointer: { type: "line", lineStyle: { color: "#e2e8f0" } },
+        axisPointer: { type: "line", lineStyle: { color: T.track } },
         formatter: (params) => {
           const i = params[0].dataIndex;
           const date = labels[i];
           if (i >= n) {
             const k = i - n;
             return tipCard(
-              tipHead(date, "预测", "#f59e0b") +
-                tipRow("#f59e0b", "预测值", fmt(forecast[k])) +
-                tipRow("#94a3b8", "区间", `${fmt(lower[k])}–${fmt(upper[k])}`)
+              tipHead(date, "预测", T.forecast) +
+                tipRow(T.forecast, "预测值", fmt(forecast[k])) +
+                tipRow(T.muted, "区间", `${fmt(lower[k])}–${fmt(upper[k])}`)
             );
           }
           return tipCard(tipHead(date, "实际", accent) + tipRow(accent, "实际值", fmt(demo[i])));
         },
       },
-      grid: { left: 18, right: 16, top: 12, bottom: 20 },
+      grid: { left: 32, right: 8, top: 8, bottom: 18 },
       xAxis: {
         type: "category",
         data: labels,
         boundaryGap: false,
         axisLine: { show: false },
         axisTick: { show: false },
-        axisLabel: { fontSize: 8.5, color: "#94a3b8", interval: 5, fontFamily: FONT },
+        axisLabel: { fontSize: 8, color: T.faint, interval: 5, fontFamily: FONT },
       },
-      yAxis: { type: "value", show: false, min: 0 },
+      yAxis: {
+        type: "value",
+        min: 0,
+        splitNumber: 3,
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { fontSize: 8, color: T.faint, fontFamily: FONT, margin: 4 },
+        splitLine: { lineStyle: { color: T.hairline, type: "dashed" } },
+      },
       series: [
         {
           name: "下界",
@@ -911,6 +1365,13 @@
           symbol: "none",
           lineStyle: { width: 2, color: accent },
           areaStyle: { color: hexA(accent, 0.06) },
+          markLine: {
+            silent: true,
+            symbol: "none",
+            lineStyle: { color: T.faint, type: "dashed", width: 1, opacity: 0.6 },
+            label: { show: false },
+            data: [{ xAxis: actualDates[n - 1] }],
+          },
         },
         {
           name: "预测",
@@ -918,7 +1379,7 @@
           data: forecastData,
           smooth: 0.35,
           symbol: "none",
-          lineStyle: { width: 1.8, type: "dashed", color: "#f59e0b" },
+          lineStyle: { width: 1.8, type: "dashed", color: T.forecast },
         },
       ],
     });
@@ -931,51 +1392,104 @@
 
   // ------------------------------------------------------------- page switch
   let activeProduct = "wencai";
-  let switching = false;
+
+  function setProduct(product) {
+    if (product !== "wencai" && product !== "aime") return;
+    activeProduct = product;
+    document.querySelectorAll(".page").forEach((page) => {
+      const on = page.dataset.product === product;
+      page.classList.toggle("is-active", on);
+      page.setAttribute("aria-hidden", String(!on));
+    });
+    const sw = $("productSwitch");
+    if (sw) {
+      sw.dataset.active = product;
+      sw.querySelectorAll(".product-tab").forEach((tab) => {
+        const on = tab.dataset.tab === product;
+        tab.classList.toggle("is-active", on);
+        tab.setAttribute("aria-selected", String(on));
+        tab.tabIndex = on ? 0 : -1;
+      });
+    }
+    requestAnimationFrame(() => charts.forEach((c) => c.resize()));
+    window.setTimeout(() => charts.forEach((c) => c.resize()), 260);
+  }
 
   function initSwitch() {
-    const btn = $("switchProduct");
-    if (!btn) return;
-    btn.addEventListener("click", () => {
-      if (switching) return;
-      const current = document.querySelector(".page.is-active");
-      const nextProduct = activeProduct === "wencai" ? "aime" : "wencai";
-      const next = document.querySelector(`.page[data-product="${nextProduct}"]`);
-      if (!current || !next) return;
-      activeProduct = nextProduct;
-      $("switchLabel").textContent = nextProduct === "wencai" ? "切换到 AIME" : "切换到 问财";
-      $("switchArrow").textContent = nextProduct === "wencai" ? "→" : "←";
-      current.setAttribute("aria-hidden", "true");
-      next.setAttribute("aria-hidden", "false");
-
-      if (REDUCED) {
-        current.classList.remove("is-active");
-        next.classList.add("is-active");
-        requestAnimationFrame(() => charts.forEach((c) => c.resize()));
-        return;
-      }
-
-      switching = true;
-      current.classList.add("animate__animated", "animate__flipOutY", "is-leaving");
-      current.style.animationDuration = "0.55s";
-      next.classList.add("is-active", "animate__animated", "animate__flipInY");
-      next.style.animationDuration = "0.55s";
-      requestAnimationFrame(() => charts.forEach((c) => c.resize()));
-
-      setTimeout(() => {
-        current.classList.remove(
-          "is-active",
-          "is-leaving",
-          "animate__animated",
-          "animate__flipOutY"
-        );
-        current.style.animationDuration = "";
-        next.classList.remove("animate__animated", "animate__flipInY");
-        next.style.animationDuration = "";
-        switching = false;
-        charts.forEach((c) => c.resize());
-      }, 580);
+    const sw = $("productSwitch");
+    if (!sw) return;
+    sw.addEventListener("click", (ev) => {
+      const tab = ev.target.closest(".product-tab");
+      if (tab) setProduct(tab.dataset.tab);
     });
+    sw.addEventListener("keydown", (ev) => {
+      if (ev.key !== "ArrowLeft" && ev.key !== "ArrowRight") return;
+      ev.preventDefault();
+      const next = activeProduct === "wencai" ? "aime" : "wencai";
+      setProduct(next);
+      const tab = sw.querySelector(`.product-tab[data-tab="${next}"]`);
+      if (tab) tab.focus();
+    });
+    setProduct(activeProduct);
+  }
+
+  // ----------------------------------------------------------- theme switch
+  function disposeCharts() {
+    charts.forEach((c) => {
+      if (c.__ro) c.__ro.disconnect();
+      try {
+        c.dispose();
+      } catch (e) {}
+    });
+    charts.length = 0;
+    Object.keys(clusterCharts).forEach((k) => delete clusterCharts[k]);
+    Object.keys(volumeCharts).forEach((k) => delete volumeCharts[k]);
+    resizeQueue.clear();
+  }
+
+  function updateThemeButton() {
+    const btn = $("themeToggle");
+    if (!btn) return;
+    const dark = document.documentElement.dataset.mode === "dark";
+    const label = dark ? "切换浅色模式" : "切换深色模式";
+    btn.setAttribute("aria-label", label);
+    btn.title = label;
+  }
+
+  function applyMode(mode, persist) {
+    document.documentElement.dataset.mode = mode;
+    if (persist) {
+      try {
+        localStorage.setItem("eval-mode", mode);
+      } catch (e) {}
+    }
+    updateThemeButton();
+    if (!DATA) return;
+    readTokens();
+    disposeCharts();
+    renderAll();
+    settleCounters();
+  }
+
+  function initTheme() {
+    updateThemeButton();
+    const btn = $("themeToggle");
+    if (btn) {
+      btn.addEventListener("click", () => {
+        applyMode(document.documentElement.dataset.mode === "dark" ? "light" : "dark", true);
+      });
+    }
+    if (window.matchMedia) {
+      const mq = window.matchMedia("(prefers-color-scheme: dark)");
+      const onChange = (ev) => {
+        let saved = null;
+        try {
+          saved = localStorage.getItem("eval-mode");
+        } catch (e) {}
+        if (!saved) applyMode(ev.matches ? "dark" : "light", false);
+      };
+      if (mq.addEventListener) mq.addEventListener("change", onChange);
+    }
   }
 
   // -------------------------------------------------------------------- boot
@@ -985,17 +1499,27 @@
       mask.classList.add("is-hidden");
       setTimeout(() => mask.remove(), 400);
     }
-    if (!REDUCED) {
-      document.querySelectorAll("[data-card]").forEach((el, i) => {
-        el.classList.add("animate__animated", "animate__fadeInUp");
-        el.style.animationDelay = `${80 + i * 45}ms`;
-        el.style.animationDuration = "520ms";
-      });
-    }
-    setTimeout(startCounters, REDUCED ? 0 : 120);
+    const board = document.querySelector(".board");
+    if (board) board.classList.add("is-ready");
+    setTimeout(() => startCounters(0.8), REDUCED ? 0 : 120);
     setTimeout(() => {
       window.__boardReady = true;
     }, 700);
+  }
+
+  function renderAll() {
+    if (!DATA) return;
+    renderHeader(DATA);
+    renderVolume("wencai", DATA);
+    renderEvaluation("wencai", DATA);
+    renderWencaiAttr(DATA);
+    renderCluster("wencai", DATA);
+    renderPrediction("wencai", DATA);
+    renderVolume("aime", DATA);
+    renderEvaluation("aime", DATA);
+    renderAimeAttr(DATA);
+    renderCluster("aime", DATA);
+    renderPrediction("aime", DATA);
   }
 
   function fail(err) {
@@ -1013,18 +1537,11 @@
       return r.json();
     })
     .then((d) => {
-      renderHeader(d);
-      renderVolume("wencai", d);
-      renderEvaluation("wencai", d);
-      renderWencaiAttr(d);
-      renderCluster("wencai", d);
-      renderPrediction("wencai", d);
-      renderVolume("aime", d);
-      renderEvaluation("aime", d);
-      renderAimeAttr(d);
-      renderCluster("aime", d);
-      renderPrediction("aime", d);
+      DATA = d;
+      readTokens();
       initSwitch();
+      initTheme();
+      renderAll();
       requestAnimationFrame(reveal);
     })
     .catch(fail);
