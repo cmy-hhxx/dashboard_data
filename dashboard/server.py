@@ -8,6 +8,8 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import timezone
+from email.utils import parsedate_to_datetime
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -117,7 +119,10 @@ class Handler(SimpleHTTPRequestHandler):
 
     def end_headers(self):
         path = self.path.split("?", 1)[0]
-        if path in ("/data.json", "/samples.json", "/healthz"):
+        if path in ("/data.json", "/samples.json"):
+            # Revalidate on every load; a 304 still saves the full JSON body.
+            policy = "no-cache"
+        elif path == "/healthz":
             policy = "no-store"
         elif path in ("/", "/index.html"):
             policy = "no-cache"
@@ -128,19 +133,56 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", policy)
         super().end_headers()
 
+    def _gzip_matches_source(self, path, gz):
+        """Reject a .gz that was not built from the current source file.
+
+        mtime alone misses equal-timestamp copies (e.g. a copied static tree);
+        gzip's trailing ISIZE field records the uncompressed size, so a size
+        mismatch catches the dangerous case before stale JSON reaches clients.
+        """
+        try:
+            # gzip preserves the source timestamp, often with coarser precision;
+            # allow a small skew but still require a matching payload size below.
+            if os.path.getmtime(gz) + 1 < os.path.getmtime(path):
+                return False
+            with open(gz, "rb") as fh:
+                fh.seek(-4, os.SEEK_END)
+                size = int.from_bytes(fh.read(4), "little")
+            return size == os.path.getsize(path) % (1 << 32)
+        except OSError:
+            return False
+
     def _serve_gzip(self, path):
         gz = path + ".gz"
         try:
             stat = os.stat(gz)
+            source = os.stat(path)
         except OSError:
             return False
+        # The compressed copy must not be older than its source, otherwise a
+        # regenerated data.json would be served from a stale .gz.
+        last_modified = max(stat.st_mtime, source.st_mtime)
+        since = self.headers.get("If-Modified-Since")
+        if since:
+            try:
+                parsed = parsedate_to_datetime(since)
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                if int(last_modified) <= int(parsed.timestamp()):
+                    self.send_response(304)
+                    self.send_header("Vary", "Accept-Encoding")
+                    self.send_header("Last-Modified", self.date_time_string(last_modified))
+                    self.end_headers()
+                    return True
+            except (TypeError, ValueError, OverflowError):
+                pass
         ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"
         self.send_response(200)
+        self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Encoding", "gzip")
         self.send_header("Content-Length", str(stat.st_size))
-        self.send_header("Vary", "Accept-Encoding")
-        self.send_header("Last-Modified", self.date_time_string(stat.st_mtime))
+        self.send_header("Last-Modified", self.date_time_string(last_modified))
         self.end_headers()
         with open(gz, "rb") as fh:
             shutil.copyfileobj(fh, self.wfile)
@@ -172,8 +214,8 @@ class Handler(SimpleHTTPRequestHandler):
                 if os.path.isfile(index):
                     path = index
             if os.path.isfile(path) and os.path.isfile(path + ".gz"):
-                self._serve_gzip(path)
-                return
+                if self._gzip_matches_source(path, path + ".gz") and self._serve_gzip(path):
+                    return
         super().do_GET()
 
     def log_message(self, fmt, *args):

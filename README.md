@@ -62,7 +62,8 @@ ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
 
 服务监听容器 `:5001`，对外是 `http://dashboard.example.com:2768/`。服务每 30 分钟重扫数据集；
 样本默认每 6 小时重算（`SAMPLES_REFRESH_SECONDS`），`samples.json` 或 `samples/` 缺失时启动即生成。
-部署时预压缩 JS/CSS/HTML；`data.json`、`samples.json` 与逐样本详情不缓存。
+部署时预压缩 JS/CSS/HTML/SVG，`data.json`、`samples.json` 与逐样本详情由生成脚本同时产出 `.gz`；
+这些 JSON 使用 `no-cache`，重复访问以 304 重验证，仅 `/healthz` 为 `no-store`。
 端口映射、部署流程、验证方式和部署最佳实践见
 [docs/dashboard-deployment.md](docs/dashboard-deployment.md)。
 

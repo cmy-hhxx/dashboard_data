@@ -2,7 +2,7 @@
 import {
   $, FONT, REDUCED, fmt, pct, clamp, fmtBytes, fmtTokens, dateRange, esc,
   lerpColor, hexA, readTokens, T, C, SEV_COLOR, AIME_SEVERITIES, tip, tipCard,
-  tipHead, tipRow, createChart, setNum, resizeAllCharts,
+  tipHead, tipRow, createChart, setNum, settleCounters, resizeAllCharts,
 } from "./core.js";
 import { createRing } from "./ring.js";
 
@@ -17,6 +17,7 @@ const board = {
   },
   predict: { wencai: { dim: "review" }, aime: { dim: "review" } },
   rings: { wencai: { volume: null, cluster: null }, aime: { volume: null, cluster: null } },
+  rendered: { wencai: false, aime: false },
 };
 
 const VERSION_DEFS = {
@@ -1389,21 +1390,27 @@ function renderProduct(product) {
   renderAttribution(product);
   renderCluster(product);
   renderPrediction(product);
+  // A product rendered after the reveal must write its final counters itself;
+  // otherwise the lazy page shows the initial "0" placeholders.
+  settleCounters(document.querySelector(`.view--data .page[data-product="${product}"]`) || document);
+  board.rendered[product] = true;
 }
 
-function renderAll() {
-  if (!board.data) return;
-  renderProduct("wencai");
-  renderProduct("aime");
+function renderedProducts() {
+  return ["wencai", "aime"].filter((product) => board.rendered[product]);
 }
 
 export function initBoard(data, opts = {}) {
   board.data = data;
   board.opts = opts || {};
+  board.product = ["wencai", "aime"].includes(opts.product) ? opts.product : "wencai";
+  board.rendered = { wencai: false, aime: false };
   readTokens();
   bindPredictTabs("wencai");
   bindPredictTabs("aime");
-  renderAll();
+  // Render only the product that is visible now. The other one is rendered on
+  // its first switch, so a cold data view does half the chart work.
+  renderProduct(board.product);
 }
 
 export function setBoardProduct(product) {
@@ -1414,13 +1421,14 @@ export function setBoardProduct(product) {
     page.classList.toggle("is-active", on);
     page.setAttribute("aria-hidden", String(!on));
   });
+  if (!board.rendered[product]) renderProduct(product);
   resizeAllCharts();
-  window.setTimeout(resizeAllCharts, 60);
 }
 
 export function refreshBoard() {
   readTokens();
-  renderAll();
+  const products = renderedProducts();
+  (products.length ? products : [board.product]).forEach(renderProduct);
 }
 
 export function resizeBoard() {

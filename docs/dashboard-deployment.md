@@ -80,10 +80,16 @@ ssh eval_data 'cd /opt/eval_dashboard && ./stop.sh'
 - 样本最多每 `SAMPLES_REFRESH_SECONDS`（默认 21600 秒 / 6 小时）重建一次；文件缺失时立即重建。
 - 可用环境变量覆盖 `PORT`（默认 5001）、`REFRESH_SECONDS`、`SAMPLES_REFRESH_SECONDS`。
   注意 `start.sh` 启动时写死 `PORT=5001`，要改监听端口需同时改 `start.sh` 或手动启动。
-- `precompress.sh` 生成 `.gz`；客户端支持 gzip 时 `server.py` 直接发送。改过 `static/` 下的
-  JS/CSS/HTML/SVG 后必须重新执行（`deploy.sh` 会自动做）。
-- 缓存头：`/data.json`、`/samples.json`、`/healthz` 为 `no-store`；`/`、`/index.html` 为
-  `no-cache`；`/vendor/` 与 `/echarts.min.js` 为一年 `immutable`；`/samples/` 详情与其余静态文件为 `no-cache`。
+- 样本源目录暂时为空（例如外部评测运行切换 `demo_data`）时，`prepare_samples.py` 会保留上一份
+  `samples.json` 与详情、跳过 prune；日志出现 `skipped: source produced no samples` 即表示沿用旧快照。
+- `precompress.sh` 为 JS/CSS/HTML/SVG 生成 `.gz`；`prepare.py` / `prepare_samples.py` 为
+  `data.json`、`samples.json` 与逐样本详情同时写出 `.gz`。客户端支持 gzip 时 `server.py`
+  直接发送；发送前用 gzip ISIZE 校验压缩包与源文件大小一致，不一致则回退原始文件，避免旧
+  `.gz` 冒充新数据。改过 `static/` 下的 JS/CSS/HTML/SVG 后必须重新执行 `precompress.sh`
+  （`deploy.sh` 会自动做）。
+- 缓存头：`/healthz` 为 `no-store`；`/data.json`、`/samples.json`、`/`、`/index.html`、
+  `/samples/` 详情与其余静态文件为 `no-cache`（可 304 重验证）；`/vendor/` 与
+  `/echarts.min.js` 为一年 `immutable`。
 - 日志：`logs/server.log`（服务输出）、`logs/prepare.log`、`logs/samples.log`；仓库没有日志轮转。
 
 ## 部署最佳实践

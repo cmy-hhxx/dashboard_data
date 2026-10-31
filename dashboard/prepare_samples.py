@@ -978,6 +978,23 @@ def main():
         "samples": sum(item["samples"] for item in summary.values()),
         **{product: item["samples"] for product, item in summary.items()},
     }
+    # A temporarily missing source (mount/run-layout change) returns zero files.
+    # Do not let that empty index prune a previously good snapshot.
+    if payload["totals"]["samples"] == 0 and os.path.exists(args.out):
+        try:
+            with open(args.out, encoding="utf-8") as fh:
+                previous = json.load(fh)
+            previous_total = int((previous.get("totals") or {}).get("samples") or 0)
+        except (OSError, ValueError, TypeError):
+            previous_total = 0
+        if previous_total:
+            print(json.dumps({
+                "generated_at": payload["generated_at"],
+                "skipped": "source produced no samples; keeping previous snapshot",
+                "previous_samples": previous_total,
+                "products": summary,
+            }, ensure_ascii=False))
+            return
     keep = write_detail_files(detail_samples, args.out)
     size, gz_size = write_payload(payload, args.out)
     prune_detail_files(args.out, keep)

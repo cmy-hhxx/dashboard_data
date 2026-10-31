@@ -1247,14 +1247,19 @@ export function initSamples(root, data, opts = {}) {
   }
   if (opts.product && (data.products || {})[opts.product]) S.product = opts.product;
   if (!(data.products || {})[S.product]) S.product = firstProductWithSamples();
-  const list = filtered();
-  S.activeId = list.length ? list[0].id : null;
-  S.activeTurn = bestTurn(activeSample());
+  if (opts.initial) {
+    // Deep links choose their target before the first render, so the default
+    // sample's detail is not fetched and then immediately replaced.
+    applyQuery(opts.initial);
+  } else {
+    const list = filtered();
+    S.activeId = list.length ? list[0].id : null;
+    S.activeTurn = bestTurn(activeSample());
+  }
   renderAll();
 }
 
-export function openSampleQuery(filter = {}) {
-  if (!S.data) return S.product;
+function applyQuery(filter = {}) {
   const products = Object.keys(S.data.products || {});
   const wanted = filter.product && products.includes(filter.product)
     ? filter.product
@@ -1283,6 +1288,11 @@ export function openSampleQuery(filter = {}) {
     : (target && target.turns ? bestTurn(target) : 0);
   if (!Number.isFinite(S.activeTurn)) S.activeTurn = 0;
   S.mobileDetail = Boolean(filter.case);
+}
+
+export function openSampleQuery(filter = {}) {
+  if (!S.data) return S.product;
+  applyQuery(filter);
   if (S.built) {
     const search = q("#smpSearch");
     if (search) search.value = S.filter.q;
