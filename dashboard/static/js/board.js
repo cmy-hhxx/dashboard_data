@@ -240,28 +240,26 @@ function renderVolumeVisual(product) {
   if (centerEl) centerEl.hidden = false;
 
   board.rings[product].volume = createRing(chartEl, centerEl, {
-    root: tree.root,
-    maxDepth: 2,
-    hole: 24.5,
-    bandWeights: [1.15, 0.85],
+    root: focused || tree.root,
+    maxDepth: 1,
+    hole: 30,
     unit: "条",
-    restValue: tree.total,
+    restValue: focused ? focused.value : tree.total,
     restLabel: "条输入",
-    shareTotal: tree.classified,
-    focusKey: focused ? focused.key : null,
+    shareTotal: focused ? focused.value : tree.classified,
     centerNode: focused || null,
     canBack: Boolean(focused),
+    crumbs: focused ? ["全部任务", focused.name] : [],
+    backLabel: "全部任务",
+    hint: "点击扇区展开 ›",
+    expandHint: "展开子类 ›",
+    leafHint: "已是最末级",
+    backHint: "",
     ariaLabel: `${productLabel(product)}数据量同心圆`,
-    onHover: (arc) => markLegend(legendEl, arc ? (arc.depth === 1 ? arc.key : arc.topKey) : null),
-    onSelect: (node, arc) => {
-      if (!node) return;
-      const top = arc.depth === 1 ? node : tree.byKey.get(arc.topKey);
-      if (!top) return;
-      if (arc.depth === 1) {
-        state.task = state.task === top.name ? null : top.name;
-      } else if (state.task !== top.name) {
-        state.task = top.name;
-      }
+    onHover: (arc) => markLegend(legendEl, arc ? arc.key : null),
+    onSelect: (node) => {
+      if (!node || focused || !(node.children || []).length) return;
+      state.task = state.task === node.name ? null : node.name;
       renderVolumeVisual(product);
     },
     onBack: () => {
@@ -794,22 +792,35 @@ function drawCluster(product) {
   const chartEl = $(isWc(product) ? "wcCluster" : "aiCluster");
   const centerEl = $(isWc(product) ? "wcClusterCenter" : "aiClusterCenter");
   const legendEl = $(isWc(product) ? "wcClusterLegend" : "aiClusterLegend");
+  const metaEl = $(isWc(product) ? "wcClusterMeta" : "aiClusterMeta");
   if (!chartEl || !current) return;
+
+  if (metaEl) {
+    metaEl.textContent = st.stack.length
+      ? ["全部", ...st.stack.map((node) => node.name)].join(" / ")
+      : "";
+    metaEl.title = metaEl.textContent;
+  }
 
   const rootTotal = (st.root && st.root.value) || current.value || 1;
   board.rings[product].cluster = createRing(chartEl, centerEl, {
     root: current,
-    maxDepth: 3,
-    hole: 24.5,
-    bandWeights: [1, 0.8, 0.62],
+    maxDepth: 1,
+    hole: 30,
     unit: "会话",
     restValue: current.value,
     restLabel: "会话",
     shareTotal: rootTotal,
     centerNode: st.stack.length ? current : null,
     canBack: st.stack.length > 0,
+    backLabel: "上一层",
+    hint: "点击扇区展开 ›",
+    expandHint: "展开子集 ›",
+    leafHint: "点击查看样本 →",
+    backHint: "",
+    leafInteractive: true,
     ariaLabel: `${productLabel(product)}聚类体系`,
-    onHover: (arc) => markLegend(legendEl, arc ? (arc.depth === 1 ? arc.key : arc.topKey) : null),
+    onHover: (arc) => markLegend(legendEl, arc ? arc.key : null),
     onSelect: (node) => {
       if (!node) return;
       if ((node.children || []).length) drillCluster(product, node);

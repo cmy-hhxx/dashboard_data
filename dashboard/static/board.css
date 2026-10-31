@@ -35,33 +35,63 @@
   height: 100%;
   overflow: visible;
   shape-rendering: geometricPrecision;
+  animation: ring-in 480ms var(--ease-out) both;
+}
+
+.ring-track {
+  stroke: var(--surface-3);
+}
+
+.ring-hairline {
+  stroke: var(--hairline);
+  opacity: 0.55;
+}
+
+.ring-hairline--inner {
+  opacity: 0.38;
 }
 
 .ring-arc {
   stroke: var(--surface);
-  transition: opacity 140ms var(--ease-out), filter 140ms var(--ease-out);
+  stroke-linejoin: round;
+  transform-box: view-box;
+  transform-origin: 50px 50px;
+  transition:
+    opacity 180ms var(--ease-out),
+    filter 180ms var(--ease-out),
+    transform 180ms var(--ease-out);
 }
 
 .ring-arc.is-dim {
-  opacity: 0.22;
+  opacity: 0.18;
 }
 
 .ring-arc.is-hot {
-  filter: brightness(1.075) saturate(1.06);
+  transform: scale(1.012);
+  filter: brightness(1.06) saturate(1.05) drop-shadow(0 1px 2px rgba(0, 0, 0, 0.14));
 }
 
 .ring-arc.is-muted {
-  opacity: 0.32;
+  opacity: 0.3;
+}
+
+@keyframes ring-in {
+  from {
+    opacity: 0;
+    transform: scale(0.975);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .ring-center {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 44%;
-  height: 44%;
-  width: min(46cqw, 46cqh);
-  height: min(46cqw, 46cqh);
+  width: min(52cqw, 52cqh);
+  height: min(52cqw, 52cqh);
   transform: translate(-50%, -50%);
   display: flex;
   flex-direction: column;
@@ -72,13 +102,28 @@
   pointer-events: none;
 }
 
+.rc-crumb {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 9px;
+  line-height: 1.2;
+  letter-spacing: 0.01em;
+  color: var(--faint);
+}
+
+.rc-crumb:empty {
+  display: none;
+}
+
 .rc-rest,
 .rc-live {
   display: none;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 3px;
   max-width: 100%;
   min-width: 0;
 }
@@ -103,6 +148,10 @@
   font-size: 10.5px;
   color: var(--muted);
   white-space: nowrap;
+}
+
+.rc-name[hidden] {
+  display: none;
 }
 
 .rc-name {
@@ -140,6 +189,7 @@
 }
 
 .rc-meta {
+  margin-left: 1px;
   font-size: 9.5px;
   line-height: 1.2;
   color: var(--faint);
@@ -147,29 +197,49 @@
   white-space: nowrap;
 }
 
+.rc-hint {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 9.5px;
+  line-height: 1.2;
+  color: var(--faint);
+  opacity: 0.92;
+}
+
+.rc-hint[hidden] {
+  display: none;
+}
+
 .rc-back {
   pointer-events: auto;
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  height: 21px;
-  margin-top: 2px;
-  padding: 0 8px;
+  gap: 4px;
+  height: 22px;
+  margin-top: 1px;
+  padding: 0 9px;
   border: 0;
-  border-radius: 6px;
-  background: var(--surface-3);
+  border-radius: 999px;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--hairline);
   font: inherit;
-  font-size: 10px;
+  font-size: 9.5px;
   font-weight: var(--fw-strong);
   color: var(--ink-2);
   cursor: pointer;
   white-space: nowrap;
-  transition: background var(--dur-snap) var(--ease-snap), color var(--dur-snap) var(--ease-snap);
+  transition:
+    background var(--dur-snap) var(--ease-snap),
+    color var(--dur-snap) var(--ease-snap),
+    box-shadow var(--dur-snap) var(--ease-snap);
 }
 
 .rc-back:hover {
-  background: var(--surface-2);
+  background: var(--surface-3);
   color: var(--ink);
+  box-shadow: inset 0 0 0 1px transparent;
 }
 
 .rc-back:focus-visible {
@@ -1046,6 +1116,10 @@
 /* ------------------------------------------------------------------ motion */
 
 @media (prefers-reduced-motion: reduce) {
+  .ring-svg {
+    animation: none;
+  }
+
   .ring-arc,
   .cover-fill,
   .pred-sharebar i,
@@ -1121,8 +1195,8 @@
   }
 
   .ring-center {
-    width: min(46cqw, 46cqh);
-    height: min(46cqw, 46cqh);
+    width: min(52cqw, 52cqh);
+    height: min(52cqw, 52cqh);
   }
 
   .card--ring .ring-body:has(.ring-chart > .empty-state) {

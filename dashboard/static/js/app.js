@@ -70,7 +70,7 @@ function setProduct(product, persist = true) {
 function navigate(view, params = {}, { replace = false } = {}) {
   if (!VIEWS.has(view)) return;
   const next = { ...params };
-  if ((view === "data" || view === "samples") && next.product == null) next.product = activeProduct;
+  if (view === "data" && next.product == null) next.product = activeProduct;
   setRoute(view, next, replace);
   applyRoute(parseRoute());
 }
@@ -109,7 +109,8 @@ function applyRoute(route) {
     setSamplesActive(true);
     ensureSamples()
       .then(() => {
-        const effective = samplesProductFor(activeProduct);
+        const explicit = PRODUCTS.has(route.params.get("product") || "");
+        const effective = explicit ? activeProduct : samplesProductFor(activeProduct);
         if (effective !== activeProduct) {
           setProduct(effective, false);
           const params = Object.fromEntries(new URLSearchParams(location.search));
@@ -189,6 +190,13 @@ function initNav() {
       if (tab) tab.focus();
     });
   }
+
+  window.addEventListener("eval:switch-product", (ev) => {
+    const product = ev.detail && ev.detail.product;
+    if (!PRODUCTS.has(product)) return;
+    setProduct(product);
+    navigate(activeView, { product }, { replace: true });
+  });
 }
 
 /* ------------------------------------------------------------------- theme */
@@ -254,7 +262,7 @@ function ensureSamples() {
     })
     .then((data) => {
       SAMPLES = data;
-      initSamples($("samplesRoot"), data, { onNavigate: navigate });
+      initSamples($("samplesRoot"), data, { onNavigate: navigate, product: activeProduct });
       return data;
     })
     .catch((err) => {

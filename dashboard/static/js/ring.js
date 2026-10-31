@@ -1,4 +1,4 @@
-/* Concentric ring: polar hit-testing, focus/context dimming and an in-ring readout. */
+/* Concentric ring: one level at a time, polar hit-testing, focus dimming and an in-ring readout. */
 import { fmt, pct } from "./core.js";
 
 const NS = "http://www.w3.org/2000/svg";
@@ -30,11 +30,12 @@ export function createRing(chartEl, centerEl, opts = {}) {
   chartEl.innerHTML = "";
   if (centerEl) centerEl.innerHTML = "";
 
-  const R = 49;
-  const HOLE = opts.hole || 24.5;
+  const R = 48.6;
+  const HOLE = opts.hole || 30;
   const root = opts.root;
-  const levels = Math.max(1, Math.min(opts.maxDepth || 3, treeDepth(root, opts.maxDepth || 3)));
-  const bandGap = 1.15;
+  const requestedDepth = Math.max(1, Number(opts.maxDepth) || 1);
+  const levels = Math.max(1, Math.min(requestedDepth, treeDepth(root, requestedDepth)));
+  const bandGap = 1.35;
   const weights = Array.from({ length: levels }, (_, i) => {
     const w = Number(opts.bandWeights && opts.bandWeights[i]);
     return w > 0 ? w : 1;
@@ -44,6 +45,7 @@ export function createRing(chartEl, centerEl, opts = {}) {
   const bandSizes = weights.map((w) => (bandSpace * w) / weightSum);
   const bandStart = (depth) =>
     HOLE + (depth - 1) * bandGap + bandSizes.slice(0, depth - 1).reduce((n, w) => n + w, 0);
+  const arcGap = opts.gap == null ? 0.026 : Math.max(0, Number(opts.gap) || 0);
   const arcs = [];
   const byKey = new Map();
 
@@ -63,7 +65,7 @@ export function createRing(chartEl, centerEl, opts = {}) {
       child.key = key;
       const r0 = bandStart(depth);
       const r1 = r0 + bandSizes[depth - 1];
-      const pad = Math.min(0.018, span * 0.12);
+      const pad = Math.min(arcGap, span * 0.28);
       const c0 = a + pad / 2;
       const c1 = a + span - pad / 2;
       const arc = {
@@ -77,6 +79,7 @@ export function createRing(chartEl, centerEl, opts = {}) {
         parentKey,
         ancestors,
         topKey: topKey || key,
+        expandable: Boolean(child.children && child.children.length),
       };
       arcs.push(arc);
       byKey.set(key, arc);
@@ -92,37 +95,72 @@ export function createRing(chartEl, centerEl, opts = {}) {
   const svg = document.createElementNS(NS, "svg");
   svg.setAttribute("viewBox", "0 0 100 100");
   svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
-  svg.setAttribute("class", "ring-svg");
+  svg.setAttribute("class", `ring-svg${levels === 1 ? " ring-svg--single" : ""}`);
   svg.setAttribute("role", "img");
   svg.setAttribute("aria-label", opts.ariaLabel || "同心圆");
   chartEl.appendChild(svg);
 
   const group = document.createElementNS(NS, "g");
   svg.appendChild(group);
+
+  if (levels === 1) {
+    const track = document.createElementNS(NS, "circle");
+    track.setAttribute("cx", "50");
+    track.setAttribute("cy", "50");
+    track.setAttribute("r", ((HOLE + R) / 2).toFixed(3));
+    track.setAttribute("fill", "none");
+    track.setAttribute("stroke-width", (R - HOLE).toFixed(3));
+    track.setAttribute("class", "ring-track");
+    group.appendChild(track);
+  }
+
   arcs.forEach((arc) => {
     const path = document.createElementNS(NS, "path");
     path.setAttribute("d", arcPath(50, 50, arc.r0, arc.r1, arc.a0, arc.a1));
     path.setAttribute("fill", arc.node.color || "currentColor");
-    path.setAttribute("class", "ring-arc");
+    path.setAttribute("class", `ring-arc${arc.expandable ? " is-expandable" : ""}`);
     path.setAttribute("data-key", arc.key);
     path.setAttribute("data-depth", String(arc.depth));
-    path.setAttribute("stroke-width", arc.depth === 1 ? "1.05" : "0.85");
+    path.setAttribute("data-expandable", String(arc.expandable));
+    path.setAttribute("stroke-width", arc.depth === 1 ? "0.7" : "0.55");
     group.appendChild(path);
     arc.el = path;
   });
 
+  const hairline = document.createElementNS(NS, "circle");
+  hairline.setAttribute("cx", "50");
+  hairline.setAttribute("cy", "50");
+  hairline.setAttribute("r", (R + 1.15).toFixed(3));
+  hairline.setAttribute("fill", "none");
+  hairline.setAttribute("stroke-width", "0.35");
+  hairline.setAttribute("class", "ring-hairline");
+  group.appendChild(hairline);
+
+  if (levels === 1) {
+    const innerHairline = document.createElementNS(NS, "circle");
+    innerHairline.setAttribute("cx", "50");
+    innerHairline.setAttribute("cy", "50");
+    innerHairline.setAttribute("r", (HOLE - 1.15).toFixed(3));
+    innerHairline.setAttribute("fill", "none");
+    innerHairline.setAttribute("stroke-width", "0.35");
+    innerHairline.setAttribute("class", "ring-hairline ring-hairline--inner");
+    group.appendChild(innerHairline);
+  }
+
   if (centerEl) {
     centerEl.innerHTML =
+      `<span class="rc-crumb"></span>` +
       `<div class="rc-rest">` +
       `<span class="rc-rest-value"></span><span class="rc-rest-label"></span>` +
       `</div>` +
       `<div class="rc-live">` +
       `<span class="rc-name"></span>` +
-      `<span class="rc-line"><b class="rc-value"></b><span class="rc-unit"></span></span>` +
-      `<span class="rc-meta"></span>` +
-      `<button class="rc-back" type="button" aria-label="返回上一级"><span aria-hidden="true">←</span> 全部</button>` +
-      `</div>`;
+      `<span class="rc-line"><b class="rc-value"></b><span class="rc-unit"></span><span class="rc-meta"></span></span>` +
+      `</div>` +
+      `<button class="rc-back" type="button" aria-label="返回上一级"><span aria-hidden="true">←</span><span class="rc-back-text"></span></button>` +
+      `<span class="rc-hint"></span>`;
   }
+  const crumbEl = centerEl && centerEl.querySelector(".rc-crumb");
   const restValueEl = centerEl && centerEl.querySelector(".rc-rest-value");
   const restLabelEl = centerEl && centerEl.querySelector(".rc-rest-label");
   const nameEl = centerEl && centerEl.querySelector(".rc-name");
@@ -130,14 +168,24 @@ export function createRing(chartEl, centerEl, opts = {}) {
   const unitEl = centerEl && centerEl.querySelector(".rc-unit");
   const metaEl = centerEl && centerEl.querySelector(".rc-meta");
   const backEl = centerEl && centerEl.querySelector(".rc-back");
+  const backTextEl = centerEl && centerEl.querySelector(".rc-back-text");
+  const hintEl = centerEl && centerEl.querySelector(".rc-hint");
 
   if (restValueEl) restValueEl.textContent = fmt(opts.restValue);
   if (restLabelEl) restLabelEl.textContent = opts.restLabel || "";
   if (unitEl) unitEl.textContent = opts.unit || "";
+  if (crumbEl) {
+    const crumbs = Array.isArray(opts.crumbs) ? opts.crumbs.filter(Boolean) : [];
+    if (crumbs.length) {
+      crumbEl.textContent = crumbs.join(" / ");
+      crumbEl.title = crumbs.join(" / ");
+    }
+  }
   if (centerEl) {
     centerEl.classList.toggle("has-focus", Boolean(opts.centerNode));
     centerEl.classList.toggle("is-live", Boolean(opts.centerNode));
   }
+  if (backTextEl) backTextEl.textContent = opts.backLabel || "上一级";
   if (backEl) {
     backEl.hidden = !opts.canBack;
     backEl.addEventListener("click", (ev) => {
@@ -156,14 +204,28 @@ export function createRing(chartEl, centerEl, opts = {}) {
 
   let activeKey;
 
+  function setHint(arc) {
+    if (!hintEl) return;
+    let text;
+    if (arc) text = arc.expandable ? (opts.expandHint || "点击展开") : (opts.leafHint || "");
+    else if (opts.canBack) text = opts.backHint || "";
+    else text = opts.hint || "";
+    hintEl.textContent = text;
+    hintEl.hidden = !text;
+  }
+
   function paintCenter(arc) {
     if (!centerEl) return;
     const node = arc ? arc.node : opts.centerNode;
     centerEl.classList.toggle("is-live", Boolean(node));
     if (!node) return;
     if (nameEl) {
-      nameEl.textContent = node.name;
-      nameEl.title = node.name;
+      const resting = !arc && Boolean(opts.centerNode);
+      nameEl.hidden = resting;
+      if (!resting) {
+        nameEl.textContent = node.name;
+        nameEl.title = node.name;
+      }
     }
     if (valueEl) valueEl.textContent = fmt(node.value);
     if (metaEl) {
@@ -176,6 +238,8 @@ export function createRing(chartEl, centerEl, opts = {}) {
     if (activeKey === key) return;
     activeKey = key;
     const active = key ? byKey.get(key) : null;
+    const interactive = Boolean(active) && (active.expandable || Boolean(opts.leafInteractive));
+    svg.style.cursor = interactive ? "pointer" : "default";
     arcs.forEach((arc) => {
       const inSubtree = Boolean(active) && (arc.key === active.key || arc.ancestors.includes(active.key));
       const isAncestor = Boolean(active) && active.ancestors.includes(arc.key);
@@ -185,6 +249,7 @@ export function createRing(chartEl, centerEl, opts = {}) {
       arc.el.classList.toggle("is-muted", !active && focusKeys.size > 0 && !focusKeys.has(arc.key));
     });
     paintCenter(active);
+    setHint(active);
     if (!silent && opts.onHover) opts.onHover(active, active ? active.node : null);
   }
 
@@ -226,7 +291,6 @@ export function createRing(chartEl, centerEl, opts = {}) {
     const p = coords(ev);
     if (!p) return;
     const arc = hitTest(p.x, p.y);
-    svg.style.cursor = arc ? "pointer" : "default";
     setActive(arc ? arc.key : null);
   });
   svg.addEventListener("pointerleave", () => {
@@ -237,7 +301,7 @@ export function createRing(chartEl, centerEl, opts = {}) {
     const p = coords(ev);
     if (!p) return;
     const arc = hitTest(p.x, p.y);
-    if (arc && opts.onSelect) opts.onSelect(arc.node, arc);
+    if (arc && (arc.expandable || opts.leafInteractive) && opts.onSelect) opts.onSelect(arc.node, arc);
   });
 
   setActive(null, true);

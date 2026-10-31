@@ -79,6 +79,17 @@ function productMeta(product = S.product) {
   return (S.data && S.data.products && S.data.products[product]) || {};
 }
 
+function productLabel(product = S.product) {
+  if (product === "wencai") return "问财";
+  if (product === "aime") return "AIME";
+  return product;
+}
+
+function otherProductWithSamples() {
+  return Object.keys((S.data && S.data.products) || {})
+    .find((product) => product !== S.product && samples(product).length) || "";
+}
+
 function modelLabel(model) {
   const raw = String(model || "");
   if (raw === "aime_fast") return "Fast";
@@ -374,6 +385,13 @@ function bindEvents() {
       clearFilters();
       return;
     }
+    const switchProduct = target.closest("[data-switch-product]");
+    if (switchProduct) {
+      window.dispatchEvent(new CustomEvent("eval:switch-product", {
+        detail: { product: switchProduct.dataset.switchProduct },
+      }));
+      return;
+    }
     if (target.closest("[data-toggle-more]")) {
       S.moreOpen = !S.moreOpen;
       const panel = q("#smpMore");
@@ -562,7 +580,18 @@ function renderList() {
   const list = filtered();
   if (countEl) countEl.textContent = String(list.length);
   if (!list.length) {
-    listEl.innerHTML = `<div class="smp-list-empty">${ICONS.empty}<p>没有匹配的样本</p><button type="button" data-clear-all>清除筛选</button></div>`;
+    if (!samples().length) {
+      const alt = otherProductWithSamples();
+      listEl.innerHTML =
+        `<div class="smp-list-empty">${ICONS.empty}<p>${esc(productLabel())}暂无 demo 样本</p>` +
+        (alt
+          ? `<span class="smp-list-sub">归因与紧凑轨迹目前只覆盖 ${esc(productLabel(alt))} demo_data</span>` +
+            `<button type="button" data-switch-product="${esc(alt)}">查看 ${esc(productLabel(alt))} 样本</button>`
+          : "") +
+        `</div>`;
+    } else {
+      listEl.innerHTML = `<div class="smp-list-empty">${ICONS.empty}<p>没有匹配的样本</p><button type="button" data-clear-all>清除筛选</button></div>`;
+    }
     return;
   }
   const active = activeSample();
@@ -777,7 +806,10 @@ function renderInput(sample) {
   const title = q("#smpInputTitle");
   if (!body) return;
   if (!sample) {
-    body.innerHTML = `<div class="smp-empty">${ICONS.empty}<h3>没有可展示的样本</h3><p>当前筛选下没有样本。清除筛选，或换一个产品。</p></div>`;
+    const emptyProduct = !samples().length;
+    body.innerHTML = emptyProduct
+      ? `<div class="smp-empty">${ICONS.empty}<h3>${esc(productLabel())}暂无 demo 样本</h3><p>demo_data 目前只包含 AIME 的归因与紧凑轨迹。可在顶栏切到 AIME。</p></div>`
+      : `<div class="smp-empty">${ICONS.empty}<h3>没有可展示的样本</h3><p>当前筛选下没有样本。清除筛选试试。</p></div>`;
     if (title) title.textContent = "对话轨迹";
     return;
   }
@@ -983,7 +1015,10 @@ function renderOutput(sample) {
   const title = q("#smpOutputTitle");
   if (!body) return;
   if (!sample) {
-    body.innerHTML = `<div class="smp-empty">${ICONS.empty}<h3>没有可展示的评测输出</h3><p>当前筛选下没有样本。</p></div>`;
+    const emptyProduct = !samples().length;
+    body.innerHTML = emptyProduct
+      ? `<div class="smp-empty">${ICONS.empty}<h3>${esc(productLabel())}暂无可展示的评测输出</h3><p>demo_data 目前只包含 AIME 的归因与紧凑轨迹。</p></div>`
+      : `<div class="smp-empty">${ICONS.empty}<h3>没有可展示的评测输出</h3><p>当前筛选下没有样本。</p></div>`;
     if (title) title.textContent = "归因结果";
     return;
   }
@@ -1210,7 +1245,8 @@ export function initSamples(root, data, opts = {}) {
     }
     return;
   }
-  if (!samples(S.product).length) S.product = samplesProductFor(S.product);
+  if (opts.product && (data.products || {})[opts.product]) S.product = opts.product;
+  if (!(data.products || {})[S.product]) S.product = firstProductWithSamples();
   const list = filtered();
   S.activeId = list.length ? list[0].id : null;
   S.activeTurn = bestTurn(activeSample());
@@ -1221,8 +1257,8 @@ export function openSampleQuery(filter = {}) {
   if (!S.data) return S.product;
   const products = Object.keys(S.data.products || {});
   const wanted = filter.product && products.includes(filter.product)
-    ? samplesProductFor(filter.product)
-    : samplesProductFor(S.product);
+    ? filter.product
+    : (products.includes(S.product) ? S.product : samplesProductFor(S.product));
   S.product = wanted;
   S.filter = {
     q: filter.q || "",
