@@ -20,6 +20,8 @@ import re
 import sys
 from datetime import datetime, timedelta, timezone
 
+import dataset_layout as layout
+
 DATASETS = "/mnt/fin_bench/code_and_clean_data/datasets"
 TZ = timezone(timedelta(hours=8), "CST")
 
@@ -104,39 +106,39 @@ def input_path_for(spec, date):
 # --------------------------------------------------------------- cluster input
 
 def cluster_specs(datasets):
-    wc_out = f"{datasets}/0_wencai/eval_output/0_daily_eval_output"
+    wc_out = layout.wencai_output_dir(datasets)
     wc_in = f"{datasets}/0_wencai/eval_input/0_daily_eval_input"
-    ai_out = f"{datasets}/1_aime/eval_output"
-    ai_in = f"{datasets}/1_aime/eval_input"
+    aime_inputs = layout.aime_input_dirs(datasets)
     specs = []
-    for model in WENCAI_MODELS:
+    if wc_out:
+        for model in WENCAI_MODELS:
+            tree = layout.first_file(
+                f"{wc_out}/{model}/cluster/cluster_tree.json",
+                f"{datasets}/0_wencai/eval_output/0_daily_eval_output/{model}/cluster/cluster_tree.json",
+                f"{datasets}/0_wencai/.archive/eval_output/0_daily_eval_output/{model}/cluster/cluster_tree.json",
+            )
+            if not tree:
+                continue
+            specs.append({
+                "product": "wencai",
+                "model": model,
+                "split": "daily",
+                "tree": tree,
+                "outdir": os.path.dirname(os.path.dirname(tree)),
+                "indir": f"{wc_in}/{model}",
+            })
+    for split, tree in layout.aime_clusters(datasets).items():
+        root = aime_inputs.get(split)
+        if not tree or not root or not os.path.exists(tree):
+            continue
         specs.append({
-            "product": "wencai",
-            "model": model,
-            "split": "daily",
-            "tree": f"{wc_out}/{model}/cluster/cluster_tree.json",
-            "outdir": f"{wc_out}/{model}",
-            "indir": f"{wc_in}/{model}",
-            "output_split": "0_daily_eval_output",
+            "product": "aime",
+            "model": AIME_MODEL,
+            "split": split,
+            "tree": tree,
+            "outdir": os.path.dirname(os.path.dirname(tree)),
+            "indir": f"{root}/{AIME_MODEL}",
         })
-    specs.append({
-        "product": "aime",
-        "model": AIME_MODEL,
-        "split": "lost",
-        "tree": f"{ai_out}/1_lost_user_eval_output/{AIME_MODEL}/cluster/cluster_tree.json",
-        "outdir": f"{ai_out}/1_lost_user_eval_output/{AIME_MODEL}",
-        "indir": f"{ai_in}/1_lost_user_eval/{AIME_MODEL}",
-        "output_split": "1_lost_user_eval_output",
-    })
-    specs.append({
-        "product": "aime",
-        "model": AIME_MODEL,
-        "split": "daily",
-        "tree": f"{ai_out}/0_daily_eval_output/{AIME_MODEL}/cluster/cluster_tree.json",
-        "outdir": f"{ai_out}/0_daily_eval_output/{AIME_MODEL}",
-        "indir": f"{ai_in}/0_daily_eval_input/{AIME_MODEL}",
-        "output_split": "0_daily_eval_output",
-    })
     return specs
 
 

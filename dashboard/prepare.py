@@ -5,8 +5,11 @@ Source: /mnt/fin_bench/code_and_clean_data/datasets
   <product>/eval_input/<split>/<model>/<model>-<date>_input.jsonl (legacy)
   1_aime/eval_input/<split>/<model>/<date>.jsonl (current)
   <product>/eval_output/<split>/<model>/<model>-<date>_output.jsonl (legacy)
-  1_aime/eval_output/<split>/<model>/<model>_attribution-<date>.jsonl (current)
+  1_aime/eval_output/demo_data/<model>/<model>_attribution-<date>.jsonl (current)
   <product>/eval_output/<split>/comparison/<pair>/<pair>-<date>_output.jsonl
+
+The current demo_data root is preferred for AIME daily outputs; legacy and
+.archive trees are fallbacks while the datasets tree migrates.
 
 Volumes / per-day counts / meta categories come from cache/datasets.json
 (scan_datasets.py); attribution, verdicts and token stats are parsed here.
@@ -21,37 +24,60 @@ import re
 import statistics
 from datetime import datetime, timedelta, timezone
 
+import dataset_layout as layout
+
 DATASETS = "/mnt/fin_bench/code_and_clean_data/datasets"
 TZ = timezone(timedelta(hours=8), "CST")
 
 WENCAI_MODELS = ["a_expert", "a_fast", "b_expert", "b_fast"]
-AIME_GROUPS = [("daily", "1_aime/eval_output/0_daily_eval_output"), ("lost", "1_aime/eval_output/1_lost_user_eval_output")]
 AIME_SEVERITIES = ["P0", "P1", "P2", "P3", "未分级"]
 
+WENCAI_OUTPUT_DIR = layout.wencai_output_dir(DATASETS)
+AIME_GROUPS = layout.aime_group_dirs(DATASETS)
+AIME_CLUSTERS = layout.aime_clusters(DATASETS)
 CLUSTER_FILES = {
-    "wencai": f"{DATASETS}/0_wencai/eval_output/0_daily_eval_output/a_fast/cluster/cluster_tree.json",
-    "aime": f"{DATASETS}/1_aime/eval_output/0_daily_eval_output/aime_fast/cluster/cluster_tree.json",
+    "wencai": layout.wencai_cluster(DATASETS),
+    "aime": AIME_CLUSTERS["daily"],
 }
-LOST_CLUSTER = f"{DATASETS}/1_aime/eval_output/1_lost_user_eval_output/aime_fast/cluster/cluster_tree.json"
+LOST_CLUSTER = AIME_CLUSTERS["lost"]
 
 WENCAI_INPUT_GLOB = f"{DATASETS}/0_wencai/eval_input/*/*/*.jsonl"
 AIME_INPUT_GLOB = f"{DATASETS}/1_aime/eval_input/*/*/*.jsonl"
-WENCAI_OUTPUT_GLOB = f"{DATASETS}/0_wencai/eval_output/0_daily_eval_output/*/*_output.jsonl"
-WENCAI_COMPARE_GLOB = f"{DATASETS}/0_wencai/eval_output/0_daily_eval_output/comparison/*/*_output.jsonl"
-AIME_DAILY_OUTPUT_GLOB = f"{DATASETS}/1_aime/eval_output/0_daily_eval_output/*/*_output.jsonl"
-AIME_LOST_OUTPUT_GLOB = f"{DATASETS}/1_aime/eval_output/1_lost_user_eval_output/*/*_output.jsonl"
 
 
-def aime_output_paths(rel):
+def wencai_output_paths(model=None):
+    if not WENCAI_OUTPUT_DIR:
+        return []
+    base = f"{WENCAI_OUTPUT_DIR}/{model}" if model else f"{WENCAI_OUTPUT_DIR}/*"
+    return sorted(
+        set(
+            glob.glob(f"{base}/*_output.jsonl")
+            + glob.glob(f"{base}/*_attribution-*.jsonl")
+        )
+    )
+
+
+def wencai_comparison_paths(pair=None):
+    if not WENCAI_OUTPUT_DIR:
+        return []
+    base = f"{WENCAI_OUTPUT_DIR}/comparison/{pair}" if pair else f"{WENCAI_OUTPUT_DIR}/comparison/*"
+    return sorted(glob.glob(f"{base}/*_output.jsonl"))
+
+
+def aime_output_paths(directory):
     """Read legacy *_output files and the current *_attribution files.
 
     Compact artifacts are deliberately excluded: they are summaries, not an
     additional evaluation result, and counting them would double the coverage.
     """
-    base = f"{DATASETS}/{rel}/*"
-    paths = glob.glob(f"{base}/*_output.jsonl")
-    paths.extend(glob.glob(f"{base}/*_attribution-*.jsonl"))
-    return paths
+    if not directory:
+        return []
+    return sorted(
+        set(
+            glob.glob(f"{directory}/*/*_output.jsonl")
+            + glob.glob(f"{directory}/*/*_attribution-*.jsonl")
+        )
+    )
 
 
 def now_iso():
@@ -92,6 +118,8 @@ def artifact_summary(paths):
 
 
 def read_cluster_meta(path):
+    if not path:
+        return None
     try:
         with open(path) as fh:
             raw = json.load(fh)
@@ -104,6 +132,25 @@ def read_cluster_meta(path):
         "total_sessions": meta.get("total_sessions"),
         "total_items": meta.get("total_items"),
     }
+
+
+def newest_date(paths):
+    dates = [file_date(path) for path in paths]
+    dates = [date for date in dates if date]
+    return max(dates) if dates else None
+
+
+def sibling_output_paths(cluster_path):
+    """Output files sitting next to a cluster tree (same model directory)."""
+    if not cluster_path:
+        return []
+    model_dir = os.path.dirname(os.path.dirname(cluster_path))
+    return sorted(
+        set(
+            glob.glob(f"{model_dir}/*_output.jsonl")
+            + glob.glob(f"{model_dir}/*_attribution-*.jsonl")
+        )
+    )
 
 
 def build_freshness():
@@ -119,20 +166,24 @@ def build_freshness():
     input_at, input_date, _ = artifact_summary(
         glob.glob(WENCAI_INPUT_GLOB) + glob.glob(AIME_INPUT_GLOB)
     )
-    wencai_out = glob.glob(WENCAI_OUTPUT_GLOB)
-    compare_out = glob.glob(WENCAI_COMPARE_GLOB)
-    aime_daily_out = aime_output_paths("1_aime/eval_output/0_daily_eval_output")
-    aime_lost_out = aime_output_paths("1_aime/eval_output/1_lost_user_eval_output")
+    wencai_out = wencai_output_paths()
+    compare_out = wencai_comparison_paths()
+    aime_by_group = {
+        name: aime_output_paths(directory) for name, directory in AIME_GROUPS
+    }
     attribution_at, attribution_date, _ = artifact_summary(
-        wencai_out + compare_out + aime_daily_out + aime_lost_out
+        wencai_out
+        + compare_out
+        + [path for paths in aime_by_group.values() for path in paths]
     )
 
     coverage = {
-        "wencai": max((file_date(p) for p in wencai_out if file_date(p)), default=None),
-        "aime_daily": max((file_date(p) for p in aime_daily_out if file_date(p)), default=None),
-        "aime_lost": max((file_date(p) for p in aime_lost_out if file_date(p)), default=None),
+        "wencai": newest_date(wencai_out),
+        "aime_daily": newest_date(aime_by_group.get("daily", [])),
+        "aime_lost": newest_date(aime_by_group.get("lost", [])),
     }
     cluster_sources = []
+    cluster_coverage = {}
     for name, path in (
         ("wencai", CLUSTER_FILES["wencai"]),
         ("aime_daily", CLUSTER_FILES["aime"]),
@@ -141,10 +192,11 @@ def build_freshness():
         meta = read_cluster_meta(path)
         if meta:
             cluster_sources.append({"name": name, **meta})
+        cluster_coverage[name] = newest_date(sibling_output_paths(path))
     cluster_at = max((s["generated_at"] for s in cluster_sources if s.get("generated_at")), default=None)
     versions = sorted({s["pipeline_version"] for s in cluster_sources if s.get("pipeline_version")})
     cluster_version = versions[0] if len(versions) == 1 else (" / ".join(versions) or None)
-    cluster_date = max((d for d in coverage.values() if d), default=None)
+    cluster_date = max((d for d in cluster_coverage.values() if d), default=None)
 
     input_reasons = []
     if not input_date:
@@ -198,6 +250,7 @@ def build_freshness():
             "stale": bool(cluster_reasons),
             "version": cluster_version,
             "coverage": coverage,
+            "cluster_coverage": cluster_coverage,
             "sources": cluster_sources,
             "reason": "；".join(cluster_reasons),
         },
@@ -220,7 +273,7 @@ def wencai_outputs():
         problems = 0
         latency = []
         difficulty = collections.Counter()
-        for path in sorted(glob.glob(f"{DATASETS}/0_wencai/eval_output/0_daily_eval_output/{model}/*_output.jsonl")):
+        for path in wencai_output_paths(model):
             day = per_day.setdefault(
                 file_date(path) or "未知",
                 {"answers": 0, "problems": 0, "tokens": 0, "latency": []},
@@ -296,7 +349,7 @@ def wencai_comparison():
     for pair in ["a_fast_vs_b_fast", "a_expert_vs_b_expert"]:
         a, b = pair.split("_vs_")
         agg = {"n": 0, "a_win": 0, "b_win": 0, "both_good": 0, "both_bad": 0}
-        for path in sorted(glob.glob(f"{DATASETS}/0_wencai/eval_output/0_daily_eval_output/comparison/{pair}/*_output.jsonl")):
+        for path in wencai_comparison_paths(pair):
             with open(path) as fh:
                 for line in fh:
                     try:
@@ -424,15 +477,18 @@ def aime_outputs():
     subtasks = collections.Counter()
     task_subtasks = collections.defaultdict(collections.Counter)
 
-    for group, rel in AIME_GROUPS:
-        for path in sorted(aime_output_paths(rel)):
+    for _, directory in AIME_GROUPS:
+        for path in aime_output_paths(directory):
             base = os.path.basename(path)
             if "_attribution-" in base:
                 model = base.split("_attribution-", 1)[0]
             else:
                 model = base.split("-", 1)[0]
             model = model.replace("aime_", "")
-            date = re.search(r"(\d{4}-\d{2}-\d{2})", base).group(1)
+            date_match = re.search(r"(\d{4}-\d{2}-\d{2})", base)
+            if not date_match:
+                continue
+            date = date_match.group(1)
             day = per_day.setdefault(
                 date,
                 {

@@ -4,8 +4,9 @@
 Emits cache/datasets.json with per-file volume, per model/date input-output
 pairs and the meta categories used for the distribution panel. AIME accepts
 both the legacy *_input.jsonl / *_output.jsonl names and the current
-<date>.jsonl inputs plus *_attribution-YYYY-MM-DD.jsonl outputs; compact files
-are summaries and are intentionally excluded from coverage counts.
+<date>.jsonl inputs plus *_attribution-YYYY-MM-DD.jsonl outputs
+(demo_data is the canonical daily output root); compact files are summaries
+and are intentionally excluded from coverage counts.
 """
 import argparse
 import collections
@@ -17,16 +18,42 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 
+import dataset_layout as layout
+
 DATASETS = "/mnt/fin_bench/code_and_clean_data/datasets"
 NAME_RE = re.compile(r"(?P<model>.+?)-(?P<date>\d{4}-\d{2}-\d{2})_(?P<kind>input|output)\.jsonl$")
 ATTRIBUTION_RE = re.compile(r"(?P<model>.+?)_attribution-(?P<date>\d{4}-\d{2}-\d{2})\.jsonl$")
 DATE_INPUT_RE = re.compile(r"(?P<date>\d{4}-\d{2}-\d{2})\.jsonl$")
 
 
+def chosen_output_roots(data_dir):
+    roots = {}
+    wencai = layout.wencai_output_dir(data_dir)
+    if wencai:
+        roots[os.path.abspath(wencai)] = "daily"
+    for split, directory in layout.aime_group_dirs(data_dir):
+        roots[os.path.abspath(directory)] = split
+    return roots
+
+
+def root_for(path, roots):
+    matches = [root for root in roots if layout.is_under(path, root)]
+    return max(matches, key=len) if matches else None
+
+
 def locate(data_dir):
     """product, split, model, date, kind, path"""
+    roots = chosen_output_roots(data_dir)
+    paths = set(glob.glob(f"{data_dir}/**/*.jsonl", recursive=True))
+    # glob() skips hidden directories such as .archive; walk chosen output
+    # roots explicitly so archived fallbacks are counted too.
+    for root in roots:
+        for dirpath, _, filenames in os.walk(root):
+            for filename in filenames:
+                if filename.endswith(".jsonl"):
+                    paths.add(os.path.join(dirpath, filename))
     rows = []
-    for path in glob.glob(f"{data_dir}/**/*.jsonl", recursive=True):
+    for path in sorted(paths):
         if "/cluster/" in path or path.endswith("item_index.jsonl"):
             continue
         name = os.path.basename(path)
@@ -51,13 +78,21 @@ def locate(data_dir):
                 kind = "input"
         parts = path[len(data_dir):].strip("/").split("/")
         product = parts[0]  # 0_wencai / 1_aime
-        raw = parts[2]
-        if raw == "comparison":
-            split = "comparison"
-        elif raw.startswith("0_"):
-            split = "daily"
+        if kind == "output":
+            root = root_for(path, roots)
+            if root is None:
+                continue
+            split = "comparison" if "/comparison/" in path else roots[root]
         else:
-            split = "lost"
+            if "/.archive/" in path:
+                continue
+            raw = parts[2] if len(parts) > 2 else ""
+            if raw == "comparison":
+                split = "comparison"
+            elif "lost" in raw:
+                split = "lost"
+            else:
+                split = "daily"
         rows.append({
             "product": product,
             "split": split,

@@ -104,18 +104,25 @@ ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
 | `scan_datasets.py` | 扫 `datasets` 的输入/输出：逐文件条数、按模型×日期配对、meta 分类分布 → `cache/datasets.json` |
 | `prepare.py` | 解析归因/覆盖/Token/逐日指标/桑基分量，合并扫描结果 → `static/data.json` |
 | `prepare_samples.py` | 从 cluster_tree 叶子样本 + 输出 JSONL + 输入 trace 组装真实样本 → `static/samples.json(.gz)` |
+| `dataset_layout.py` | 解析 datasets 布局：demo_data → legacy → `.archive` 逐级回退，供三个生成脚本共用 |
 | `server.py` | `ThreadingHTTPServer` + 定时重算；`/healthz` 返回 data/samples 双刷新状态 |
 | `static/` | 三页入口、ES modules、ECharts 离线包、构建好的 `app.css` 与页面 CSS |
 | `static/js/` | `app.js` 路由/主题/数据加载，`board.js` 数据板块，`system.js` 体系页，`samples.js` 样本页，`core.js` 共享 token/图表/数字动效 |
 | `precompress.sh` | 部署时预压缩 JS/CSS/HTML；`prepare.py`/`prepare_samples.py` 另产 `.gz` |
 | `build/` | Tailwind/DaisyUI 配置与构建入口（`npx tailwindcss -c tailwind.config.js -i input.css -o ../static/app.css --minify`） |
 
+AIME 输出以 `1_aime/eval_output/demo_data/<model>/<model>_attribution-<date>.jsonl` 为准（demo 格式，后续沿用）；
+旧 `eval_output/<split>/...` 与 `.archive/` 只作回退。问财暂无 demo_data，回退到
+`0_wencai/.archive/eval_output/0_daily_eval_output`；AIME lost 与聚类树也按 demo → legacy → archive 解析。
+`demo_data` 目前没有 `cluster_tree`，聚类/样本页沿用最近的归档聚类快照，freshness 会标 stale。
+
 口径：输入 = 数据集中的 `*_input.jsonl`，以及 AIME 新布局的 `<date>.jsonl`；已评测 = 输出侧回答记录数（问财四个版本 answer 合计，
 不含 comparison / compact 汇总记录；AIME 统计 `*_attribution-YYYY-MM-DD.jsonl`）；待评测 = 输入 − 已评测。
 问财 / AIME 都按 `meta.task` 展示任务分布：问财不展示「其他/其它」，AIME 把「其它」并进「其他」。
 样本页从 cluster 叶子/条目索引反查 `src_file:src_line`，再按 trace_id 回接输入；不补造缺失内容。
-当前真实快照：输入/归因覆盖至 2026-10-23，聚类产物生成于 2026-10-30（v2.5.0，覆盖旧快照），
-预期 2026-10-30 日更批次缺失，顶栏因此标「待刷新」。问财原始输出没有 severity 字段，
+当前真实快照：输入覆盖至 2026-10-31；AIME 日常归因（demo_data）覆盖至 2026-10-31，
+问财归因回退归档（至 2026-10-23），AIME lost 回退归档（至 2026-10-14）；聚类产物生成于
+2026-10-30（v2.5.0），聚类覆盖至 2026-10-23，顶栏因此标「待刷新」。问财原始输出没有 severity 字段，
 样本页对问财显式显示「无分级」；AIME 日更批次也无 severity，只有 lost-user 批次有 P0–P3。
 
 ### 设计规则（可复现的 token）
