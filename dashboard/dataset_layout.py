@@ -36,6 +36,7 @@ def wencai_output_dir(datasets):
     return first_dir(
         f"{datasets}/0_wencai/eval_output/demo_data",
         f"{datasets}/0_wencai/eval_output/0_daily_eval_output",
+        f"{datasets}/0_wencai/.archive/0_daily_eval_output",
         f"{datasets}/0_wencai/.archive/eval_output/0_daily_eval_output",
     )
 
@@ -69,6 +70,7 @@ def wencai_cluster(datasets):
     return first_file(
         f"{root}/a_fast/cluster/cluster_tree.json" if root else None,
         f"{datasets}/0_wencai/eval_output/0_daily_eval_output/a_fast/cluster/cluster_tree.json",
+        f"{datasets}/0_wencai/.archive/0_daily_eval_output/a_fast/cluster/cluster_tree.json",
         f"{datasets}/0_wencai/.archive/eval_output/0_daily_eval_output/a_fast/cluster/cluster_tree.json",
     )
 

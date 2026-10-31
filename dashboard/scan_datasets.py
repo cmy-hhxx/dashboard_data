@@ -73,7 +73,10 @@ def locate(data_dir):
                 if not m or "/eval_input/" not in path:
                     continue
                 parts = path[len(data_dir):].strip("/").split("/")
-                model = parts[3] if len(parts) > 3 else "unknown"
+                # Date-named inputs live under <split>/<model>/ or, for the
+                # newer Wencai layout, directly under <model>/; the parent
+                # directory is the model in both cases.
+                model = parts[-2] if len(parts) >= 2 else "unknown"
                 date = m.group("date")
                 kind = "input"
         parts = path[len(data_dir):].strip("/").split("/")

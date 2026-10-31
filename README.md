@@ -113,16 +113,19 @@ ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
 | `dataset_layout.py` | 解析 datasets 布局：demo_data → legacy → `.archive` 逐级回退，供三个生成脚本共用 |
 | `server.py` | `ThreadingHTTPServer` + 定时重算；`/healthz` 返回 data/samples 双刷新状态 |
 | `static/` | 三页入口、ES modules、ECharts 离线包、构建好的 `app.css` 与页面 CSS |
-| `static/js/` | `app.js` 路由/主题/数据加载，`board.js` 数据板块，`system.js` 归因调度页，`samples.js` 样本页，`core.js` 共享 token/图表/数字动效 |
+| `static/js/` | `app.js` 路由/主题/数据加载，`board.js` 数据板块，`ring.js` 同心环自绘，`system.js` 归因调度页，`samples.js` 样本页，`core.js` 共享 token/图表/数字动效 |
 | `precompress.sh` | 部署时预压缩 JS/CSS/HTML；`prepare.py`/`prepare_samples.py` 另产 `.gz` |
 | `build/` | Tailwind/DaisyUI 配置与构建入口（`npx tailwindcss -c tailwind.config.js -i input.css -o ../static/app.css --minify`） |
 
 AIME 输出以 `1_aime/eval_output/demo_data/<model>/<model>_attribution-<date>.jsonl` 与
 `compact/<model>_compact-<date>.jsonl` 为准（demo 格式，后续沿用）；
 旧 `eval_output/<split>/...` 与 `.archive/` 只作回退。问财暂无 demo_data 样本。
+问财输出当前回退到 `0_wencai/.archive/0_daily_eval_output`（旧
+`.archive/eval_output/0_daily_eval_output` 仍兼容），输入为
+`0_wencai/eval_input/<model>/<date>.jsonl`。
 `demo_data` 目前没有 `cluster_tree`；数据板块聚类沿用最近的归档聚类快照，样本页不再依赖聚类树。
 
-口径：输入 = 数据集中的 `*_input.jsonl`，以及 AIME 新布局的 `<date>.jsonl`；已评测 = 输出侧回答记录数（问财四个版本 answer 合计，
+口径：输入 = 数据集中的 `*_input.jsonl`，以及 AIME / 问财新布局的 `<date>.jsonl`；已评测 = 输出侧回答记录数（问财四个版本 answer 合计，
 不含 comparison / compact 汇总记录；AIME 统计 `*_attribution-YYYY-MM-DD.jsonl`）；待评测 = 输入 − 已评测。
 问财 / AIME 都按 `meta.task` 展示任务分布：问财不展示「其他/其它」，AIME 把「其它」并进「其他」。
 样本 = demo_data 的 attribution + compact 按 session_id 配对；输入按 trace_id/session_id 回接，不补造缺失内容。
