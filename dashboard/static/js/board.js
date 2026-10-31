@@ -12,8 +12,8 @@ const board = {
   product: "wencai",
   volume: { wencai: { task: null }, aime: { task: null } },
   cluster: {
-    wencai: { src: null, root: null, meta: {}, stack: [] },
-    aime: { src: null, root: null, meta: {}, stack: [] },
+    wencai: { src: null, root: null, meta: {}, stack: [], expandedKey: "" },
+    aime: { src: null, root: null, meta: {}, stack: [], expandedKey: "" },
   },
   predict: { wencai: { dim: "review" }, aime: { dim: "review" } },
   rings: { wencai: { volume: null, cluster: null }, aime: { volume: null, cluster: null } },
@@ -93,15 +93,26 @@ function maybeNumber(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function tonalPalette(n) {
-  const stops = [T.cl1, T.cl2, T.cl3, T.cl4, T.cl5, T.cl6];
-  if (n <= 1) return [stops[0]];
-  return Array.from({ length: n }, (_, i) => {
-    const pos = (i / (n - 1)) * (stops.length - 1);
-    const a = Math.floor(pos);
-    const b = Math.min(stops.length - 1, a + 1);
-    return lerpColor(stops[a], stops[b], pos - a);
-  });
+const RING_LIGHT = [
+  "#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4",
+  "#008300", "#6250d6", "#e34948", "#184f95", "#a8431a",
+  "#127a56", "#a06b00", "#a83e62", "#0a6b0a",
+];
+const RING_DARK = [
+  "#3987e5", "#d95926", "#199e70", "#c98500", "#d55181",
+  "#008300", "#9085e9", "#e66767", "#4f90e0", "#c96a45",
+  "#2a9a6d", "#b88a00", "#c45f85", "#2f9a2f",
+];
+
+function ringPalette(n) {
+  const colors = T.mode === "dark" ? RING_DARK : RING_LIGHT;
+  return Array.from({ length: n }, (_, i) => colors[i % colors.length]);
+}
+
+function paletteByName(names) {
+  const colors = ringPalette(names.length);
+  const ordered = [...names].sort((a, b) => String(a).localeCompare(String(b), "zh-Hans-CN"));
+  return new Map(ordered.map((name, i) => [name, colors[i]]));
 }
 
 function indexTree(root) {
@@ -152,11 +163,12 @@ function volumeTree(product) {
   const tasks = taskList(product);
   const total = volumeTotal(product);
   const classified = tasks.reduce((n, t) => n + (t.value || 0), 0) || 1;
-  const palette = tonalPalette(tasks.length);
+  const colorMap = paletteByName(tasks.map((task) => task.name));
+  const childMix = T.mode === "dark" ? "#ffffff" : T.surface;
   const root = { key: "vol-root", name: "全部任务", value: total, children: [] };
-  root.children = tasks.map((task, i) => {
+  root.children = tasks.map((task) => {
     const key = `task:${task.name}`;
-    const color = palette[i] || T.cl1;
+    const color = colorMap.get(task.name) || T.cl1;
     const subs = taskSubs(product, task.name);
     const subSum = subs.reduce((n, c) => n + (c.value || 0), 0) || 1;
     return {
@@ -169,7 +181,11 @@ function volumeTree(product) {
         key: `${key}/${j}`,
         name: s.name,
         value: s.value,
-        color: lerpColor(color, T.surface, 0.34),
+        color: lerpColor(
+          color,
+          childMix,
+          0.1 + (j / Math.max(subs.length - 1, 1)) * 0.18
+        ),
         share: pct(s.value, subSum),
       })),
     };
@@ -240,25 +256,25 @@ function renderVolumeVisual(product) {
   if (centerEl) centerEl.hidden = false;
 
   board.rings[product].volume = createRing(chartEl, centerEl, {
-    root: focused || tree.root,
-    maxDepth: 1,
-    hole: 30,
+    root: tree.root,
+    expandedKey: focused ? focused.key : "",
     unit: "条",
-    restValue: focused ? focused.value : tree.total,
+    restValue: tree.total,
     restLabel: "条输入",
-    shareTotal: focused ? focused.value : tree.classified,
+    shareTotal: tree.classified,
     centerNode: focused || null,
     canBack: Boolean(focused),
-    crumbs: focused ? ["全部任务", focused.name] : [],
     backLabel: "全部任务",
     hint: "点击扇区展开 ›",
-    expandHint: "展开子类 ›",
+    expandHint: "点击展开子类 ›",
+    collapseHint: "点击收起子类",
+    switchHint: "点击切换展开 ›",
     leafHint: "已是最末级",
     backHint: "",
-    ariaLabel: `${productLabel(product)}数据量同心圆`,
+    ariaLabel: `${productLabel(product)}数据量圆环`,
     onHover: (arc) => markLegend(legendEl, arc ? arc.key : null),
-    onSelect: (node) => {
-      if (!node || focused || !(node.children || []).length) return;
+    onSelect: (node, arc) => {
+      if (!node || arc.kind !== "base" || !(node.children || []).length) return;
       state.task = state.task === node.name ? null : node.name;
       renderVolumeVisual(product);
     },
@@ -726,9 +742,11 @@ function clusterValue(node) {
   return Number(node.value != null ? node.value : node.sessions || 0);
 }
 
-function decorateCluster(node, color, depth, parentPath) {
+function decorateCluster(node, color, depth, parentPath, index = 0, siblings = 1) {
   const path = [...parentPath, node.name];
   const value = clusterValue(node);
+  const childMix = T.mode === "dark" ? "#ffffff" : T.surface;
+  const mix = Math.min(0.48, 0.1 + depth * 0.06 + (siblings > 1 ? (index / (siblings - 1)) * 0.08 : 0));
   const out = {
     key: node.id || path.join("/"),
     clusterKey: node.id || path.join("/"),
@@ -736,10 +754,21 @@ function decorateCluster(node, color, depth, parentPath) {
     value,
     items: Number(node.items != null ? node.items : node.count || 0),
     clusterPath: path,
-    color: depth === 0 ? color : lerpColor(color, T.surface, 0.14 + depth * 0.1),
+    color: depth === 0 ? color : lerpColor(color, childMix, mix),
   };
-  if (node.children && node.children.length) out.children = node.children.map((c) => decorateCluster(c, color, depth + 1, path));
+  if (node.children && node.children.length) {
+    out.children = node.children.map((c, i) =>
+      decorateCluster(c, color, depth + 1, path, i, node.children.length)
+    );
+  }
   return out;
+}
+
+function clusterExpanded(product) {
+  const st = board.cluster[product];
+  if (!st || !st.expandedKey) return null;
+  const current = clusterCurrent(product);
+  return (current.children || []).find((node) => node.key === st.expandedKey) || null;
 }
 
 function clusterCurrent(product) {
@@ -757,10 +786,11 @@ function findClusterNode(root, key) {
   return null;
 }
 
-function renderClusterLegend(product, current) {
+function renderClusterLegend(product, current, expanded) {
   const el = $(isWc(product) ? "wcClusterLegend" : "aiClusterLegend");
   if (!el) return;
-  const rows = (current && current.children) || [];
+  const scope = expanded || current;
+  const rows = (scope && scope.children) || [];
   if (!rows.length) {
     el.innerHTML = `<div class="cl-empty">没有更细的聚类节点</div>`;
     return;
@@ -779,16 +809,27 @@ function renderClusterLegend(product, current) {
   el.onclick = (ev) => {
     const row = ev.target.closest(".rl-row");
     if (!row) return;
-    const node = findClusterNode(current, row.dataset.key);
+    const node = (scope.children || []).find((child) => child.key === row.dataset.key);
     if (!node) return;
-    if ((node.children || []).length) drillCluster(product, node);
-    else recall({ cluster: node.key });
+    if (expanded) {
+      if ((node.children || []).length) drillCluster(product, node);
+      else recall({ cluster: node.key });
+      return;
+    }
+    if ((node.children || []).length) {
+      const st = board.cluster[product];
+      st.expandedKey = st.expandedKey === node.key ? "" : node.key;
+      drawCluster(product);
+    } else {
+      recall({ cluster: node.key });
+    }
   };
 }
 
 function drawCluster(product) {
   const st = board.cluster[product];
   const current = clusterCurrent(product);
+  const expanded = clusterExpanded(product);
   const chartEl = $(isWc(product) ? "wcCluster" : "aiCluster");
   const centerEl = $(isWc(product) ? "wcClusterCenter" : "aiClusterCenter");
   const legendEl = $(isWc(product) ? "wcClusterLegend" : "aiClusterLegend");
@@ -796,8 +837,9 @@ function drawCluster(product) {
   if (!chartEl || !current) return;
 
   if (metaEl) {
-    metaEl.textContent = st.stack.length
-      ? ["全部", ...st.stack.map((node) => node.name)].join(" / ")
+    const trail = [...st.stack, ...(expanded ? [expanded] : [])];
+    metaEl.textContent = trail.length
+      ? ["全部", ...trail.map((node) => node.name)].join(" / ")
       : "";
     metaEl.title = metaEl.textContent;
   }
@@ -805,48 +847,67 @@ function drawCluster(product) {
   const rootTotal = (st.root && st.root.value) || current.value || 1;
   board.rings[product].cluster = createRing(chartEl, centerEl, {
     root: current,
-    maxDepth: 1,
-    hole: 30,
+    expandedKey: expanded ? expanded.key : "",
     unit: "会话",
     restValue: current.value,
     restLabel: "会话",
     shareTotal: rootTotal,
-    centerNode: st.stack.length ? current : null,
-    canBack: st.stack.length > 0,
-    backLabel: "上一层",
+    centerNode: expanded || (st.stack.length ? current : null),
+    canBack: Boolean(expanded) || st.stack.length > 0,
+    backLabel: expanded ? "收起" : "上一层",
     hint: "点击扇区展开 ›",
-    expandHint: "展开子集 ›",
+    expandHint: "点击展开子集 ›",
+    collapseHint: "点击收起子集",
+    switchHint: "点击切换展开 ›",
+    burstHint: "点击进入下一层 ›",
     leafHint: "点击查看样本 →",
     backHint: "",
     leafInteractive: true,
+    burstInteractive: true,
     ariaLabel: `${productLabel(product)}聚类体系`,
     onHover: (arc) => markLegend(legendEl, arc ? arc.key : null),
-    onSelect: (node) => {
+    onSelect: (node, arc) => {
       if (!node) return;
+      if (arc.kind === "base") {
+        if ((node.children || []).length) {
+          st.expandedKey = st.expandedKey === node.key ? "" : node.key;
+          drawCluster(product);
+        } else {
+          recall({ cluster: node.key });
+        }
+        return;
+      }
       if ((node.children || []).length) drillCluster(product, node);
       else recall({ cluster: node.key });
     },
     onBack: () => {
+      if (st.expandedKey) {
+        st.expandedKey = "";
+        drawCluster(product);
+        return;
+      }
       st.stack.pop();
       drawCluster(product);
     },
   });
 
+  const statsNode = expanded || current;
   const stats = $(isWc(product) ? "wcClusterStats" : "aiClusterStats");
-  if (stats) stats.innerHTML = `<span>${fmt(current.items || 0)} <em>条目</em></span>`;
-  renderClusterLegend(product, current);
+  if (stats) stats.innerHTML = `<span>${fmt(statsNode.items || 0)} <em>条目</em></span>`;
+  renderClusterLegend(product, current, expanded);
 
   const sampleBtn = $(isWc(product) ? "wcClusterSamples" : "aiClusterSamples");
   if (sampleBtn) {
     sampleBtn.onclick = () => {
-      const node = clusterCurrent(product);
-      recall({ cluster: node && node !== st.root ? node.key : "" });
+      const node = expanded || (st.stack.length ? current : null);
+      recall({ cluster: node ? node.key : "" });
     };
   }
 }
 
 function drillCluster(product, node) {
   const st = board.cluster[product];
+  st.expandedKey = "";
   if (!node || node === st.root) {
     st.stack = [];
     drawCluster(product);
@@ -877,7 +938,8 @@ function renderCluster(product) {
   const root = (cl && cl.tree) || null;
   const base = board.cluster[product];
   const stackKey = base.stack.length ? base.stack[base.stack.length - 1].key : "";
-  board.cluster[product] = { src, root: null, meta, stack: [] };
+  const expandedKey = base.expandedKey || "";
+  board.cluster[product] = { src, root: null, meta, stack: [], expandedKey: "" };
 
   const chartEl = $(wc ? "wcCluster" : "aiCluster");
   const centerEl = $(wc ? "wcClusterCenter" : "aiClusterCenter");
@@ -900,7 +962,8 @@ function renderCluster(product) {
   }
   if (centerEl) centerEl.hidden = false;
 
-  const palette = tonalPalette(5);
+  const rootKids = root.children || [];
+  const colorMap = paletteByName(rootKids.map((child) => child.name));
   const total = clusterValue(root);
   const prepared = {
     key: "cluster-root",
@@ -909,8 +972,10 @@ function renderCluster(product) {
     value: total,
     items: Number(root.items != null ? root.items : root.count || 0),
     clusterPath: [root.name],
-    color: palette[0],
-    children: (root.children || []).map((c, i) => decorateCluster(c, palette[i % palette.length], 0, [])),
+    color: ringPalette(1)[0],
+    children: rootKids.map((child) =>
+      decorateCluster(child, colorMap.get(child.name) || T.cl1, 0, [])
+    ),
   };
   const setShare = (node) => {
     node.share = pct(node.value, total);
@@ -936,6 +1001,12 @@ function renderCluster(product) {
       walk(prepared, []);
       board.cluster[product].stack = path.filter((n) => n !== prepared);
     }
+  }
+
+  if (expandedKey) {
+    const current = clusterCurrent(product);
+    const restored = (current.children || []).some((node) => node.key === expandedKey);
+    if (restored) board.cluster[product].expandedKey = expandedKey;
   }
 
   const sampleBtn = $(wc ? "wcClusterSamples" : "aiClusterSamples");
