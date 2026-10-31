@@ -128,9 +128,10 @@ export function readTokens() {
     borderWidth: 0,
     padding: 0,
     textStyle: { color: T.ink, fontSize: 11, fontFamily: FONT },
-    extraCssText: `border-radius:12px;box-shadow:0 16px 36px -16px ${
-      T.mode === "dark" ? "rgba(0,0,0,.8)" : "rgba(15,23,42,.35)"
+    extraCssText: `border-radius:8px;box-shadow:0 4px 14px ${
+      T.mode === "dark" ? "rgba(0,0,0,.22)" : "rgba(15,23,42,.1)"
     };`,
+    className: "chart-tooltip",
     appendToBody: true,
     confine: false,
   });
@@ -207,6 +208,7 @@ export function resizeAllCharts() {
   requestAnimationFrame(() => {
     chartInstances.forEach((c) => {
       try {
+        c.dispatchAction({ type: "hideTip" });
         c.resize();
       } catch (e) {}
     });
@@ -222,8 +224,11 @@ export function chartCount() {
 function lockNum(el, value, decimals) {
   if (!el) return;
   const s = fmtFixed(Number(value) || 0, decimals || 0);
-  const width = s.length - (s.includes(",") ? 0.35 : 0);
-  el.style.minWidth = `${Math.max(2, width).toFixed(2)}ch`;
+  // Reserve the final formatted value, including its suffix, before animating.
+  // Keep the largest reservation during refreshes that cross a digit boundary.
+  const width = s.length + (el.dataset.suffix || "").length;
+  el._numWidth = Math.max(el._numWidth || 0, width, 2);
+  el.style.minWidth = `${el._numWidth}ch`;
 }
 
 export function setNum(id, value, opts) {

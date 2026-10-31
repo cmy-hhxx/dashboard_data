@@ -10,9 +10,8 @@ AIME 评测数据在远端服务器上的**搬运、打包与看板**工程。
 ```
 servers.conf                    # 服务器清单（ssh 别名、端口、密钥路径）
 scripts/pack_aime_input.sh      # 把 AIME 评测输入流式打成单个 tar.zst
-docs/aime-input-packaging.md    # 打包流程、压缩基准、参数取舍、踩坑记录
+docs/aime-input-packaging.md    # 打包流程与参数说明
 docs/aime-data-inventory.md     # 2026-10-30 那份数据的解压体量与目录拆解
-docs/manifests/                 # 历史包的逐文件清单（数据删了，清单留着）
 ```
 
 ## 快速开始
@@ -23,8 +22,7 @@ scp scripts/pack_aime_input.sh eval_data:/tmp/
 ssh eval_data 'chmod +x /tmp/pack_aime_input.sh && /tmp/pack_aime_input.sh <目录…>'
 ```
 
-产物落在 `/mnt/fin_bench/aime_data/aime_input_<日期>.tar.zst`，旁边附 `.manifest.txt`
-（sha256、参数、耗时、还原命令、逐文件清单）。
+产物落在 `/mnt/fin_bench/aime_data/aime_input_<日期>.tar.zst`。
 
 默认 `LEVEL=12`：10.3 GB 输入约 **47 秒 / 620 MB（16.6×）**。要更小用 `LEVEL=15`
 （129 秒 / 597 MB），极致压缩用 `LEVEL=19`（392 秒 / 539 MB / 19.06×）。
@@ -47,13 +45,13 @@ ssh eval_data 'chmod +x /tmp/pack_aime_input.sh && /tmp/pack_aime_input.sh <目�
 
 `dashboard/` 是问财 / AIME 评测看板：原生 ES modules + ECharts + Python 标准库起服务。
 **唯一数据源**是 `/mnt/fin_bench/code_and_clean_data/datasets`（评测输入、输出、cluster_tree、item_index）。
-入口分三块，顶部导航切换，Hash 路由可直接分享：
+入口分三块，顶部导航切换，query 路由可直接分享：
 
 | 页面 | 路由 | 内容 |
 |---|---|---|
-| 数据 | `#/data` | 问财 / AIME 的 2+3 Bento：数据量、评测量、归因、聚类、预测 |
-| 评测体系 | `#/system` | 基于 `eval_agent_harness` 与 `cluster_algorithm` 的动画化结构说明 |
-| 样本 | `#/samples` | 按归因 / 聚类召回真实样本；输入卡 + 输出信息卡 + 归因卡 |
+| 数据 | `?view=data` | 问财 / AIME 的 2+3 Bento：数据量、评测量、归因、聚类、预测 |
+| 评测体系 | `?view=system` | 基于 `eval_agent_harness` 与 `cluster_algorithm` 的动画化结构说明 |
+| 样本 | `?view=samples` | 按归因 / 聚类召回真实样本；输入卡 + 输出信息卡 + 归因卡 |
 
 ```bash
 ./dashboard/deploy.sh                                    # 同步、生成 data.json/samples.json、重启
@@ -94,7 +92,7 @@ ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
 - 右栏：左侧一张「评测输入」大卡（原问、meta、工具、system/reasoning/tool call/工具返回、
   最终回答，长文折叠）；右侧两张上下卡：上「评测输出 · 信息卡」（判词、指标、逐轮/会话总结），
   下「评测输出 · 归因卡」（聚类路径、全部 Problem、严重度、定义/理由/证据引文）。
-- 归因桑基点击、聚类召回、体系页 CTA 都通过 `#/samples?product=…&component=…&severity=…&cluster=…`
+- 归因桑基点击、聚类召回、体系页 CTA 都通过 `?view=samples&product=…&component=…&severity=…&cluster=…`
   深链进入；筛选和选中 case 同步到 URL，可直接分享。
 
 | 文件 | 作用 |
@@ -108,8 +106,8 @@ ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
 | `precompress.sh` | 部署时预压缩 JS/CSS/HTML；`prepare.py`/`prepare_samples.py` 另产 `.gz` |
 | `build/` | Tailwind/DaisyUI 配置与构建入口（`npx tailwindcss -c tailwind.config.js -i input.css -o ../static/app.css --minify`） |
 
-口径：输入 = 数据集中的 `*_input.jsonl`；已评测 = 输出侧回答记录数（问财四个版本 answer 合计，
-不含 comparison 记录；AIME 输出记录数）；待评测 = 输入 − 已评测。
+口径：输入 = 数据集中的 `*_input.jsonl`，以及 AIME 新布局的 `<date>.jsonl`；已评测 = 输出侧回答记录数（问财四个版本 answer 合计，
+不含 comparison / compact 汇总记录；AIME 统计 `*_attribution-YYYY-MM-DD.jsonl`）；待评测 = 输入 − 已评测。
 问财 / AIME 都按 `meta.task` 展示任务分布：问财不展示「其他/其它」，AIME 把「其它」并进「其他」。
 样本页从 cluster 叶子/条目索引反查 `src_file:src_line`，再按 trace_id 回接输入；不补造缺失内容。
 当前真实快照：输入/归因覆盖至 2026-10-23，聚类产物生成于 2026-10-30（v2.5.0，覆盖旧快照），

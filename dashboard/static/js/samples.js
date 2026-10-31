@@ -218,7 +218,7 @@ function bindEvents() {
         S.activeId = null;
         renderList();
         renderDetail();
-        syncHash();
+        syncRoute();
       }, 140);
     });
   }
@@ -359,7 +359,7 @@ function selectSample(id) {
   if (shell) shell.classList.add("is-detail-open");
   renderList();
   renderDetail();
-  syncHash();
+  syncRoute();
   const detail = q("#sampleDetail");
   if (detail && window.innerWidth > 900) detail.scrollTop = 0;
 }
@@ -741,7 +741,7 @@ function renderDetail() {
 
 /* -------------------------------------------------------------------- state */
 
-function syncHash() {
+function syncRoute() {
   if (!S.built) return;
   const s = activeSample();
   const params = new URLSearchParams();
@@ -751,7 +751,8 @@ function syncHash() {
   });
   if (s && s.case_id) params.set("case", s.case_id);
   try {
-    history.replaceState(null, "", `#/samples?${params.toString()}`);
+    params.set("view", "samples");
+    history.replaceState(null, "", `?${params.toString()}`);
   } catch (e) {}
 }
 
@@ -770,7 +771,7 @@ function renderAll() {
     shell.classList.toggle("is-detail-open", S.mobileDetail);
     shell.classList.toggle("is-rail-open", S.railOpen);
   }
-  syncHash();
+  syncRoute();
 }
 
 /* --------------------------------------------------------------------- API */

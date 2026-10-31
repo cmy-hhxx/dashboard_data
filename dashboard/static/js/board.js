@@ -25,13 +25,11 @@ const VERSION_DEFS = {
 };
 
 const TASK_COLORS = () => [
-  T.wc, "#0ea5e9", "#f59e0b", "#8b5cf6", "#ef4444", "#14b8a6",
-  "#6366f1", "#84cc16", "#ec4899", "#64748b", "#f97316", "#06b6d4",
+  T.cl1, T.cl2, T.cl3, T.cl4, T.cl5, T.cl6,
 ];
 
 const AIME_TASK_COLORS = () => [
-  T.ai, "#0ea5e9", "#f59e0b", "#8b5cf6", "#ef4444", "#14b8a6",
-  "#6366f1", "#84cc16", "#ec4899", "#64748b", "#f97316", "#06b6d4",
+  T.cl1, T.cl2, T.cl3, T.cl4, T.cl5, T.cl6,
 ];
 
 const isWc = (product) => product === "wencai";
@@ -156,11 +154,11 @@ function renderVolumeLegend(product) {
     const selectedIndex = tasks.findIndex((t) => t.name === selected.name);
     const baseColor = pal[Math.max(0, selectedIndex) % pal.length];
     el.innerHTML =
-      `<div class="vr-head"><span>${esc(selected.name)} · 子类</span><span>条数</span><span>占比</span></div>` +
+      `<div class="vr-head"><span title="${esc(selected.name)}">子类明细</span><span>条数</span><span>占比</span></div>` +
       subs
         .map(
           (x, i) =>
-            `<div class="vr-row is-static" title="${esc(x.name)} · ${fmt(x.value)} 条 · ${pct(x.value, subTotal).toFixed(1)}%">` +
+            `<div class="vr-row is-static" data-volume-name="${esc(x.name)}" title="${esc(x.name)} · ${fmt(x.value)} 条 · ${pct(x.value, subTotal).toFixed(1)}%">` +
             `<i class="vr-dot" style="background:${lerpColor(baseColor, T.surface, 0.22 + i * 0.06)}"></i>` +
             `<span class="vr-name">${esc(x.name)}</span>` +
             `<span class="vr-val">${fmt(x.value)}</span>` +
@@ -176,7 +174,7 @@ function renderVolumeLegend(product) {
     tasks
       .map(
         (t, i) =>
-          `<button class="vr-row${selected === t.name ? " is-active" : ""}" type="button" data-task="${esc(t.name)}" title="${esc(t.name)} · ${fmt(t.value)} 条 · ${pct(t.value, total).toFixed(1)}%">` +
+          `<button class="vr-row${selected === t.name ? " is-active" : ""}" type="button" data-task="${esc(t.name)}" data-volume-name="${esc(t.name)}" title="${esc(t.name)} · ${fmt(t.value)} 条 · ${pct(t.value, total).toFixed(1)}%">` +
           `<i class="vr-dot" style="background:${pal[i % pal.length]}"></i>` +
           `<span class="vr-name">${esc(t.name)}</span>` +
           `<span class="vr-val">${fmt(t.value)}</span>` +
@@ -227,34 +225,36 @@ function renderVolumeVisual(product) {
 
   const el = $(wc ? "wcTaskChart" : "aiTaskChart");
   if (!el) return;
+  const stage = el.closest(".volume-stage");
+  stage.classList.toggle("is-empty", !tasks.length);
   if (!tasks.length) {
+    if (note) note.textContent = "任务分类";
     showChartEmpty(el, "任务分类数据待接入");
     return;
   }
   el.innerHTML = "";
   const data = tasks.map((t, i) => ringNode(product, t, i));
 
-  const narrow = window.innerWidth <= 760;
-  const minShare = selected ? 4.4 : 5.5;
   const chart = createChart(el, {
     animationDuration: REDUCED ? 0 : 680,
     animationEasing: "cubicOut",
     tooltip: {
       ...tip,
+      position: (point, params, dom, rect, size) => {
+        const bounds = el.getBoundingClientRect();
+        const x = Math.max(12 - bounds.left, Math.min(point[0] + 12, window.innerWidth - bounds.left - size.contentSize[0] - 12));
+        const y = Math.max(12 - bounds.top, Math.min(point[1] + 16, window.innerHeight - bounds.top - size.contentSize[1] - 12));
+        return [x, y];
+      },
       formatter: (p) => {
         const share = p.data && p.data.share != null ? p.data.share : pct(p.value, total);
-        const path = p.data && p.data.ringLevel === 1 ? `${p.data.taskName} / ` : "";
-        return tipCard(
-          tipHead(`${path}${p.name}`, `${share.toFixed(1)}%`, p.color) +
-            tipRow(p.color, "条数", fmt(p.value)) +
-            `<div class="tip-path">${p.data && p.data.ringLevel === 0 ? "点击该任务下钻" : "点击切换任务"}</div>`
-        );
+        return `<div class="volume-tip"><span>${esc(p.name)}</span><b>${fmt(p.value)}</b><em>占全部 ${share.toFixed(1)}%</em></div>`;
       },
     },
     series: [
       {
         type: "sunburst",
-        radius: ["26%", "96%"],
+        radius: ["38%", "92%"],
         center: ["50%", "50%"],
         data,
         sort: null,
@@ -265,40 +265,47 @@ function renderVolumeVisual(product) {
         levels: [
           {},
           {
-            r0: "26%",
-            r: "59%",
+            r0: "38%",
+            r: selected ? "68%" : "92%",
             itemStyle: { borderWidth: 2.4 },
-            label: {
-              show: !narrow,
-              position: "inside",
-              fontSize: 9,
-              lineHeight: 11,
-              rotate: "none",
-              color: "inherit",
-              formatter: (p) => {
-                const share = p.data && p.data.share != null ? p.data.share : 0;
-                if (share < minShare) return "";
-                const name = String(p.name || "");
-                return name.length > 7 ? `${name.slice(0, 6)}…` : name;
-              },
-            },
+            label: { show: false },
           },
           {
-            r0: "59%",
-            r: "95%",
+            r0: "68%",
+            r: "92%",
             itemStyle: { borderWidth: 2 },
             label: { show: false },
           },
         ],
         labelLayout: { hideOverlap: true },
         emphasis: {
-          focus: "ancestor",
-          itemStyle: { shadowBlur: 12, shadowColor: hexA(T.ink, 0.18) },
+          focus: "none",
+          itemStyle: { borderColor: T.ink2, borderWidth: 2, shadowBlur: 0 },
         },
       },
     ],
   });
   if (chart) {
+    const legend = $(wc ? "wcVolumeLegend" : "aiVolumeLegend");
+    const highlight = (name) => {
+      legend.querySelectorAll(".vr-row").forEach((row) => {
+        row.classList.toggle("is-hovered", row.dataset.volumeName === name);
+      });
+    };
+    chart.on("mouseover", (p) => highlight(p.name));
+    chart.on("mouseout", () => highlight(null));
+    const hoverRow = (event) => {
+      const row = event.target.closest(".vr-row");
+      chart.dispatchAction({ type: "downplay", seriesIndex: 0 });
+      highlight(row ? row.dataset.volumeName : null);
+      if (row) chart.dispatchAction({ type: "highlight", seriesIndex: 0, name: row.dataset.volumeName });
+    };
+    legend.onmouseover = hoverRow;
+    legend.onfocusin = hoverRow;
+    legend.onmouseleave = legend.onfocusout = () => {
+      highlight(null);
+      chart.dispatchAction({ type: "downplay", seriesIndex: 0 });
+    };
     chart.on("click", (p) => {
       const task = p.data && p.data.taskName;
       if (!task) return;
@@ -323,8 +330,7 @@ function renderVolume(product) {
     board.volume[product].task = null;
   }
   if (!board.volume[product].initialized) {
-    const pick = tasks.find((t) => !["其他", "其它"].includes(t.name)) || tasks[0];
-    board.volume[product].task = pick ? pick.name : null;
+    board.volume[product].task = null;
     board.volume[product].initialized = true;
   }
 
@@ -576,7 +582,7 @@ function renderSpark(perDay) {
       const h = Math.max(3, Math.round(ratio * 100));
       const alpha = (0.3 + ratio * 0.7).toFixed(2);
       return (
-        `<i class="spark-bar" style="--h:${h}%;background:linear-gradient(180deg,${hexA(T.aiMid, alpha)},${hexA(T.ai, alpha)})"` +
+        `<i class="spark-bar" style="--h:${h}%;background:${hexA(T.ai, alpha)}"` +
         ` title="${x.date} · ${fmt(x.value)} 条"></i>`
       );
     })

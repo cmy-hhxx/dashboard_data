@@ -2,8 +2,10 @@
 """Build data.json for the eval dashboard from the curated datasets tree.
 
 Source: /mnt/fin_bench/code_and_clean_data/datasets
-  <product>/eval_input/<split>/<model>/<model>-<date>_input.jsonl
-  <product>/eval_output/<split>/<model>/<model>-<date>_output.jsonl
+  <product>/eval_input/<split>/<model>/<model>-<date>_input.jsonl (legacy)
+  1_aime/eval_input/<split>/<model>/<date>.jsonl (current)
+  <product>/eval_output/<split>/<model>/<model>-<date>_output.jsonl (legacy)
+  1_aime/eval_output/<split>/<model>/<model>_attribution-<date>.jsonl (current)
   <product>/eval_output/<split>/comparison/<pair>/<pair>-<date>_output.jsonl
 
 Volumes / per-day counts / meta categories come from cache/datasets.json
@@ -32,12 +34,24 @@ CLUSTER_FILES = {
 }
 LOST_CLUSTER = f"{DATASETS}/1_aime/eval_output/1_lost_user_eval_output/aime_fast/cluster/cluster_tree.json"
 
-WENCAI_INPUT_GLOB = f"{DATASETS}/0_wencai/eval_input/*/*/*_input.jsonl"
-AIME_INPUT_GLOB = f"{DATASETS}/1_aime/eval_input/*/*/*_input.jsonl"
+WENCAI_INPUT_GLOB = f"{DATASETS}/0_wencai/eval_input/*/*/*.jsonl"
+AIME_INPUT_GLOB = f"{DATASETS}/1_aime/eval_input/*/*/*.jsonl"
 WENCAI_OUTPUT_GLOB = f"{DATASETS}/0_wencai/eval_output/0_daily_eval_output/*/*_output.jsonl"
 WENCAI_COMPARE_GLOB = f"{DATASETS}/0_wencai/eval_output/0_daily_eval_output/comparison/*/*_output.jsonl"
 AIME_DAILY_OUTPUT_GLOB = f"{DATASETS}/1_aime/eval_output/0_daily_eval_output/*/*_output.jsonl"
 AIME_LOST_OUTPUT_GLOB = f"{DATASETS}/1_aime/eval_output/1_lost_user_eval_output/*/*_output.jsonl"
+
+
+def aime_output_paths(rel):
+    """Read legacy *_output files and the current *_attribution files.
+
+    Compact artifacts are deliberately excluded: they are summaries, not an
+    additional evaluation result, and counting them would double the coverage.
+    """
+    base = f"{DATASETS}/{rel}/*"
+    paths = glob.glob(f"{base}/*_output.jsonl")
+    paths.extend(glob.glob(f"{base}/*_attribution-*.jsonl"))
+    return paths
 
 
 def now_iso():
@@ -107,8 +121,8 @@ def build_freshness():
     )
     wencai_out = glob.glob(WENCAI_OUTPUT_GLOB)
     compare_out = glob.glob(WENCAI_COMPARE_GLOB)
-    aime_daily_out = glob.glob(AIME_DAILY_OUTPUT_GLOB)
-    aime_lost_out = glob.glob(AIME_LOST_OUTPUT_GLOB)
+    aime_daily_out = aime_output_paths("1_aime/eval_output/0_daily_eval_output")
+    aime_lost_out = aime_output_paths("1_aime/eval_output/1_lost_user_eval_output")
     attribution_at, attribution_date, _ = artifact_summary(
         wencai_out + compare_out + aime_daily_out + aime_lost_out
     )
@@ -411,9 +425,13 @@ def aime_outputs():
     task_subtasks = collections.defaultdict(collections.Counter)
 
     for group, rel in AIME_GROUPS:
-        for path in sorted(glob.glob(f"{DATASETS}/{rel}/*/*_output.jsonl")):
+        for path in sorted(aime_output_paths(rel)):
             base = os.path.basename(path)
-            model = base.split("-")[0].replace("aime_", "")
+            if "_attribution-" in base:
+                model = base.split("_attribution-", 1)[0]
+            else:
+                model = base.split("-", 1)[0]
+            model = model.replace("aime_", "")
             date = re.search(r"(\d{4}-\d{2}-\d{2})", base).group(1)
             day = per_day.setdefault(
                 date,

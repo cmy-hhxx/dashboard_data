@@ -29,3 +29,5 @@ dashboard/static/**/*.gz
 
 dashboard/static/samples.json
 dashboard/static/samples.json.gz
+
+.taste-skill/

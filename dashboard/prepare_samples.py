@@ -91,6 +91,16 @@ def same_label(left, right):
     return (left or "").strip() == (right or "").strip()
 
 
+def input_path_for(spec, date):
+    """Resolve both the current date.jsonl layout and the legacy filename."""
+    current = os.path.join(spec["indir"], f"{date}.jsonl")
+    legacy = os.path.join(spec["indir"], f"{spec['model']}-{date}_input.jsonl")
+    for path in (current, legacy):
+        if os.path.exists(path):
+            return path
+    return current
+
+
 # --------------------------------------------------------------- cluster input
 
 def cluster_specs(datasets):
@@ -115,7 +125,7 @@ def cluster_specs(datasets):
         "split": "lost",
         "tree": f"{ai_out}/1_lost_user_eval_output/{AIME_MODEL}/cluster/cluster_tree.json",
         "outdir": f"{ai_out}/1_lost_user_eval_output/{AIME_MODEL}",
-        "indir": f"{ai_in}/1_lost_user_input/{AIME_MODEL}",
+        "indir": f"{ai_in}/1_lost_user_eval/{AIME_MODEL}",
         "output_split": "1_lost_user_eval_output",
     })
     specs.append({
@@ -683,7 +693,7 @@ def resolve_inputs(samples, datasets, max_input_mb):
             sample["quality"]["input_missing"] = True
             sample["quality"]["input_missing_reason"] = "date_unknown"
             continue
-        path = f"{spec['indir']}/{spec['model']}-{date}_input.jsonl"
+        path = input_path_for(spec, date)
         if not os.path.exists(path):
             sample["quality"]["input_missing"] = True
             sample["quality"]["input_missing_reason"] = "input_file_missing"

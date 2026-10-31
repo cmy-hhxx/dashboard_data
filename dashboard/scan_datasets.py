@@ -2,7 +2,10 @@
 """Scan /mnt/fin_bench/code_and_clean_data/datasets (the curated eval dataset).
 
 Emits cache/datasets.json with per-file volume, per model/date input-output
-pairs and the meta categories used for the distribution panel.
+pairs and the meta categories used for the distribution panel. AIME accepts
+both the legacy *_input.jsonl / *_output.jsonl names and the current
+<date>.jsonl inputs plus *_attribution-YYYY-MM-DD.jsonl outputs; compact files
+are summaries and are intentionally excluded from coverage counts.
 """
 import argparse
 import collections
@@ -16,6 +19,8 @@ from datetime import datetime, timedelta, timezone
 
 DATASETS = "/mnt/fin_bench/code_and_clean_data/datasets"
 NAME_RE = re.compile(r"(?P<model>.+?)-(?P<date>\d{4}-\d{2}-\d{2})_(?P<kind>input|output)\.jsonl$")
+ATTRIBUTION_RE = re.compile(r"(?P<model>.+?)_attribution-(?P<date>\d{4}-\d{2}-\d{2})\.jsonl$")
+DATE_INPUT_RE = re.compile(r"(?P<date>\d{4}-\d{2}-\d{2})\.jsonl$")
 
 
 def locate(data_dir):
@@ -26,8 +31,24 @@ def locate(data_dir):
             continue
         name = os.path.basename(path)
         m = NAME_RE.search(name)
-        if not m:
-            continue
+        if m:
+            model = m.group("model")
+            date = m.group("date")
+            kind = m.group("kind")
+        else:
+            m = ATTRIBUTION_RE.search(name)
+            if m:
+                model = m.group("model")
+                date = m.group("date")
+                kind = "output"
+            else:
+                m = DATE_INPUT_RE.search(name)
+                if not m or "/eval_input/" not in path:
+                    continue
+                parts = path[len(data_dir):].strip("/").split("/")
+                model = parts[3] if len(parts) > 3 else "unknown"
+                date = m.group("date")
+                kind = "input"
         parts = path[len(data_dir):].strip("/").split("/")
         product = parts[0]  # 0_wencai / 1_aime
         raw = parts[2]
@@ -40,9 +61,9 @@ def locate(data_dir):
         rows.append({
             "product": product,
             "split": split,
-            "model": m.group("model"),
-            "date": m.group("date"),
-            "kind": m.group("kind"),
+            "model": model,
+            "date": date,
+            "kind": kind,
             "path": path,
         })
     return rows

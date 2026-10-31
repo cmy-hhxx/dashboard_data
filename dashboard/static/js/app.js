@@ -1,4 +1,4 @@
-/* Shell: three views, product switch, hash routing, theme and data loading. */
+/* Shell: three views, product switch, query routing, theme and data loading. */
 import { $, $$, readTokens, disposeAllCharts, resizeAllCharts, settleCounters, startCounters } from "./core.js";
 import { initBoard, setBoardProduct, refreshBoard, resizeBoard, getBoardProduct } from "./board.js";
 import { initSystem, setSystemActive, refreshSystem } from "./system.js";
@@ -20,27 +20,25 @@ let activeProduct = "wencai";
 
 /* ------------------------------------------------------------------ helpers */
 
-function parseHash() {
-  const raw = (location.hash || "#/data").replace(/^#\/?/, "");
-  const [name, query = ""] = raw.split("?");
-  const params = new URLSearchParams(query);
-  return { view: VIEWS.has(name) ? name : "data", params };
+function parseRoute() {
+  const params = new URLSearchParams(location.search);
+  const view = params.get("view") || "data";
+  return { view: VIEWS.has(view) ? view : "data", params };
 }
 
-function hashFor(view, params) {
+function routeFor(view, params) {
   const q = new URLSearchParams();
+  q.set("view", view);
   Object.entries(params || {}).forEach(([k, v]) => {
     if (v != null && v !== "") q.set(k, v);
   });
-  const body = q.toString();
-  return `#/${view}${body ? `?${body}` : ""}`;
+  return `?${q.toString()}`;
 }
 
-function setHash(view, params, replace) {
-  const next = hashFor(view, params);
-  if (location.hash === next) return;
-  if (replace) history.replaceState(null, "", next);
-  else location.hash = next;
+function setRoute(view, params, replace) {
+  const next = routeFor(view, params);
+  if (location.search === next) return;
+  history[replace ? "replaceState" : "pushState"](null, "", next);
 }
 
 function setProduct(product, persist = true) {
@@ -72,8 +70,8 @@ function navigate(view, params = {}, { replace = false } = {}) {
   if (!VIEWS.has(view)) return;
   const next = { ...params };
   if ((view === "data" || view === "samples") && next.product == null) next.product = activeProduct;
-  setHash(view, next, replace);
-  applyRoute(parseHash());
+  setRoute(view, next, replace);
+  applyRoute(parseRoute());
 }
 
 function applyRoute(route) {
@@ -164,7 +162,7 @@ function initNav() {
       const tab = ev.target.closest(".product-tab");
       if (!tab) return;
       setProduct(tab.dataset.tab);
-      const route = parseHash();
+      const route = parseRoute();
       const params = activeView === "samples"
         ? { product: tab.dataset.tab }
         : { ...Object.fromEntries(route.params), product: tab.dataset.tab };
@@ -274,13 +272,18 @@ function setFreshness(data) {
   const el = $("freshnessChip");
   if (!el) return;
   const f = data.freshness || {};
+  const input = f.input || {};
   const a = f.attribution || {};
   const c = f.cluster || {};
   const stamp = (x) => String(x.date || x.at || "—").slice(5, 10);
-  const stale = Boolean(a.stale || c.stale);
+  const stale = Boolean(input.stale || a.stale || c.stale);
+  const outputMissing = !a.date && !a.at;
   el.classList.toggle("is-stale", stale);
-  el.textContent = `归因 ${stamp(a)} · 聚类 ${stamp(c)}${stale ? " · 待刷新" : ""}`;
+  const inputLabel = input.date ? `输入 ${stamp(input)}` : "输入 —";
+  const statusLabel = outputMissing ? "输出待落盘" : stale ? "待刷新" : "已同步";
+  el.textContent = `${inputLabel} · 归因 ${stamp(a)} · 聚类 ${stamp(c)} · ${statusLabel}`;
   el.title = [
+    `输入：${input.label || input.at || "未知"}${input.stale ? "（仍在更新）" : ""}`,
     `归因：${a.label || a.at || "未知"}${a.stale ? "（非最新批次）" : ""}`,
     `聚类：${c.label || c.at || "未知"}${c.stale ? "（非最新批次）" : ""}`,
   ].join("\n");
@@ -299,7 +302,7 @@ function renderAll() {
   setFreshness(DATA);
   $("updated").textContent = (DATA.generated_at || "—").slice(5, 16).replace("T", " ");
   setProduct(activeProduct, false);
-  applyRoute(parseHash());
+  applyRoute(parseRoute());
 }
 
 function reveal() {
@@ -334,7 +337,7 @@ function boot() {
   initTheme();
   initNav();
 
-  window.addEventListener("hashchange", () => applyRoute(parseHash()));
+  window.addEventListener("popstate", () => applyRoute(parseRoute()));
   window.addEventListener("resize", resizeAllCharts);
   window.addEventListener("eval:recall", onRecall);
 

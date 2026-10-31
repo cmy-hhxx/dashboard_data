@@ -10,7 +10,6 @@
 `0_daily_eval_input`，117 文件 / 10,271,219,449 B），逐日期明细照旧可用；全量口径比它多
 170 个文件，即 `1_lost_user_eval/aime_expert`、`1_lost_user_eval/aime_fast` 及其
 `input_files/`、`output_files/` 附件，外加一个 `.package-pipeline.lock`。
-窄口径的逐文件清单保留在 [`manifests/aime_input_20261030.manifest.txt`](manifests/aime_input_20261030.manifest.txt)。
 
 ## 1. 体量
 
@@ -140,7 +139,6 @@ aime_input_20261030.tar.zst
 - **日常/fast 日期缺口**：2026-10-26~2026-10-28（按相邻日期差 > 1 天判定）
 - **附件 56 个 / 24.9 MB**（图片、xlsx、zip、svg），按日期分组放在 `input_files/<日期>/`，文件名是内容哈希前缀，靠记录里的 id 关联，不在 jsonl 行内嵌。
 - **`status.json` 不是数据**：2 个，记录流水线进度（processing / completed_with_backlog），只在统计“完成度”时有意义；另有 3 个 0 字节 lock。
-- 25,090 条记录在打包时已全量校验：逐行 `json.loads` 通过，0 坏行。
 ## 6. 评测输入计数（2026-10-30 18:50 CST 快照）
 
 按"日常 / 流失 / 归档"三个口径分列。条数 = jsonl 行数（一行一个评测输入），
