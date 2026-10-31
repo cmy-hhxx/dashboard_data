@@ -52,7 +52,7 @@ ssh eval_data 'chmod +x /tmp/pack_aime_input.sh && /tmp/pack_aime_input.sh <目�
 | 页面 | 路由 | 内容 |
 |---|---|---|
 | 数据 | `?view=data` | 问财 / AIME 的 2+3 Bento：数据量、评测量、归因、聚类、预测 |
-| 评测体系 | `?view=system` | 基于 `eval_agent_harness` 与 `cluster_algorithm` 的动画化结构说明 |
+| 评测体系 | `?view=system` | 归因调度台：一个程序路由器 + 四个专业代理，事件驱动、草稿闸门与两份 JSONL 产物 |
 | 样本 | `?view=samples` | 按归因 / 聚类召回真实样本；输入卡 + 输出信息卡 + 归因卡 |
 
 ```bash
@@ -80,14 +80,15 @@ ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
   数据量给 7 日预测 + 置信区间；性能预测覆盖率（累计口径），附 P50 / 问题密度；
   归因预测严重度或环节构成。历史不足时明确标「原型」；AIME 批量尖峰用 7 日平滑并标注。
 
-**2. 评测体系说明页**：三幕动画，实际在动。
+**2. 评测体系说明页**：归因调度台，一个程序路由器 + 四个专业代理，事件驱动。
 
-- 总览：输入 → Criteria / Compact → Trace 归因 → Session 归因 → JSONL；五个下游消费者；
-  节点逐段点亮、流上有运动粒子，支持播放 / 暂停 / 单步。
-- 归因链：原始消息 → Compact 字段 → Trace 审查 → Session 审查 → 引文回跳原始坐标；
-  展示 `trace/message/path/evidence_id` 与 400 字引文约束。
-- 聚类与质量：9 环节 × 7 机制矩阵、133 模式 / 124 叶子、α=0.918、91.3% 双盲一致率；
-  「召回样本」直接跳到样本页。版本事实标 r486 / taxonomy v3.0.0，不冒充实时测量。
+- 事件源 → 程序路由器 → 四个代理：字段员、组件调查员、逐轮摘要员、跨轮复核员；
+  路由器只在输入就绪或结果被接受时转发，不轮询。
+- 草稿闸门逐条校验原文坐标（逐字连续、≤400 字）、异常处置（5 选 1）与剩余影响（终稿是否采用）：
+  有确认剩余影响的进入 P0–P3，已恢复的记 P4，说不清的不生成问题。
+- 压缩接受后立即写 `compact.jsonl`，会话接受后追加 `attribution.jsonl`；只追加、可续跑。
+- 动画按输入 → 压缩 → 组件 → 逐轮 → 跨轮 → 闸门 → 落盘推进，支持播放 / 暂停与点击代理查看阶段；
+  系统减少动态时直接给出完整静态终态。
 
 **3. 具体样本页**：三栏召回工作台。
 
@@ -107,7 +108,7 @@ ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
 | `dataset_layout.py` | 解析 datasets 布局：demo_data → legacy → `.archive` 逐级回退，供三个生成脚本共用 |
 | `server.py` | `ThreadingHTTPServer` + 定时重算；`/healthz` 返回 data/samples 双刷新状态 |
 | `static/` | 三页入口、ES modules、ECharts 离线包、构建好的 `app.css` 与页面 CSS |
-| `static/js/` | `app.js` 路由/主题/数据加载，`board.js` 数据板块，`system.js` 体系页，`samples.js` 样本页，`core.js` 共享 token/图表/数字动效 |
+| `static/js/` | `app.js` 路由/主题/数据加载，`board.js` 数据板块，`system.js` 归因调度页，`samples.js` 样本页，`core.js` 共享 token/图表/数字动效 |
 | `precompress.sh` | 部署时预压缩 JS/CSS/HTML；`prepare.py`/`prepare_samples.py` 另产 `.gz` |
 | `build/` | Tailwind/DaisyUI 配置与构建入口（`npx tailwindcss -c tailwind.config.js -i input.css -o ../static/app.css --minify`） |
 
