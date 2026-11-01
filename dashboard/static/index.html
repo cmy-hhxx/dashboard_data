@@ -1,202 +1,54 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="evalboard" data-mode="light">
+<html lang="zh-CN" data-mode="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>评测数据看板 · 数据 / 评测体系 / 样本</title>
+<title>评测看板</title>
 <script>
   (function () {
     try {
       var saved = localStorage.getItem("eval-mode");
-      if (saved !== "light" && saved !== "dark") saved = null;
-      var dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-      document.documentElement.dataset.mode = saved || (dark ? "dark" : "light");
+      var dark = window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.dataset.mode = saved === "light" || saved === "dark" ? saved : dark ? "dark" : "light";
     } catch (e) {}
   })();
 </script>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%230F766E'/%3E%3Crect x='7' y='14' width='4' height='11' rx='1.5' fill='white' opacity='.6'/%3E%3Crect x='14' y='8' width='4' height='17' rx='1.5' fill='white'/%3E%3Crect x='21' y='17' width='4' height='8' rx='1.5' fill='white' opacity='.4'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='1' y='1' width='6' height='6' rx='1.5' fill='%23d35e2c'/%3E%3Crect x='9' y='1' width='6' height='6' rx='1.5' fill='%23dfe3e8'/%3E%3Crect x='17' y='1' width='6' height='6' rx='1.5' fill='%23a01e26'/%3E%3Crect x='1' y='9' width='6' height='6' rx='1.5' fill='%23dfe3e8'/%3E%3Crect x='9' y='9' width='6' height='6' rx='1.5' fill='%23d35e2c'/%3E%3Crect x='17' y='9' width='6' height='6' rx='1.5' fill='%23dfe3e8'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="app.css">
-<link rel="stylesheet" href="shell.css">
-<link rel="stylesheet" href="taste.css">
 </head>
 <body>
-<a class="skip-link" href="#mainContent">跳到主要内容</a>
-<div class="app">
-
-  <header class="page-head">
-    <div class="head-left">
-      <div class="brand">
-        <span class="brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none">
-            <rect x="4" y="13" width="3.4" height="7" rx="1.2" fill="white" opacity=".55"/>
-            <rect x="10.3" y="7" width="3.4" height="13" rx="1.2" fill="white"/>
-            <rect x="16.6" y="16" width="3.4" height="4" rx="1.2" fill="white" opacity=".4"/>
-          </svg>
-        </span>
-        <h1>评测数据看板</h1>
-      </div>
-      <nav id="viewSwitch" class="view-switch" data-active="data" aria-label="板块切换">
-        <span class="view-knob" aria-hidden="true"></span>
-        <button class="view-tab is-active" type="button" data-view="data" aria-current="page">数据</button>
-        <button class="view-tab" type="button" data-view="system">评测体系</button>
-        <button class="view-tab" type="button" data-view="samples">样本</button>
-      </nav>
-    </div>
-    <div class="head-actions">
-      <div id="productSwitch" class="product-switch" data-active="wencai" role="tablist" aria-label="产品切换">
-        <span class="switch-knob" aria-hidden="true"></span>
-        <button class="product-tab is-active" type="button" role="tab" data-tab="wencai" aria-selected="true">问财</button>
-        <button class="product-tab" type="button" role="tab" data-tab="aime" aria-selected="false">AIME</button>
-      </div>
-      <span id="freshnessChip" class="freshness-chip" role="img" aria-label="数据状态">
-        <i class="freshness-dot" aria-hidden="true"></i>
-      </span>
-      <button id="themeToggle" class="icon-btn" type="button" aria-label="切换深色模式">
-        <svg class="icon icon-sun" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <circle cx="12" cy="12" r="4.1" stroke="currentColor" stroke-width="1.7"/>
-          <path d="M12 3.2v1.8M12 19v1.8M20.8 12H19M5 12H3.2M18.2 5.8l-1.3 1.3M7.1 16.9l-1.3 1.3M18.2 18.2l-1.3-1.3M7.1 7.1 5.8 5.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-        </svg>
-        <svg class="icon icon-moon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M20 14.4A8.4 8.4 0 0 1 9.6 4a8.4 8.4 0 1 0 10.4 10.4Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
-        </svg>
-      </button>
-    </div>
-  </header>
-
-  <main id="mainContent" class="board" tabindex="-1">
-
-    <!-- ============================ 数据板块 ============================ -->
-    <section class="view view--data is-active" data-view="data" aria-label="数据板块">
-      <!-- Both products instantiate this same five-card template. -->
-      <template id="dataCardsTemplate">
-          <article class="card card--wide card--ring" data-card>
-            <header class="card-head">
-              <h2>数据量</h2>
-              <span class="card-meta" data-card-id="VolMeta"></span>
-            </header>
-            <div class="ring-body" data-card-id="VolumeHierarchy"></div>
-            <div class="card-foot" data-card-id="VolStats"></div>
-          </article>
-
-          <article class="card card--wide card--eval" data-card>
-            <header class="card-head">
-              <h2>评测量</h2>
-              <span class="card-meta" data-card-id="EvalMeta"></span>
-            </header>
-            <div class="eval-body eval-dashboard">
-              <section class="eval-coverage" aria-label="评测覆盖率">
-                <div class="eval-module-head"><h3>整体进度</h3><span data-card-id="CoverBatch"></span></div>
-                <div class="eval-coverage-body">
-                  <div class="eval-ring" data-card-id="CoverBar" role="img" aria-label="评测覆盖率">
-                    <div class="eval-ring-hole">
-                      <span class="cover-pct" data-card-id="CoverPct" data-count="0" data-decimals="1" data-suffix="%">0%</span>
-                      <span>已评测</span>
-                    </div>
-                  </div>
-                  <div class="eval-coverage-copy">
-                    <div class="cover-top">
-                      <span class="cover-num" data-card-id="Evaluated" data-count="0">0</span>
-                      <span class="cover-unit">条已评测</span>
-                    </div>
-                    <span class="cover-of">共 <b data-card-id="InputTotal">—</b> 条输入</span>
-                  </div>
-                  <div class="cover-legend">
-                    <span><i class="cover-dot" style="--dot:var(--accent)"></i>已完成 <b data-card-id="CoverDone">—</b></span>
-                    <span><i class="cover-dot cover-dot--rest"></i>待评测 <b data-card-id="CoverPending">—</b></span>
-                  </div>
-                </div>
-              </section>
-              <section class="eval-versions">
-                <div class="eval-module-head"><h3>版本表现</h3><span>核心达成率</span></div>
-                <div class="ev-rows" data-card-id="Models"></div>
-              </section>
-              <section class="eval-side">
-                <div class="eval-module-head"><h3>难度构成</h3><span data-card-id="DiffTotal"></span></div>
-                <div class="diff-block" data-card-id="Difficulty"></div>
-              </section>
-              <div class="eval-facts" data-card-id="EvalStats"></div>
-            </div>
-          </article>
-
-          <article class="card card--third" data-card>
-            <header class="card-head">
-              <h2>归因体系</h2>
-            </header>
-            <div class="card-hero card-hero--attr">
-              <span class="hero-num" data-card-id="Problems" data-count="0">0</span>
-              <span class="hero-unit">个问题</span>
-            </div>
-            <div class="chart sankey-chart" data-card-id="Attr" role="img" aria-label="归因桑基图"></div>
-          </article>
-
-          <article class="card card--third card--ring" data-card>
-            <header class="card-head">
-              <h2>聚类体系</h2>
-              <span class="card-meta" data-card-id="ClusterMeta"></span>
-            </header>
-            <div class="ring-body" data-card-id="ClusterHierarchy"></div>
-            <div class="card-foot" data-card-id="ClusterStats"></div>
-          </article>
-
-          <article class="card card--third card--predict" data-card>
-            <header class="card-head">
-              <h2>预测体系</h2>
-              <span class="data-status-chip" data-card-id="PredStatus">待接入</span>
-            </header>
-            <div class="pred-head">
-              <div class="pred-main">
-                <span class="pred-num" data-card-id="PredTotal" data-count="0">0</span>
-                <span class="pred-unit">预测题</span>
-              </div>
-              <div class="pred-progress-block">
-                <div class="pred-gauge" data-card-id="PredGauge" role="img" aria-label="截面可解题占比">
-                  <span data-card-id="PredGaugeText" data-count="0" data-decimals="1" data-suffix="%">0%</span>
-                </div>
-                <div class="pred-side">
-                  <span><em>可解</em><b data-card-id="PredAvailable">—</b></span>
-                  <span><em>待公布</em><b data-card-id="PredPending">—</b></span>
-                </div>
-              </div>
-            </div>
-            <div class="predict-tabs" data-card-id="PredictTabs" role="tablist" aria-label="预测维度">
-              <button class="predict-tab is-active" type="button" role="tab" data-dim="distribution" aria-selected="true">预测数据分布</button>
-              <button class="predict-tab" type="button" role="tab" data-dim="accuracy" aria-selected="false">准确率</button>
-              <button class="predict-tab" type="button" role="tab" data-dim="attribution" aria-selected="false">预测归因</button>
-            </div>
-            <div class="chart chart--forecast" data-card-id="ForecastChart" role="img" aria-label="预测体系"></div>
-          </article>
-      </template>
-      <section class="page is-active" data-product="wencai" aria-label="问财数据看板" aria-hidden="false">
-        <div class="page-grid"></div>
-      </section>
-      <section class="page" data-product="aime" aria-label="AIME 数据看板" aria-hidden="true">
-        <div class="page-grid"></div>
-      </section>
-    </section>
-
-    <!-- ============================ 归因流程白板 ============================ -->
-    <section class="view view--system" data-view="system" aria-label="归因流程">
-      <div id="systemRoot" class="system-root"></div>
-    </section>
-
-    <!-- ============================ 具体样本 ============================ -->
-    <section class="view view--samples" data-view="samples" aria-label="具体样本板块">
-      <div id="samplesRoot" class="samples-root"></div>
-    </section>
-
-  </main>
-</div>
-
-<div id="viewAnnouncer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-
-<div id="mask" class="mask">
-  <div class="mask-inner">
-    <span class="spinner" aria-hidden="true"></span>
-    <span>正在加载看板…</span>
+<a class="skip" href="#main">跳到主要内容</a>
+<header class="top">
+  <div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>评测看板</div>
+  <nav class="seg" id="viewSwitch" aria-label="页面">
+    <span class="seg-knob" aria-hidden="true"></span>
+    <button type="button" data-value="data">数据</button>
+    <button type="button" data-value="system">评测体系</button>
+    <button type="button" data-value="samples">样本</button>
+  </nav>
+  <span class="top-spacer"></span>
+  <span class="stamp num" id="stamp"></span>
+  <div class="seg" id="productSwitch" role="group" aria-label="产品">
+    <span class="seg-knob" aria-hidden="true"></span>
+    <button type="button" data-value="wencai">问财</button>
+    <button type="button" data-value="aime">AIME</button>
   </div>
-</div>
+  <button class="icon-btn" id="themeToggle" type="button" aria-label="切换深色模式">
+    <svg class="i-sun" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="1.6"/><path d="M12 3v2M12 19v2M21 12h-2M5 12H3M18.4 5.6 17 7M7 17l-1.4 1.4M18.4 18.4 17 17M7 7 5.6 5.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    <svg class="i-moon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+  </button>
+</header>
 
+<main id="main" tabindex="-1">
+  <section class="view" data-view="data" aria-label="数据"></section>
+  <section class="view" data-view="system" aria-label="评测体系"></section>
+  <section class="view" data-view="samples" aria-label="样本"></section>
+</main>
+
+<div class="tip" id="tip" role="tooltip"></div>
+<div class="sr-only" id="announcer" aria-live="polite"></div>
+<div class="mask" id="mask"><div class="loader" aria-label="正在加载"><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
 <script type="module" src="js/app.js"></script>
 </body>
 </html>

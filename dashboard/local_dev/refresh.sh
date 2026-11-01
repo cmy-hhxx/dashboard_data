@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rebuild data.json + samples.json from the current local data source while the
+# Rebuild data.json, samples.json and samples/ from the current local data source while the
 # dev server keeps running. The server sends these with Cache-Control: no-cache,
 # so a browser reload picks the new payload up without a restart.
 #
@@ -16,7 +16,5 @@ DATASETS_DIR="$(resolve_datasets)"
 export EVAL_DATASETS="$DATASETS_DIR"
 echo "[refresh] datasets: $EVAL_DATASETS"
 
-python3 scan_datasets.py --data "$EVAL_DATASETS" --out cache/datasets.json
-python3 prepare.py --counts cache/datasets.json
-python3 prepare_samples.py --datasets "$EVAL_DATASETS"
+python3 build.py --datasets "$EVAL_DATASETS"
 echo "[refresh] done, reload the browser"

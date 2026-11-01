@@ -40,17 +40,11 @@ export EVAL_DATASETS="$DATASETS_DIR"
 # every 30 minutes; override with REFRESH_SECONDS if you want the scheduler.
 export REFRESH_SECONDS="${REFRESH_SECONDS:-86400}"
 
-mkdir -p cache logs
+mkdir -p logs
 
 echo "[dev] datasets: $EVAL_DATASETS"
-echo "[dev] scan"
-python3 scan_datasets.py --data "$EVAL_DATASETS" --out cache/datasets.json
-
-echo "[dev] prepare"
-python3 prepare.py --counts cache/datasets.json
-
-echo "[dev] samples"
-python3 prepare_samples.py --datasets "$EVAL_DATASETS"
+echo "[dev] build"
+python3 build.py --datasets "$EVAL_DATASETS"
 
 echo "[dev] serving http://127.0.0.1:$PORT/"
 echo $$ > "$PIDFILE"

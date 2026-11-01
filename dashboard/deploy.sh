@@ -13,10 +13,10 @@ if [ -n "${EVAL_DEPLOY_PORT:-}" ]; then SSH_OPTS+=(-p "$EVAL_DEPLOY_PORT"); fi
 if [ -n "${EVAL_DEPLOY_KEY:-}" ]; then SSH_OPTS+=(-i "$EVAL_DEPLOY_KEY"); fi
 
 SSH=(ssh "${SSH_OPTS[@]}")
-RSYNC=(rsync -az --delete --exclude 'data.json' --exclude 'data.json.gz' --exclude 'samples.json' --exclude 'samples.json.gz' --exclude 'static/samples' --exclude 'server.pid' --exclude 'cache' --exclude 'logs' --exclude '*.log' --exclude '__pycache__' --exclude 'build' --exclude 'local_dev'
+RSYNC=(rsync -az --delete --exclude 'data.json' --exclude 'data.json.gz' --exclude 'samples.json' --exclude 'samples.json.gz' --exclude 'static/samples' --exclude 'static/.samples-*' --exclude 'server.pid' --exclude 'logs' --exclude '*.log' --exclude '__pycache__' --exclude 'local_dev' --exclude 'tests'
   -e "ssh ${SSH_OPTS[*]}")
 
-"${SSH[@]}" "$HOST" "mkdir -p $REMOTE/static $REMOTE/cache $REMOTE/logs"
+"${SSH[@]}" "$HOST" "mkdir -p $REMOTE/static $REMOTE/logs"
 "${RSYNC[@]}" "$HERE/" "$HOST:$REMOTE/"
-"${SSH[@]}" "$HOST" "cd $REMOTE && mkdir -p logs && (timeout 300 python3 prepare.py --counts cache/datasets.json >> logs/prepare.log 2>&1 || echo '[deploy] prepare skipped') && (timeout 900 python3 prepare_samples.py >> logs/samples.log 2>&1 || echo '[deploy] samples generation skipped') && chmod +x start.sh stop.sh precompress.sh && ./precompress.sh && ./stop.sh && ./start.sh"
+"${SSH[@]}" "$HOST" "cd $REMOTE && mkdir -p logs && (timeout 900 python3 build.py --keep-on-empty >> logs/build.log 2>&1 || echo '[deploy] build skipped, serving the previous payloads') && chmod +x start.sh stop.sh precompress.sh && ./precompress.sh && ./stop.sh && ./start.sh"
 echo "deployed -> $REMOTE"

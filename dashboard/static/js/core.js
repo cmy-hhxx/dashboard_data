@@ -1,315 +1,216 @@
-/* Shared design tokens, formatters, ECharts lifecycle and count-up helpers. */
-export const $ = (id) => document.getElementById(id);
+/* Shared helpers: formatting, severity, counters, tooltip, segmented controls. */
+export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
-export const FONT =
-  '"Inter","SF Pro Text",-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
-export const STILL = (() => {
-  try {
-    return new URLSearchParams(location.search).has("still");
-  } catch (e) {
-    return false;
-  }
-})();
 export const REDUCED =
-  STILL || (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  new URLSearchParams(location.search).has("still") ||
+  (window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches);
 
-export const fmt = (n) =>
-  n == null || Number.isNaN(Number(n)) ? "—" : Number(n).toLocaleString("en-US");
-export const fmtFixed = (n, d) =>
-  Number(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
-export const pct = (a, b) => (b ? (100 * a) / b : 0);
-export const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
-export const fmtBytes = (n) => {
-  if (!n) return "—";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let v = Number(n);
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i += 1;
-  }
-  return `${v >= 100 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+export const SEV = ["P0", "P1", "P2", "P3", "P4"];
+export const WORST = [...SEV, "none"];
+export const SEV_NAME = { P0: "P0", P1: "P1", P2: "P2", P3: "P3", P4: "P4", none: "无问题" };
+export const sevColor = (key) => {
+  const i = typeof key === "number" ? key : WORST.indexOf(key);
+  return i >= 0 && i < 5 ? `var(--sev-${i})` : "var(--sev-none)";
 };
-export const fmtTokens = (n) => {
-  if (!n) return "—";
-  if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
-  if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
-  if (n >= 1e3) return Math.round(n / 1e3) + "K";
-  return String(n);
+export const KIND = {
+  system: "系统", user: "用户", think: "思考", llm: "模型", call: "调用", result: "返回", answer: "回答", other: "其他",
 };
-export const dateRange = (r) => {
-  if (!r) return "—";
-  return r.start === r.end ? r.start : `${r.start.slice(5)} → ${r.end.slice(5)}`;
+export const ROLE_NOTE = {
+  planning: "决定做几步、先查什么：规划器与任务编排。",
+  request_generation: "把计划落成可执行的请求：参数、字段、查询语句与代码。",
+  tool: "取数、检索、抓取等工具的执行与回执。",
+  script: "代码解释器与 shell 脚本的执行。",
+  skill: "技能文件与外部能力的装载。",
+  delivery: "把材料组织成终稿：取值、推断、引用、计算与指令遵循。",
 };
+
 export const esc = (s) =>
-  String(s == null ? "" : s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+  String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+export const fmt = (n, d = 0) =>
+  n == null || !Number.isFinite(Number(n))
+    ? "—"
+    : Number(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+export const pct = (a, b, d = 0) => (b ? fmt((100 * a) / b, d) + "%" : "—");
+export const compact = (n) =>
+  n >= 1e9 ? fmt(n / 1e9, 1) + "B" : n >= 1e6 ? fmt(n / 1e6, 1) + "M" : n >= 1e4 ? fmt(n / 1e3, 0) + "K" : fmt(n);
+export const sum = (a) => a.reduce((x, y) => x + y, 0);
 
-export function lerpColor(a, b, t) {
-  if (!a || !b || !a.startsWith("#") || !b.startsWith("#")) return a || b || "transparent";
-  const pa = parseInt(a.slice(1), 16);
-  const pb = parseInt(b.slice(1), 16);
-  const mix = (s) =>
-    Math.round(((pa >> s) & 255) + (((pb >> s) & 255) - ((pa >> s) & 255)) * clamp(t, 0, 1));
+/* Counters: width reserved in ch for the final string, so refreshes never shift layout. */
+export function counter(value, { d = 0, suffix = "", cls = "" } = {}) {
+  const final = fmt(value, d) + suffix;
+  return `<span class="num ${cls}" data-count="${value}" data-d="${d}" data-suffix="${esc(suffix)}" style="min-width:${final.length}ch">${final}</span>`;
+}
+export function runCounters(root) {
+  $$("[data-count]", root).forEach((el) => {
+    const end = Number(el.dataset.count);
+    const d = Number(el.dataset.d || 0);
+    const suffix = el.dataset.suffix || "";
+    if (REDUCED || !Number.isFinite(end)) return;
+    const t0 = performance.now();
+    const token = (el._tok = (el._tok || 0) + 1);
+    const step = (now) => {
+      if (el._tok !== token) return;
+      const p = Math.min(1, (now - t0) / 900);
+      const e = 1 - Math.pow(1 - p, 4);
+      el.textContent = fmt(p >= 1 ? end : end * e, d) + suffix;
+      if (p < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  });
+}
+
+export function stack(counts, { tall = false, title = "" } = {}) {
+  const total = sum(counts);
+  if (!total) return `<div class="stack${tall ? " tall" : ""}"><span style="--c:var(--sev-none);flex:1"></span></div>`;
   return (
-    "#" +
-    [16, 8, 0]
-      .map((s) => mix(s).toString(16).padStart(2, "0"))
-      .join("")
+    `<div class="stack${tall ? " tall" : ""}" role="img" aria-label="${esc(title)}">` +
+    counts
+      .map((n, i) => (n ? `<span style="--c:${sevColor(i)};flex:${n} 1 0" data-tip="${WORST[i]}|${n}"></span>` : ""))
+      .join("") +
+    "</div>"
   );
 }
 
-export function hexA(hex, alpha) {
-  if (!hex || !hex.startsWith("#")) return hex || `rgba(100,116,139,${alpha})`;
-  const n = parseInt(hex.slice(1), 16);
-  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+export function hist(h, label) {
+  if (!h) return "";
+  const max = Math.max(...h.counts, 1);
+  const bars = h.counts
+    .map((c, i) => {
+      const lo = h.edges[i];
+      const hi = h.edges[i + 1];
+      const range = hi != null ? `${compact(lo)}–${compact(hi - (Number.isInteger(hi) ? 1 : 0))}` : `≥ ${compact(lo)}`;
+      return `<span style="height:${Math.max(3, (100 * c) / max)}%;animation-delay:${i * 40}ms" data-tip="${esc(label)} ${range}|${c}"></span>`;
+    })
+    .join("");
+  return `<div class="hist">${bars}</div><div class="hist-axis num"><span>${compact(h.edges[0])}</span><span>${compact(h.edges[h.edges.length - 1])}+</span></div>`;
 }
 
-export function labelOn(hex) {
-  const n = parseInt(hex.slice(1), 16);
-  const lin = (c) => {
-    const v = c / 255;
-    return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+export function barRows(items, { max, fmtVal = fmt } = {}) {
+  const top = max || Math.max(...items.map((x) => x.n), 1);
+  return (
+    `<div class="bars">` +
+    items
+      .map(
+        (x, i) =>
+          `<div class="bar-row"><span class="lbl" title="${esc(x.label || x.id)}">${esc(x.label || x.id)}</span>` +
+          `<span class="track"><i style="width:${(100 * x.n) / top}%;animation-delay:${i * 35}ms"></i></span>` +
+          `<span class="val num">${fmtVal(x.n)}</span></div>`,
+      )
+      .join("") +
+    `</div>`
+  );
+}
+
+/* Tooltip: one floating node; any [data-tip="title|value"] or element.tipHTML gets it. */
+const tipEl = () => document.getElementById("tip");
+export function showTip(html, x, y) {
+  const el = tipEl();
+  el.innerHTML = html;
+  el.classList.add("is-on");
+  const w = el.offsetWidth;
+  const h = el.offsetHeight;
+  const left = Math.min(window.innerWidth - w - 12, x + 14);
+  const top = y + h + 20 > window.innerHeight ? y - h - 12 : y + 16;
+  el.style.left = `${Math.max(8, left)}px`;
+  el.style.top = `${Math.max(8, top)}px`;
+}
+export function hideTip() {
+  tipEl().classList.remove("is-on");
+}
+export function bindTips(root, resolve) {
+  root.addEventListener("pointermove", (e) => {
+    const t = e.target.closest("[data-tip],[data-cell],[data-mx]");
+    if (!t || !root.contains(t)) return hideTip();
+    const html = resolve ? resolve(t) : null;
+    if (html) return showTip(html, e.clientX, e.clientY);
+    if (t.dataset.tip) {
+      const [a, b] = t.dataset.tip.split("|");
+      const label = SEV_NAME[a] || a;
+      showTip(`<div class="t-row">${esc(label)}<b class="num" style="margin-left:auto">${esc(b)}</b></div>`, e.clientX, e.clientY);
+    }
+  });
+  root.addEventListener("pointerleave", hideTip);
+}
+
+/* Segmented control: click springs the knob; dragging tracks the pointer 1:1 and snaps crisply. */
+export function segmented(el, onPick) {
+  const knob = $(".seg-knob", el);
+  const buttons = $$("button", el);
+  let value = null;
+  const place = (btn) => {
+    knob.style.width = `${btn.offsetWidth}px`;
+    knob.style.transform = `translateX(${btn.offsetLeft}px)`;
   };
-  const L =
-    0.2126 * lin((n >> 16) & 255) +
-    0.7152 * lin((n >> 8) & 255) +
-    0.0722 * lin(n & 255);
-  const white = 1.05 / (L + 0.05);
-  const black = (L + 0.05) / 0.05;
-  return white >= black ? "#ffffff" : T.mode === "dark" ? "#0e1217" : T.ink;
-}
-
-export function cssVar(name) {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-}
-
-export const T = {};
-export const C = {};
-export const SEV_COLOR = {};
-export const tip = {};
-export const AIME_SEVERITIES = ["P0", "P1", "P2", "P3", "未分级"];
-
-export function readTokens() {
-  const names = [
-    "bg", "surface", "surface-2", "surface-3", "tooltip", "track", "hairline",
-    "ink", "ink-2", "muted", "faint",
-    "wc", "wc-mid", "wc-soft", "ai", "ai-mid", "ai-light", "ai-soft", "pred-fast",
-    "b", "b-mid", "forecast", "sev-0", "sev-1", "sev-2", "sev-3", "sev-4",
-    "cl-1", "cl-2", "cl-3", "cl-4", "cl-5", "cl-6",
-  ];
-  names.forEach((n) => {
-    const key = n.replace(/-(\w)/g, (_, c) => c.toUpperCase());
-    T[key] = cssVar(`--${n}`);
+  const set = (v, { silent = false } = {}) => {
+    const btn = buttons.find((b) => b.dataset.value === v) || buttons[0];
+    value = btn.dataset.value;
+    buttons.forEach((b) => b.setAttribute("aria-pressed", String(b === btn)));
+    place(btn);
+    if (!silent) onPick(value);
+  };
+  let drag = null;
+  el.addEventListener("pointerdown", (e) => {
+    const start = buttons.find((b) => b.getAttribute("aria-pressed") === "true");
+    if (!start || !e.target.closest("button")) return;
+    drag = { x: e.clientX, left: start.offsetLeft, moved: false, id: e.pointerId };
   });
-  T.mode = document.documentElement.dataset.mode || "light";
-  Object.assign(C, {
-    a: T.wc,
-    aMid: T.wcMid,
-    b: T.b,
-    bMid: T.bMid,
-    ai: T.ai,
-    aiMid: T.aiMid,
-    aiLight: T.aiLight,
+  el.addEventListener("pointermove", (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const dx = e.clientX - drag.x;
+    if (!drag.moved && Math.abs(dx) < 4) return;
+    if (!drag.moved) {
+      drag.moved = true;
+      el.setPointerCapture(e.pointerId);
+      el.classList.add("is-dragging");
+    }
+    const maxLeft = el.clientWidth - knob.offsetWidth - 3;
+    knob.style.transform = `translateX(${Math.max(3, Math.min(maxLeft, drag.left + dx))}px)`;
   });
-  Object.assign(SEV_COLOR, {
-    P0: T.sev0,
-    P1: T.sev1,
-    P2: T.sev2,
-    P3: T.sev3,
-    未分级: T.sev4,
-  });
-  Object.assign(tip, {
-    backgroundColor: T.tooltip,
-    borderColor: "transparent",
-    borderWidth: 0,
-    padding: 0,
-    textStyle: { color: T.ink, fontSize: 11, fontFamily: FONT },
-    extraCssText: `border-radius:8px;box-shadow:0 4px 14px ${
-      T.mode === "dark" ? "rgba(0,0,0,.22)" : "rgba(15,23,42,.1)"
-    };`,
-    className: "chart-tooltip",
-    appendToBody: true,
-    confine: false,
-  });
-  return T;
-}
-
-export const clusterPalette = () => [T.cl1, T.cl2, T.cl3, T.cl4, T.cl5, T.cl6];
-
-export const tipCard = (html) => `<div class="tip-card">${html}</div>`;
-export const tipHead = (title, meta, color) =>
-  `<div class="tip-head"><i style="background:${color || T.muted}"></i><span>${title}</span>` +
-  `${meta ? `<em>${meta}</em>` : ""}</div>`;
-export const tipSep = () => `<div class="tip-sep"></div>`;
-export const tipRow = (color, label, value) =>
-  `<div class="tip-row"><i style="background:${color}"></i><span>${label}</span><b>${value}</b></div>`;
-
-/* ------------------------------------------------------------------ charts */
-
-const chartInstances = new Set();
-const chartByEl = new WeakMap();
-let resizeRaf = 0;
-const resizeQueue = new Set();
-
-function scheduleResize(c, el) {
-  if (!el.clientWidth || !el.clientHeight) return;
-  resizeQueue.add(c);
-  if (resizeRaf) return;
-  resizeRaf = requestAnimationFrame(() => {
-    resizeRaf = 0;
-    resizeQueue.forEach((x) => {
-      try {
-        x.resize();
-      } catch (e) {}
-    });
-    resizeQueue.clear();
-  });
-}
-
-export function createChart(elOrId, option) {
-  const el = typeof elOrId === "string" ? $(elOrId) : elOrId;
-  if (!el || typeof echarts === "undefined") return null;
-  disposeChart(el);
-  el.innerHTML = "";
-  const c = echarts.init(el, null, { renderer: "canvas" });
-  c.setOption(option);
-  chartInstances.add(c);
-  chartByEl.set(el, c);
-  if (window.ResizeObserver) {
-    const ro = new ResizeObserver(() => scheduleResize(c, el));
-    c.__ro = ro;
-    ro.observe(el);
-  }
-  return c;
-}
-
-export function disposeChart(elOrId) {
-  const el = typeof elOrId === "string" ? $(elOrId) : elOrId;
-  if (!el) return;
-  const chart = chartByEl.get(el) || (typeof echarts !== "undefined" && echarts.getInstanceByDom(el));
-  if (!chart) return;
-  if (chart.__ro) chart.__ro.disconnect();
-  try {
-    chart.dispose();
-  } catch (e) {}
-  chartInstances.delete(chart);
-  chartByEl.delete(el);
-  resizeQueue.delete(chart);
-}
-
-export function disposeAllCharts() {
-  chartInstances.forEach((chart) => disposeChart(chart.getDom()));
-  resizeQueue.clear();
-}
-
-export function resizeAllCharts() {
-  requestAnimationFrame(() => {
-    chartInstances.forEach((c) => {
-      try {
-        c.dispatchAction({ type: "hideTip" });
-        c.resize();
-      } catch (e) {}
-    });
-  });
-}
-
-export function chartCount() {
-  return chartInstances.size;
-}
-
-/* ---------------------------------------------------------------- counters */
-
-function lockNum(el, value, decimals) {
-  if (!el) return;
-  const s = fmtFixed(Number(value) || 0, decimals || 0);
-  // Reserve the final formatted value, including its suffix, before animating.
-  // Keep the largest reservation during refreshes that cross a digit boundary.
-  const width = s.length + (el.dataset.suffix || "").length;
-  el._numWidth = Math.max(el._numWidth || 0, width, 2);
-  el.style.minWidth = `${el._numWidth}ch`;
-}
-
-export function setNum(id, value, opts) {
-  const el = typeof id === "string" ? $(id) : id;
-  if (!el) return;
-  if (value == null || !Number.isFinite(Number(value))) {
-    el._numToken = (el._numToken || 0) + 1;
-    delete el.dataset.count;
-    el.textContent = "—";
-    return;
-  }
-  el.dataset.count = String(value);
-  if (opts && opts.decimals != null) el.dataset.decimals = String(opts.decimals);
-  if (opts && opts.suffix) el.dataset.suffix = opts.suffix;
-  lockNum(el, value, (opts && opts.decimals) || 0);
-}
-
-export function settleCounters(root = document) {
-  root.querySelectorAll("[data-count]").forEach((el) => {
-    const end = Number(el.dataset.count);
-    if (!Number.isFinite(end)) return;
-    const decimals = Number(el.dataset.decimals || 0);
-    el._numToken = (el._numToken || 0) + 1;
-    el.textContent = fmtFixed(end, decimals) + (el.dataset.suffix || "");
-  });
-}
-
-export function tweenNumber(el, end, decimals, suffix, duration) {
-  const d = decimals || 0;
-  const token = (el._numToken = (el._numToken || 0) + 1);
-  const started = performance.now();
-  const ms = Math.max(1, duration);
-  const step = (now) => {
-    if (el._numToken !== token) return;
-    const p = Math.min(1, (now - started) / ms);
-    const eased = 1 - Math.pow(1 - p, 3);
-    if (p >= 1) {
-      el.textContent = fmtFixed(end, d) + suffix;
+  const end = (e) => {
+    if (!drag) return;
+    const moved = drag.moved;
+    drag = null;
+    el.classList.remove("is-dragging");
+    if (!moved) return;
+    const box = knob.getBoundingClientRect();
+    const mid = box.left + box.width / 2;
+    const nearest = buttons.reduce((best, b) => {
+      const r = b.getBoundingClientRect();
+      const dist = Math.abs(r.left + r.width / 2 - mid);
+      return dist < best.d ? { b, d: dist } : best;
+    }, { b: buttons[0], d: Infinity }).b;
+    el.classList.add("is-snapping");
+    setTimeout(() => el.classList.remove("is-snapping"), 140);
+    el._suppressClick = true;
+    if (nearest.dataset.value !== value) set(nearest.dataset.value);
+    else place(nearest);
+    e.preventDefault();
+  };
+  el.addEventListener("pointerup", end);
+  el.addEventListener("pointercancel", end);
+  el.addEventListener("click", (e) => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    if (el._suppressClick) {
+      el._suppressClick = false;
       return;
     }
-    el.textContent = fmtFixed(end * eased, d) + suffix;
-    requestAnimationFrame(step);
-  };
-  requestAnimationFrame(step);
-}
-
-export function startCounters(duration, root = document) {
-  root.querySelectorAll("[data-count]").forEach((el) => {
-    const end = Number(el.dataset.count);
-    if (!Number.isFinite(end)) return;
-    const decimals = Number(el.dataset.decimals || 0);
-    const suffix = el.dataset.suffix || "";
-    lockNum(el, end, decimals);
-    if (REDUCED) {
-      el.textContent = fmtFixed(end, decimals) + suffix;
-      return;
-    }
-    tweenNumber(el, end, decimals, suffix, (duration || 0.8) * 1000);
+    if (btn.dataset.value !== value) set(btn.dataset.value);
   });
+  new ResizeObserver(() => {
+    const btn = buttons.find((b) => b.dataset.value === value);
+    if (btn) place(btn);
+  }).observe(el);
+  return { set, get: () => value };
 }
 
-export function bump(el) {
-  if (!el || REDUCED) return;
-  el.classList.remove("is-bump");
-  void el.offsetWidth;
-  el.classList.add("is-bump");
-  window.setTimeout(() => el.classList.remove("is-bump"), 380);
+export async function getJSON(url) {
+  const res = await fetch(url, { cache: "no-cache" });
+  if (!res.ok) throw new Error(`${url} ${res.status}`);
+  return res.json();
 }
 
-export function animateTo(id, value, decimals) {
-  const el = typeof id === "string" ? $(id) : id;
-  if (!el) return;
-  const d = decimals || 0;
-  el.dataset.count = String(value == null ? 0 : value);
-  lockNum(el, value, d);
-  bump(el);
-  if (REDUCED) {
-    el.textContent = fmtFixed(value || 0, d);
-    return;
-  }
-  tweenNumber(el, value || 0, d, "", 450);
+export function announce(text) {
+  const el = document.getElementById("announcer");
+  if (el) el.textContent = text;
 }

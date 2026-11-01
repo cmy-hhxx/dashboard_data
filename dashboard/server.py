@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Eval dashboard server: static files + generated data.json on :5001."""
+"""Eval dashboard server: static files + build.py payloads on :5001, rebuilt on a timer."""
 import json
 import mimetypes
 import os
@@ -14,88 +14,39 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
-PREPARE = os.path.join(HERE, "prepare.py")
-COUNTS = os.path.join(HERE, "cache", "datasets.json")
-SCAN = os.path.join(HERE, "scan_datasets.py")
-SAMPLES = os.path.join(HERE, "prepare_samples.py")
-SAMPLES_JSON = os.path.join(STATIC, "samples.json")
-SAMPLES_DETAILS = os.path.join(STATIC, "samples")
+BUILD = os.path.join(HERE, "build.py")
+OUTPUTS = [os.path.join(STATIC, n) for n in ("data.json", "samples.json", "samples")]
 PORT = int(os.environ.get("PORT", "5001"))
 REFRESH = int(os.environ.get("REFRESH_SECONDS", "1800"))
-SAMPLES_REFRESH = int(os.environ.get("SAMPLES_REFRESH_SECONDS", "21600"))
 
-_state = {
-    "last_run": 0,
-    "running": False,
-    "error": "",
-    "seconds": 0,
-    "samples_last": 0,
-    "samples_error": "",
-    "samples_seconds": 0,
-}
+_state = {"last_run": 0, "running": False, "error": "", "seconds": 0, "build": None}
 _lock = threading.Lock()
 
 
-def refresh_samples(force=False):
-    if not os.path.exists(SAMPLES):
-        _state["samples_error"] = "prepare_samples.py missing"
-        return
-    try:
-        mtime = os.path.getmtime(SAMPLES_JSON)
-        _state["samples_last"] = mtime
-        age = time.time() - mtime
-    except OSError:
-        age = 10**12
-    if not force and age < SAMPLES_REFRESH:
-        return
-    started = time.time()
-    try:
-        proc = subprocess.run(
-            [sys.executable, SAMPLES],
-            capture_output=True, text=True, timeout=1800, cwd=HERE,
-        )
-        if proc.returncode == 0:
-            _state["samples_error"] = ""
-            _state["samples_last"] = time.time()
-            print("[samples]", proc.stdout.strip()[-500:], flush=True)
-        else:
-            _state["samples_error"] = (proc.stderr or "")[-500:]
-            print("[samples] failed:", _state["samples_error"], flush=True)
-    except Exception as exc:  # noqa: BLE001 - samples are optional for the data board
-        _state["samples_error"] = str(exc)
-        print("[samples] error:", exc, flush=True)
-    finally:
-        _state["samples_seconds"] = round(time.time() - started, 1)
-
-
 def refresh_once():
+    """Rebuild data.json, samples.json and samples/ from the datasets in one pass."""
     with _lock:
         if _state["running"]:
             return
         _state["running"] = True
     started = time.time()
     try:
-        scan = subprocess.run([sys.executable, SCAN], capture_output=True, text=True, timeout=1800)
-        if scan.returncode != 0:
-            print("[refresh] scan failed:", (scan.stderr or "")[-500:], flush=True)
-            scan = None
         proc = subprocess.run(
-            [sys.executable, PREPARE, "--counts", COUNTS],
-            capture_output=True, text=True, timeout=1800,
+            [sys.executable, BUILD, "--keep-on-empty"],
+            capture_output=True, text=True, timeout=1800, cwd=HERE,
         )
+        line = (proc.stdout.strip().splitlines() or [""])[-1]
         if proc.returncode == 0:
             _state["error"] = ""
-            print("[refresh]", proc.stdout.strip(), flush=True)
+            try:
+                _state["build"] = json.loads(line)
+            except ValueError:
+                _state["build"] = line[-500:]
+            print("[refresh]", line, flush=True)
         else:
-            _state["error"] = (proc.stderr or "")[-500:]
+            _state["error"] = (proc.stderr or line or "")[-500:]
             print("[refresh] failed:", _state["error"], flush=True)
-        try:
-            refresh_samples(
-                force=not os.path.exists(SAMPLES_JSON) or not os.path.isdir(SAMPLES_DETAILS)
-            )
-        except Exception as exc:  # noqa: BLE001
-            _state["samples_error"] = str(exc)
-    except Exception as exc:  # noqa: BLE001 - keep serving regardless
+    except Exception as exc:  # noqa: BLE001 - keep serving the last good build
         _state["error"] = str(exc)
         print("[refresh] error:", exc, flush=True)
     finally:
@@ -104,14 +55,14 @@ def refresh_once():
         _state["running"] = False
 
 
-def scheduler():
+def scheduler(delay):
+    time.sleep(delay)
     while True:
         try:
             refresh_once()
         except Exception as exc:  # noqa: BLE001
             print("[refresh] loop error:", exc, flush=True)
         time.sleep(REFRESH)
-
 
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -126,8 +77,6 @@ class Handler(SimpleHTTPRequestHandler):
             policy = "no-store"
         elif path in ("/", "/index.html"):
             policy = "no-cache"
-        elif path.startswith("/vendor/") or path == "/echarts.min.js":
-            policy = "public, max-age=31536000, immutable"
         else:
             policy = "no-cache"
         self.send_header("Cache-Control", policy)
@@ -193,13 +142,11 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path.startswith("/healthz"):
             body = json.dumps({
                 "ok": _state["error"] == "",
+                "running": _state["running"],
                 "last_refresh": _state["last_run"],
                 "refresh_seconds": _state["seconds"],
                 "error": _state["error"],
-                "samples_ok": _state["samples_error"] == "",
-                "samples_last": _state["samples_last"],
-                "samples_seconds": _state["samples_seconds"],
-                "samples_error": _state["samples_error"],
+                "build": _state["build"],
             }).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -223,14 +170,15 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 def main():
-    if (
-        not os.path.exists(os.path.join(STATIC, "data.json"))
-        or not os.path.exists(SAMPLES_JSON)
-        or not os.path.isdir(SAMPLES_DETAILS)
-    ):
-        print("[serve] data.json or samples.json missing, building once", flush=True)
+    if not all(os.path.exists(p) for p in OUTPUTS):
+        print("[serve] payloads missing, building once before serving", flush=True)
         refresh_once()
-    threading.Thread(target=scheduler, daemon=True).start()
+    # Rebuild right away on restart, unless a build just ran (start.sh / deploy.sh build first).
+    try:
+        age = time.time() - os.path.getmtime(OUTPUTS[0])
+    except OSError:
+        age = 0
+    threading.Thread(target=scheduler, args=(REFRESH if age < 120 else 0,), daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"[serve] http://0.0.0.0:{PORT} static={STATIC} refresh={REFRESH}s", flush=True)
     server.serve_forever()

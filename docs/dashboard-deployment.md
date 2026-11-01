@@ -31,18 +31,17 @@ SSH 别名 `eval_data`；也可以用 `EVAL_DEPLOY_HOST` / `EVAL_DEPLOY_PORT` / 
 
 脚本按固定顺序完成：
 
-1. 建远端目录 `static/`、`cache/`、`logs/`。
-2. `rsync -az --delete` 同步代码，排除生成物与运行态：`data.json`、`samples.json`、
-   `static/samples/`、`cache/`、`logs/`、`server.pid`、`build/`、`__pycache__`、`*.log`。
-3. 远端执行 `prepare.py --counts cache/datasets.json`，生成 `static/data.json`。
-4. 远端执行 `prepare_samples.py`，生成 `static/samples.json` 与逐样本详情 `static/samples/`。
-5. `precompress.sh` 为 JS/CSS/HTML/SVG 生成 `.gz`。
-6. `stop.sh` 停旧进程，`start.sh` 拉起新进程。
-7. 输出 `deployed -> /opt/eval_dashboard`。
+1. 建远端目录 `static/`、`logs/`。
+2. `rsync -az --delete` 同步代码，排除生成物与运行态：`data.json`、`samples.json`（含 `.gz`）、
+   `static/samples/`、`logs/`、`server.pid`、`local_dev/`、`tests/`、`__pycache__`、`*.log`。
+3. 远端执行 `build.py --keep-on-empty`（上限 900 秒），一次生成 `static/data.json`、`static/samples.json`
+   与逐样本详情 `static/samples/`，均带 `.gz`。
+4. `precompress.sh` 为 JS/CSS/HTML/SVG 生成 `.gz`。
+5. `stop.sh` 停旧进程，`start.sh` 拉起新进程。
+6. 输出 `deployed -> /opt/eval_dashboard`。
 
-耗时主要在 3、4 两步的数据构建（脚本上限分别为 300 秒和 900 秒），文件同步本身很小。
-这两步失败**不会中断部署**，只会在 `logs/prepare.log` / `logs/samples.log` 留记录，服务继续用上一次
-生成的数据（首次部署则等启动后的首轮刷新）；因此每次部署后都要看这两个日志。
+耗时主要在第 3 步的数据构建，文件同步本身很小。构建失败**不会中断部署**，只会在 `logs/build.log`
+留记录，服务继续用上一次生成的数据；因此每次部署后都要看这个日志。
 
 验证：
 
@@ -54,12 +53,12 @@ curl -s "http://<dashboard-host>:<port>/healthz" | jq
 
 | 字段 | 含义 |
 |---|---|
-| `ok` / `error` | 最近一次 `scan + prepare` 是否成功 |
-| `last_refresh` / `refresh_seconds` | 最近刷新完成的 epoch 秒与耗时 |
-| `samples_ok` / `samples_error` | 样本生成状态 |
-| `samples_last` / `samples_seconds` | 样本最近生成时间（epoch 秒）与生成耗时 |
+| `ok` / `error` | 最近一次 `build.py` 是否成功 |
+| `running` | 是否正在构建 |
+| `last_refresh` / `refresh_seconds` | 最近一次构建完成的 epoch 秒与耗时 |
+| `build` | `build.py` 输出的构建摘要（如 `pairs`；保留旧数据时含 `kept_previous`） |
 
-正常应看到 `ok=true`、`samples_ok=true`、两个 `error` 为空。随后打开
+正常应看到 `ok=true`、`error` 为空、`build.pairs` 大于 0。随后打开
 `http://<dashboard-host>:<port>/` 确认页面。
 
 单独起停：
@@ -75,49 +74,37 @@ ssh eval_data 'cd /opt/eval_dashboard && ./stop.sh'
 
 ## 运行时行为
 
-- 启动时若 `data.json` 或 `samples.json` 缺失，先同步构建一次。
-- 调度线程在启动后**立即**执行一轮 `scan_datasets.py + prepare.py`，之后每 `REFRESH_SECONDS`
-  （默认 1800 秒 / 30 分钟）执行一次。
-- 样本最多每 `SAMPLES_REFRESH_SECONDS`（默认 21600 秒 / 6 小时）重建一次；文件缺失时立即重建。
-- 可用环境变量覆盖 `PORT`（默认 5001）、`REFRESH_SECONDS`、`SAMPLES_REFRESH_SECONDS`。
+- 启动时若 `data.json`、`samples.json` 或 `samples/` 缺失，先同步构建一次。
+- 调度线程每 `REFRESH_SECONDS`（默认 1800 秒 / 30 分钟）执行一次 `build.py --keep-on-empty`。
+  启动时如果 `data.json` 已超过 2 分钟没有更新，会先立即构建一轮；`deploy.sh` 或 `start.sh` 刚构建过时跳过。
+- 可用环境变量覆盖 `PORT`（默认 5001）和 `REFRESH_SECONDS`。
   注意 `start.sh` 启动时写死 `PORT=5001`，要改监听端口需同时改 `start.sh` 或手动启动。
-- 样本源目录为空时，`prepare_samples.py` 写出空的 `samples.json`，并清理旧样本详情，
-  页面显示待接入空态。数据刷新严格反映当前数据源。
-- `precompress.sh` 为 JS/CSS/HTML/SVG 生成 `.gz`；`prepare.py` / `prepare_samples.py` 为
+- 数据源为空（例如挂载失效）而上一份数据非空时，`--keep-on-empty` 不写任何文件，healthz 的
+  `build.kept_previous` 会给出保留的组数。只有手动执行不带参数的 `build.py`，才会写出空数据。
+- `precompress.sh` 为 JS/CSS/HTML/SVG 生成 `.gz`；`build.py` 为
   `data.json`、`samples.json` 与逐样本详情同时写出 `.gz`。客户端支持 gzip 时 `server.py`
   直接发送；发送前用 gzip ISIZE 校验压缩包与源文件大小一致，不一致则回退原始文件，避免旧
   `.gz` 冒充新数据。改过 `static/` 下的 JS/CSS/HTML/SVG 后必须重新执行 `precompress.sh`
   （`deploy.sh` 会自动做）。
-- 缓存头：`/healthz` 为 `no-store`；`/data.json`、`/samples.json`、`/`、`/index.html`、
-  `/samples/` 详情与其余静态文件为 `no-cache`（可 304 重验证）；`/vendor/` 与
-  `/echarts.min.js` 为一年 `immutable`。
-- 日志：`logs/server.log`（服务输出）、`logs/prepare.log`、`logs/samples.log`；仓库没有日志轮转。
+- 缓存头：`/healthz` 为 `no-store`，其余全部为 `no-cache`（可以用 304 重新验证）。
+- 日志：`logs/server.log` 记录服务输出，`logs/build.log` 记录部署时的构建；仓库没有日志轮转。
 
 ## 部署最佳实践
 
 1. **只通过 `deploy.sh` 发布**：远端部署目录不是 git 仓库，`rsync --delete` 会删掉远端多出来的文件。
    在远端手改的内容下次部署就会消失；回滚应从本地切回旧 commit 后重新部署。
-2. **生成物留在远端**：`data.json`、`samples.json`、`samples/`、`cache/`、`logs/` 已排除同步。
+2. **生成物留在远端**：`data.json`、`samples.json`、`samples/`、`logs/` 已排除同步。
    数据在服务器侧生成，避免本地旧数据覆盖远端，也避免传输大文件。
-3. **先构建、后重启**：不要打乱 `deploy.sh` 的顺序，也不要在 `prepare` 未完成时手动 `start.sh`。
+3. **先构建、后重启**：不要打乱 `deploy.sh` 的顺序，也不要在 `build.py` 未完成时手动 `start.sh`。
    构建失败时服务会带着旧数据启动，必须看日志，不能只看「启动成功」。
-4. **看 healthz 内容，不只看状态码**：`healthz` 永远 200；`ok=false` 查 `logs/prepare.log`，
-   `samples_ok=false` 查 `logs/samples.log`。
-5. **改样式先处理构建产物**：直接改 `static/` 下的 JS/CSS 可以直接部署；改 Tailwind 输入
-   （`dashboard/build/`）要先在本地生成 `static/app.css`，因为 `build/` 不参与同步：
-
-   ```bash
-   cd dashboard/build
-   npx tailwindcss -c tailwind.config.js -i input.css -o ../static/app.css --minify
-   ```
-
-6. **强制刷新数据用重启**：`deploy.sh` 里的 `prepare.py` 用的是 `cache/datasets.json` 的缓存计数；
-   服务启动后调度线程会立即重新 `scan` 再 `prepare`。需要强制重建样本时，先删
-   `static/samples.json` 与 `static/samples/` 再重启。
+4. **看 healthz 内容，不只看状态码**：`healthz` 永远 200；`ok=false` 时看 healthz 的 `error`
+   与 `logs/build.log`。
+5. **样式直接改 `static/`**：没有前端构建步骤，改完 `static/` 下的 JS/CSS 直接部署（`deploy.sh` 会重新预压缩）。
+6. **强制刷新数据**：重启服务，或在远端执行 `python3 build.py --keep-on-empty`。
 7. **改端口要三处同步**：`server.py` / `start.sh` 的监听端口、容器平台端口映射、
    本地 `servers.conf` 的 `dashboard_port_1`。对外端口按部署环境配置，不要把 `5001` 直接暴露。
-8. **升级 ECharts 要换文件名或加版本**：`/echarts.min.js` 和 `/vendor/` 带一年 `immutable`
-   缓存，同路径覆盖后老客户端一年内可能不更新。
+8. **预测数据放在产品目录**：`datasets/<产品>/prediction.json` 在下一轮构建时生效，格式见
+   `docs/prediction-data.md`。
 9. **没有进程守护**：服务由 `nohup` 启动（父进程已是容器 init），目前没有 cron / systemd
    自启动配置；容器或环境重启后需要手动执行 `start.sh`。若要自动恢复，需在容器平台的启动命令里
    补这一步（仓库内没有该配置）。
@@ -130,8 +117,8 @@ ssh eval_data 'cd /opt/eval_dashboard && ./stop.sh'
 | 现象 | 处理 |
 |---|---|
 | 外网打不开 / 502 | `ssh eval_data` 后 `curl -s http://127.0.0.1:5001/healthz`；看 `logs/server.log`；`./start.sh` |
-| `ok=false` | 看 `logs/prepare.log` 最后一段；修复后重启触发重算 |
-| `samples_ok=false` | 看 `logs/samples.log`；删 `static/samples.json` 与 `static/samples/` 后重启可强制重建 |
+| `ok=false` | 看 healthz 的 `error` 与 `logs/build.log` 最后一段；修复后重启触发重算 |
+| `build.kept_previous` 出现 | 数据源为空，确认 `datasets` 挂载；恢复后下一轮自动重建 |
 | `start.sh` 说 already serving 但页面没更新 | `./stop.sh && ./start.sh` |
-| 静态资源没更新 | 确认远端 `.gz` 已重新生成；ECharts 按最佳实践第 8 条处理缓存 |
+| 静态资源没更新 | 确认远端 `.gz` 已由 `precompress.sh` 重新生成 |
 | 数据停留在旧日期 | 看 healthz 的 `last_refresh`；重启触发立即扫描；确认 `datasets` 挂载可读 |

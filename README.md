@@ -45,7 +45,7 @@ ssh eval_data 'chmod +x /tmp/pack_aime_input.sh && /tmp/pack_aime_input.sh <目�
 
 ## 数据看板
 
-`dashboard/` 是问财 / AIME 评测看板：原生 ES modules + ECharts + Python 标准库起服务。
+`dashboard/` 是问财 / AIME 评测看板：原生 ES modules + SVG + Python 标准库起服务，无第三方运行时依赖。
 本地读取仓库根目录的 `datasets/`，生产读取 `/mnt/fin_bench/code_and_clean_data/datasets`；
 可通过 `EVAL_DATASETS` 显式指定数据根目录（评测输入、输出、cluster_tree、item_index）。
 没有数据时显示待接入空态。将数据放入 `datasets/` 后运行 `./dashboard/local_dev/refresh.sh` 重建；
@@ -72,15 +72,14 @@ ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
 
 ### 三个板块
 
-**1. 数据板块**：每产品 2+3 Bento，上排数据量 / 评测量，下排归因 / 聚类 / 预测。
-问财与 AIME 共用 `dataCardsTemplate` 五卡模板和渲染组件，仅在适配层转换各自的数据。
+**1. 数据板块**：顶部是会话场，中间是 2+3 Bento（数据量 / 评测量，归因 / 聚类 / 预测），底部是聚类矩阵。
+问财与 AIME 共用同一套卡片。
 
-- 数据量与聚类：完整复用 `hierarchy-card.js`，由 `ring.js` 的 ECharts 内置旭日图绘制；圆环比例、配色、中心、图例、响应式尺寸与默认收起状态一致。
-  数据量保留真实分类的全部层级（通常 2～3 级）；聚类按真实树深继续下钻。两者点击内圈展开子类，点击有下级的外圈节点进入下一层，到叶子停止。
-  返回图标先收起展开，再返回上一层；图例与圆环同色并联动高亮。两者都不跳转样本页，顶部“样本”导航正常保留。
-- 评测量：共用整体进度、版本回答量与核心达成率、难度构成和底部统计；未提供的核心达成率显示“—”，两产品保持同一布局。
-- 归因体系：共用两列桑基图 `版本/模型 → 环节`，统一节点、连线、标签与长尾合并规则，不显示严重度标签或第三列；数据区交互不跳转到样本页。
-- 预测体系：三个维度为 `预测数据分布 / 准确率 / 预测归因`。按数据快照时间和每题答案公布时间计算可解题量与类别构成，不展示日历或日期选择控件；准确率使用真实时间轴，模型和数值显示在图中，不再添加底部题注。题库、准确率或归因未接入时显示对应空态，缺失指标显示“—”。数据协议见 [预测卡片数据接口](docs/prediction-data.md)。
+- 数据量与聚类：共用 `sunburst.js` 下钻旭日图。数据量的层级是版本 → task → subtask（问财用场景），聚类的层级是阶段 → 环节 → 机制 → 模式。默认展开最大的分支：内圈是一整圈，外圈是其中一段。点击内圈展开或下钻，点击外圈下钻，点击圆心返回上一级。
+- 评测量：覆盖率环（已评测 / 输入）和各版本达成率；底部是归因、Compact、证据与定位率统计。`is_correct` 未填时，达成率按没有 P0–P3 问题的会话占比计算。
+- 归因体系：两列桑基图 `版本 → 归因环节`，悬停版本或环节会高亮对应连线，不显示严重度。
+- 预测体系：预测题量（已揭晓 / 待揭晓 / 其他题）、各版本准确率和错因构成。`prediction.json` 接入前显示标着「示例数据」的 mock，数据协议见 [预测卡片数据接口](docs/prediction-data.md)。
+- 会话场与聚类矩阵：会话场每格是一个会话，按最严重的问题着色。聚类矩阵是唯一跳转到样本的入口：点格子按模式筛选，点行头按环节筛选。
 
 **2. 评测体系说明页**：归因调度台，一个程序路由器 + 四个专业代理，事件驱动。
 
@@ -110,15 +109,11 @@ ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
 
 | 文件 | 作用 |
 |---|---|
-| `scan_datasets.py` | 扫 `datasets` 的输入/输出：逐文件条数、按模型×日期配对、meta 分类分布 → `cache/datasets.json` |
-| `prepare.py` | 解析归因/覆盖/Token/逐日指标/桑基分量，合并扫描结果 → `static/data.json` |
-| `prepare_samples.py` | demo_data 的 attribution + compact 按 session_id 配对 → `static/samples.json(.gz)`；逐样本详情 → `static/samples/<slug>.json(.gz)` |
-| `dataset_layout.py` | 解析 datasets 布局：demo_data → legacy → `.archive` 逐级回退，供三个生成脚本共用 |
-| `server.py` | `ThreadingHTTPServer` + 定时重算；`/healthz` 返回 data/samples 双刷新状态 |
-| `static/` | 三页入口、ES modules、ECharts 离线包、构建好的 `app.css` 与页面 CSS |
-| `static/js/` | `app.js` 路由/主题/数据加载，`board.js` 数据板块，`hierarchy-card.js` 数据量与聚类共用的完整圆环组件，`hierarchy-data.js` 分类适配/层级状态，`ring.js` ECharts 旭日图，`system.js` 归因调度页，`samples.js` 样本页，`core.js` 共享 token/图表/数字动效 |
-| `precompress.sh` | 部署时预压缩 JS/CSS/HTML；`prepare.py`/`prepare_samples.py` 另产 `.gz` |
-| `build/` | Tailwind/DaisyUI 配置与构建入口（`npx tailwindcss -c tailwind.config.js -i input.css -o ../static/app.css --minify`） |
+| `build.py` | 一次扫描 `datasets/`：输入、归因、compact 按 `对应关系.csv` 配对 → `static/data.json`、`static/samples.json`、`static/samples/<slug>.json`（均带 `.gz`）；`--keep-on-empty` 在数据源为空时保留上一份 |
+| `server.py` | `ThreadingHTTPServer` + 定时执行 `build.py --keep-on-empty`；`/healthz` 返回最近一次构建摘要 |
+| `static/` | 三页入口、ES modules、`app.css`；无第三方运行时依赖 |
+| `static/js/` | `app.js` 路由/主题/数据加载，`data.js` 数据页，`sunburst.js` 可下钻旭日图，`system.js` 评测体系页，`samples.js` 样本页（含 compact 流程图），`core.js` 共享格式化/提示/数字动效 |
+| `precompress.sh` | 部署时预压缩 JS/CSS/HTML |
 
 AIME 输出以 `1_aime/eval_output/demo_data/<model>/<model>_attribution-<date>.jsonl` 与
 `compact/<model>_compact-<date>.jsonl` 为准（demo 格式，后续沿用）；
@@ -141,7 +136,7 @@ AIME demo 归因带 P0–P4（P4 为提示级）；问财暂无 demo 样本。
 
 通用原则见 [docs/design-principles.md](docs/design-principles.md)；以下是落到本项目的具体 token。
 
-- **一卡一主视觉**：数据量与聚类统一复用 ECharts 旭日图组件，主分类在内圈、选中分支的子类在外圈；评测量用覆盖率环、版本核心达成率和难度构成环；归因用桑基图；预测展示时间截面、分类累计分布与准确率曲线。
+- **一卡一主视觉**：数据量和聚类用下钻旭日图；评测量用覆盖率环、版本达成率和产出统计；归因用版本 → 归因环节的桑基图；预测体系讲清预测题量、准确率和错因。只有聚类矩阵会跳转到样本。
 - **分类色板可校验**：圆环使用固定顺序的分类色（亮/暗各一套），已通过亮度带、色度、相邻 CVD
   分离度与暗色对比度检查；小扇区用图例、直接标注与扇区间隙做二级编码，不依赖颜色单独辨识。
 - **体系页用「活图」**：节点逐段点亮、流上粒子运动、播放/暂停/单步；不是静态截图。
