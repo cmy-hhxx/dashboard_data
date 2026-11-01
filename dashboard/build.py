@@ -836,6 +836,7 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
     counts = Counter(p["sev"] for p in problems if p["sev"])
     row = {
         "q": clip(question, 160), "m": model, "sp": pair["split"], "d": pair["date"],
+        "sid": sid or None, "tid": tid or None,
         "w": worst_of([{"severity": p["sev"]} for p in problems]),
         "n": len(problems), "sv": [counts.get(s, 0) for s in SEVERITIES],
         "r": sorted({p["role"] for p in problems if p["role"]}, key=lambda r: ROLE_ORDER.index(r) if r in ROLE_ORDER else 99),

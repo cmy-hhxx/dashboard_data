@@ -58,7 +58,7 @@ function stamp(data) {
 
 async function boot() {
   viewSeg = segmented($("#viewSwitch"), (v) => {
-    announce(`切换到${{ data: "数据", system: "评测体系", samples: "样本" }[v]}`);
+    announce(`切换到${{ data: "数据看板", system: "评测体系", samples: "具体数据" }[v]}`);
     navigate({ view: v });
   });
   productSeg = segmented($("#productSwitch"), (p) => navigate({ product: p, case: null }));

@@ -1,5 +1,6 @@
-/* 样本: recall list → input timeline → attribution / compact, with evidence → message links. */
-import { $, $$, esc, fmt, compact, SEV, WORST, SEV_NAME, sevColor, KIND, segmented, getJSON, stack, bindTips, REDUCED } from "./core.js";
+/* 具体数据: recall list → chat transcript → attribution / compact, with evidence → message links. */
+import { $, $$, esc, fmt, compact, SEV, WORST, SEV_NAME, sevColor, KIND, segmented, getJSON, bindTips, REDUCED } from "./core.js";
+import { renderContent, segment } from "./render.js";
 
 const ROLE = { planning: "规划", request_generation: "请求生成", tool: "工具执行", script: "脚本执行", skill: "技能装载", delivery: "交付" };
 const FOLD_OPEN = new Set(["user", "answer"]);
@@ -16,6 +17,7 @@ const F = () => {
     stage: q.get("stage") || "", mech: q.get("mech") || "", pattern: q.get("pattern") || "", sort: q.get("sort") || "sev",
   };
 };
+const dirty = () => Object.entries(F()).some(([k, v]) => k !== "sort" && v);
 
 export async function render(r, c) {
   ctx = c;
@@ -60,10 +62,13 @@ function skeleton() {
   root.innerHTML = `<div class="bench">
     <aside class="pane pane-sticky" aria-label="样本列表">
       <div class="pane-head">
-        <input class="search" id="sq" type="search" placeholder="搜索提问、问题标签、任务" autocomplete="off">
+        <input class="search" id="sq" type="search" placeholder="搜索问题 · Session ID · Trace ID" autocomplete="off">
         <div class="filters" id="sf"></div>
         <div class="list-meta"><span id="scount" class="num"></span>
-          <select id="ssort" aria-label="排序"><option value="sev">严重度优先</option><option value="n">问题数</option><option value="date">日期新→旧</option></select></div>
+          <span class="meta-end">
+            <button type="button" class="reset" id="sreset" hidden>重置</button>
+            <select id="ssort" aria-label="排序"><option value="sev">严重度优先</option><option value="n">问题数</option><option value="date">日期新→旧</option></select>
+          </span></div>
       </div>
       <div class="pane-scroll" id="slist" tabindex="0" aria-label="样本"></div>
     </aside>
@@ -84,6 +89,9 @@ function skeleton() {
     timer = setTimeout(() => setFilter({ q: e.target.value.trim() }), 140);
   });
   $("#ssort", root).addEventListener("change", (e) => setFilter({ sort: e.target.value }));
+  $("#sreset", root).addEventListener("click", () =>
+    setFilter({ q: "", w: "", split: "", model: "", stage: "", mech: "", pattern: "", sort: "sev" }),
+  );
   $("#sf", root).addEventListener("click", (e) => {
     const b = e.target.closest("button[data-k]");
     if (!b) return;
@@ -114,7 +122,7 @@ function skeleton() {
   $("#sin", root).addEventListener("click", onInputClick);
   $("#sout", root).addEventListener("click", onOutClick);
   bindTips($("#sout", root), (t) => {
-    if ((!t.closest(".cmap") && !t.closest(".cf-comps")) || !t.dataset.tip) return null;
+    if ((!t.closest(".cmap") && !t.closest(".sp")) || !t.dataset.tip) return null;
     const i = t.dataset.tip.indexOf("|");
     return `<div style="font-weight:var(--w-medium);margin-bottom:4px">${esc(t.dataset.tip.slice(0, i))}</div><div style="max-width:300px;white-space:normal;line-height:1.6">${esc(t.dataset.tip.slice(i + 1))}</div>`;
   });
@@ -131,11 +139,13 @@ function syncFilters() {
   const p = S.prod;
   $("#sq", root).value !== f.q && document.activeElement !== $("#sq", root) && ($("#sq", root).value = f.q);
   $("#ssort", root).value = f.sort;
+  const resetBtn = $("#sreset", root);
+  if (resetBtn) resetBtn.hidden = !dirty();
   const btn = (k, v, label, color) =>
     `<button type="button" data-k="${k}" data-v="${esc(v)}" aria-pressed="${f[k] === v}"${color ? ` style="--c:${color}"` : ""}>${color ? "<i></i>" : ""}${esc(label)}</button>`;
   const row = (cls, items) => `<div class="frow${cls ? ` ${cls}` : ""}">${items}</div>`;
   let html = row("sev", WORST.map((w, i) => btn("w", w, SEV_NAME[w], sevColor(i))).join(""));
-  if (p.splits.length > 1) html += row("", p.splits.map((s) => btn("split", s.id, s.label)).join(""));
+  if (p.splits.some((s) => s.id === "lost")) html += row("", btn("split", "lost", "仅看流失用户"));
   html += row("", p.models.map((m) => btn("model", m.id, m.label)).join(""));
 
   const tax = ctx.data.taxonomy;
@@ -168,6 +178,9 @@ function syncFilters() {
 function renderList() {
   const f = F();
   const needle = f.q.toLowerCase();
+  const hit = (r) =>
+    !needle ||
+    [r.q, r.lb, r.s, r.sid, r.tid, r.case, r.task, r.skill].some((x) => x && String(x).toLowerCase().includes(needle));
   S.rows = S.all.filter(
     (r) =>
       (!f.w || r.w === f.w) && (!f.split || r.sp === f.split) && (!f.model || r.m === f.model) &&
@@ -177,7 +190,7 @@ function renderList() {
         return m === f.mech && (!f.stage || s === f.stage);
       })) &&
       (!f.pattern || r.pt.some((x) => x === f.pattern || x.startsWith(f.pattern + "."))) &&
-      (!needle || r.q.toLowerCase().includes(needle) || r.lb.toLowerCase().includes(needle) || (r.task || "").includes(f.q) || (r.skill || "").includes(f.q) || r.s === f.q),
+      hit(r),
   );
   if (f.sort === "n") S.rows = S.rows.slice().sort((a, b) => b.n - a.n);
   if (f.sort === "date") S.rows = S.rows.slice().sort((a, b) => (a.d < b.d ? 1 : -1));
@@ -187,8 +200,10 @@ function renderList() {
     ? S.rows
         .map(
           (r) => `<button type="button" class="srow" data-s="${r.s}" style="--c:${sevColor(r.w)}" aria-current="${r.s === S.slug}">
-      <span class="bar"></span><span><span class="q">${esc(r.q || "（无提问）")}</span>
-      <span class="m num"><span>${esc(label(r.m))}${S.prod.splits.length > 1 ? ` · ${r.sp === "lost" ? "流失" : "日常"}` : ""}</span><span>${r.d.slice(5)}</span><span>${r.n ? `${r.w} · ${r.n} 个问题` : "无问题"}</span></span></span></button>`,
+      <span class="bar"></span><span class="srow-body"><span class="q">${esc(r.q || "（无提问）")}</span>
+      <span class="m num"><span class="srow-model">${esc(label(r.m))}</span><span>${r.d.slice(5)}</span><span class="srow-sev" style="color:${r.w === "none" ? "var(--muted)" : sevColor(r.w)}">${r.n ? `${r.w} · ${r.n}` : "无问题"}</span>${
+            r.sp === "lost" ? '<span class="tag-lost">流失</span>' : ""
+          }</span></span></button>`,
         )
         .join("")
     : `<div class="empty">没有符合条件的会话<br><button type="button" class="link" id="sclear">清除筛选</button></div>`;
@@ -251,19 +266,26 @@ function renderIn() {
   const D = S.D;
   const m = D.meta || {};
   const label = (S.prod.models.find((x) => x.id === D.model) || { label: D.model }).label;
-  const facts = [
-    S.prod.splits.length > 1 ? (D.split === "lost" ? "流失用户" : "日常评测") : null, label, D.date,
-    m.task, m.subtask, m.difficulty, m.skill, m.mode,
-    m.tokens_in ? `${compact((m.tokens_in || 0) + (m.tokens_out || 0))} tokens` : null,
-    m.finish_ms ? `${fmt(m.finish_ms / 1000, 1)} s` : null,
-  ].filter(Boolean);
+  const scene = [m.task, m.subtask, m.difficulty, m.skill, m.mode].filter(Boolean);
+  const scale = [m.tokens_in ? `${compact((m.tokens_in || 0) + (m.tokens_out || 0))} tokens` : null,
+    m.finish_ms ? `${fmt(m.finish_ms / 1000, 1)} s` : null].filter(Boolean);
   const ids = [["会话 ID", D.ids.session], ["Trace ID", D.ids.trace], ["Case ID", D.ids.case]].filter((x) => x[1]);
   const traces = D.input.traces;
+  const group = (k, cls, vals) =>
+    vals.length
+      ? `<span class="cg${cls ? ` ${cls}` : ""}"><span class="cg-k">${k}</span>${vals.map((v) => `<span class="pill">${esc(v)}</span>`).join("")}</span>`
+      : "";
   $("#sin", root).innerHTML = `<div class="sample-head">
       <h2>${esc(D.question || "（无提问）")}</h2>
       ${D.question_zh && D.question_zh !== D.question ? `<div class="zh">${esc(D.question_zh)}</div>` : ""}
-      <div class="chips">${facts.map((x) => `<span class="pill">${esc(x)}</span>`).join("")}</div>
-      <div class="chips">${ids.map(([k, v]) => `<button type="button" class="copy" data-copy="${esc(v)}">复制${k}</button>`).join("")}</div>
+      <div class="chip-groups">
+        ${D.split === "lost" ? `<span class="cg"><span class="pill lost">流失用户</span></span>` : ""}
+        ${group("模型", "is-model", [label])}
+        ${group("日期", "is-plain", [D.date])}
+        ${group("场景", "is-scene", scene)}
+        ${group("规模", "is-scale", scale)}
+      </div>
+      <div class="idline">${ids.map(([k, v]) => `<button type="button" class="copy" data-copy="${esc(v)}">${k} <span class="num">${esc(v.length > 18 ? `${v.slice(0, 8)}…${v.slice(-6)}` : v)}</span></button>`).join("")}</div>
       ${traces.length > 1 ? `<div class="trace-tabs" id="ttabs">${traces.map((t, i) => `<button type="button" class="pill" data-t="${i}" aria-pressed="${i === S.trace}">第 ${i + 1} 轮${t.agent ? ` · ${esc(t.agent)}` : ""}</button>`).join("")}</div>` : ""}
       <div id="wf"></div>
     </div>
@@ -294,66 +316,81 @@ function waterfall(msgs) {
     <div class="hist-axis num"><span>0 s</span><span>模型 ▬ 上 · 工具 ▬ 下</span><span>${fmt(end / 1000, 1)} s</span></div>`;
 }
 
+/* Chat scene: the user speaks on the right, the answer answers on the left,
+   everything the agent did in between is a compact step row. */
 function msgHTML(t, i, m) {
   const D = S.D;
   const key = `${t}:${i}`;
+  const chat = m.k === "user" || m.k === "answer";
   const folded = !FOLD_OPEN.has(m.k) && !S.open.has(key);
   const sevs = [...new Set((m.ev || []).map((e) => D._ix.sev.get(e)).filter(Boolean))].sort();
-  const blocks = m.blocks
-    .map((b, bi) => {
-      const lab = b.l === "think" ? "思考" : b.l && b.l.startsWith("call:") ? `→ ${b.l.slice(5)}` : "";
-      return `${lab ? `<span class="blk-label">${esc(lab)}</span>` : ""}<div class="blk${b.f === "json" ? " json" : ""}">${pieces(t, i, bi, b)}</div>`;
-    })
-    .join("");
   const time = m.dur != null ? `<span class="num">${m.dur >= 1000 ? fmt(m.dur / 1000, 1) + " s" : m.dur + " ms"}</span>` : "";
-  return `<div class="msg k-${m.k}${folded ? " is-folded" : ""}" id="m-${t}-${i}" data-key="${key}">
-    <span class="msg-dot" aria-hidden="true"></span>
-    <div class="msg-body"><div class="msg-top"><span class="who">${KIND[m.k] || m.k}</span><span class="num faint">#${i}</span>
-      ${m.name ? `<span>${esc(m.name)}</span>` : ""}${m.model ? `<span class="faint">${esc(m.model)}</span>` : ""}${time}
+  const who = KIND[m.k] || m.k;
+  return `<div class="msg k-${m.k}${chat ? " is-chat" : ""}${folded ? " is-folded" : ""}" id="m-${t}-${i}" data-key="${key}">
+    ${chat ? "" : '<span class="msg-dot" aria-hidden="true"></span>'}
+    <div class="msg-body"><div class="msg-top"><span class="who">${who}</span><span class="num faint">#${i}</span>
+      ${m.name ? `<span class="mname">${esc(m.name)}</span>` : ""}${m.model ? `<span class="faint">${esc(m.model)}</span>` : ""}${time}
       <span class="evs">${sevs.map((s) => `<i style="--c:${sevColor(s)}" title="${s} 证据"></i>`).join("")}</span>
       ${FOLD_OPEN.has(m.k) ? "" : `<button type="button" class="toggle" data-fold="${key}">${folded ? "展开" : "收起"}</button>`}</div>
-      ${blocks}</div></div>`;
+      ${blockHTML(t, i, m)}</div></div>`;
 }
 
-function pieces(t, mi, bi, b) {
+function blockHTML(t, mi, m) {
+  if (!m.blocks.length) return `<div class="blk faint">（空）</div>`;
+  return m.blocks
+    .map((b, bi) => {
+      const lab = b.l === "think" ? "思考" : b.l && b.l.startsWith("call:") ? `→ ${b.l.slice(5)}` : "";
+      const body = pieceHTML(t, mi, bi, b);
+      return `${lab ? `<span class="blk-label">${esc(lab)}</span>` : ""}<div class="blk${b.f === "json" ? " is-json" : ""}">${body}</div>`;
+    })
+    .join("");
+}
+
+function markHTML(cover, body) {
+  const cx = cover.find((k) => k.src === "compact");
+  if (cx) return `<mark class="cx" data-e="${cx.e[0]}">${body}</mark>`;
+  const attr = cover.filter((k) => k.src === "attr");
+  const e = attr.flatMap((k) => k.e);
+  return `<mark class="ev" data-e="${e.join(" ")}" style="--c:${sevColor(S.D._ix.sev.get(e[0]))}">${body}</mark>`;
+}
+
+function pieceHTML(t, mi, bi, b) {
   const D = S.D;
   const ids = (D._ix.byBlock.get(`${t}:${mi}:${bi}`) || []).filter((e) => D.evidence[e].src === "attr" || e === S.active);
-  const marks = ids.map((e) => ({ e, s: D.evidence[e].o[0], z: D.evidence[e].o[1], src: D.evidence[e].src }));
-  let pos = 0;
-  let out = "";
-  for (const x of b.x) {
-    if (typeof x !== "string") {
-      out += `<span class="gap">··· 省略 ${fmt(x.g)} 字 ···</span>`;
-      pos += x.g;
-      continue;
-    }
-    const len = x.length;
-    const cuts = new Set([0, len]);
-    marks.forEach((k) => {
-      if (k.s < pos + len && k.z > pos) {
-        cuts.add(Math.max(0, k.s - pos));
-        cuts.add(Math.min(len, k.z - pos));
-      }
-    });
-    const cs = [...cuts].sort((a, c) => a - c);
-    for (let j = 0; j < cs.length - 1; j++) {
-      const a = cs[j];
-      const z = cs[j + 1];
-      const seg = esc(x.slice(a, z));
-      const cover = marks.filter((k) => k.s <= pos + a && k.z >= pos + z);
-      if (!cover.length) {
-        out += seg;
-        continue;
-      }
-      const cx = cover.find((k) => k.src === "compact");
-      const attr = cover.filter((k) => k.src === "attr");
-      out += cx
-        ? `<mark class="cx" data-e="${cx.e}">${seg}</mark>`
-        : `<mark class="ev" data-e="${attr.map((k) => k.e).join(" ")}" style="--c:${sevColor(D._ix.sev.get(attr[0].e))}">${seg}</mark>`;
-    }
-    pos += len;
+  const marks = ids
+    .filter((e) => D.evidence[e].o)
+    .map((e) => ({ e: [e], src: D.evidence[e].src, s: D.evidence[e].o[0], z: D.evidence[e].o[1] }));
+  const gaps = b.x.some((x) => typeof x !== "string");
+
+  if (!marks.length && !gaps) return renderContent(b.x.join(""), b.f);
+  if (!marks.length) {
+    let pos = 0;
+    return b.x
+      .map((x) => {
+        if (typeof x !== "string") {
+          pos += x.g;
+          return `<span class="gap">··· 省略 ${fmt(x.g)} 字 ···</span>`;
+        }
+        pos += x.length;
+        return `<span class="piece">${esc(x)}</span>`;
+      })
+      .join("");
   }
-  return out;
+  // Marks demand the original characters, so formatting stays inline-only.
+  let pos = 0;
+  return b.x
+    .map((x) => {
+      if (typeof x !== "string") {
+        pos += x.g;
+        return `<span class="gap">··· 省略 ${fmt(x.g)} 字 ···</span>`;
+      }
+      const local = marks
+        .filter((k) => k.s < pos + x.length && k.z > pos)
+        .map((k) => ({ s: Math.max(0, k.s - pos), z: Math.min(x.length, k.z - pos), e: k.e, src: k.src }));
+      pos += x.length;
+      return segment(x, local, markHTML, "inline");
+    })
+    .join("");
 }
 
 function rerenderMsg(t, i) {
@@ -440,31 +477,56 @@ function attrHTML(D) {
   const A = D.attribution;
   const multi = D.input.traces.length > 1;
   const counts = SEV.map((s) => A.problems.filter((p) => p.sev === s).length);
+  const total = A.problems.length;
   const tax = ctx.data.taxonomy;
+
   const card = (p) => {
     const pat = p.cl && tax && tax.patterns[p.cl.path];
-    const evs = p.ev
-      .map((e) => {
-        const ev = D.evidence[e];
-        return `<button type="button" class="evbtn" data-e="${e}"${ev.m == null ? " disabled" : ""}><span class="at">${evAt(ev, multi)}</span><span class="qt">${esc(ev.q)}</span>${ev.r ? `<span class="rs">${esc(ev.r)}</span>` : ""}</button>`;
-      })
-      .join("");
+    const evOne = (e) => {
+      const ev = D.evidence[e];
+      return `<button type="button" class="evbtn" data-e="${e}"${ev.m == null ? " disabled" : ""}><span class="at">${evAt(ev, multi)}</span><span class="qt">${esc(ev.q)}</span></button>`;
+    };
+    const CAP = 3;
+    const evs = p.ev.length > CAP
+      ? `${p.ev.slice(0, CAP).map(evOne).join("")}<details class="evmore"><summary>其余 ${p.ev.length - CAP} 条证据</summary>${p.ev.slice(CAP).map(evOne).join("")}</details>`
+      : p.ev.map(evOne).join("");
+    const more = [p.why && ["原因", p.why], p.sevr && ["定级理由", p.sevr], p.calc && p.calc.length && ["核算", p.calc.join("\n")]].filter(Boolean);
     return `<article class="pcard" id="pc-${p.id}" style="--c:${sevColor(p.sev)}">
-      <div class="chips"><span class="pill sevpill" style="--c:${sevColor(p.sev)}">${p.sev || "—"}</span><span class="pill">${esc(ROLE[p.role] || p.role || "—")}</span>
-        ${p.cl ? `<button type="button" class="pill" data-pattern="${p.cl.path}" title="${esc((pat && pat.plain) || "")}"><span class="mono">${p.cl.path}</span>${esc(pat ? pat.name : "")}</button>` : `<span class="pill faint">未聚类</span>`}</div>
-      <h3>${esc(p.label)}</h3>
-      <div class="path"><b>${esc(p.fam || "—")}</b><span class="faint">›</span><span>${esc(p.comp || "—")}</span></div>
-      <dl>${p.ph ? `<dt>现象</dt><dd>${esc(p.ph)}</dd>` : ""}${p.why ? `<dt>原因</dt><dd>${esc(p.why)}</dd>` : ""}${
-        p.sevr ? `<dt>定级理由</dt><dd>${esc(p.sevr)}</dd>` : ""}${p.calc && p.calc.length ? `<dt>核算</dt><dd class="mono">${p.calc.map(esc).join("<br>")}</dd>` : ""}</dl>
+      <div class="pcard-head"><span class="sev-badge">${p.sev || "—"}</span><h3>${esc(p.label)}</h3></div>
+      <div class="pcard-meta"><span>${esc(ROLE[p.role] || p.role || "—")}</span>${p.fam ? `<span class="faint">${esc(p.fam)} › ${esc(p.comp || "")}</span>` : ""}
+        ${p.cl ? `<button type="button" class="path" data-pattern="${p.cl.path}" title="${esc((pat && pat.plain) || "")}"><span class="mono">${p.cl.path}</span>${esc(pat ? pat.name : "")}</button>` : `<span class="faint">未聚类</span>`}</div>
+      ${p.ph ? `<p class="pcard-ph">${esc(p.ph)}</p>` : ""}
+      ${more.length ? `<details class="pcard-more"><summary>${more.map(([k]) => k).join(" · ")}</summary><dl>${
+        more.map(([k, v]) => `<dt>${k}</dt><dd${k === "核算" ? ' class="mono"' : ""}>${esc(v)}</dd>`).join("")
+      }</dl></details>` : ""}
       <div class="evlist">${evs}</div></article>`;
   };
   const order = (ids) => ids.map((i) => A.problems[i]).sort((a, b) => SEV.indexOf(a.sev) - SEV.indexOf(b.sev));
+  const group = (title, note, ids) => {
+    const cards = order(ids);
+    if (!cards.length) return "";
+    return `<section class="tgroup"><header class="tgroup-head"><span>${title}</span><span class="faint num">${cards.length}</span>${note ? `<span class="faint">${note}</span>` : ""}</header>${cards.map(card).join("")}</section>`;
+  };
   let body = "";
-  A.turns.forEach((t) => (body += order(t.problems).map(card).join("")));
-  if (A.session_problems.length) body += order(A.session_problems).map(card).join("");
-  return `${A.summary ? `<p class="summary">${esc(A.summary)}</p>` : ""}
-    <div>${stack(counts, { tall: true, title: "问题严重度构成" })}
-      <div class="legend" style="margin-top:8px;gap:4px 12px">${SEV.map((s, i) => `<span class="sev" style="--c:${sevColor(i)}"><i></i>${s}<b class="num">${counts[i]}</b></span>`).join("")}</div></div>
+  A.turns.forEach((t, ti) => {
+    body += group(multi ? `第 ${ti + 1} 轮` : "本轮", t.correct === false ? "判为错误" : t.correct === true ? "判为正确" : "", t.problems);
+  });
+  body += group("整场会话", "", A.session_problems);
+
+  const sumHTML = A.summary
+    ? `<div class="sum-box${A.summary.length > 130 ? " is-long" : ""}"><p class="summary">${esc(A.summary)}</p>${
+        A.summary.length > 130 ? '<button type="button" class="sum-toggle" data-sum>展开全部</button>' : ""
+      }</div>`
+    : "";
+  return `<div class="attr-head">
+      ${sumHTML}
+      <div class="sevrow" role="list" aria-label="问题严重度">
+        ${SEV.map((s, i) => counts[i]
+          ? `<span class="sev-tile" role="listitem" style="--c:${sevColor(i)}"><b class="num">${counts[i]}</b><span>${s}</span></span>`
+          : "").join("")}
+        <span class="sev-total num">${total ? `${total} 个问题` : "无问题"}</span>
+      </div>
+    </div>
     ${body || `<div class="empty">归因没有记下问题</div>`}`;
 }
 
@@ -474,7 +536,6 @@ function compactHTML(D) {
   const multi = D.input.traces.length > 1;
   let html = C.overview.length ? `<ol class="overview">${C.overview.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>` : "";
   C.turns.forEach((t) => {
-    // Every compact item sits where its evidence sits in the trace: the flow is the session itself.
     const nodes = [];
     CX.forEach(([key, name, cls], ci) => {
       let prev = cls === "plan" ? -1 : null;
@@ -495,7 +556,7 @@ function compactHTML(D) {
           <div class="cf-body">${tag}<span class="cf-text">${esc(n.x.c)}</span>${refs}</div></div>`;
       })
       .join("");
-    html += `${flowMap(nodes, t.turn, at)}<div class="cflow">${flow}</div>${componentRail(t.components || [], D, at)}`;
+    html += `${flowMap(nodes, t.turn, at)}${skillPoints(t.components || [], D, at)}<div class="cflow">${flow}</div>`;
   });
   return html;
 }
@@ -539,40 +600,37 @@ function flowMap(nodes, turn, at) {
   return `<div class="cmap"><svg width="${W}" height="${h}" viewBox="0 0 ${W} ${h}">${grid}<path class="cm-p" d="${d}"/>${marks}</svg></div>`;
 }
 
-/* Components as a small span chart: one bar per component from its first to last evidence message. */
+/* Components as skill points: one chip per tool / script / model, click to jump. */
 const COMP_KIND = { model: ["模型", "var(--t1)"], tool: ["工具", "var(--accent)"], script: ["脚本", "var(--t2)"], skill: ["技能", "var(--t3)"] };
-const COMP_ORDER = ["model", "tool", "script", "skill"];
-function componentRail(list, D, at) {
+function skillPoints(list, D, at) {
   const items = list
     .map((x) => {
       const ev = (x.ev || []).filter((e) => D.evidence[e] && D.evidence[e].m != null);
       const ms = ev.map((e) => D.evidence[e].m);
-      return { x, ev, first: ms.length ? Math.min(...ms) : null, last: ms.length ? Math.max(...ms) : null, kind: COMP_KIND[x.kind] ? x.kind : null };
+      return { x, ev, first: ms.length ? Math.min(...ms) : null, kind: COMP_KIND[x.kind] ? x.kind : null };
     })
     .filter((x) => x.first != null);
   if (!items.length) return "";
-  const lo = Math.min(...items.map((x) => x.first));
-  const hi = Math.max(...items.map((x) => x.last));
-  const span = Math.max(1, hi - lo + 1);
-  const keys = COMP_ORDER.filter((k) => items.some((x) => x.kind === k))
-    .map((k) => `<span><i style="--c:${COMP_KIND[k][1]}"></i>${COMP_KIND[k][0]} ${items.filter((x) => x.kind === k).length}</span>`)
-    .join("");
-  const rows = items
-    .sort((a, b) => a.first - b.first || a.last - b.last)
+  const chips = items
+    .sort((a, b) => a.first - b.first)
     .map((x) => {
-      const [label, c] = COMP_KIND[x.kind] || [x.x.kind || "", "var(--t3)"];
-      const left = (100 * (x.first - lo)) / span;
-      const width = Math.max(1.4, (100 * (x.last - x.first + 1)) / span);
+      const [label, c] = COMP_KIND[x.kind] || [x.x.kind || "组件", "var(--t3)"];
       const base = String(x.x.name).split("/").filter(Boolean).pop() || x.x.name;
-      return `<button type="button" class="cf-comp" style="--c:${c}" data-e="${x.ev[0]}" data-tip="${esc(x.x.name)}|${esc(label)} · ${x.ev.length} 处证据 · ${at(x.first) || "—"}${x.x.c ? ` — ${esc(x.x.c)}` : ""}">
-        <i class="mk"></i><span class="nm">${esc(base)}</span>
-        <span class="bar"><i style="left:${left.toFixed(2)}%;width:${width.toFixed(2)}%"></i></span></button>`;
+      return `<button type="button" class="sp" style="--c:${c}" data-e="${x.ev[0]}" data-tip="${esc(x.x.name)}|${esc(label)} · ${x.ev.length} 处证据 · ${at(x.first) || "—"}${x.x.c ? ` — ${esc(x.x.c)}` : ""}">
+        <i class="sp-dot"></i><span class="sp-name">${esc(base)}</span><span class="sp-n num">${x.ev.length}</span></button>`;
     })
     .join("");
-  return `<div class="cf-comps"><div class="cf-keys">${keys}</div>${rows}</div>`;
+  return `<div class="sp-box"><span class="sp-k">组件</span><div class="sp-list">${chips}</div></div>`;
 }
 
 function onOutClick(e) {
+  const sum = e.target.closest("[data-sum]");
+  if (sum) {
+    const box = sum.closest(".sum-box");
+    const open = box.classList.toggle("is-open");
+    sum.textContent = open ? "收起" : "展开全部";
+    return;
+  }
   const cm = e.target.closest("[data-cf]");
   if (cm) {
     const row = document.getElementById(cm.dataset.cf);

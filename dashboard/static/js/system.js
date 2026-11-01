@@ -129,7 +129,7 @@ function anatomyCard(a, hasIndex) {
     <header class="card-head"><h2>证据闭环</h2><span class="meta end" id="eMeta"></span></header>
     ${hasIndex ? `<div class="echo">
       <aside class="echo-side" aria-label="证据样本筛选">
-        <input class="search" id="eq" type="search" placeholder="搜索提问、问题标签" autocomplete="off">
+        <input class="search" id="eq" type="search" placeholder="搜索问题 · Session ID · Trace ID" autocomplete="off">
         <div class="filters" id="ef"></div>
         <div class="list-meta"><span id="ecount"></span></div>
         <div class="echo-list" id="elist"></div>
@@ -229,7 +229,7 @@ function syncEchoFilters(root) {
     `<button type="button" data-k="${k}" data-v="${esc(v)}" aria-pressed="${f[k] === v}"${color ? ` style="--c:${color}"` : ""}>${color ? "<i></i>" : ""}${esc(label)}</button>`;
   const row = (cls, items) => `<div class="frow${cls ? ` ${cls}` : ""}">${items}</div>`;
   let html = row("sev", WORST.map((w, i) => btn("w", w, SEV_NAME[w], sevColor(i))).join(""));
-  if ((prod.splits || []).length > 1) html += row("", prod.splits.map((s) => btn("split", s.id, s.label)).join(""));
+  if ((prod.splits || []).some((s) => s.id === "lost")) html += row("", btn("split", "lost", "仅看流失用户"));
   html += row("", (prod.models || []).map((m) => btn("model", m.id, m.label)).join(""));
   const tax = E.tax;
   if (tax) {
@@ -294,16 +294,15 @@ function applyEcho(root) {
 function rowHTML(r) {
   const models = (E.prod && E.prod.models) || [];
   const label = ((models.find((m) => m.id === r.m) || {}).label) || r.m;
-  const splits = (E.prod && E.prod.splits) || [];
   return `<button type="button" class="srow" data-s="${r.s}" style="--c:${sevColor(r.w)}" aria-current="${r.s === E.slug}">
     <span class="bar"></span><span><span class="q">${esc(r.q || "（无提问）")}</span>
-    <span class="m num"><span>${esc(label)}${splits.length > 1 ? ` · ${r.sp === "lost" ? "流失" : "日常"}` : ""}</span><span>${esc((r.d || "").slice(5))}</span><span>${r.n ? `${r.w} · ${r.n} 个问题` : "无问题"}</span></span></span></button>`;
+    <span class="m num"><span>${esc(label)}</span><span>${esc((r.d || "").slice(5))}</span><span>${r.n ? `${r.w} · ${r.n} 个问题` : "无问题"}</span>${r.sp === "lost" ? '<span class="tag-lost">流失</span>' : ""}</span></span></button>`;
 }
 
 function filterRows(rows, f) {
   const needle = f.q.toLowerCase();
   return rows.filter((r) => {
-    const hay = [r.q, r.lb, r.s, r.task, r.skill].filter(Boolean).join(" ").toLowerCase();
+    const hay = [r.q, r.lb, r.s, r.sid, r.tid, r.case, r.task, r.skill].filter(Boolean).join(" ").toLowerCase();
     return (
       (!f.w || r.w === f.w) &&
       (!f.split || r.sp === f.split) &&
