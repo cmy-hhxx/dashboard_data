@@ -144,10 +144,10 @@ function flowCard(tax) {
     const mechRows = mechs.map((m, i) =>
       `<span class="fx-mech" data-m="${m.id}" title="${esc(m.def || "")}"><i style="--c:${mechTint(i, mechs.length)}"></i><code>${m.id}</code><b>${esc(m.name)}</b><small>${esc(m.def || "")}</small></span>`).join("");
     taxHTML = `<div class="fx-tax" id="fxTax">
-      <div class="fx-label"><span class="num">04</span>聚类<span class="faint"> · 问题落在哪个环节 × 以什么机制失败 → 归入一个模式</span></div>
+      <div class="fx-label"><span class="num">04</span>聚类</div>
       <div class="fx-tax-grid">
-        <div class="fx-box fx-stgbox"><span class="fx-k">环节 · ${stages.length}<span>点选环节，下方列出它的全部模式</span></span><div class="fx-phs">${phases}</div></div>
-        <div class="fx-box fx-mechbox"><span class="fx-k">机制 · ${mechs.length}<span>亮起的是当前环节用到的机制</span></span><div class="fx-mechs">${mechRows}</div></div>
+        <div class="fx-box fx-stgbox"><span class="fx-k">环节</span><div class="fx-phs">${phases}</div></div>
+        <div class="fx-box fx-mechbox"><span class="fx-k">机制</span><div class="fx-mechs">${mechRows}</div></div>
         <div class="fx-box fx-pm" id="fxDetail">${first ? patternMatrix(tax, first.id) : ""}</div>
       </div></div>`;
   }
@@ -159,7 +159,7 @@ function flowCard(tax) {
         <div class="fx-hubwrap">
           <div class="fx-ask">保留轨迹顺序<b>是</b></div>
           <div class="fx-hub"><span class="fx-orbit"><i></i></span><svg class="fx-ring" viewBox="-80 -80 160 160" aria-hidden="true">${ticks}</svg><span class="fx-core"><span>${tiles}</span></span></div>
-          <p class="fx-cap">每条轨迹压成 7 类关键步骤<br><em>每一步都带原文位置</em></p>
+          <p class="fx-cap"><em>每一步都带原文位置</em></p>
           <div class="fx-steps">${FX_STEPS.map(([n, c]) => `<span style="--c:${c}"><i></i>${n}</span>`).join("")}</div>
         </div></div>
       <div class="fx-col"><div class="fx-label"><span class="num">03</span>归因</div>${outs}</div>
@@ -181,8 +181,8 @@ function patternMatrix(tax, sid) {
   const cols = groups.map(([mid, name, c]) => {
     const list = pats.filter(([id]) => (mid ? id.split(".")[1] === mid : !known.has(id.split(".")[1])));
     if (!list.length) return "";
-    return `<div class="fx-pm-col" data-m="${mid}"><div class="fx-pm-h"><i style="--c:${c}"></i><code>${mid || "—"}</code><b>${esc(name)}</b><span class="num">${list.length}</span></div>${
-      list.map(([id, pt]) => `<div class="fx-pat" style="--d:${d++}" title="${esc(pt.plain || "")}"><code>${id}</code><span>${esc(pt.name || id)}</span></div>`).join("")}</div>`;
+    return `<div class="fx-pm-col" data-m="${mid}"><div class="fx-pm-h"><i style="--c:${c}"></i><code>${mid || "—"}</code><b>${esc(name)}</b><span class="num">${list.length}</span></div><div class="fx-pm-items">${
+      list.map(([id, pt]) => `<div class="fx-pat" style="--d:${d++}" title="${esc(pt.plain || "")}"><code>${id}</code><span>${esc(pt.name || id)}</span></div>`).join("")}</div></div>`;
   }).join("");
   const ex = pats[0] ? pats[0][0].split(".") : [sid, "M1", "1"];
   const used = new Set(pats.map(([id]) => id.split(".")[1]));

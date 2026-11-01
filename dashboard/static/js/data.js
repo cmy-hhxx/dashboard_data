@@ -125,7 +125,7 @@ function evalCard(p) {
   const k = p.kpi;
   const inputs = Math.max(k.inputs || 0, k.sessions);
   const paths = arcs(
-    [{ v: k.sessions, c: "var(--t2)", tip: `已评测|${fmt(k.sessions)}` }, { v: inputs - k.sessions, c: "var(--t4)", tip: `待评测|${fmt(inputs - k.sessions)}` }],
+    [{ v: k.sessions, c: "var(--accent)", tip: `已评测|${fmt(k.sessions)}` }, { v: inputs - k.sessions, c: "var(--t4)", tip: `待评测|${fmt(inputs - k.sessions)}` }],
     RING / 2 - 18, RING / 2,
   );
   const max = Math.max(...p.field.map((g) => g.cells.length), 1);
@@ -133,7 +133,7 @@ function evalCard(p) {
     .map((g) => {
       const n = g.cells.length;
       const name = groupName(p, g);
-      return `<div class="li vrow" data-tip="${esc(name)} · 已评测|${fmt(n)} 条 · ${pct(n, k.sessions)}"><span>${esc(name)}</span><span class="vbar"><i style="width:${(100 * n) / max}%"></i></span><b class="num">${fmt(n)}</b></div>`;
+      return `<div class="li vrow" data-tip="${esc(name)} · 已评测|${fmt(n)} 条 · ${pct(n, k.sessions)}"><span>${esc(name)}</span><span class="vbar"><i style="width:${(100 * n) / max}%"></i></span><b class="num">${fmt(n)}</b><em class="num">${pct(n, k.sessions)}</em></div>`;
     })
     .join("");
   const days = (p.dates || []).map((d) => ({ d: d.d, n: dayCount(d) })).filter((d) => d.n);
@@ -146,14 +146,14 @@ function evalCard(p) {
       : days.length
         ? `<div class="evdays" style="--n:${days.length}">${days
             .map(
-              (x) => `<div class="evday"><span style="height:${Math.max(3, (52 * x.n) / peak)}px" data-tip="${esc(x.d)}|${fmt(x.n)} 条"></span>
+              (x) => `<div class="evday"><b class="num">${fmt(x.n)}</b><span style="height:${Math.max(3, (52 * x.n) / peak)}px" data-tip="${esc(x.d)}|${fmt(x.n)} 条"></span>
         <small class="num">${esc(x.d.slice(5))}</small></div>`,
             )
             .join("")}</div>`
         : "";
-  return card(6, "评测量", `<div class="duo">${ring(paths, pct(k.sessions, inputs, 1), `${fmt(k.sessions)} / ${fmt(inputs)}`)}<div class="list">${rows}</div></div>
+  return card(6, "评测量", `<div class="eval-content"><div class="duo eval-summary">${ring(paths, pct(k.sessions, inputs, 1), `${fmt(k.sessions)} / ${fmt(inputs)}`)}<div class="list">${rows}</div></div>
     ${chart}
-    ${stats([["评测总量", counter(k.sessions)], ["评测天数", counter(days.length)], ["日均", counter(avg, { d: avg % 1 ? 1 : 0 })], ["单日峰值", counter(days.length ? peak : 0)]])}`);
+    ${stats([["评测总量", counter(k.sessions)], ["评测天数", counter(days.length)], ["日均", counter(avg, { d: avg % 1 ? 1 : 0 })], ["单日峰值", counter(days.length ? peak : 0)]])}</div>`);
 }
 
 /* ---------------------------------------------------------------- 归因体系: version → component role */

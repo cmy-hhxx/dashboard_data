@@ -42,7 +42,7 @@ export function sunburst(host, tree, { unit = "" } = {}) {
   let focus = root;
   let open = biggest(root);
   host.classList.add("sbx");
-  host.innerHTML = `<div class="sb"><svg viewBox="0 0 ${S} ${S}"></svg><button type="button" class="sb-c"></button></div><div class="list sb-list"></div>`;
+  host.innerHTML = `<div class="sb-view"><div class="sb"><svg viewBox="0 0 ${S} ${S}"></svg><button type="button" class="sb-c"></button></div><div class="list sb-list"></div></div>`;
   const svg = host.querySelector("svg");
   const center = host.querySelector(".sb-c");
   const list = host.querySelector(".sb-list");
@@ -81,10 +81,11 @@ export function sunburst(host, tree, { unit = "" } = {}) {
     const fill = new Map(target.map((t) => [t.node, t.fill]));
     const row = (n, cls) =>
       `<button type="button" class="li sb-r ${cls}" data-k="${esc(n.id)}"><i style="--c:${fill.get(n)}"></i><span>${esc(n.name)}</span><b class="num">${fmt(n.n)}</b><em class="num">${pct(n.n, n.parent.n)}</em></button>`;
-    list.innerHTML =
-      open && open.children
-        ? row(open, "head") + open.children.map((n) => row(n, "sub")).join("")
-        : (focus.children || []).map((n) => row(n, n === open ? "head" : "")).join("");
+    // Keep sibling categories visible while expanding the selected branch.
+    list.innerHTML = (focus.children || []).map((n) =>
+      row(n, n === open ? "head" : "") +
+      (n === open && n.children ? n.children.map((c) => row(c, "sub")).join("") : "")
+    ).join("");
   }
 
   function draw(animate) {
