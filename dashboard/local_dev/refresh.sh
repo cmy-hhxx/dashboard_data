@@ -12,16 +12,7 @@ REPO_ROOT="$(dirname "$PWD")"
 # shellcheck source=local_dev/env.sh
 source "$DASHBOARD/local_dev/env.sh"
 
-DATASETS_DIR="$(resolve_datasets || true)"
-if [ -z "$DATASETS_DIR" ]; then
-  # No data/ yet: keep the offline fixture usable.
-  if [ -d "$DASHBOARD/local_dev/datasets/0_wencai" ] || [ -d "$DASHBOARD/local_dev/datasets/1_aime" ]; then
-    DATASETS_DIR="$DASHBOARD/local_dev/datasets"
-  else
-    echo "no datasets found: put 0_wencai / 1_aime under ../data or set EVAL_DATASETS" >&2
-    exit 1
-  fi
-fi
+DATASETS_DIR="$(resolve_datasets)"
 export EVAL_DATASETS="$DATASETS_DIR"
 echo "[refresh] datasets: $EVAL_DATASETS"
 

@@ -236,7 +236,13 @@ function lockNum(el, value, decimals) {
 export function setNum(id, value, opts) {
   const el = typeof id === "string" ? $(id) : id;
   if (!el) return;
-  el.dataset.count = String(value == null ? 0 : value);
+  if (value == null || !Number.isFinite(Number(value))) {
+    el._numToken = (el._numToken || 0) + 1;
+    delete el.dataset.count;
+    el.textContent = "—";
+    return;
+  }
+  el.dataset.count = String(value);
   if (opts && opts.decimals != null) el.dataset.decimals = String(opts.decimals);
   if (opts && opts.suffix) el.dataset.suffix = opts.suffix;
   lockNum(el, value, (opts && opts.decimals) || 0);

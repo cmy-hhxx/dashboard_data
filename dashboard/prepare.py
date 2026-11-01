@@ -26,11 +26,7 @@ from datetime import datetime, timedelta, timezone
 
 import dataset_layout as layout
 
-# Production data root; override with EVAL_DATASETS to point at a local tree
-# (see dashboard/local_dev/README.md for the offline dev fixture).
-DATASETS = os.path.abspath(os.path.expanduser(
-    os.environ.get("EVAL_DATASETS", "/mnt/fin_bench/code_and_clean_data/datasets")
-))
+DATASETS = layout.datasets_root()
 TZ = timezone(timedelta(hours=8), "CST")
 
 WENCAI_MODELS = ["a_expert", "a_fast", "b_expert", "b_fast"]
@@ -815,7 +811,6 @@ def build(counts_path, out_path):
             },
             "components": build_wencai_components(wc_components),
             "cluster": compact_cluster(CLUSTER_FILES["wencai"]),
-            "run": {"status": "snapshot", "name": "datasets · 2026-10-23"},
         },
         "aime": {
             "input": {

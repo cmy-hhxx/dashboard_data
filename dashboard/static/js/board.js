@@ -66,6 +66,7 @@ function renderHierarchy(product, slot, props) {
 function renderVolume(product) {
   const src = getSrc(product);
   const prefix = isWc(product) ? "wc" : "ai";
+  const hasInput = src.input.files > 0;
   const root = classificationHierarchy(src.input, product);
   const meta = $(`${prefix}VolMeta`);
   if (meta) meta.textContent = dateRange(src.input.date_range).replace(/^\d{4}-/, "");
@@ -82,8 +83,8 @@ function renderVolume(product) {
       const useClassified = classified > 0 && classified < normalized.value;
       stats.innerHTML = [
         ["体量", fmtBytes(src.input.bytes)],
-        [useClassified ? "已归类" : "文件", useClassified ? fmt(classified) : fmt(src.input.files)],
-        ["已评测", fmt(src.input.evaluated)],
+        [useClassified ? "已归类" : "文件", useClassified ? fmt(classified) : fmt(hasInput ? src.input.files : null)],
+        ["已评测", fmt(hasInput || src.input.evaluated > 0 ? src.input.evaluated : null)],
       ].map(([label, value]) => `<span>${label} <b>${value}</b></span>`).join("");
     },
   });
@@ -223,7 +224,7 @@ function renderEvalFacts(product) {
   const el = $(isWc(product) ? "wcEvalStats" : "aiEvalStats");
   if (!el) return;
   el.innerHTML = [
-    ["问题", fmt(out.problems || 0)],
+    ["问题", fmt(out.answers > 0 ? out.problems : null)],
     ["Tokens", fmtTokens(out.tokens || 0)],
     ["P50", p50 ? p50.toFixed(1) + "s" : "—"],
   ]
@@ -240,22 +241,23 @@ function renderEvaluation(product) {
   const pending = input.pending || 0;
   const total = input.total || 0;
   const cover = clamp(pct(evaluated, total), 0, 100);
+  const hasData = input.files > 0 || evaluated > 0;
 
-  setNum(wc ? "wcEvaluated" : "aiEvaluated", evaluated);
-  setNum(wc ? "wcCoverPct" : "aiCoverPct", cover, { decimals: 1, suffix: "%" });
+  setNum(wc ? "wcEvaluated" : "aiEvaluated", hasData ? evaluated : null);
+  setNum(wc ? "wcCoverPct" : "aiCoverPct", total ? cover : null, { decimals: 1, suffix: "%" });
 
   const inputTotal = $(wc ? "wcInputTotal" : "aiInputTotal");
-  if (inputTotal) inputTotal.textContent = fmt(total);
+  if (inputTotal) inputTotal.textContent = fmt(hasData ? total : null);
   const done = $(wc ? "wcCoverDone" : "aiCoverDone");
-  if (done) done.textContent = fmt(evaluated);
+  if (done) done.textContent = fmt(hasData ? evaluated : null);
   const rest = $(wc ? "wcCoverPending" : "aiCoverPending");
-  if (rest) rest.textContent = fmt(pending);
+  if (rest) rest.textContent = fmt(hasData ? pending : null);
   const coverBar = $(wc ? "wcCoverBar" : "aiCoverBar");
   if (coverBar) {
     coverBar.style.setProperty("--coverage", `${cover.toFixed(2)}%`);
     coverBar.setAttribute(
       "aria-label",
-      `评测覆盖率 ${cover.toFixed(1)}%，已评测 ${fmt(evaluated)} 条，共 ${fmt(total)} 条`
+      total ? `评测覆盖率 ${cover.toFixed(1)}%，已评测 ${fmt(evaluated)} 条，共 ${fmt(total)} 条` : "评测数据待接入"
     );
   }
 
@@ -431,7 +433,8 @@ function renderAttribution(product) {
   const el = $(id);
   const graph = buildSankey(product);
 
-  setNum(wc ? "wcProblems" : "aiProblems", out.problems ?? graph.links.reduce((n, l) => n + l.value, 0));
+  setNum(wc ? "wcProblems" : "aiProblems", out.answers > 0 || graph.links.length
+    ? out.problems ?? graph.links.reduce((n, l) => n + l.value, 0) : null);
 
   if (!el) return;
   if (!graph.links.length) {
@@ -477,7 +480,7 @@ function predictionModel(product) {
   const source = getSrc(product);
   const generatedAt = board.data.generated_at;
   if (!state.model || state.source !== source || state.generatedAt !== generatedAt) {
-    state.model = predictionData(source, product, generatedAt);
+    state.model = predictionData(source, generatedAt);
     state.source = source;
     state.generatedAt = generatedAt;
   }
@@ -511,7 +514,7 @@ function predictionTimeAxis(first, last) {
 
 function renderPredDistribution(snapshot, chartEl) {
   if (!snapshot.total || !snapshot.scheduled) {
-    showChartEmpty(chartEl, snapshot.total ? "暂无答案公布时间数据" : "题库暂无预测题");
+    showChartEmpty(chartEl, snapshot.total ? "暂无答案公布时间数据" : snapshot.hasQuestions ? "题库暂无预测题" : "预测题库待接入");
     return;
   }
   const colors = paletteByName(snapshot.distribution.map((series) => series.name));
@@ -702,19 +705,22 @@ function renderPrediction(product) {
     tab.setAttribute("aria-selected", String(on));
   });
   const status = $(`${prefix}PredStatus`);
-  if (status) status.hidden = !snapshot.prototype;
-  setNum(`${prefix}PredTotal`, snapshot.total);
+  if (status) status.hidden = dim === "distribution" ? snapshot.hasQuestions
+    : dim === "accuracy" ? snapshot.accuracy.length > 0 : Boolean(snapshot.attribution);
+  setNum(`${prefix}PredTotal`, snapshot.hasQuestions ? snapshot.total : null);
   const available = $(`${prefix}PredAvailable`);
-  if (available) available.textContent = fmt(snapshot.available);
+  if (available) available.textContent = fmt(snapshot.hasQuestions ? snapshot.available : null);
   const pending = $(`${prefix}PredPending`);
-  if (pending) pending.textContent = fmt(snapshot.pending);
+  if (pending) pending.textContent = fmt(snapshot.hasQuestions ? snapshot.pending : null);
   const progress = pct(snapshot.available, snapshot.total);
   const gauge = $(`${prefix}PredGauge`);
   if (gauge) {
     gauge.style.setProperty("--progress", `${progress.toFixed(2)}%`);
-    gauge.setAttribute("aria-label", `截面可解题占比 ${progress.toFixed(1)}%，可解 ${fmt(snapshot.available)} 题，共 ${fmt(snapshot.total)} 题`);
+    gauge.setAttribute("aria-label", snapshot.total
+      ? `截面可解题占比 ${progress.toFixed(1)}%，可解 ${fmt(snapshot.available)} 题，共 ${fmt(snapshot.total)} 题`
+      : snapshot.hasQuestions ? "题库暂无预测题" : "预测题库待接入");
   }
-  setNum(`${prefix}PredGaugeText`, progress, { decimals: 1, suffix: "%" });
+  setNum(`${prefix}PredGaugeText`, snapshot.total ? progress : null, { decimals: 1, suffix: "%" });
   const chartEl = $(`${prefix}ForecastChart`);
   if (!chartEl) return;
   chartEl.setAttribute("aria-label", `${productLabel(product)}${{ distribution: "预测数据分布", accuracy: "预测准确率", attribution: "预测归因" }[dim]}`);

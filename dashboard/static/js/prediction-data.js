@@ -1,19 +1,6 @@
-/* Prediction data adapter. The fallback bank and accuracy records are example data. */
+/* Prediction data adapter: absent sources stay empty until data is connected. */
 const DAY = 86400000;
 const ZONE_OFFSET = 8 * 3600000;
-const DEMO_CURVES = {
-  wencai: {
-    a_expert: [58, 61, 60, 64, 66, 68, 71, 74],
-    a_fast: [55, 57, 59, 58, 62, 64, 65, 69],
-    b_expert: [52, 55, 54, 58, 57, 61, 63, 66],
-    b_fast: [49, 51, 52, 54, 56, 55, 58, 60],
-  },
-  aime: {
-    fast: [63, 65, 64, 68, 70, 69, 72, 74],
-    expert: [67, 69, 71, 70, 74, 76, 75, 78],
-  },
-};
-const DEMO_ERRORS = ["方向错误", "依据不足", "数值偏差", "时点错配"];
 
 export function parsePredictionTime(value) {
   if (value == null || value === "") return NaN;
@@ -43,10 +30,6 @@ export function predictionTimeLabel(at, full = false) {
   return full ? `${value.day} ${value.time}` : value.day.slice(5).replace("-", "/");
 }
 
-function endOfDay(at) {
-  return Math.floor((at + ZONE_OFFSET) / DAY) * DAY - ZONE_OFFSET + DAY - 1;
-}
-
 function normalizeAccuracy(rows) {
   const records = new Map();
   (Array.isArray(rows) ? rows : []).forEach((row) => {
@@ -72,65 +55,22 @@ function normalizeAccuracy(rows) {
   return [...records.values()].sort((a, b) => a.at - b.at);
 }
 
-function demoData(src, product, asOf) {
-  const categories = ((src.input && src.input.categories && src.input.categories.task) || [])
-    .filter((item) => item.name && Number(item.value) > 0);
-  if (!categories.length) categories.push({ name: "未分类", value: 1 });
-  const weight = categories.reduce((sum, item) => sum + Number(item.value), 0);
-  const start = asOf - 14 * DAY;
-  const questions = Array.from({ length: 1000 }, (_, index) => {
-    let pick = ((index * 73) % 1000) / 1000 * weight;
-    const category = categories.find((item) => (pick -= Number(item.value)) < 0) || categories[categories.length - 1];
-    return {
-      id: `example-${index + 1}`,
-      category: category.name,
-      answer_at: start + Math.floor(((index * 193) % 1000) / 999 * 42 * 24 * 60) * 60000,
-    };
-  });
-  const accuracy = [];
-  Object.entries(DEMO_CURVES[product] || DEMO_CURVES.wencai).forEach(([model, values]) => {
-    for (let index = 0; index < 14; index += 1) {
-      const at = Math.min(asOf, endOfDay(asOf - (13 - index) * DAY));
-      const total = questions.filter((question) => question.answer_at <= at).length;
-      const position = index / 13 * (values.length - 1);
-      const left = Math.floor(position);
-      const rate = values[left] + (values[Math.min(left + 1, values.length - 1)] - values[left]) * (position - left);
-      accuracy.push({ model, at, total, correct: Math.round(total * rate / 100) });
-    }
-  });
-  return { questions, accuracy };
-}
-
-export function predictionData(src = {}, product = "wencai", generatedAt) {
+export function predictionData(src = {}, generatedAt) {
   const source = src.prediction || {};
   const parsed = parsePredictionTime(source.as_of ?? generatedAt);
   const asOf = Math.floor((Number.isFinite(parsed) ? parsed : Date.now()) / 60000) * 60000;
-  const prototype = !Array.isArray(source.questions);
-  const raw = prototype ? demoData(src, product, asOf) : source;
+  const hasQuestions = Array.isArray(source.questions);
   return {
     asOf,
-    prototype,
-    questions: raw.questions.filter((question) => question && typeof question === "object").map((question, index) => ({
+    hasQuestions,
+    questions: (hasQuestions ? source.questions : []).filter((question) => question && typeof question === "object").map((question, index) => ({
       id: String(question.id ?? index),
       category: String(question.category || "未分类"),
       answerAt: parsePredictionTime(question.answer_at),
     })),
-    accuracy: normalizeAccuracy(raw.accuracy),
+    accuracy: normalizeAccuracy(source.accuracy),
     attribution: source.attribution || null,
   };
-}
-
-function exampleAttribution(curves) {
-  const models = curves.map((curve) => curve.key);
-  const flows = Object.fromEntries(curves.map((curve) => {
-    const last = curve.points[curve.points.length - 1];
-    const errors = last && last.total != null ? last.total - last.correct : 0;
-    const first = Math.floor(errors * 0.4);
-    const second = Math.floor(errors * 0.3);
-    const third = Math.floor(errors * 0.2);
-    return [curve.key, [first, second, third, errors - first - second - third]];
-  }));
-  return { models, errors: DEMO_ERRORS, flows };
 }
 
 export function predictionSnapshot(data, cutoff = data.asOf) {
@@ -162,7 +102,7 @@ export function predictionSnapshot(data, cutoff = data.asOf) {
     bucket.set(category, (bucket.get(category) || 0) + 1);
   });
   const start = Math.min(Number.isFinite(earliest) ? earliest : at, at) - DAY;
-  const times = [...new Set([start, ...buckets.keys(), at])].sort((a, b) => a - b);
+  const times = data.questions.length ? [...new Set([start, ...buckets.keys(), at])].sort((a, b) => a - b) : [];
   const running = new Map(groups.map((name) => [name, 0]));
   const distribution = groups.map((name) => ({ name, value: counts.get(name) || 0, values: [] }));
   const cumulative = [];
@@ -183,10 +123,10 @@ export function predictionSnapshot(data, cutoff = data.asOf) {
     available,
     scheduled,
     pending: data.questions.length - available,
-    prototype: data.prototype,
+    hasQuestions: data.hasQuestions,
     distribution,
     cumulative,
     accuracy,
-    attribution: data.prototype ? exampleAttribution(accuracy) : data.attribution,
+    attribution: data.attribution,
   };
 }

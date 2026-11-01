@@ -3,12 +3,12 @@ import assert from "node:assert/strict";
 import { predictionData, predictionSnapshot, parsePredictionTime, predictionInputValue, predictionTimeLabel } from "../static/js/prediction-data.js";
 
 const at = parsePredictionTime;
-const make = (questions, accuracy = [], asOf = "2026-11-02T12:00+08:00") => predictionData({ prediction: { questions, accuracy } }, "wencai", asOf);
+const make = (questions, accuracy = [], asOf = "2026-11-02T12:00+08:00") => predictionData({ prediction: { questions, accuracy } }, asOf);
 
 function consistent(snapshot) {
   assert.equal(snapshot.available + snapshot.pending, snapshot.total);
   assert.equal(snapshot.distribution.reduce((sum, category) => sum + category.value, 0), snapshot.available);
-  assert.equal(snapshot.cumulative.at(-1)[1], snapshot.available);
+  assert.equal(snapshot.cumulative.at(-1)?.[1] ?? 0, snapshot.available);
   snapshot.distribution.forEach((category) => assert.equal(category.values.at(-1)[1], category.value));
 }
 
@@ -67,33 +67,47 @@ test("accuracy is weighted by scored questions and cannot leak future observatio
   assert.equal(predictionSnapshot(data, at("2026-11-01T19:59")).accuracy.length, 0);
 });
 
-test("real empty banks and missing metrics never become example data or zero accuracy", () => {
+test("empty banks stay empty and missing metrics never become zero accuracy", () => {
   const data = make([], [{ model: "fast", at: "2026-11-01", total: 0, correct: 0 }]);
-  assert.equal(data.prototype, false);
+  assert.equal(data.hasQuestions, true);
   assert.equal(data.accuracy.length, 0);
   const snapshot = predictionSnapshot(data);
   assert.equal(snapshot.total, 0);
   consistent(snapshot);
 });
 
-test("both products have deterministic 1000-question examples with coherent snapshots", () => {
-  for (const product of ["wencai", "aime"]) {
-    const source = { input: { categories: { task: [{ name: "行情", value: 3 }, { name: "研报", value: 1 }] } } };
-    const data = predictionData(source, product, "2026-11-01T09:43+08:00");
-    assert.equal(data.prototype, true);
-    assert.equal(data.questions.length, 1000);
-    assert.deepEqual(data.questions, predictionData(source, product, "2026-11-01T09:43+08:00").questions);
+test("absent or malformed prediction banks never generate questions, metrics or attribution", () => {
+  for (const prediction of [undefined, null, {}, { questions: null }, { questions: {} }]) {
+    const source = { prediction, input: { categories: { task: [{ name: "行情", value: 3 }] } } };
+    const data = predictionData(source, "2026-11-01T09:43+08:00");
+    assert.equal(data.hasQuestions, false);
+    assert.deepEqual(data.questions, []);
+    assert.deepEqual(data.accuracy, []);
     const snapshot = predictionSnapshot(data);
-    assert.ok(snapshot.available > 0 && snapshot.available < 1000);
-    assert.ok(new Set(data.questions.map((question) => question.answerAt)).size > 100);
+    assert.equal(snapshot.total, 0);
+    assert.equal(snapshot.available, 0);
+    assert.equal(snapshot.pending, 0);
+    assert.deepEqual(snapshot.distribution, []);
+    assert.deepEqual(snapshot.cumulative, []);
+    assert.deepEqual(snapshot.accuracy, []);
+    assert.equal(snapshot.attribution, null);
     consistent(snapshot);
-    snapshot.cumulative.filter((_, i) => i % 50 === 0).forEach(([time, value]) => {
-      assert.equal(value, data.questions.filter((question) => question.answerAt <= time).length);
-    });
-    const future = predictionSnapshot(data, data.asOf + 40 * 86400000);
-    assert.equal(future.available, 1000);
-    assert.equal(future.pending, 0);
-    consistent(future);
-    assert.ok(future.accuracy.every((curve) => curve.points.every((point) => point.at <= data.asOf && point.accuracy >= 0 && point.accuracy <= 100)));
   }
+});
+
+test("supplied accuracy remains usable without fabricating a bank or attribution", () => {
+  const data = predictionData({ prediction: { accuracy: [
+    { model: "fast", at: "2026-11-01T09:00+08:00", correct: 1, total: 2 },
+  ] } }, "2026-11-01T12:00+08:00");
+  const snapshot = predictionSnapshot(data);
+  assert.equal(snapshot.hasQuestions, false);
+  assert.equal(snapshot.total, 0);
+  assert.equal(snapshot.accuracy[0].points[0].accuracy, 50);
+  assert.equal(snapshot.attribution, null);
+});
+
+test("attribution comes only from an explicitly supplied source", () => {
+  const attribution = { models: ["fast"], errors: ["计算错误"], flows: { fast: [2] } };
+  const data = predictionData({ prediction: { questions: [], attribution } });
+  assert.deepEqual(predictionSnapshot(data).attribution, attribution);
 });

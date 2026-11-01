@@ -255,7 +255,10 @@ function loadSamplesModule() {
 }
 
 function ensureData() {
-  if (DATA) return Promise.resolve(DATA);
+  if (DATA) {
+    setFreshness(DATA);
+    return Promise.resolve(DATA);
+  }
   if (dataPromise) return dataPromise;
   dataPromise = fetch("data.json", { cache: "no-cache" })
     .then((response) => {
@@ -287,7 +290,10 @@ async function prepareSystem() {
 }
 
 function ensureSamples(initial) {
-  if (SAMPLES) return Promise.resolve(SAMPLES);
+  if (SAMPLES) {
+    setSamplesFreshness(SAMPLES);
+    return Promise.resolve(SAMPLES);
+  }
   if (samplesPromise) return samplesPromise;
   samplesPromise = (async () => {
     await ensureCss(VIEW_CSS.samples);
@@ -577,12 +583,18 @@ function setFreshness(data) {
   const input = f.input || {};
   const a = f.attribution || {};
   const c = f.cluster || {};
-  const stamp = (x) => String(x.date || x.at || "—").slice(5, 10);
-  const stale = Boolean(input.stale || a.stale || c.stale);
+  const stamp = (x) => x.date || x.at ? String(x.date || x.at).slice(5, 10) : "—";
+  const waiting = !input.at && !a.at && !c.at;
+  const stale = !waiting && Boolean(input.stale || a.stale || c.stale);
   const outputMissing = !a.date && !a.at;
-  const statusLabel = outputMissing ? "输出待落盘" : stale ? "待刷新" : "已同步";
+  const statusLabel = waiting ? "数据待接入" : outputMissing ? "输出待落盘" : stale ? "待刷新" : "已同步";
   el.classList.toggle("is-stale", stale);
   el.dataset.state = outputMissing ? "pending" : stale ? "stale" : "ok";
+  if (waiting) {
+    el.title = "数据状态：数据待接入";
+    el.setAttribute("aria-label", el.title);
+    return;
+  }
   el.title = [
     `数据状态：${statusLabel}`,
     `输入：${input.label || input.at || "未知"}${input.stale ? "（仍在更新）" : ""}`,
@@ -597,10 +609,11 @@ function setSamplesFreshness(samples) {
   const el = $("freshnessChip");
   if (!el || !samples) return;
   const at = String(samples.generated_at || "").slice(0, 16).replace("T", " ");
+  const waiting = !Object.values(samples.products || {}).some((product) => product.total > 0);
   el.classList.remove("is-stale");
-  el.dataset.state = "ok";
-  el.title = `样本索引：${at || "已加载"}`;
-  el.setAttribute("aria-label", `样本索引已加载${at ? `，生成于 ${at}` : ""}`);
+  el.dataset.state = waiting ? "pending" : "ok";
+  el.title = waiting ? "样本数据待接入" : `样本索引：${at || "已加载"}`;
+  el.setAttribute("aria-label", waiting ? "样本数据待接入" : `样本索引已加载${at ? `，生成于 ${at}` : ""}`);
 }
 
 /* -------------------------------------------------------------------- boot */

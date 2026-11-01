@@ -9,6 +9,17 @@ working while the data tree migrates.
 import os
 
 
+def datasets_root():
+    """Use an explicit root, the mounted production tree, or local datasets/."""
+    override = os.environ.get("EVAL_DATASETS")
+    if override:
+        return os.path.abspath(os.path.expanduser(override))
+    production = "/mnt/fin_bench/code_and_clean_data/datasets"
+    if os.path.isdir(production):
+        return production
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "datasets")
+
+
 def first_dir(*paths):
     for path in paths:
         if path and os.path.isdir(path):

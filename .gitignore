@@ -35,7 +35,6 @@ dashboard/static/samples.json.gz
 dashboard/static/samples/
 
 .taste-skill/
-# 本地调试夹具（离线生成，不入库）
-dashboard/local_dev/datasets/
+# 本地数据与服务状态（不入库）
 dashboard/local_dev/server.pid
-datasets
+/datasets/

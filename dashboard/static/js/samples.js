@@ -582,7 +582,7 @@ function renderList() {
     if (!samples().length) {
       const alt = otherProductWithSamples();
       listEl.innerHTML =
-        `<div class="smp-list-empty">${ICONS.empty}<p>${esc(productLabel())}暂无 demo 样本</p>` +
+        `<div class="smp-list-empty">${ICONS.empty}<p>${esc(productLabel())}样本待接入</p>` +
         (alt
           ? `<button type="button" data-switch-product="${esc(alt)}">${esc(productLabel(alt))} 样本</button>`
           : "") +
@@ -812,7 +812,7 @@ function renderInput(sample) {
   if (!sample) {
     const emptyProduct = !samples().length;
     body.innerHTML = emptyProduct
-      ? `<div class="smp-empty">${ICONS.empty}<h3>${esc(productLabel())}暂无 demo 样本</h3></div>`
+      ? `<div class="smp-empty">${ICONS.empty}<h3>${esc(productLabel())}样本待接入</h3></div>`
       : `<div class="smp-empty">${ICONS.empty}<h3>没有可展示的样本</h3><p>当前筛选下没有样本。</p></div>`;
     if (title) title.textContent = "对话轨迹";
     return;

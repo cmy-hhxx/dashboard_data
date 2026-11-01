@@ -1,27 +1,27 @@
 # 本地调试
 
-生产看板只读挂载 `/mnt/fin_bench/code_and_clean_data/datasets`，本机没有这份数据。
-`local_dev/` 让 `scan_datasets.py → prepare.py → prepare_samples.py → server.py` 在本地
-原样跑通，页面三块（数据 / 评测体系 / 样本）都有内容。
+本地只读取仓库根目录的 `datasets/`；数据未放入时，数据看板与样本页保持待接入空态。
+`EVAL_DATASETS` 可显式指定其他数据根目录。三个生成脚本在本地与生产使用同一套解析逻辑。
 
 ## 启动
 
+在仓库根目录执行：
+
 ```bash
-./local_dev/start.sh                 # 自动找数据 + 构建 data.json/samples.json + 起服务
+./dashboard/local_dev/start.sh
 # 打开 http://127.0.0.1:5001/
 ```
 
-数据源按以下顺序选择：
+`start.sh` 重建 `data.json`、`samples.json` 后在前台启动服务；`Ctrl-C` 结束。
+也可以运行 `./dashboard/local_dev/stop.sh`。重跑启动脚本会自动停止此前的本地服务。
+改了 `static/` 下的 JS/CSS 后，直接刷新页面。
 
-1. `EVAL_DATASETS=/path/to/datasets`
-2. `dashboard_data/data` 或 `dashboard_data/data/datasets`（只要里面有 `0_wencai/` 或 `1_aime/`）
-3. 都没有时，生成离线夹具 `local_dev/datasets/`
+## 接入数据
 
-因此把数据放到仓库根的 `data/` 下，再跑一次 `./local_dev/start.sh` 就会用真实数据。
-数据根目录的布局必须和线上一致：
+将真实数据放到 `datasets/`，保持原始目录结构：
 
-```
-data/                      # 或 data/datasets/
+```text
+datasets/
   0_wencai/
     eval_input/<model>/<date>.jsonl
     eval_output/0_daily_eval_output/<model>/...
@@ -30,55 +30,31 @@ data/                      # 或 data/datasets/
     eval_output/demo_data/<model>/...
 ```
 
-`start.sh` 会在前台跑 `server.py`，`Ctrl-C` 结束；也可以在另一个终端
-`./local_dev/stop.sh`。重跑 `start.sh` 会自动停掉上一个 dev server，换数据源（例如从夹具
-切到 `data/`）就是重跑一次。改了 `static/` 下的 JS/CSS 直接刷新页面即可（服务是 `no-cache`）。
+`demo_data` 是已有评测产物的目录名称，由数据解析器兼容读取。
+数据目录不提交到 Git。目录尚不存在或没有文件时，生成空数据索引。
 
-## 换端口
-
-```bash
-PORT=5055 ./local_dev/start.sh
-```
-
-## 数据更新后刷新（不用重启）
+放好或更新数据后执行：
 
 ```bash
-./local_dev/refresh.sh               # 只重扫 + 重建 data.json/samples.json
+./dashboard/local_dev/refresh.sh
 ```
 
-服务发送这两个文件用 `no-cache`，刷新浏览器就能看到新数据。本地 dev 默认把服务自身
-的定时重扫设为 24 小时（`REFRESH_SECONDS`，避免大目录反复扫描），所以改了源数据后
-用 `refresh.sh` 显式重建；要恢复 30 分钟调度传 `REFRESH_SECONDS=1800`。
-强制重建样本可以删掉 `static/samples.json` 与 `static/samples/` 后重启。
+刷新浏览器即可看到重建后的结果。数据源为空时也会覆盖旧索引、清理旧样本详情。
+本地定时重扫默认间隔 24 小时；及时接入新数据请运行上述刷新命令。
 
-## 用真实数据
-
-三个脚本都支持 `EVAL_DATASETS` 环境变量覆盖数据根目录（生产默认值不变），
-`server.py` 的子进程会继承它：
+## 指定目录或端口
 
 ```bash
-EVAL_DATASETS=/path/to/datasets ./local_dev/start.sh
+EVAL_DATASETS=/path/to/datasets ./dashboard/local_dev/start.sh
+EVAL_DATASETS=/path/to/datasets ./dashboard/local_dev/refresh.sh
+PORT=5055 ./dashboard/local_dev/start.sh
 ```
 
-## 离线夹具
+指定目录后刷新时需传入同一个 `EVAL_DATASETS`。`server.py` 的刷新子进程继承启动时的数据根目录。
 
-找不到 `data/` 时使用夹具，内容：
-
-- `0_wencai`：4 个版本 × 14 天 × 约 24 个会话，默认约 1.3k 会话；输入 / 归因 / compact 三份对齐。
-- `1_aime`：`aime_fast` / `aime_expert` × 14 天 × 约 16 个会话，默认约 450 个会话；布局为
-  `eval_output/demo_data/<model>/...`。
-- 任务、子任务、意图、答案形态四层 `cluster_tree.json`，每个分支节点保留会话数和条目数；
-  每个维度最多展示 8 个主要分支，长尾自动合并为“其他”。
-- 样本包含 `intent`、`answer_type`、`cluster_path`，从第 4 级聚类查看样本时会按完整路径过滤。
-- 日期取「今天 − 14 … 今天 − 1 天」，让 freshness 判定为新鲜，预测卡片也有历史可算。
-
-可用 `--wencai-per-day` / `--aime-per-day` 调整每个模型每天的会话量，例如：
+## 检查
 
 ```bash
-python3 local_dev/make_demo_dataset.py --out local_dev/datasets \
-  --wencai-per-day 48 --aime-per-day 32
-./local_dev/refresh.sh
+node --test dashboard/tests/*.test.mjs
+python3 -m unittest discover -s dashboard/tests -p 'test_*.py'
 ```
-
-夹具由 `make_demo_dataset.py` 生成，每次运行会清空目标目录重建；它不是真实评测数据，
-不要提交。产物路径 `local_dev/datasets/` 已加入 `.gitignore`。

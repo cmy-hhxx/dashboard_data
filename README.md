@@ -2,8 +2,8 @@
 
 AIME 评测数据在远端服务器上的**搬运、打包与看板**工程。
 
-数据不在这个仓库里——仓库只放流程、脚本和看板代码；数据始终留在部署主机的挂载目录与
-`ceph-fuse` 上。
+仓库只提交流程、脚本和看板代码；真实数据由本地 `datasets/` 或部署主机的挂载目录与
+`ceph-fuse` 接入，不提交到 Git。
 
 ## 目录
 
@@ -46,7 +46,10 @@ ssh eval_data 'chmod +x /tmp/pack_aime_input.sh && /tmp/pack_aime_input.sh <目�
 ## 数据看板
 
 `dashboard/` 是问财 / AIME 评测看板：原生 ES modules + ECharts + Python 标准库起服务。
-**唯一数据源**是 `/mnt/fin_bench/code_and_clean_data/datasets`（评测输入、输出、cluster_tree、item_index）。
+本地读取仓库根目录的 `datasets/`，生产读取 `/mnt/fin_bench/code_and_clean_data/datasets`；
+可通过 `EVAL_DATASETS` 显式指定数据根目录（评测输入、输出、cluster_tree、item_index）。
+没有数据时显示待接入空态。将数据放入 `datasets/` 后运行 `./dashboard/local_dev/refresh.sh` 重建；
+本地启动方式见 [本地调试说明](dashboard/local_dev/README.md)。
 入口分三块，顶部导航切换，query 路由可直接分享：
 
 | 页面 | 路由 | 内容 |
@@ -77,7 +80,7 @@ ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
   返回图标先收起展开，再返回上一层；图例与圆环同色并联动高亮。两者都不跳转样本页，顶部“样本”导航正常保留。
 - 评测量：共用整体进度、版本回答量与核心达成率、难度构成和底部统计；未提供的核心达成率显示“—”，两产品保持同一布局。
 - 归因体系：共用两列桑基图 `版本/模型 → 环节`，统一节点、连线、标签与长尾合并规则，不显示严重度标签或第三列；数据区交互不跳转到样本页。
-- 预测体系：三个维度为 `预测数据分布 / 准确率 / 预测归因`。按数据快照时间和每题答案公布时间计算可解题量与类别构成，不展示日历或日期选择控件；准确率使用真实时间轴，模型和数值显示在图中，不再添加底部题注。真实题库未接入时显示“示例数据”，使用 1000 题示例。数据协议见 [预测卡片数据接口](docs/prediction-data.md)。
+- 预测体系：三个维度为 `预测数据分布 / 准确率 / 预测归因`。按数据快照时间和每题答案公布时间计算可解题量与类别构成，不展示日历或日期选择控件；准确率使用真实时间轴，模型和数值显示在图中，不再添加底部题注。题库、准确率或归因未接入时显示对应空态，缺失指标显示“—”。数据协议见 [预测卡片数据接口](docs/prediction-data.md)。
 
 **2. 评测体系说明页**：归因调度台，一个程序路由器 + 四个专业代理，事件驱动。
 
@@ -100,7 +103,7 @@ ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
   紧凑轨迹展示会话概览、规划、执行、工具错误、反思与组件。两者共同组成一个样本的评测输出。
 - User / Session / Trace ID 不在页面展示，只提供复制按钮；样本 URL 使用短 slug。
 - 归因/体系页通过 `?view=samples&product=…&component=…&severity=…&case=…` 深链进入；
-  搜索、筛选、轮次与输出 tab 同步到 URL。问财暂无 demo 样本时保持问财选中并给出 AIME 入口，
+  搜索、筛选、轮次与输出 tab 同步到 URL。问财暂无样本时保持问财选中并给出 AIME 入口，
   不再自动改写 `product` 路由。
 - 详情按样本懒加载：`samples.json` 只含召回索引与筛选面，选中后取
   `samples/<slug>.json(.gz)`；首屏不再携带全部 trace。

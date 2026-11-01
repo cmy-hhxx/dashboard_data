@@ -1,6 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import { classificationHierarchy, normalizeHierarchy, hierarchyDepth, createHierarchyState } from "../static/js/hierarchy-data.js";
 
 const chain = (depth) => ({ name: "全部", children: [branch(depth)] });
@@ -85,14 +84,12 @@ test("normalization preserves counts and distinguishes repeated labels across br
   assert.equal(root.children[1].children[0].share, 100);
 });
 
-test("both bundled products feed the same normalized hierarchy contract", async () => {
-  const data = JSON.parse(await readFile(new URL("../static/data.json", import.meta.url), "utf8"));
+test("both products stay empty before classification and clustering are connected", () => {
   for (const product of ["wencai", "aime"]) {
-    const source = data[product];
-    for (const raw of [classificationHierarchy(source.input, product), source.cluster.tree]) {
+    for (const raw of [classificationHierarchy({}, product), null]) {
       const root = normalizeHierarchy(raw);
-      assert.ok(root.value > 0 && root.children.length > 0);
-      assert.ok(hierarchyDepth(root) >= 2);
+      assert.equal(root.value, 0);
+      assert.deepEqual(root.children, []);
       const view = createHierarchyState(root).snapshot();
       assert.equal(view.expanded, null);
       assert.equal(view.current, root);

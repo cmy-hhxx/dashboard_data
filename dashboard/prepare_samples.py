@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build static/samples.json from demo compact + attribution records.
+"""Build static/samples.json from dataset compact + attribution records.
 
 One sample is one evaluated session.  The evaluation output of a sample is the
 pair
@@ -27,10 +27,7 @@ from datetime import datetime, timedelta, timezone
 
 import dataset_layout as layout
 
-# Production data root; override with EVAL_DATASETS for local dev.
-DATASETS = os.path.abspath(os.path.expanduser(
-    os.environ.get("EVAL_DATASETS", "/mnt/fin_bench/code_and_clean_data/datasets")
-))
+DATASETS = layout.datasets_root()
 TZ = timezone(timedelta(hours=8), "CST")
 
 PRODUCTS = {
@@ -925,7 +922,7 @@ def prune_detail_files(out_path, keep):
 
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
-    parser = argparse.ArgumentParser(description="Build samples.json from compact + attribution demo records")
+    parser = argparse.ArgumentParser(description="Build samples.json from compact + attribution records")
     parser.add_argument("--datasets", default=DATASETS, help="datasets root (default: server data root)")
     parser.add_argument("--out", default=os.path.join(here, "static", "samples.json"))
     parser.add_argument("--product", choices=["all", "wencai", "aime"], default="all")
@@ -937,7 +934,7 @@ def main():
     payload = {
         "generated_at": now_iso(),
         "schema_version": 2,
-        "source": "demo_data",
+        "source": "datasets",
         "products": {},
     }
     summary = {}
@@ -995,23 +992,6 @@ def main():
         "samples": sum(item["samples"] for item in summary.values()),
         **{product: item["samples"] for product, item in summary.items()},
     }
-    # A temporarily missing source (mount/run-layout change) returns zero files.
-    # Do not let that empty index prune a previously good snapshot.
-    if payload["totals"]["samples"] == 0 and os.path.exists(args.out):
-        try:
-            with open(args.out, encoding="utf-8") as fh:
-                previous = json.load(fh)
-            previous_total = int((previous.get("totals") or {}).get("samples") or 0)
-        except (OSError, ValueError, TypeError):
-            previous_total = 0
-        if previous_total:
-            print(json.dumps({
-                "generated_at": payload["generated_at"],
-                "skipped": "source produced no samples; keeping previous snapshot",
-                "previous_samples": previous_total,
-                "products": summary,
-            }, ensure_ascii=False))
-            return
     keep = write_detail_files(detail_samples, args.out)
     size, gz_size = write_payload(payload, args.out)
     prune_detail_files(args.out, keep)

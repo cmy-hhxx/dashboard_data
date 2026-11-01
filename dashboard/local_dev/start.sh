@@ -3,8 +3,7 @@
 #
 # Data source (first match wins):
 #   1. EVAL_DATASETS=/path/to/datasets
-#   2. ../data (repo root) or ../data/datasets with 0_wencai / 1_aime
-#   3. the offline fixture under local_dev/datasets/ (generated on demand)
+#   2. ../datasets (repo root), which may be empty while waiting for data
 #
 # It rebuilds data.json + samples.json from the chosen source, then serves
 # on :5001 (override with PORT). Rerun this script after dropping new data in:
@@ -35,12 +34,7 @@ if [ -f "$PIDFILE" ]; then
   rm -f "$PIDFILE"
 fi
 
-DATASETS_DIR="$(resolve_datasets || true)"
-USE_FIXTURE=0
-if [ -z "$DATASETS_DIR" ]; then
-  DATASETS_DIR="$DASHBOARD/local_dev/datasets"
-  USE_FIXTURE=1
-fi
+DATASETS_DIR="$(resolve_datasets)"
 export EVAL_DATASETS="$DATASETS_DIR"
 # Local dev refreshes on explicit ./local_dev/refresh.sh instead of rescanning
 # every 30 minutes; override with REFRESH_SECONDS if you want the scheduler.
@@ -49,11 +43,6 @@ export REFRESH_SECONDS="${REFRESH_SECONDS:-86400}"
 mkdir -p cache logs
 
 echo "[dev] datasets: $EVAL_DATASETS"
-if [ "$USE_FIXTURE" = "1" ]; then
-  echo "[dev] no data/ found, generating offline fixture"
-  python3 local_dev/make_demo_dataset.py --out "$EVAL_DATASETS"
-fi
-
 echo "[dev] scan"
 python3 scan_datasets.py --data "$EVAL_DATASETS" --out cache/datasets.json
 

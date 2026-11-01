@@ -2,7 +2,7 @@
 
 问财与 AIME 共用同一个预测卡片。数据分别放在 `data.json` 的 `wencai.prediction` 与 `aime.prediction` 中；适配逻辑位于 `dashboard/static/js/prediction-data.js`。
 
-没有 `prediction.questions` 字段时，卡片使用确定性的 1000 题示例题库，并显示“示例数据”。已有 `questions: []` 表示真实空题库，不会回退成示例。示例的公布时间各不相同，分布在数据快照前 14 天至后 28 天。
+没有 `prediction.questions` 数组时，卡片显示“预测题库待接入”，题量、可解数量、待公布数量和占比显示“—”。已有 `questions: []` 表示已接入的空题库，题量显示 0，占比仍显示“—”。缺失题库不会根据任务分类生成题目、准确率或归因。
 
 ```json
 {
@@ -25,7 +25,7 @@
 
 `accuracy` 是各模型的准确率观测记录。优先用 `correct / total × 100` 计算；也支持直接提供 `accuracy`，其单位固定为 0–100 的百分数。同一模型、同一时刻的计数记录合并计算，不平均百分比。缺失指标与零分母不会被画成 0%。准确率仅展示不晚于截面、且不晚于 `as_of` 的观测，未来截面不会生成未来准确率。`as_of` 缺失时使用 `data.json.generated_at`。
 
-真实预测归因可通过 `prediction.attribution` 提供 `{models, errors, flows}`：`models` 为模型 ID 数组，`errors` 为错误类别数组，`flows[模型ID]` 为按错误类别顺序排列的数量数组。未提供时显示数据待接入；示例模式按已知准确率计数生成示例归因。
+预测归因通过 `prediction.attribution` 提供 `{models, errors, flows}`：`models` 为模型 ID 数组，`errors` 为错误类别数组，`flows[模型ID]` 为按错误类别顺序排列的数量数组。未提供时显示数据待接入，不根据准确率推算问题类型或分配数量。各维度独立读取已提供的数据：缺失题库时，仍可展示已有准确率和归因。
 
 预测卡片不再渲染图外底部题注，曲线末端、图例和数据浮层承载图表信息。
 

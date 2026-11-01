@@ -873,7 +873,7 @@
   container: prediction / inline-size;
 }
 
-.card--predict .proto-chip {
+.card--predict .data-status-chip {
   display: inline-flex;
   align-items: center;
   height: 20px;
@@ -885,7 +885,7 @@
   font-weight: var(--fw-strong);
 }
 
-.card--predict .proto-chip[hidden] { display: none; }
+.card--predict .data-status-chip[hidden] { display: none; }
 
 .card--predict .pred-head {
   display: grid;

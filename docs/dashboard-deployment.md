@@ -81,8 +81,8 @@ ssh eval_data 'cd /opt/eval_dashboard && ./stop.sh'
 - 样本最多每 `SAMPLES_REFRESH_SECONDS`（默认 21600 秒 / 6 小时）重建一次；文件缺失时立即重建。
 - 可用环境变量覆盖 `PORT`（默认 5001）、`REFRESH_SECONDS`、`SAMPLES_REFRESH_SECONDS`。
   注意 `start.sh` 启动时写死 `PORT=5001`，要改监听端口需同时改 `start.sh` 或手动启动。
-- 样本源目录暂时为空（例如外部评测运行切换 `demo_data`）时，`prepare_samples.py` 会保留上一份
-  `samples.json` 与详情、跳过 prune；日志出现 `skipped: source produced no samples` 即表示沿用旧快照。
+- 样本源目录为空时，`prepare_samples.py` 写出空的 `samples.json`，并清理旧样本详情，
+  页面显示待接入空态。数据刷新严格反映当前数据源。
 - `precompress.sh` 为 JS/CSS/HTML/SVG 生成 `.gz`；`prepare.py` / `prepare_samples.py` 为
   `data.json`、`samples.json` 与逐样本详情同时写出 `.gz`。客户端支持 gzip 时 `server.py`
   直接发送；发送前用 gzip ISIZE 校验压缩包与源文件大小一致，不一致则回退原始文件，避免旧
