@@ -13,7 +13,7 @@ const F = () => {
   const q = params();
   return {
     q: q.get("q") || "", w: q.get("w") || "", split: q.get("split") || "", model: q.get("model") || "",
-    role: q.get("role") || "", stage: q.get("stage") || "", pattern: q.get("pattern") || "", sort: q.get("sort") || "sev",
+    stage: q.get("stage") || "", mech: q.get("mech") || "", pattern: q.get("pattern") || "", sort: q.get("sort") || "sev",
   };
 };
 
@@ -90,6 +90,15 @@ function skeleton() {
     const cur = F()[b.dataset.k];
     setFilter({ [b.dataset.k]: cur === b.dataset.v ? "" : b.dataset.v });
   });
+  $("#sf", root).addEventListener("change", (e) => {
+    const s = e.target.closest("select[data-k]");
+    if (!s) return;
+    const k = s.dataset.k;
+    const patch = { [k]: s.value };
+    if (k === "stage") Object.assign(patch, { mech: "", pattern: "" });
+    if (k === "mech") patch.pattern = "";
+    setFilter(patch);
+  });
   const list = $("#slist", root);
   list.addEventListener("click", (e) => {
     const b = e.target.closest(".srow");
@@ -105,7 +114,7 @@ function skeleton() {
   $("#sin", root).addEventListener("click", onInputClick);
   $("#sout", root).addEventListener("click", onOutClick);
   bindTips($("#sout", root), (t) => {
-    if (!t.closest(".cmap") || !t.dataset.tip) return null;
+    if ((!t.closest(".cmap") && !t.closest(".cf-comps")) || !t.dataset.tip) return null;
     const i = t.dataset.tip.indexOf("|");
     return `<div style="font-weight:var(--w-medium);margin-bottom:4px">${esc(t.dataset.tip.slice(0, i))}</div><div style="max-width:300px;white-space:normal;line-height:1.6">${esc(t.dataset.tip.slice(i + 1))}</div>`;
   });
@@ -124,20 +133,34 @@ function syncFilters() {
   $("#ssort", root).value = f.sort;
   const btn = (k, v, label, color) =>
     `<button type="button" data-k="${k}" data-v="${esc(v)}" aria-pressed="${f[k] === v}"${color ? ` style="--c:${color}"` : ""}>${color ? "<i></i>" : ""}${esc(label)}</button>`;
-  const roles = Object.keys(ROLE).filter((r) => S.all.some((x) => x.r.includes(r)));
-  const br = `<span class="fbreak"></span>`;
-  let html = WORST.map((w, i) => btn("w", w, SEV_NAME[w], sevColor(i))).join("");
-  if (p.splits.length > 1) html += br + p.splits.map((s) => btn("split", s.id, s.label)).join("");
-  html += br + p.models.map((m) => btn("model", m.id, m.label)).join("");
-  html += br + roles.map((r) => btn("role", r, ROLE[r])).join("");
+  const row = (cls, items) => `<div class="frow${cls ? ` ${cls}` : ""}">${items}</div>`;
+  let html = row("sev", WORST.map((w, i) => btn("w", w, SEV_NAME[w], sevColor(i))).join(""));
+  if (p.splits.length > 1) html += row("", p.splits.map((s) => btn("split", s.id, s.label)).join(""));
+  html += row("", p.models.map((m) => btn("model", m.id, m.label)).join(""));
+
   const tax = ctx.data.taxonomy;
-  if (f.pattern || f.stage) {
-    const nm = (list, id) => ((tax && list(tax).find((x) => x.id === id)) || { name: id }).name;
-    const [ps, pm, pn] = f.pattern.split(".");
-    const pname = pn ? (tax && (tax.patterns[f.pattern] || {}).name) || f.pattern : `${nm((t) => t.stages, ps)} · ${nm((t) => t.mechanisms, pm)}`;
-    html += br;
-    if (f.stage) html += btn("stage", f.stage, `${nm((t) => t.stages, f.stage)} ×`);
-    if (f.pattern) html += btn("pattern", f.pattern, `${pname} ×`);
+  if (tax) {
+    const byNum = (a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1));
+    const stages = tax.stages.filter((s) => S.all.some((r) => r.st.includes(s.id))).sort(byNum);
+    const mechs = tax.mechanisms
+      .filter((m) => S.all.some((r) => r.pt.some((x) => x.split(".")[1] === m.id && (!f.stage || x.startsWith(`${f.stage}.`)))))
+      .sort(byNum);
+    const pats = Object.keys(tax.patterns)
+      .filter((id) => {
+        const [s, m] = id.split(".");
+        return (!f.stage || s === f.stage) && (!f.mech || m === f.mech) && S.all.some((r) => r.pt.includes(id));
+      })
+      .sort((a, b) => {
+        const pa = a.split(".").map((x) => Number(x.slice(1)));
+        const pb = b.split(".").map((x) => Number(x.slice(1)));
+        return pa[0] - pb[0] || pa[1] - pb[1] || pa[2] - pb[2];
+      });
+    const opt = (v, label, on) => `<option value="${esc(v)}"${on ? " selected" : ""}>${esc(label)}</option>`;
+    html += `<div class="cascade">
+      <select data-k="stage" aria-label="阶段"><option value="">全部阶段</option>${stages.map((s) => opt(s.id, `${s.id} ${s.name}`, f.stage === s.id)).join("")}</select>
+      <select data-k="mech" aria-label="机制"><option value="">全部机制</option>${mechs.map((m) => opt(m.id, `${m.id} ${m.name}`, f.mech === m.id)).join("")}</select>
+      <select data-k="pattern" aria-label="模式" class="wide"><option value="">全部模式</option>${pats.map((id) => opt(id, `${(tax.patterns[id] || {}).name || id} · ${id}`, f.pattern === id)).join("")}</select>
+    </div>`;
   }
   $("#sf", root).innerHTML = html;
 }
@@ -148,7 +171,12 @@ function renderList() {
   S.rows = S.all.filter(
     (r) =>
       (!f.w || r.w === f.w) && (!f.split || r.sp === f.split) && (!f.model || r.m === f.model) &&
-      (!f.role || r.r.includes(f.role)) && (!f.stage || r.st.includes(f.stage)) && (!f.pattern || r.pt.some((x) => x === f.pattern || x.startsWith(f.pattern + "."))) &&
+      (!f.stage || r.st.includes(f.stage)) &&
+      (!f.mech || r.pt.some((x) => {
+        const [s, m] = x.split(".");
+        return m === f.mech && (!f.stage || s === f.stage);
+      })) &&
+      (!f.pattern || r.pt.some((x) => x === f.pattern || x.startsWith(f.pattern + "."))) &&
       (!needle || r.q.toLowerCase().includes(needle) || r.lb.toLowerCase().includes(needle) || (r.task || "").includes(f.q) || (r.skill || "").includes(f.q) || r.s === f.q),
   );
   if (f.sort === "n") S.rows = S.rows.slice().sort((a, b) => b.n - a.n);
@@ -165,7 +193,7 @@ function renderList() {
         .join("")
     : `<div class="empty">没有符合条件的会话<br><button type="button" class="link" id="sclear">清除筛选</button></div>`;
   const clear = $("#sclear", root);
-  clear && clear.addEventListener("click", () => setFilter({ q: "", w: "", split: "", model: "", role: "", stage: "", pattern: "" }));
+  clear && clear.addEventListener("click", () => setFilter({ q: "", w: "", split: "", model: "", stage: "", mech: "", pattern: "" }));
 }
 
 function markCurrent() {
@@ -467,10 +495,7 @@ function compactHTML(D) {
           <div class="cf-body">${tag}<span class="cf-text">${esc(n.x.c)}</span>${refs}</div></div>`;
       })
       .join("");
-    const comps = (t.components || [])
-      .map((x) => `<button type="button" class="cf-comp" title="${esc(x.c)}"${x.ev.length && D.evidence[x.ev[0]].m != null ? ` data-e="${x.ev[0]}"` : ""}>${esc(x.name)}${x.kind ? `<small>${esc(x.kind)}</small>` : ""}</button>`)
-      .join("");
-    html += `${flowMap(nodes, t.turn, at)}<div class="cflow">${flow}</div>${comps ? `<div class="cf-comps">${comps}</div>` : ""}`;
+    html += `${flowMap(nodes, t.turn, at)}<div class="cflow">${flow}</div>${componentRail(t.components || [], D, at)}`;
   });
   return html;
 }
@@ -512,6 +537,39 @@ function flowMap(nodes, turn, at) {
     })
     .join("");
   return `<div class="cmap"><svg width="${W}" height="${h}" viewBox="0 0 ${W} ${h}">${grid}<path class="cm-p" d="${d}"/>${marks}</svg></div>`;
+}
+
+/* Components as a small span chart: one bar per component from its first to last evidence message. */
+const COMP_KIND = { model: ["模型", "var(--t1)"], tool: ["工具", "var(--accent)"], script: ["脚本", "var(--t2)"], skill: ["技能", "var(--t3)"] };
+const COMP_ORDER = ["model", "tool", "script", "skill"];
+function componentRail(list, D, at) {
+  const items = list
+    .map((x) => {
+      const ev = (x.ev || []).filter((e) => D.evidence[e] && D.evidence[e].m != null);
+      const ms = ev.map((e) => D.evidence[e].m);
+      return { x, ev, first: ms.length ? Math.min(...ms) : null, last: ms.length ? Math.max(...ms) : null, kind: COMP_KIND[x.kind] ? x.kind : null };
+    })
+    .filter((x) => x.first != null);
+  if (!items.length) return "";
+  const lo = Math.min(...items.map((x) => x.first));
+  const hi = Math.max(...items.map((x) => x.last));
+  const span = Math.max(1, hi - lo + 1);
+  const keys = COMP_ORDER.filter((k) => items.some((x) => x.kind === k))
+    .map((k) => `<span><i style="--c:${COMP_KIND[k][1]}"></i>${COMP_KIND[k][0]} ${items.filter((x) => x.kind === k).length}</span>`)
+    .join("");
+  const rows = items
+    .sort((a, b) => a.first - b.first || a.last - b.last)
+    .map((x) => {
+      const [label, c] = COMP_KIND[x.kind] || [x.x.kind || "", "var(--t3)"];
+      const left = (100 * (x.first - lo)) / span;
+      const width = Math.max(1.4, (100 * (x.last - x.first + 1)) / span);
+      const base = String(x.x.name).split("/").filter(Boolean).pop() || x.x.name;
+      return `<button type="button" class="cf-comp" style="--c:${c}" data-e="${x.ev[0]}" data-tip="${esc(x.x.name)}|${esc(label)} · ${x.ev.length} 处证据 · ${at(x.first) || "—"}${x.x.c ? ` — ${esc(x.x.c)}` : ""}">
+        <i class="mk"></i><span class="nm">${esc(base)}</span>
+        <span class="bar"><i style="left:${left.toFixed(2)}%;width:${width.toFixed(2)}%"></i></span></button>`;
+    })
+    .join("");
+  return `<div class="cf-comps"><div class="cf-keys">${keys}</div>${rows}</div>`;
 }
 
 function onOutClick(e) {

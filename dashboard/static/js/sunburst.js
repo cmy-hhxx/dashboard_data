@@ -57,7 +57,7 @@ export function sunburst(host, tree, { unit = "" } = {}) {
     let span = null;
     kids.forEach((c) => {
       const a1 = a + (TAU * c.n) / total;
-      out.push({ node: c, ring: "in", g: { a0: a, a1, r0: IN[0], r1: IN[1] }, fill: c === open ? "var(--accent)" : c.other ? "var(--t4)" : "var(--t3)" });
+      out.push({ node: c, ring: "in", g: { a0: a, a1, r0: IN[0], r1: IN[1] }, fill: c === open ? "var(--accent)" : c.other ? "var(--t3)" : "var(--t2)" });
       if (c === open) span = [a, a1];
       a = a1;
     });

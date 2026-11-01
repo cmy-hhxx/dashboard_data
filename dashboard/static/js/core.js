@@ -15,14 +15,6 @@ export const sevColor = (key) => {
 export const KIND = {
   system: "系统", user: "用户", think: "思考", llm: "模型", call: "调用", result: "返回", answer: "回答", other: "其他",
 };
-export const ROLE_NOTE = {
-  planning: "决定做几步、先查什么：规划器与任务编排。",
-  request_generation: "把计划落成可执行的请求：参数、字段、查询语句与代码。",
-  tool: "取数、检索、抓取等工具的执行与回执。",
-  script: "代码解释器与 shell 脚本的执行。",
-  skill: "技能文件与外部能力的装载。",
-  delivery: "把材料组织成终稿：取值、推断、引用、计算与指令遵循。",
-};
 
 export const esc = (s) =>
   String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);

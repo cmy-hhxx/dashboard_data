@@ -880,6 +880,16 @@ def aggregate(product, samples, taxonomy):
     models += sorted({s[2]["m"] for s in samples} - set(models))
     splits = [sp for sp in ("daily", "lost") if any(s[2]["sp"] == sp for s in samples)]
 
+    # 问财 has no task/subtask in the source; its scene is the skill the A versions
+    # routed to; B versions take the skill recorded for the same question.
+    scene = {}
+    if product == "wencai":
+        votes = defaultdict(Counter)
+        for s in samples:
+            if s[1]["meta"].get("skill"):
+                votes[s[1]["question"]][s[1]["meta"]["skill"]] += 1
+        scene = {q: c.most_common(1)[0][0] for q, c in votes.items()}
+
     severity, worst = sev_counter(), {k: 0 for k in WORST_KEYS}
     evidence_n = located = 0
     problems_all = []
@@ -964,7 +974,8 @@ def aggregate(product, samples, taxonomy):
         pat["models"][row["m"]] += 1
         if p["sev"]:
             pat["sev"][p["sev"]] += 1
-        pat["examples"].append((SEVERITIES.index(p["sev"]) if p["sev"] else 9, slug, p["id"], p["label"]))
+        pat["examples"].append((SEVERITIES.index(p["sev"]) if p["sev"] else 9, slug, p["id"], p["label"],
+                                row["m"], row["w"], clip(row["q"], 64)))
         for tag in cl["tags"]:
             t = tags.setdefault(tag, {"id": tag, "n": 0, "sessions": set(), "stages": Counter()})
             t["n"] += 1
@@ -981,12 +992,24 @@ def aggregate(product, samples, taxonomy):
         pattern_list.append({
             "id": pat["id"], "n": pat["n"], "sessions": len(pat["sessions"]), "sev": pat["sev"],
             "models": dict(pat["models"]),
-            "examples": [{"slug": s, "p": pid, "label": lab} for _, s, pid, lab in ex],
+            "examples": [{"slug": s, "p": pid, "label": lab, "model": m, "worst": w, "q": q} for _, s, pid, lab, m, w, q in ex],
         })
     tag_list = [
         {"id": t["id"], "n": t["n"], "sessions": len(t["sessions"]), "stages": dict(t["stages"].most_common(4))}
         for t in sorted(tags.values(), key=lambda x: -len(x["sessions"]))
     ]
+
+    # 聚类矩阵: one entry per session that has clustered problems. The frontend pivots
+    # these against the scenario tree (task → subtask) and the cluster tree
+    # (stage → mechanism → pattern), so every drill state uses the same raw rows.
+    cross = []
+    for slug, detail, row, facts in samples:
+        pats = Counter(p["cl"]["path"] for p in detail["attribution"]["problems"] if p["cl"])
+        if not pats:
+            continue
+        m = detail["meta"]
+        task = m.get("task") or m.get("skill") or scene.get(detail["question"]) or "未标注"
+        cross.append([task, m.get("subtask") or "", [[pid, n] for pid, n in pats.most_common()]])
 
     # Input profile.
     msgs = [s[3]["messages"] for s in samples]
@@ -1061,16 +1084,7 @@ def aggregate(product, samples, taxonomy):
         daily[s[2]["d"]][s[2]["sp"]] += 1
     dates = [{"d": d, **{sp: c.get(sp, 0) for sp in splits}} for d, c in sorted(daily.items())]
 
-    # 数据量 drill-down: version → task → subtask. 问财 has no task, so its 场景 is the skill
-    # the A versions routed to; B versions take the skill recorded for the same question.
-    scene = {}
-    if product == "wencai":
-        votes = defaultdict(Counter)
-        for s in samples:
-            if s[1]["meta"].get("skill"):
-                votes[s[1]["question"]][s[1]["meta"]["skill"]] += 1
-        scene = {q: c.most_common(1)[0][0] for q, c in votes.items()}
-
+    # 数据量 drill-down: version → task → subtask.
     def task_tree(rows):
         tree = defaultdict(Counter)
         for s in rows:
@@ -1081,20 +1095,23 @@ def aggregate(product, samples, taxonomy):
             for t, c in sorted(tree.items(), key=lambda kv: -sum(kv[1].values()))
         ]
 
-    # The session field: one cell per session, grouped by split → model, worst first.
+    # The session field: one cell per session, grouped by model. AIME is read as one
+    # product (daily + lost together); its lost users are counted as a marker, not split out.
     field = []
     order = {k: i for i, k in enumerate(WORST_KEYS)}
-    for sp in splits:
-        for m in models:
-            group = [s for s in samples if s[2]["sp"] == sp and s[2]["m"] == m]
-            group.sort(key=lambda s: (order[s[2]["w"]], -s[2]["n"], s[2]["d"]))
-            if group:
-                field.append({
-                    "split": sp, "model": m,
-                    "cells": [[s[0], order[s[2]["w"]], s[2]["n"], clip(s[2]["q"], 56)] for s in group],
-                    "roles": dict(Counter(p["role"] or "other" for s in group for p in s[1]["attribution"]["problems"])),
-                    "tree": task_tree(group),
-                })
+    unified = product == "aime"
+    keys = [(None, m) for m in models] if unified else [(sp, m) for sp in splits for m in models]
+    for sp, m in keys:
+        group = [s for s in samples if s[2]["m"] == m and (sp is None or s[2]["sp"] == sp)]
+        group.sort(key=lambda s: (order[s[2]["w"]], -s[2]["n"], s[2]["d"]))
+        if group:
+            field.append({
+                "split": sp or "", "model": m,
+                "lost": sum(1 for s in group if s[2]["sp"] == "lost"),
+                "cells": [[s[0], order[s[2]["w"]], s[2]["n"], clip(s[2]["q"], 56), int(s[2]["sp"] == "lost")] for s in group],
+                "roles": dict(Counter(p["role"] or "other" for s in group for p in s[1]["attribution"]["problems"])),
+                "tree": task_tree(group),
+            })
 
     out = {
         "label": PRODUCTS[product]["label"],
@@ -1111,11 +1128,12 @@ def aggregate(product, samples, taxonomy):
         },
         "range": {"start": dates[0]["d"], "end": dates[-1]["d"]} if dates else None,
         "splits": [{"id": sp, "label": SPLIT_LABEL[sp]} for sp in splits],
+        "unified": unified,
         "models": [{"id": m, "label": MODEL_LABEL.get(m, m)} for m in models],
         "severity": severity, "worst": worst,
         "by_model": by_model, "by_split": by_split,
         "roles": role_list,
-        "matrix": matrix_out, "patterns": pattern_list, "tags": tag_list,
+        "matrix": matrix_out, "patterns": pattern_list, "tags": tag_list, "cross": cross,
         "profile": profile, "compact": compact_profile,
         "dates": dates, "field": field,
     }
@@ -1193,27 +1211,28 @@ def system_facts(all_samples):
             out.append({"slug": slug, "product": product, "p": pid, "label": label, "reason": reason, "comp": comp})
         picked[s] = out
 
-    # Anatomy: a mid-sized single-trace session whose problems span several severities and roles.
-    best, best_score = None, -1
-    for slug, detail, row, facts in all_samples:
-        traces = detail["input"]["traces"]
-        if len(traces) != 1:
-            continue
-        n_msgs = len(traces[0]["messages"])
-        probs = detail["attribution"]["problems"]
-        if not (14 <= n_msgs <= 34) or not (3 <= len(probs) <= 5):
-            continue
-        located = sum(1 for p in probs for e in p["ev"] if "m" in detail["evidence"][e])
-        score = len({p["sev"] for p in probs}) * 3 + len({p["role"] for p in probs}) * 2 + min(located, 14) / 2
-        if detail["lang"] == "zh":
-            score += 1.5
-        if score > best_score:
-            best, best_score = (slug, detail), score
-    anatomy = None
-    if best:
+    # Anatomy: one mid-sized single-trace session per product, so the page can switch examples.
+    def pick_anatomy(samples):
+        best, best_score = None, -1
+        for slug, detail, row, facts in samples:
+            traces = detail["input"]["traces"]
+            if len(traces) != 1:
+                continue
+            n_msgs = len(traces[0]["messages"])
+            probs = detail["attribution"]["problems"]
+            if not (14 <= n_msgs <= 34) or not (3 <= len(probs) <= 5):
+                continue
+            located = sum(1 for p in probs for e in p["ev"] if "m" in detail["evidence"][e])
+            score = len({p["sev"] for p in probs}) * 3 + len({p["role"] for p in probs}) * 2 + min(located, 14) / 2
+            if detail["lang"] == "zh":
+                score += 1.5
+            if score > best_score:
+                best, best_score = (slug, detail), score
+        if not best:
+            return None
         slug, detail = best
         msgs = detail["input"]["traces"][0]["messages"]
-        anatomy = {
+        return {
             "slug": slug, "product": detail["product"], "model": detail["model"], "question": detail["question"],
             "messages": [
                 {"k": m["k"], "name": m.get("name"), "dur": m.get("dur"),
@@ -1233,6 +1252,11 @@ def system_facts(all_samples):
             "overview": (detail["compact"] or {}).get("overview", [])[:3],
             "summary": clip(detail["attribution"]["summary"], 260),
         }
+
+    by_product = {}
+    for item in all_samples:
+        by_product.setdefault(item[1]["product"], []).append(item)
+    anatomy = {product: a for product, samples in by_product.items() if (a := pick_anatomy(samples))}
     return {
         "severity_examples": picked,
         "evidence_per_problem": {str(k): v for k, v in sorted(ev_per_problem.items())},

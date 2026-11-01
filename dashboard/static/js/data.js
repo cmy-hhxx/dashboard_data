@@ -1,13 +1,12 @@
 /* 数据: 会话场 · 数据量 · 评测量 · 归因体系 · 聚类体系 · 预测体系 · 聚类矩阵. Titles only; the layout carries the rest.
-   Only the cluster matrix opens samples; everything else drills in place. */
-import { $, $$, esc, fmt, pct, compact, sum, WORST, SEV_NAME, sevColor, counter, runCounters, bindTips, REDUCED } from "./core.js";
+   Everything drills in place; this page never opens a sample. */
+import { $, $$, esc, fmt, pct, compact, sum, WORST, SEV_NAME, sevColor, counter, runCounters, bindTips, segmented, REDUCED } from "./core.js";
 import { sunburst } from "./sunburst.js";
 
 let ctx;
 let shown = null;
 const RING = 168;
 const SPLIT_SHORT = { daily: "日常", lost: "流失" };
-const tone = (i) => `var(--t${Math.min(i, 4)})`;
 const dot = (c) => `<i style="--c:${c}"></i>`;
 
 export function render(root, c) {
@@ -31,7 +30,7 @@ export function render(root, c) {
 const card = (span, title, body, end = "") =>
   `<article class="card" style="--span:${span}"><header class="card-head"><h2>${title}</h2>${end}</header>${body}</article>`;
 const modelName = (p, id) => (p.models.find((m) => m.id === id) || { label: id }).label;
-const groupName = (p, g) => (p.splits.length > 1 ? `${SPLIT_SHORT[g.split] || g.split} · ` : "") + modelName(p, g.model);
+const groupName = (p, g) => (p.unified || p.splits.length <= 1 ? "" : `${SPLIT_SHORT[g.split] || g.split} · `) + modelName(p, g.model);
 const stats = (items) => `<div class="stats">${items.map(([l, v]) => `<div><b class="num">${v}</b><small>${l}</small></div>`).join("")}</div>`;
 /* Versions: first half accent, second half ink; Fast full, Expert lighter. */
 const shade = (i, n) =>
@@ -64,15 +63,38 @@ const ring = (paths, num, unit) =>
   `<div class="ring"><svg viewBox="0 0 ${RING} ${RING}">${paths}</svg><div class="ring-c"><b class="num">${num}</b><small class="num">${unit}</small></div></div>`;
 
 /* ---------------------------------------------------------------- 会话场 */
+const FIELD_BUDGET = 2000;
 function fieldCard(p) {
+  const total = sum(p.field.map((g) => g.cells.length));
+  const k = Math.max(1, Math.ceil(total / FIELD_BUDGET));
+  const dense = k > 1;
+  // Keep one cell per session until the field gets too large; then merge adjacent
+  // same-severity sessions into one cell (heavier sessions still read as one tile).
+  const buckets = (cells) => {
+    const out = [];
+    cells.forEach((c, i) => {
+      const last = out[out.length - 1];
+      if (last && last.sev === c[1] && last.size < k) {
+        last.size += 1;
+        last.n += c[2];
+      } else out.push({ sev: c[1], size: 1, n: c[2], i });
+    });
+    return out;
+  };
   const groups = p.field
-    .map((g, gi) => `<div class="fgroup"><div class="fgroup-head"><b>${esc(groupName(p, g))}</b><span class="num">${fmt(g.cells.length)}</span></div>
-      <div class="tiles">${g.cells.map((c, i) => `<span style="--c:${sevColor(c[1])};--i:${Math.min(i, 400)}" data-cell="${gi}:${i}" data-w="${c[1]}"></span>`).join("")}</div></div>`)
+    .map((g, gi) => {
+      const cells = dense ? buckets(g.cells) : g.cells.map((c, i) => ({ sev: c[1], size: 1, n: c[2], i }));
+      return `<div class="fgroup"><div class="fgroup-head"><b>${esc(groupName(p, g))}</b><span class="num">${fmt(g.cells.length)}</span>${
+        g.lost ? `<span class="fgroup-lost"><i></i>流失 ${fmt(g.lost)}</span>` : ""
+      }</div>
+      <div class="tiles">${cells.map((b, i) => `<span style="--c:${sevColor(b.sev)};--i:${Math.min(i, 400)}" data-cell="${gi}:${b.i}" data-w="${b.sev}"${dense ? ` data-k="${b.size}" data-p="${b.n}"` : ""}></span>`).join("")}</div></div>`;
+    })
     .join("");
   const legend = `<div class="legend end" id="fieldLegend">${WORST.map(
     (w, i) => `<button type="button" style="--c:${sevColor(i)}" data-w="${i}" aria-pressed="false"><i></i>${SEV_NAME[w]}<b class="num">${fmt(p.worst[w])}</b></button>`,
   ).join("")}</div>`;
-  return card(12, "会话场", `<div class="field is-intro" id="field"><div class="field-groups">${groups}</div></div>`, legend);
+  const note = dense ? `<span class="meta" title="会话过多时，相邻且同为最严重等级的会话合并为一格">每格 ≤ ${k} 场</span>` : "";
+  return card(12, "会话场", `<div class="field is-intro${dense ? " is-dense" : ""}" id="field"><div class="field-groups">${groups}</div></div>`, `${note}${legend}`);
 }
 
 /* ---------------------------------------------------------------- 数据量: version → task → subtask */
@@ -96,26 +118,42 @@ function volTree(p) {
   };
 }
 
-/* ---------------------------------------------------------------- 评测量 */
+/* ---------------------------------------------------------------- 评测量: how many were evaluated each day */
+const dayCount = (d) => Object.entries(d).reduce((n, [k, v]) => (k === "d" ? n : n + (v || 0)), 0);
+
 function evalCard(p) {
   const k = p.kpi;
   const inputs = Math.max(k.inputs || 0, k.sessions);
   const paths = arcs(
-    [{ v: k.sessions, c: "var(--t0)", tip: `已评测|${fmt(k.sessions)}` }, { v: inputs - k.sessions, c: "var(--t4)", tip: `待评测|${fmt(inputs - k.sessions)}` }],
+    [{ v: k.sessions, c: "var(--t2)", tip: `已评测|${fmt(k.sessions)}` }, { v: inputs - k.sessions, c: "var(--t4)", tip: `待评测|${fmt(inputs - k.sessions)}` }],
     RING / 2 - 18, RING / 2,
   );
+  const max = Math.max(...p.field.map((g) => g.cells.length), 1);
   const rows = p.field
     .map((g) => {
-      const bm = p.by_model.find((x) => x.id === g.model) || {};
-      const m = (p.splits.length > 1 && bm.splits && bm.splits[g.split]) || bm;
+      const n = g.cells.length;
       const name = groupName(p, g);
-      // is_correct is empty in the current batch; until it is filled the bar is the share without a P0–P3 problem.
-      const r = m.judged ? (100 * m.correct) / m.judged : (100 * ((m.worst.P4 || 0) + (m.worst.none || 0))) / Math.max(1, m.sessions);
-      return `<div class="li vrow" data-tip="${esc(name)} · ${m.judged ? "正确率" : "无实质问题"}|${fmt(r, 1)}%"><span>${esc(name)}</span><span class="vbar"><i style="width:${r}%"></i></span><b class="num">${fmt(r, 1)}%</b></div>`;
+      return `<div class="li vrow" data-tip="${esc(name)} · 已评测|${fmt(n)} 条 · ${pct(n, k.sessions)}"><span>${esc(name)}</span><span class="vbar"><i style="width:${(100 * n) / max}%"></i></span><b class="num">${fmt(n)}</b></div>`;
     })
     .join("");
+  const days = (p.dates || []).map((d) => ({ d: d.d, n: dayCount(d) })).filter((d) => d.n);
+  const peak = Math.max(...days.map((d) => d.n), 1);
+  const total = sum(days.map((d) => d.n));
+  const avg = days.length ? total / days.length : 0;
+  const chart =
+    days.length === 1
+      ? `<div class="evsingle"><i></i><span class="num">${esc(days[0].d)}</span><b class="num">${fmt(days[0].n)}</b><small>条</small></div>`
+      : days.length
+        ? `<div class="evdays" style="--n:${days.length}">${days
+            .map(
+              (x) => `<div class="evday"><span style="height:${Math.max(3, (52 * x.n) / peak)}px" data-tip="${esc(x.d)}|${fmt(x.n)} 条"></span>
+        <small class="num">${esc(x.d.slice(5))}</small></div>`,
+            )
+            .join("")}</div>`
+        : "";
   return card(6, "评测量", `<div class="duo">${ring(paths, pct(k.sessions, inputs, 1), `${fmt(k.sessions)} / ${fmt(inputs)}`)}<div class="list">${rows}</div></div>
-    ${stats([["归因", counter(k.sessions)], ["Compact", counter(k.compacted || 0)], ["证据", counter(k.evidence)], ["已定位", pct(k.located, k.evidence)]])}`);
+    ${chart}
+    ${stats([["评测总量", counter(k.sessions)], ["评测天数", counter(days.length)], ["日均", counter(avg, { d: avg % 1 ? 1 : 0 })], ["单日峰值", counter(days.length ? peak : 0)]])}`);
 }
 
 /* ---------------------------------------------------------------- 归因体系: version → component role */
@@ -236,6 +274,54 @@ function mockPrediction(p, allQ) {
   return { as_of: now, questions, accuracy, attribution: { models: p.models.map((m) => m.id), errors: MOCK_CAUSE.map(([e]) => e), flows } };
 }
 
+function predSankey(p, models, causes, flows) {
+  const left = models
+    .map((m, i) => ({ m, name: modelName(p, m), n: sum(causes.map((_, j) => ((flows[m] || [])[j] || 0))), c: shade(i, models.length) }))
+    .filter((x) => x.n);
+  if (!left.length || !causes.length) return "";
+  const total = sum(left.map((x) => x.n)) || 1;
+  const W = 440, H = 176, gap = 7, x0 = 96, x1 = W - 96;
+  const kL = (H - gap * (left.length - 1)) / total;
+  const kR = (H - gap * (causes.length - 1)) / total;
+  let y = 0;
+  const L = left.map((x) => {
+    const o = { x, y, h: x.n * kL, off: 0 };
+    y += o.h + gap;
+    return o;
+  });
+  y = 0;
+  const R = causes.map((x) => {
+    const o = { x, y, h: x.n * kR, off: 0 };
+    y += o.h + gap;
+    return o;
+  });
+  let paths = "";
+  L.forEach((l, li) =>
+    R.forEach((r, ri) => {
+      const n = (flows[l.x.m] || [])[ri] || 0;
+      if (!n) return;
+      const a0 = l.y + l.off, a1 = a0 + n * kL, b0 = r.y + r.off, b1 = b0 + n * kR;
+      l.off += n * kL;
+      r.off += n * kR;
+      paths += `<path class="sk-f" d="M${x0} ${a0}C${(x0 + x1) / 2} ${a0} ${(x0 + x1) / 2} ${b0} ${x1} ${b0}L${x1} ${b1}C${(x0 + x1) / 2} ${b1} ${(x0 + x1) / 2} ${a1} ${x0} ${a1}Z" fill="url(#psk${li})" data-g="${li}" data-r="${ri}" data-tip="${esc(l.x.name)} → ${esc(r.x.l)}|${fmt(n)}"/>`;
+    }),
+  );
+  const ly = spread(L.map((o) => o.y + o.h / 2), 14, H);
+  const ry = spread(R.map((o) => o.y + o.h / 2), 14, H);
+  const defs = L.map(
+    (l, i) => `<linearGradient id="psk${i}" gradientUnits="userSpaceOnUse" x1="${x0}" x2="${x1}" y1="0" y2="0"><stop offset="0" style="stop-color:${l.x.c};stop-opacity:.55"/><stop offset="1" style="stop-color:${l.x.c};stop-opacity:.16"/></linearGradient>`,
+  ).join("");
+  const lnode = L.map(
+    (l, i) => `<g class="sk-node" data-g="${i}"><rect x="${x0 - 5}" y="${l.y}" width="5" height="${Math.max(1, l.h)}" rx="2" style="fill:${l.x.c}"/>
+      <text x="${x0 - 12}" y="${ly[i]}" text-anchor="end" class="sk-t">${esc(l.x.name)}<tspan class="sk-n" dx="6">${fmt(l.x.n)}</tspan></text></g>`,
+  ).join("");
+  const rnode = R.map(
+    (r, i) => `<g class="sk-node" data-r="${i}"><rect x="${x1}" y="${r.y}" width="5" height="${Math.max(1, r.h)}" rx="2" style="fill:var(--t1)"/>
+      <text x="${x1 + 12}" y="${ry[i]}" class="sk-t">${esc(r.x.l)}<tspan class="sk-n" dx="6">${fmt(r.x.n)}</tspan></text></g>`,
+  ).join("");
+  return `<svg class="sankey pred-sk" viewBox="0 0 ${W} ${H}"><defs>${defs}</defs>${paths}${lnode}${rnode}</svg>`;
+}
+
 function predictCard(p) {
   const allQ = new Set(p.field.flatMap((g) => g.cells.map((c) => c[3]))).size;
   const pr = p.prediction || mockPrediction(p, allQ);
@@ -260,58 +346,204 @@ function predictCard(p) {
   const acc = Object.entries(latest).map(([m, e]) => ({ m, r: e.n ? (100 * e.c) / e.n : e.pct, c: e.c, n: e.n })).filter((x) => x.r != null);
   const pooledN = sum(acc.map((x) => x.n));
   const at = pr.attribution || {};
-  const causes = (at.errors || []).map((l, i) => ({ l, n: sum((at.models || []).map((m) => ((at.flows || {})[m] || [])[i] || 0)) })).filter((x) => x.n);
+  const predModels = at.models && at.models.length ? at.models : Object.keys(at.flows || {});
+  const causes = (at.errors || []).map((l, i) => ({ l, n: sum(predModels.map((m) => ((at.flows || {})[m] || [])[i] || 0)) })).filter((x) => x.n);
   const bar = (items) =>
     `<div class="comp">${items.map((x) => `<span style="flex:${x.n} 1 0;--c:${x.c}" data-tip="${esc(x.l)}|${fmt(x.n)}"></span>`).join("")}</div>
     <div class="keys">${items.map((x) => `<span>${dot(x.c)}${esc(x.l)}<b class="num">${fmt(x.n)}</b></span>`).join("")}</div>`;
   const rows = acc
     .map((x) => `<div class="li vrow" data-tip="${esc(modelName(p, x.m))} · 准确率|${x.n ? `${fmt(x.c)} / ${fmt(x.n)}` : `${fmt(x.r, 1)}%`}"><span>${esc(modelName(p, x.m))}</span><span class="vbar"><i style="width:${x.r}%"></i></span><b class="num">${fmt(x.r, 1)}%</b></div>`)
     .join("");
-  return card(4, "预测体系", `<div class="pred-top">
-      <div class="hero"><b class="big">${counter(qs.length)}</b><small>预测题</small></div>
-      <div class="hero"><b class="big num">${pooledN ? `${fmt((100 * sum(acc.map((x) => x.c))) / pooledN, 1)}%` : "—"}</b><small>准确率</small></div></div>
-    ${bar([
-      { n: open, c: "var(--accent)", l: "已揭晓" },
-      { n: qs.length - open, c: "color-mix(in oklab, var(--accent) 38%, var(--card))", l: "待揭晓" },
-      { n: Math.max(0, allQ - qs.length), c: "var(--t4)", l: "其他题" },
-    ].filter((x) => x.n))}
-    ${rows ? `<div class="list pred-rows">${rows}</div>` : ""}${causes.length ? bar(causes.map((x, i) => ({ ...x, c: tone(i) }))) : ""}`,
-  p.prediction ? "" : `<span class="status end">示例数据</span>`);
+  const right = sum(acc.map((x) => x.c));
+  const causeTotal = sum(causes.map((x) => x.n));
+  const panes = `<div class="pred-pane is-on" data-pane="vol">
+      <div class="pred-top"><div class="hero"><b class="big">${counter(qs.length)}</b><small>预测题</small></div>
+        <div class="hero"><b class="big num">${pct(qs.length, allQ, 1)}</b><small>占题库</small></div></div>
+      ${bar([
+        { n: open, c: "var(--accent)", l: "已揭晓" },
+        { n: qs.length - open, c: "color-mix(in oklab, var(--accent) 38%, var(--card))", l: "待揭晓" },
+        { n: Math.max(0, allQ - qs.length), c: "var(--t4)", l: "其他题" },
+      ].filter((x) => x.n))}
+      ${stats([["题库", counter(allQ)], ["已揭晓", counter(open)], ["待揭晓", counter(qs.length - open)], ["其他题", counter(Math.max(0, allQ - qs.length))]])}
+    </div>
+    <div class="pred-pane" data-pane="acc">
+      <div class="pred-top"><div class="hero"><b class="big num">${pooledN ? `${fmt((100 * right) / pooledN, 1)}%` : "—"}</b><small>准确率</small></div>
+        <div class="hero"><b class="big num">${fmt(pooledN)}</b><small>已判定</small></div></div>
+      ${rows ? `<div class="list pred-rows">${rows}</div>` : `<div class="empty">暂无准确率</div>`}
+      ${pooledN ? bar([
+        { n: right, c: "var(--accent)", l: "正确" },
+        { n: pooledN - right, c: "var(--t4)", l: "错误" },
+      ].filter((x) => x.n)) : ""}
+    </div>
+    <div class="pred-pane" data-pane="cause">
+      <div class="pred-top"><div class="hero"><b class="big">${counter(causeTotal)}</b><small>错误</small></div>
+        <div class="hero"><b class="big num">${causes.length}</b><small>类别</small></div></div>
+      ${causes.length ? predSankey(p, predModels, causes, at.flows || {}) : `<div class="empty">暂无预测归因</div>`}
+    </div>`;
+  return card(
+    4,
+    `预测体系${p.prediction ? "" : ` <span class="status">示例数据</span>`}`,
+    `<div class="pred-panes">${panes}</div>`,
+    `<div class="seg pred-tabs" id="predTab"><span class="seg-knob" aria-hidden="true"></span>
+      <button type="button" data-value="vol" aria-pressed="true">题量</button>
+      <button type="button" data-value="acc">能力</button>
+      <button type="button" data-value="cause">归因</button></div>`,
+  );
 }
 
-/* ---------------------------------------------------------------- 聚类矩阵: stage × mechanism — the one place that opens samples */
+/* ---------------------------------------------------------------- 聚类矩阵: 场景 × 问题聚类, two-axis drill in place */
+const MX_HEAD = 10;
+const MX_MIN = 12;
+const byNum = (a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1));
+
+function sceneTree(p) {
+  const tasks = new Map();
+  (p.cross || []).forEach(([task, sub, pats]) => {
+    const n = sum(pats.map((x) => x[1]));
+    let t = tasks.get(task);
+    if (!t) tasks.set(task, (t = { name: task, n: 0, sessions: 0, subs: new Map() }));
+    t.n += n;
+    t.sessions += 1;
+    if (sub) {
+      let s = t.subs.get(sub);
+      if (!s) t.subs.set(sub, (s = { name: sub, n: 0, sessions: 0 }));
+      s.n += n;
+      s.sessions += 1;
+    }
+  });
+  return [...tasks.values()]
+    .sort((a, b) => b.n - a.n || a.name.localeCompare(b.name))
+    .map((t) => {
+      const subs = [...t.subs.values()].sort((a, b) => b.n - a.n || a.name.localeCompare(b.name));
+      return {
+        name: t.name, task: t.name, n: t.n, sessions: t.sessions, tasks: [t.name],
+        children: subs.length
+          ? subs.map((s) => ({ name: s.name, task: t.name, sub: s.name, n: s.n, sessions: s.sessions, children: [] }))
+          : [],
+      };
+    });
+}
+
+// Long task lists fold into a group that opens as its own table; the fold is display-only.
+function capScenes(nodes) {
+  if (nodes.length <= MX_MIN) return nodes;
+  const rest = nodes.slice(MX_HEAD);
+  return [
+    ...nodes.slice(0, MX_HEAD),
+    {
+      name: "其他场景", group: true, n: sum(rest.map((x) => x.n)), sessions: sum(rest.map((x) => x.sessions)),
+      tasks: rest.flatMap((x) => x.tasks || [x.task]), children: rest,
+    },
+  ];
+}
+
+const sceneMatches = (node, task, sub) =>
+  node.group ? node.tasks.includes(task) : node.sub ? node.task === task && node.sub === sub : !node.task || node.task === task;
+
+function clusterTree(p, tax) {
+  const pats = new Map((p.patterns || []).map((x) => [x.id, x]));
+  const stages = [...tax.stages].sort(byNum).map((s) => {
+    const mechs = tax.mechanisms.map((m) => {
+      const children = [...pats.values()]
+        .filter((x) => x.id.startsWith(`${s.id}.${m.id}.`))
+        .sort((a, b) => Number(a.id.split(".")[2]) - Number(b.id.split(".")[2]))
+        .map((x) => ({ name: (tax.patterns[x.id] || {}).name || x.id, id: x.id, pat: x.id, prefix: x.id, children: [] }));
+      return children.length ? { name: m.name, id: m.id, prefix: `${s.id}.${m.id}`, children } : null;
+    }).filter(Boolean);
+    return mechs.length ? { name: s.name, id: s.id, prefix: s.id, children: mechs } : null;
+  }).filter(Boolean);
+  return { name: "全部", children: stages };
+}
+
+const clusterMatches = (node, pid) => !node.prefix || pid === node.prefix || pid.startsWith(`${node.prefix}.`);
+
+function matrixView(p, rows, cols) {
+  const cells = rows.map(() => cols.map(() => ({ n: 0, sessions: 0, pats: new Map() })));
+  (p.cross || []).forEach(([task, sub, pats]) => {
+    const ri = rows.findIndex((r) => sceneMatches(r, task, sub));
+    if (ri < 0) return;
+    const hit = new Set();
+    pats.forEach(([pid, n]) => {
+      const ci = cols.findIndex((c) => clusterMatches(c, pid));
+      if (ci < 0) return;
+      const cell = cells[ri][ci];
+      cell.n += n;
+      cell.pats.set(pid, (cell.pats.get(pid) || 0) + n);
+      if (!hit.has(ci)) {
+        cell.sessions += 1;
+        hit.add(ci);
+      }
+    });
+  });
+  return { rows, cols, cells };
+}
+
+function matrixTable(view) {
+  const { rows, cols, cells } = view;
+  if (!rows.length || !cols.length) return `<div class="empty">暂无聚类数据</div>`;
+  let max = 1, maxTot = 1;
+  const totals = rows.map((_, ri) => sum(cells[ri].map((x) => x.n)));
+  cells.forEach((row) => row.forEach((x) => (max = Math.max(max, x.n))));
+  totals.forEach((n) => (maxTot = Math.max(maxTot, n)));
+  let html = `<span></span>${cols
+    .map((c, ci) => {
+      const title = `${c.id ? `${c.id} · ` : ""}${c.name}`;
+      const label = `<span class="mx-lab">${esc(c.name)}</span>`;
+      return c.children.length
+        ? `<button type="button" class="mh" data-col="${ci}" title="${esc(title)}" aria-label="下钻 ${esc(c.name)}">${label}<i class="mx-caret" aria-hidden="true"></i></button>`
+        : `<span class="mh" title="${esc(title)}">${label}</span>`;
+    })
+    .join("")}<span></span>`;
+  rows.forEach((r, ri) => {
+    const drill = r.children.length;
+    const label = `<span class="mx-lab">${esc(r.name)}</span>${drill ? `<i class="mx-caret" aria-hidden="true"></i>` : ""}`;
+    html += drill
+      ? `<button type="button" class="rh" data-row="${ri}" title="${esc(r.name)}" aria-label="下钻 ${esc(r.name)}">${label}</button>`
+      : `<span class="rh" title="${esc(r.name)}">${label}</span>`;
+    cols.forEach((_, ci) => {
+      const cell = cells[ri][ci];
+      const v = cell.n ? 0.08 + 0.72 * Math.sqrt(cell.n / max) : 0;
+      html += cell.n
+        ? `<span class="cell num${v > 0.5 ? " hot" : ""}" style="--v:${v.toFixed(3)}" data-mx="${ri}:${ci}">${fmt(cell.n)}</span>`
+        : `<span class="cell is-empty"></span>`;
+    });
+    html += `<span class="rowtot num"><i style="width:${(72 * totals[ri]) / maxTot}px"></i>${fmt(totals[ri])}</span>`;
+  });
+  return `<div class="matrix" style="--cols:${cols.length}">${html}</div>`;
+}
+
+function crumbPath(path, axis) {
+  return path
+    .map((n, i) => {
+      const text = i ? `<i class="mx-sep" aria-hidden="true">›</i>` : "";
+      return `${text}${i === path.length - 1
+        ? `<b>${esc(n.name)}</b>`
+        : `<button type="button" class="mx-crumb" data-${axis}="${i}" aria-label="返回 ${esc(n.name)}">${esc(n.name)}</button>`}`;
+    })
+    .join("");
+}
+
+const crumbs = (rowPath, colPath) =>
+  `<span class="mx-crumb-group"><span class="mx-crumb-label">场景</span>${crumbPath(rowPath, "rp")}</span>
+   <span class="mx-crumb-group"><span class="mx-crumb-label">问题</span>${crumbPath(colPath, "cp")}</span>`;
+
 function matrixCard(p, tax) {
   if (!tax) return "";
-  const mechs = tax.mechanisms;
-  let max = 1;
-  Object.values(p.matrix).forEach((row) => Object.values(row).forEach((x) => (max = Math.max(max, x.n))));
-  const totals = {};
-  tax.stages.forEach((s) => (totals[s.id] = sum(Object.values(p.matrix[s.id] || {}).map((x) => x.n))));
-  const maxTot = Math.max(...Object.values(totals), 1);
-  let html = `<span></span>${mechs.map((m) => `<span class="mh">${esc(m.name)}</span>`).join("")}<span></span>`;
-  tax.phases.forEach((ph, pi) => {
-    if (pi) html += `<span class="sep"></span>`;
-    tax.stages
-      .filter((s) => s.phase === ph.id)
-      .forEach((s) => {
-        html += `<button type="button" class="rh" data-go="stage=${s.id}">${esc(s.name)}<small>${s.id}</small></button>`;
-        mechs.forEach((m) => {
-          const n = ((p.matrix[s.id] || {})[m.id] || {}).n || 0;
-          const v = n ? 0.08 + 0.72 * Math.sqrt(n / max) : 0;
-          html += n
-            ? `<button type="button" class="cell num${v > 0.5 ? " hot" : ""}" style="--v:${v.toFixed(3)}" data-mx="${s.id}|${m.id}" data-go="pattern=${s.id}.${m.id}">${n}</button>`
-            : `<span class="cell"></span>`;
-        });
-        html += `<span class="rowtot num"><i style="width:${(72 * totals[s.id]) / maxTot}px"></i>${fmt(totals[s.id])}</span>`;
-      });
-  });
-  return card(12, "聚类矩阵", `<div class="matrix" style="--cols:${mechs.length}">${html}</div>`);
+  const sceneRoot = { name: "全部", children: capScenes(sceneTree(p)) };
+  const clusterRoot = clusterTree(p, tax);
+  if (!sceneRoot.children.length || !clusterRoot.children.length) {
+    return card(12, "聚类矩阵", `<div class="empty">暂无聚类数据</div>`);
+  }
+  return card(
+    12,
+    "聚类矩阵",
+    `<div id="mxShell">${matrixTable(matrixView(p, sceneRoot.children, clusterRoot.children))}</div>`,
+    `<button type="button" class="link mx-back" id="mxBack" hidden aria-label="返回上一级">← 返回</button>
+     <div class="mx-crumbs" id="mxCrumbs">${crumbs([sceneRoot], [clusterRoot])}</div>`,
+  );
 }
 
 /* ---------------------------------------------------------------- interaction */
-const go = (params) =>
-  ctx.navigate({ view: "samples", product: ctx.product, case: null, q: null, w: null, split: null, model: null, role: null, stage: null, pattern: null, ...params });
-
 function wire(bento, p, tax) {
   const field = $("#field", bento);
   setTimeout(() => field.classList.remove("is-intro"), REDUCED ? 0 : 1600);
@@ -324,37 +556,138 @@ function wire(bento, p, tax) {
     field.classList.toggle("is-filtered", on);
     $$(".tiles span", field).forEach((t) => t.classList.toggle("on", on && t.dataset.w === b.dataset.w));
   });
-  bento.addEventListener("click", (e) => {
-    const t = e.target.closest(".matrix [data-go]");
-    if (t) go(Object.fromEntries(new URLSearchParams(t.dataset.go)));
-  });
+  const tabs = $("#predTab", bento);
+  if (tabs) {
+    const seg = segmented(tabs, (v) => $$(".pred-pane", bento).forEach((x) => x.classList.toggle("is-on", x.dataset.pane === v)));
+    seg.set("vol", { silent: true });
+  }
+
+  // Matrix: two axes walk their own trees and the whole table is redrawn in place.
+  // Rows: task → subtask (long task lists fold into 其他场景). Columns: stage → mechanism → pattern.
+  const shell = $("#mxShell", bento);
+  let mxView = null;
+  if (shell && tax) {
+    const sceneRoot = { name: "全部", children: capScenes(sceneTree(p)) };
+    const clusterRoot = clusterTree(p, tax);
+    let rowPath = [sceneRoot];
+    let colPath = [clusterRoot];
+    let trail = [];
+    const syncTrail = () => {
+      trail = [...Array(rowPath.length - 1).fill("r"), ...Array(colPath.length - 1).fill("c")];
+    };
+    const paint = () => {
+      const rowNode = rowPath[rowPath.length - 1];
+      const colNode = colPath[colPath.length - 1];
+      const view = matrixView(p, rowNode.children || [], colNode.children || []);
+      // Once a problem cluster is selected, keep only scenes that actually carry it.
+      if (colPath.length > 1) {
+        const rows = [], cells = [];
+        view.rows.forEach((r, i) => {
+          if (sum(view.cells[i].map((x) => x.n))) {
+            rows.push(r);
+            cells.push(view.cells[i]);
+          }
+        });
+        view.rows = rows;
+        view.cells = cells;
+      }
+      mxView = view;
+      shell.innerHTML = matrixTable(mxView);
+      const crumbsEl = $("#mxCrumbs", bento);
+      if (crumbsEl) crumbsEl.innerHTML = crumbs(rowPath, colPath);
+      const back = $("#mxBack", bento);
+      if (back) back.hidden = rowPath.length === 1 && colPath.length === 1;
+    };
+    paint();
+    bento.addEventListener("click", (e) => {
+      const back = e.target.closest("#mxBack");
+      if (back) {
+        const axis = trail.pop();
+        if (axis === "r" && rowPath.length > 1) rowPath = rowPath.slice(0, -1);
+        else if (axis === "c" && colPath.length > 1) colPath = colPath.slice(0, -1);
+        else if (colPath.length > 1) colPath = colPath.slice(0, -1);
+        else if (rowPath.length > 1) rowPath = rowPath.slice(0, -1);
+        paint();
+        return;
+      }
+      const row = e.target.closest("#mxShell [data-row]");
+      if (row) {
+        const node = mxView.rows[Number(row.dataset.row)];
+        if (node && node.children.length) {
+          rowPath = [...rowPath, node];
+          trail.push("r");
+          paint();
+        }
+        return;
+      }
+      const col = e.target.closest("#mxShell [data-col]");
+      if (col) {
+        const node = mxView.cols[Number(col.dataset.col)];
+        if (node && node.children.length) {
+          colPath = [...colPath, node];
+          trail.push("c");
+          paint();
+        }
+        return;
+      }
+      const rp = e.target.closest("#mxCrumbs [data-rp]");
+      if (rp) {
+        rowPath = rowPath.slice(0, Number(rp.dataset.rp) + 1);
+        syncTrail();
+        paint();
+        return;
+      }
+      const cp = e.target.closest("#mxCrumbs [data-cp]");
+      if (cp) {
+        colPath = colPath.slice(0, Number(cp.dataset.cp) + 1);
+        syncTrail();
+        paint();
+      }
+    });
+  }
+
   sunburst($("#vol", bento), volTree(p), { unit: "会话" });
   if (tax) sunburst($("#clu", bento), cluTree(p, tax), { unit: "问题" });
 
-  const sk = $(".sankey", bento);
-  sk.addEventListener("pointerover", (e) => {
-    const t = e.target.closest("[data-g],[data-r]");
-    sk.classList.toggle("hl", !!t);
-    if (!t) return;
-    const hit = (f) => (t.classList.contains("sk-f") ? f === t : t.dataset.g != null ? f.dataset.g === t.dataset.g : f.dataset.r === t.dataset.r);
-    $$(".sk-f", sk).forEach((f) => f.classList.toggle("on", hit(f)));
+  $$(".sankey", bento).forEach((sk) => {
+    sk.addEventListener("pointerover", (e) => {
+      const t = e.target.closest("[data-g],[data-r]");
+      sk.classList.toggle("hl", !!t);
+      if (!t) return;
+      const hit = (f) => (t.classList.contains("sk-f") ? f === t : t.dataset.g != null ? f.dataset.g === t.dataset.g : f.dataset.r === t.dataset.r);
+      $$(".sk-f", sk).forEach((f) => f.classList.toggle("on", hit(f)));
+    });
+    sk.addEventListener("pointerleave", () => sk.classList.remove("hl"));
   });
-  sk.addEventListener("pointerleave", () => sk.classList.remove("hl"));
 
   bindTips(bento, (t) => {
     if (t.dataset.mx) {
-      const [s, m] = t.dataset.mx.split("|");
-      const name = (list, id) => (list.find((x) => x.id === id) || { name: id }).name;
-      const pats = p.patterns.filter((x) => x.id.startsWith(`${s}.${m}.`)).slice(0, 4);
-      return `<div style="font-weight:var(--w-medium);margin-bottom:6px">${esc(name(tax.stages, s))} · ${esc(name(tax.mechanisms, m))}</div>${pats
-        .map((x) => `<div class="t-row"><span>${esc((tax.patterns[x.id] || {}).name || x.id)}</span><b class="num" style="margin-left:auto">${fmt(x.sessions)}</b></div>`)
-        .join("")}`;
+      if (!mxView) return null;
+      const [ri, ci] = t.dataset.mx.split(":").map(Number);
+      const row = mxView.rows[ri], col = mxView.cols[ci], cell = mxView.cells[ri] && mxView.cells[ri][ci];
+      if (!row || !col || !cell || !cell.n) return null;
+      const top = col.pat
+        ? ""
+        : [...cell.pats.entries()]
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 3)
+            .map(([pid, n]) => `<div class="t-row"><span>${esc((tax.patterns[pid] || {}).name || pid)}</span><b class="num" style="margin-left:auto">${fmt(n)}</b></div>`)
+            .join("");
+      return `<div style="font-weight:var(--w-medium);margin-bottom:6px">${esc(row.name)} · ${esc(col.name)}</div>
+        <div class="t-row"><span>问题</span><b class="num" style="margin-left:auto">${fmt(cell.n)}</b></div>
+        <div class="t-row"><span>会话</span><b class="num" style="margin-left:auto">${fmt(cell.sessions)}</b></div>
+        ${top ? `<div class="mx-tip-pats">${top}</div>` : ""}`;
     }
     if (!t.dataset.cell) return null;
     const [g, i] = t.dataset.cell.split(":").map(Number);
     const c = p.field[g].cells[i];
-    return `<div style="font-weight:var(--w-medium);margin-bottom:4px">${esc(c[3])}</div>
+    const bucketed = t.dataset.k != null;
+    const size = Number(t.dataset.k) || 1;
+    const probs = Number(t.dataset.p) || c[2];
+    return `<div style="font-weight:var(--w-medium);margin-bottom:4px">${bucketed ? `<span class="faint">示例</span> ` : ""}${esc(c[3])}</div>
       <div class="t-row"><span class="sev" style="--c:${sevColor(c[1])}"><i></i>${SEV_NAME[WORST[c[1]]]}</span>
-      <span>${esc(groupName(p, p.field[g]))}</span><b class="num" style="margin-left:auto">${c[2]} 个问题</b></div>`;
+      <span>${esc(groupName(p, p.field[g]))}</span>${c[4] ? `<span class="dim">流失用户</span>` : ""}<b class="num" style="margin-left:auto">${
+        bucketed ? `${fmt(size)} 个会话 · ${fmt(probs)} 个问题` : `${c[2]} 个问题`
+      }</b></div>`;
   });
 }
