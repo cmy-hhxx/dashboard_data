@@ -38,4 +38,4 @@ dashboard/static/samples/
 # 本地调试夹具（离线生成，不入库）
 dashboard/local_dev/datasets/
 dashboard/local_dev/server.pid
-data
+datasets

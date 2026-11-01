@@ -173,13 +173,7 @@ function scheduleResize(c, el) {
 export function createChart(elOrId, option) {
   const el = typeof elOrId === "string" ? $(elOrId) : elOrId;
   if (!el || typeof echarts === "undefined") return null;
-  const old = chartByEl.get(el) || echarts.getInstanceByDom(el);
-  if (old) {
-    try {
-      old.dispose();
-    } catch (e) {}
-    chartInstances.delete(old);
-  }
+  disposeChart(el);
   el.innerHTML = "";
   const c = echarts.init(el, null, { renderer: "canvas" });
   c.setOption(option);
@@ -193,14 +187,22 @@ export function createChart(elOrId, option) {
   return c;
 }
 
+export function disposeChart(elOrId) {
+  const el = typeof elOrId === "string" ? $(elOrId) : elOrId;
+  if (!el) return;
+  const chart = chartByEl.get(el) || (typeof echarts !== "undefined" && echarts.getInstanceByDom(el));
+  if (!chart) return;
+  if (chart.__ro) chart.__ro.disconnect();
+  try {
+    chart.dispose();
+  } catch (e) {}
+  chartInstances.delete(chart);
+  chartByEl.delete(el);
+  resizeQueue.delete(chart);
+}
+
 export function disposeAllCharts() {
-  chartInstances.forEach((c) => {
-    if (c.__ro) c.__ro.disconnect();
-    try {
-      c.dispose();
-    } catch (e) {}
-    chartInstances.delete(c);
-  });
+  chartInstances.forEach((chart) => disposeChart(chart.getDom()));
   resizeQueue.clear();
 }
 

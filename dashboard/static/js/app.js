@@ -41,7 +41,8 @@ function routeFor(view, params) {
   const q = new URLSearchParams();
   q.set("view", view);
   Object.entries(params || {}).forEach(([k, v]) => {
-    if (v != null && v !== "") q.set(k, v);
+    // Carried-over query parameters must not override the requested page.
+    if (k !== "view" && v != null && v !== "") q.set(k, v);
   });
   return `?${q.toString()}`;
 }
@@ -73,10 +74,10 @@ function viewRoot(view) {
 function errorText(err) {
   const raw = String((err && err.message) || err || "未知错误");
   if (/Failed to fetch|dynamically imported module|NetworkError|Load failed/i.test(raw)) {
-    return "资源加载失败，请检查网络后重试。";
+    return "资源加载失败。";
   }
   if (/\b(?:samples|data)\.json \d{3}\b/.test(raw)) {
-    return "数据文件暂不可用，请稍后重试。";
+    return "数据文件暂不可用。";
   }
   return raw;
 }
@@ -524,7 +525,6 @@ function updateThemeButton() {
   const dark = document.documentElement.dataset.mode === "dark";
   const label = dark ? "切换浅色模式" : "切换深色模式";
   btn.setAttribute("aria-label", label);
-  btn.title = label;
 }
 
 function applyMode(mode, persist) {

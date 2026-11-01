@@ -129,27 +129,8 @@ body[data-view="samples"] .freshness-chip {
   color: var(--ink);
 }
 
-.smp-search input::placeholder {
-  color: var(--faint);
-}
-
 .smp-search input::-webkit-search-cancel-button {
   display: none;
-}
-
-.smp-search kbd {
-  flex: none;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 3px;
-  border: 0;
-  border-radius: 4px;
-  background: var(--surface-3);
-  font: inherit;
-  font-size: 11px;
-  line-height: 16px;
-  text-align: center;
-  color: var(--muted);
 }
 
 .smp-filterbar {
@@ -594,21 +575,6 @@ body[data-view="samples"] .freshness-chip {
   padding: 2px;
   border-radius: 7px;
   background: var(--surface-2);
-}
-
-.smp-copy-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 0 4px 0 3px;
-  font-size: 11px;
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.smp-copy-label svg {
-  width: 12px;
-  height: 12px;
 }
 
 .smp-copy-group button {
@@ -1075,18 +1041,32 @@ body[data-view="samples"] .freshness-chip {
 }
 
 .ev-clamp-toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
   margin-top: 3px;
   padding: 0;
   border: 0;
+  border-radius: 6px;
   background: transparent;
   font: inherit;
-  font-size: 11px;
   color: var(--accent);
   cursor: pointer;
 }
 
 .ev-clamp-toggle:hover {
-  text-decoration: underline;
+  background: var(--surface-2);
+}
+
+.ev-clamp-toggle svg {
+  width: 16px;
+  height: 16px;
+  transition: transform var(--dur-snap) var(--ease-snap);
+}
+
+.ev-clamp.is-open > .ev-clamp-toggle svg {
+  transform: rotate(180deg);
 }
 
 .ev-trunc {
@@ -1597,13 +1577,6 @@ body[data-view="samples"] .freshness-chip {
   color: var(--faint);
 }
 
-.cmp-foot {
-  margin: 18px 0 0;
-  font-size: 11px;
-  color: var(--faint);
-  text-align: center;
-}
-
 /* ------------------------------------------------------------------- empty */
 
 .smp-empty {
@@ -1747,10 +1720,6 @@ body[data-view="samples"] .freshness-chip {
     padding: 13px 13px 24px;
   }
 
-  .smp-copy-label span {
-    display: none;
-  }
-
   .smp-copy-group button {
     padding: 0 5px;
   }
@@ -1782,14 +1751,6 @@ body[data-view="samples"] .freshness-chip {
   .smp-pane {
     height: auto;
     min-height: 560px;
-  }
-
-  .smp-copy-label {
-    display: inline-flex;
-  }
-
-  .smp-copy-label span {
-    display: inline;
   }
 
   .smp-pane-title h2 {

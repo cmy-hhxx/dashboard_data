@@ -14,6 +14,7 @@ const S = {
   moreOpen: false,
   mobileDetail: false,
   built: false,
+  active: false,
   globalBound: false,
 };
 
@@ -249,7 +250,7 @@ function clampHtml(html, className = "", label = "展开全文") {
   return (
     `<div class="ev-clamp ${className}">` +
     `<div class="ev-clamp-body">${html}</div>` +
-    `<button class="ev-clamp-toggle" type="button" data-clamp data-label="${esc(label)}">${esc(label)}</button>` +
+    `<button class="ev-clamp-toggle" type="button" data-clamp data-label="${esc(label)}" aria-label="${esc(label)}" aria-expanded="false">${ICONS.chevron}</button>` +
     `</div>`
   );
 }
@@ -273,8 +274,7 @@ function buildShell() {
         </div>
         <label class="smp-search">
           ${ICONS.search}
-          <input id="smpSearch" type="search" placeholder="搜索 Trace / Session / 问题" autocomplete="off" spellcheck="false" aria-label="搜索 Trace ID、Session ID 或问题关键词">
-          <kbd>/</kbd>
+          <input id="smpSearch" type="search" autocomplete="off" spellcheck="false" aria-label="搜索 Trace ID、Session ID 或问题关键词">
         </label>
         <div class="smp-filterbar">
           <div class="smp-seg" id="smpModelSeg" role="tablist" aria-label="模型筛选">
@@ -301,8 +301,8 @@ function buildShell() {
         <div class="smp-list-head">
           <span><b id="smpCount">0</b> 条样本</span>
           <span class="smp-list-nav">
-            <button type="button" data-prev title="上一条" aria-label="上一条">↑</button>
-            <button type="button" data-next title="下一条" aria-label="下一条">↓</button>
+            <button type="button" data-prev aria-label="上一条">↑</button>
+            <button type="button" data-next aria-label="下一条">↓</button>
           </span>
         </div>
         <div class="smp-list" id="smpList" role="listbox" aria-label="召回样本" tabindex="0"></div>
@@ -345,6 +345,7 @@ function bindEvents() {
     search.addEventListener("input", () => {
       window.clearTimeout(timer);
       timer = window.setTimeout(() => {
+        if (!S.active) return;
         S.filter.q = search.value;
         afterFilterChange();
       }, 140);
@@ -456,7 +457,8 @@ function bindEvents() {
       const wrap = clamp.closest(".ev-clamp");
       if (wrap) {
         const open = wrap.classList.toggle("is-open");
-        clamp.textContent = open ? "收起" : (clamp.dataset.label || "展开全文");
+        clamp.setAttribute("aria-expanded", String(open));
+        clamp.setAttribute("aria-label", open ? "收起" : (clamp.dataset.label || "展开全文"));
       }
     }
   });
@@ -558,7 +560,7 @@ function renderFilterState() {
     wrap.innerHTML = active
       .map(
         ([key, label]) =>
-          `<button type="button" class="smp-chip" data-clear-filter="${key}" title="清除${esc(label)}">${esc(label)}<span>×</span></button>`
+          `<button type="button" class="smp-chip" data-clear-filter="${key}" aria-label="清除${esc(label)}">${esc(label)}<span>×</span></button>`
       )
       .join("");
   }
@@ -582,8 +584,7 @@ function renderList() {
       listEl.innerHTML =
         `<div class="smp-list-empty">${ICONS.empty}<p>${esc(productLabel())}暂无 demo 样本</p>` +
         (alt
-          ? `<span class="smp-list-sub">归因与紧凑轨迹目前只覆盖 ${esc(productLabel(alt))} demo_data</span>` +
-            `<button type="button" data-switch-product="${esc(alt)}">查看 ${esc(productLabel(alt))} 样本</button>`
+          ? `<button type="button" data-switch-product="${esc(alt)}">${esc(productLabel(alt))} 样本</button>`
           : "") +
         `</div>`;
     } else {
@@ -750,7 +751,7 @@ function renderEvent(event, question) {
     const original = (event.items || []).reduce((sum, item) => sum + Number(item.chars || 0), 0);
     const shown = (event.items || []).reduce((sum, item) => sum + String(item.text || "").length, 0);
     const note = truncNote(original, shown);
-    body = `<details class="ev-fold"><summary>查看系统提示</summary><div class="ev-fold-body">${note}${items}</div></details>`;
+    body = `<details class="ev-fold"><summary>系统提示</summary><div class="ev-fold-body">${note}${items}</div></details>`;
   } else if (event.kind === "user") {
     const same = question && String(event.text || "").trim() === String(question).trim();
     if (!same) body = `<div class="ev-text ev-text--user">${md(event.text)}</div>`;
@@ -784,7 +785,7 @@ function renderEvent(event, question) {
     const html = md(text);
     const note = event.parsed ? "" : truncNote(event.chars, text.length);
     if (text.length > 220) {
-      body = `<details class="ev-fold"><summary>${esc(event.summary || "展开思考过程")}</summary><div class="ev-fold-body">${note}<div class="ev-text">${html}</div></div></details>`;
+      body = `<details class="ev-fold"><summary>${esc(event.summary || "思考过程")}</summary><div class="ev-fold-body">${note}<div class="ev-text">${html}</div></div></details>`;
     } else {
       body = `<div class="ev-text">${html}</div>${note}`;
     }
@@ -811,8 +812,8 @@ function renderInput(sample) {
   if (!sample) {
     const emptyProduct = !samples().length;
     body.innerHTML = emptyProduct
-      ? `<div class="smp-empty">${ICONS.empty}<h3>${esc(productLabel())}暂无 demo 样本</h3><p>demo_data 目前只包含 AIME 的归因与紧凑轨迹。可在顶栏切到 AIME。</p></div>`
-      : `<div class="smp-empty">${ICONS.empty}<h3>没有可展示的样本</h3><p>当前筛选下没有样本。清除筛选试试。</p></div>`;
+      ? `<div class="smp-empty">${ICONS.empty}<h3>${esc(productLabel())}暂无 demo 样本</h3></div>`
+      : `<div class="smp-empty">${ICONS.empty}<h3>没有可展示的样本</h3><p>当前筛选下没有样本。</p></div>`;
     if (title) title.textContent = "对话轨迹";
     return;
   }
@@ -1008,8 +1009,7 @@ function renderCompact(sample) {
           )
           .join("") +
         `</div></section>`
-      : "") +
-    `<p class="cmp-foot">完整回答与工具返回见左侧评测输入。</p>`
+      : "")
   );
 }
 
@@ -1020,7 +1020,7 @@ function renderOutput(sample) {
   if (!sample) {
     const emptyProduct = !samples().length;
     body.innerHTML = emptyProduct
-      ? `<div class="smp-empty">${ICONS.empty}<h3>${esc(productLabel())}暂无可展示的评测输出</h3><p>demo_data 目前只包含 AIME 的归因与紧凑轨迹。</p></div>`
+      ? `<div class="smp-empty">${ICONS.empty}<h3>${esc(productLabel())}暂无可展示的评测输出</h3></div>`
       : `<div class="smp-empty">${ICONS.empty}<h3>没有可展示的评测输出</h3><p>当前筛选下没有样本。</p></div>`;
     if (title) title.textContent = "归因结果";
     return;
@@ -1040,11 +1040,8 @@ function renderOutput(sample) {
 function copyText(text, button) {
   const done = () => {
     if (!button) return;
-    const label = button.textContent;
-    button.textContent = "已复制";
     button.classList.add("is-copied");
     window.setTimeout(() => {
-      button.textContent = label;
       button.classList.remove("is-copied");
     }, 1200);
   };
@@ -1099,10 +1096,9 @@ function renderActions(sample) {
   el.innerHTML =
     `<button class="smp-back" type="button" data-back-list>${ICONS.back}<span>列表</span></button>` +
     `<div class="smp-copy-group" aria-label="复制样本标识">` +
-    `<span class="smp-copy-label">${ICONS.copy}<span>复制</span></span>` +
-    `<button type="button" data-copy-kind="user" title="复制 User ID" aria-label="复制 User ID"${has.user ? "" : " disabled"}>User</button>` +
-    `<button type="button" data-copy-kind="session" title="复制 Session ID" aria-label="复制 Session ID"${has.session ? "" : " disabled"}>Session</button>` +
-    `<button type="button" data-copy-kind="trace" title="复制 Trace ID" aria-label="复制 Trace ID"${has.trace ? "" : " disabled"}>Trace</button>` +
+    `<button type="button" data-copy-kind="user" aria-label="复制 User ID"${has.user ? "" : " disabled"}>User</button>` +
+    `<button type="button" data-copy-kind="session" aria-label="复制 Session ID"${has.session ? "" : " disabled"}>Session</button>` +
+    `<button type="button" data-copy-kind="trace" aria-label="复制 Trace ID"${has.trace ? "" : " disabled"}>Trace</button>` +
     `</div>`;
 }
 
@@ -1146,7 +1142,7 @@ function renderDetailLoading() {
 
 function renderDetailError() {
   const body =
-    `<div class="smp-empty">${ICONS.warning}<h3>样本详情载入失败</h3><p>确认静态目录下已经生成 samples/ 详情文件。</p>` +
+    `<div class="smp-empty">${ICONS.warning}<h3>样本详情载入失败</h3>` +
     `<button class="smp-retry" type="button" data-retry-detail>重试</button></div>`;
   const input = q("#smpInputBody");
   if (input) input.innerHTML = body;
@@ -1166,7 +1162,7 @@ function renderDetail() {
     renderDetailLoading();
     loadDetail(sample)
       .then(() => {
-        if (S.activeId !== sample.id) return;
+        if (!S.active || S.activeId !== sample.id) return;
         if (!S.turnExplicit) S.activeTurn = bestTurn(sample);
         S.activeTurn = Math.min(Math.max(S.activeTurn, 0), Math.max(sample.turns.length - 1, 0));
         renderInput(sample);
@@ -1174,7 +1170,7 @@ function renderDetail() {
         syncRoute();
       })
       .catch(() => {
-        if (S.activeId === sample.id) renderDetailError();
+        if (S.active && S.activeId === sample.id) renderDetailError();
       });
     return;
   }
@@ -1199,7 +1195,8 @@ function renderAll() {
 }
 
 function syncRoute() {
-  if (!S.built) return;
+  // Pending sample loads must never rewrite another page's route.
+  if (!S.built || !S.active) return;
   const sample = activeSample();
   const params = new URLSearchParams();
   params.set("view", "samples");
@@ -1244,7 +1241,7 @@ export function initSamples(root, data, opts = {}) {
   S.filter = { q: "", model: "", severity: "", component: "", date: "", cluster: "", sort: "severity" };
   if (!data) {
     if (root) {
-      root.innerHTML = `<div class="smp-empty smp-empty--page">${ICONS.empty}<h3>样本数据尚未生成</h3><p>运行 <code>python3 prepare_samples.py</code> 生成 samples.json。</p></div>`;
+      root.innerHTML = `<div class="smp-empty smp-empty--page">${ICONS.empty}<h3>样本数据尚未生成</h3></div>`;
     }
     return;
   }
@@ -1329,6 +1326,6 @@ export function refreshSamples() {
   if (S.built) renderAll();
 }
 
-export function setSamplesActive() {
-  /* no timers in this view */
+export function setSamplesActive(active) {
+  S.active = Boolean(active);
 }
