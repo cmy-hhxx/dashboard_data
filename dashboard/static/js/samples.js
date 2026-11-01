@@ -6,7 +6,7 @@ const S = {
   data: null,
   opts: {},
   product: "aime",
-  filter: { q: "", model: "", severity: "", component: "", date: "", sort: "severity" },
+  filter: { q: "", model: "", severity: "", component: "", date: "", cluster: "", sort: "severity" },
   activeId: null,
   activeTurn: 0,
   turnExplicit: false,
@@ -20,12 +20,6 @@ const S = {
 const detailCache = new Map();
 const detailPending = new Map();
 
-const SORT_LABEL = {
-  severity: "按严重度",
-  date: "按日期",
-  problems: "按问题数",
-  question: "按问题",
-};
 const SEV_ORDER = { P0: 0, P1: 1, P2: 2, P3: 3, P4: 4, 未分级: 5 };
 const SEV_CLASS = {
   P0: "sev-0",
@@ -165,6 +159,11 @@ function filtered() {
     if (filter.severity && !(sample.severities || []).includes(filter.severity)) return false;
     if (filter.component && !(sample.components || []).includes(filter.component)) return false;
     if (filter.date && sample.date !== filter.date) return false;
+    if (filter.cluster) {
+      const wanted = String(filter.cluster).split("/").filter(Boolean);
+      const actual = sample.cluster_path || [];
+      if (!wanted.every((part, index) => actual[index] === part)) return false;
+    }
     if (tokens.length) {
       const hay = [
         sample.session_id,
@@ -301,7 +300,6 @@ function buildShell() {
         <div class="smp-active" id="smpActive" hidden></div>
         <div class="smp-list-head">
           <span><b id="smpCount">0</b> 条样本</span>
-          <span class="smp-sort-label" id="smpSortLabel">按严重度</span>
           <span class="smp-list-nav">
             <button type="button" data-prev title="上一条" aria-label="上一条">↑</button>
             <button type="button" data-next title="下一条" aria-label="下一条">↓</button>
@@ -545,8 +543,6 @@ function renderFilterState() {
   if (date) date.value = S.filter.date;
   const sort = q("#smpSort");
   if (sort) sort.value = S.filter.sort;
-  const sortLabel = q("#smpSortLabel");
-  if (sortLabel) sortLabel.textContent = SORT_LABEL[S.filter.sort] || "按严重度";
 
   const active = [];
   if (S.filter.q) active.push(["q", `搜索：${S.filter.q}`]);
@@ -554,6 +550,7 @@ function renderFilterState() {
   if (S.filter.severity) active.push(["severity", `严重度：${S.filter.severity}`]);
   if (S.filter.component) active.push(["component", `环节：${S.filter.component}`]);
   if (S.filter.date) active.push(["date", `日期：${S.filter.date}`]);
+  if (S.filter.cluster) active.push(["cluster", `聚类：${String(S.filter.cluster).split("/").filter(Boolean).pop() || S.filter.cluster}`]);
 
   const wrap = q("#smpActive");
   if (wrap) {
@@ -628,7 +625,7 @@ function renderFoot() {
 }
 
 function clearFilters() {
-  S.filter = { q: "", model: "", severity: "", component: "", date: "", sort: S.filter.sort || "severity" };
+  S.filter = { q: "", model: "", severity: "", component: "", date: "", cluster: "", sort: S.filter.sort || "severity" };
   const search = q("#smpSearch");
   if (search) search.value = "";
   afterFilterChange();
@@ -691,6 +688,12 @@ function metaChips(sample, turn) {
   chips.push(`<span class="smp-meta-chip"><em>日期</em>${esc(sample.date)}</span>`);
   if (turn && turn.task) {
     chips.push(`<span class="smp-meta-chip"><em>任务</em>${esc(turn.task)}${turn.subtask ? ` / ${esc(turn.subtask)}` : ""}</span>`);
+  }
+  if (turn && turn.intent) {
+    chips.push(`<span class="smp-meta-chip"><em>意图</em>${esc(turn.intent)}</span>`);
+  }
+  if (turn && turn.answer_type) {
+    chips.push(`<span class="smp-meta-chip"><em>输出</em>${esc(turn.answer_type)}</span>`);
   }
   if (turn && turn.difficulty) {
     chips.push(`<span class="smp-meta-chip"><em>难度</em>${esc(turn.difficulty)}</span>`);
@@ -1201,7 +1204,7 @@ function syncRoute() {
   const params = new URLSearchParams();
   params.set("view", "samples");
   params.set("product", S.product);
-  ["q", "model", "severity", "component", "date"].forEach((key) => {
+  ["q", "model", "severity", "component", "date", "cluster"].forEach((key) => {
     if (S.filter[key]) params.set(key, S.filter[key]);
   });
   if (S.filter.sort && S.filter.sort !== "severity") params.set("sort", S.filter.sort);
@@ -1238,7 +1241,7 @@ export function initSamples(root, data, opts = {}) {
   S.outTab = "attr";
   S.moreOpen = false;
   S.mobileDetail = false;
-  S.filter = { q: "", model: "", severity: "", component: "", date: "", sort: "severity" };
+  S.filter = { q: "", model: "", severity: "", component: "", date: "", cluster: "", sort: "severity" };
   if (!data) {
     if (root) {
       root.innerHTML = `<div class="smp-empty smp-empty--page">${ICONS.empty}<h3>样本数据尚未生成</h3><p>运行 <code>python3 prepare_samples.py</code> 生成 samples.json。</p></div>`;
@@ -1271,6 +1274,7 @@ function applyQuery(filter = {}) {
     severity: filter.severity || "",
     component: filter.component || "",
     date: filter.date || "",
+    cluster: filter.cluster || "",
     sort: filter.sort || "severity",
   };
   S.outTab = filter.tab === "compact" ? "compact" : "attr";
@@ -1306,7 +1310,7 @@ export function openSampleQuery(filter = {}) {
 export function setSamplesProduct(product) {
   if (!S.data || !(S.data.products || {})[product]) return;
   S.product = product;
-  S.filter = { q: "", model: "", severity: "", component: "", date: "", sort: "severity" };
+  S.filter = { q: "", model: "", severity: "", component: "", date: "", cluster: "", sort: "severity" };
   S.mobileDetail = false;
   const list = filtered();
   S.activeId = list.length ? list[0].id : null;

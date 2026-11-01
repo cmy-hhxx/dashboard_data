@@ -20,7 +20,10 @@ from datetime import datetime, timedelta, timezone
 
 import dataset_layout as layout
 
-DATASETS = "/mnt/fin_bench/code_and_clean_data/datasets"
+# Production data root; override with EVAL_DATASETS for local dev.
+DATASETS = os.path.abspath(os.path.expanduser(
+    os.environ.get("EVAL_DATASETS", "/mnt/fin_bench/code_and_clean_data/datasets")
+))
 NAME_RE = re.compile(r"(?P<model>.+?)-(?P<date>\d{4}-\d{2}-\d{2})_(?P<kind>input|output)\.jsonl$")
 ATTRIBUTION_RE = re.compile(r"(?P<model>.+?)_attribution-(?P<date>\d{4}-\d{2}-\d{2})\.jsonl$")
 DATE_INPUT_RE = re.compile(r"(?P<date>\d{4}-\d{2}-\d{2})\.jsonl$")

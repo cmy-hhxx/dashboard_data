@@ -209,8 +209,7 @@
 .view-state .spinner {
   width: 18px;
   height: 18px;
-  border-color: var(--surface-3);
-  border-top-color: var(--accent);
+  background: conic-gradient(var(--accent) 0 90deg, var(--surface-3) 90deg 360deg);
 }
 
 .view-state p {
@@ -325,9 +324,12 @@
   width: 100%;
 }
 
-body[data-view="system"] #productSwitch,
 body[data-view="system"] .freshness-chip {
   display: none;
+}
+
+body[data-view="system"] #productSwitch {
+  display: none !important;
 }
 
 @media (max-width: 1320px) {

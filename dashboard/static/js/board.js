@@ -10,7 +10,10 @@ const board = {
   data: null,
   opts: {},
   product: "wencai",
-  volume: { wencai: { task: null }, aime: { task: null } },
+  volume: {
+    wencai: { task: null, defaultExpanded: false },
+    aime: { task: null, defaultExpanded: false },
+  },
   cluster: {
     wencai: { src: null, root: null, meta: {}, stack: [], expandedKey: "" },
     aime: { src: null, root: null, meta: {}, stack: [], expandedKey: "" },
@@ -32,12 +35,6 @@ const VERSION_DEFS = {
 const isWc = (product) => product === "wencai";
 const getSrc = (product) => (isWc(product) ? board.data.wencai : board.data.aime);
 const productLabel = (product) => (isWc(product) ? "问财" : "AIME");
-
-function recall(detail) {
-  const d = { product: board.product, ...(detail || {}) };
-  if (board.opts && board.opts.onRecall) board.opts.onRecall(d);
-  else window.dispatchEvent(new CustomEvent("eval:recall", { detail: d }));
-}
 
 function showChartEmpty(el, text) {
   if (!el) return;
@@ -203,27 +200,58 @@ function renderVolumeLegend(product, tree, focused) {
     return;
   }
   const staticRows = Boolean(focused);
+  const total = rows.reduce((n, node) => n + Math.max(0, Number(node.value) || 0), 0) || 1;
+  const ranked = [...rows].sort((a, b) => Number(b.value || 0) - Number(a.value || 0));
+  const top = ranked[0];
+  const concentration = ranked.reduce((n, node) => {
+    const share = Math.max(0, Number(node.value) || 0) / total;
+    return n + share * share;
+  }, 0);
+  const concentrationLabel = concentration >= 0.5 ? "集中" : concentration >= 0.3 ? "均衡" : "分散";
+  const stack = ranked
+    .map((node) => {
+      const width = pct(node.value, total);
+      return `<i style="width:${width.toFixed(2)}%;background:${node.color}"></i>`;
+    })
+    .join("");
+
   el.classList.toggle("is-single", staticRows);
-  el.innerHTML = rows
+  el.innerHTML =
+    `<div class="vbd-head">` +
+      `<span>${staticRows ? "子类构成" : "类别构成"}</span>` +
+      `<span>${fmt(rows.length)} 类</span>` +
+    `</div>` +
+    `<div class="vbd-stack" role="img" aria-label="${esc(top ? `${top.name}占比最高` : "类别构成")}">${stack}</div>` +
+    `<div class="vbd-rows">` +
+    rows
     .map((node) => {
       const title = `${node.name} · ${fmt(node.value)} 条 · ${Number(node.share || 0).toFixed(1)}%`;
       const tag = staticRows ? "div" : "button";
       const attrs = staticRows
-        ? `class="rl-row is-static"`
-        : `class="rl-row" type="button" aria-label="${esc(title)}"`;
+        ? `class="rl-row vbd-row is-static"`
+        : `class="rl-row vbd-row" type="button" aria-label="${esc(title)}"`;
       return (
         `<${tag} ${attrs} data-key="${esc(node.key)}" title="${esc(title)}">` +
-        `<i class="rl-dot" style="background:${node.color}"></i>` +
-        `<span class="rl-name">${esc(node.name)}</span>` +
-        `<span class="rl-pct">${Number(node.share || 0).toFixed(1)}%</span>` +
+          `<span class="vbd-top">` +
+            `<i class="rl-dot" style="background:${node.color}"></i>` +
+            `<span class="rl-name">${esc(node.name)}</span>` +
+            `<b>${fmt(node.value)}</b>` +
+            `<em>${Number(node.share || 0).toFixed(1)}%</em>` +
+          `</span>` +
+          `<span class="vbd-track" aria-hidden="true"><i style="width:${clamp(Number(node.share || 0), 0, 100).toFixed(2)}%;background:${node.color}"></i></span>` +
         `</${tag}>`
       );
     })
-    .join("");
+    .join("") +
+    `</div>` +
+    `<div class="vbd-foot">` +
+      `<span><em>最大项</em><b>${esc(top ? top.name : "—")} · ${top ? Number(top.share || 0).toFixed(1) : "0.0"}%</b></span>` +
+      `<span><em>分布</em><b>${concentrationLabel}</b></span>` +
+    `</div>`;
 
   bindLegendHover(el, () => board.rings[product].volume);
   el.onclick = (ev) => {
-    const row = ev.target.closest("button.rl-row");
+    const row = ev.target.closest("button.vbd-row");
     if (!row || staticRows) return;
     const task = row.dataset.key.replace(/^task:/, "");
     const state = board.volume[product];
@@ -294,6 +322,12 @@ function renderVolume(product) {
   const tasks = taskList(product);
   const classified = tasks.reduce((n, t) => n + (t.value || 0), 0);
   const state = board.volume[product];
+  // Open the highest-volume category on first render so the subcategory
+  // composition is visible without requiring an exploratory click.
+  if (!state.defaultExpanded && tasks.length) {
+    state.task = tasks[0].name;
+    state.defaultExpanded = true;
+  }
   if (state.task && !tasks.some((t) => t.name === state.task)) state.task = null;
 
   const meta = $(isWc(product) ? "wcVolMeta" : "aiVolMeta");
@@ -343,24 +377,42 @@ function renderEvalVersions(product) {
     }));
   }
 
-  const grid = el.closest(".eval-grid");
   const empty = !rows.some((r) => r.answers > 0);
-  if (grid) grid.classList.toggle("is-empty", empty);
+  const section = el.closest(".eval-versions");
+  if (section) section.classList.toggle("is-empty", empty);
   if (empty) {
     el.innerHTML = `<div class="ev-empty">评测输出待接入</div>`;
     return;
   }
 
+  const hasCore = rows.some((r) => Number(r.core) > 0);
+  const metricHead = section && section.querySelector(".eval-module-head span");
+  if (metricHead) metricHead.textContent = hasCore ? "核心达成率" : "回答量";
+  const maxAnswers = Math.max(1, ...rows.map((r) => Number(r.answers) || 0));
+
   el.innerHTML = rows
     .map(
-      (r) =>
-        `<div class="ev-row" style="--c:${r.color}" title="${esc(r.name)} · ${fmt(r.answers)} 条回答 · 核心 ${r.core ? r.core.toFixed(1) + "%" : "—"} · P50 ${r.p50 ? r.p50.toFixed(1) + "s" : "—"} · Tokens ${fmtTokens(r.tokens)}">` +
-        `<span class="ev-name"><i></i>${esc(r.name)}</span>` +
-        `<span class="ev-count">${fmt(r.answers)}</span>` +
-        `<span class="ev-core">${r.core ? r.core.toFixed(1) + "%" : "—"}</span>` +
-        `</div>`
+      (r) => {
+        const metric = hasCore ? Number(r.core) || 0 : Number(r.answers) || 0;
+        const max = hasCore ? 100 : maxAnswers;
+        const width = clamp(pct(metric, max), 0, 100);
+        const display = hasCore ? `${metric.toFixed(1)}%` : `${fmt(metric)} 条`;
+        const title = `${esc(r.name)} · ${fmt(r.answers)} 条回答 · 核心 ${r.core ? r.core.toFixed(1) + "%" : "—"} · P50 ${r.p50 ? r.p50.toFixed(1) + "s" : "—"} · Tokens ${fmtTokens(r.tokens)}`;
+        return (
+          `<div class="ev-row" style="--c:${r.color}" title="${title}">` +
+            `<span class="ev-model"><i></i><span>${esc(r.name)}</span><em>${fmt(r.answers)} 条</em></span>` +
+            `<span class="ev-meter" role="img" aria-label="${esc(r.name)} ${hasCore ? "核心达成率" : "回答量"} ${display}">` +
+              `<span class="ev-meter-track"><i style="width:${width.toFixed(2)}%"></i></span>` +
+              `<b>${display}</b>` +
+            `</span>` +
+          `</div>`
+        );
+      }
     )
-    .join("");
+    .join("") +
+    (hasCore
+      ? `<div class="ev-scale" aria-hidden="true"><span>0</span><span>50%</span><span>100%</span></div>`
+      : "");
 }
 
 function renderDifficulty(product) {
@@ -376,29 +428,44 @@ function renderDifficulty(product) {
     });
   });
   if (!total) {
-    el.innerHTML = "";
+    ((src.input && src.input.categories && src.input.categories.difficulty) || []).forEach((item) => {
+      const count = Number(item.value) || 0;
+      if (!count) return;
+      counts[item.name] = (counts[item.name] || 0) + count;
+      total += count;
+    });
+  }
+  if (!total) {
+    const totalEl = $(isWc(product) ? "wcDiffTotal" : "aiDiffTotal");
+    if (totalEl) totalEl.textContent = "暂无数据";
+    el.innerHTML = `<div class="diff-empty">难度标注待接入</div>`;
     return;
   }
   const order = ["简单", "中等", "困难", "复杂"];
   const colors = { 简单: T.wcMid, 中等: T.wc, 困难: T.bMid, 复杂: T.b };
+  let cursor = 0;
+  const stops = order.map((k) => {
+    const from = cursor;
+    cursor += pct(counts[k] || 0, total);
+    return `${colors[k]} ${from.toFixed(2)}% ${cursor.toFixed(2)}%`;
+  });
+  const totalEl = $(isWc(product) ? "wcDiffTotal" : "aiDiffTotal");
+  if (totalEl) totalEl.textContent = `${fmt(total)} 条`;
   el.innerHTML =
-    `<div class="diff-head">难度构成</div>` +
-    `<div class="diff-bar" role="img" aria-label="难度构成">` +
-    order
-      .filter((k) => counts[k])
-      .map(
-        (k) =>
-          `<i style="width:${pct(counts[k] || 0, total).toFixed(2)}%;background:${colors[k]}" title="${k} · ${fmt(counts[k] || 0)} 条 · ${pct(counts[k] || 0, total).toFixed(1)}%"></i>`
-      )
-      .join("") +
-    `</div>` +
-    `<div class="diff-legend">` +
-    order
-      .map(
-        (k) =>
-          `<span title="${k} · ${fmt(counts[k] || 0)} 条"><i style="background:${colors[k]}"></i>${k} <b>${pct(counts[k] || 0, total).toFixed(0)}%</b></span>`
-      )
-      .join("") +
+    `<div class="diff-layout">` +
+      `<div class="diff-donut" role="img" aria-label="难度构成，共 ${fmt(total)} 条" style="--diff-gradient:conic-gradient(from -90deg, ${stops.join(",")})">` +
+        `<span><b>${fmt(total)}</b><em>条评测</em></span>` +
+      `</div>` +
+      `<div class="diff-legend">` +
+      order
+        .map(
+          (k) =>
+            `<span title="${k} · ${fmt(counts[k] || 0)} 条 · ${pct(counts[k] || 0, total).toFixed(1)}%">` +
+              `<i style="background:${colors[k]}"></i><em>${k}</em><b>${pct(counts[k] || 0, total).toFixed(0)}%</b><small>${fmt(counts[k] || 0)} 条</small>` +
+            `</span>`
+        )
+        .join("") +
+      `</div>` +
     `</div>`;
 }
 
@@ -451,10 +518,9 @@ function renderEvaluation(product) {
   if (done) done.textContent = fmt(evaluated);
   const rest = $(wc ? "wcCoverPending" : "aiCoverPending");
   if (rest) rest.textContent = fmt(pending);
-  const fill = $(wc ? "wcCoverFill" : "aiCoverFill");
-  if (fill) fill.style.width = `${cover.toFixed(2)}%`;
   const coverBar = $(wc ? "wcCoverBar" : "aiCoverBar");
   if (coverBar) {
+    coverBar.style.setProperty("--coverage", `${cover.toFixed(2)}%`);
     coverBar.setAttribute(
       "aria-label",
       `评测覆盖率 ${cover.toFixed(1)}%，已评测 ${fmt(evaluated)} 条，共 ${fmt(total)} 条`
@@ -633,16 +699,14 @@ function sankeyOption(graph) {
           const t = p.data.target;
           return tipCard(
             tipHead(`${s} → ${t}`, fmt(p.value), color) +
-              tipRow(color, "问题数", fmt(p.value)) +
-              `<div class="tip-path">点击回流召回相关样本</div>`
+              tipRow(color, "问题数", fmt(p.value))
           );
         }
         const d = p.data || {};
         return tipCard(
           tipHead(d.display || p.name, "", color) +
             tipRow(color, "问题数", fmt(p.value)) +
-            (d.tipMeta ? `<div class="tip-path">${esc(d.tipMeta)}</div>` : "") +
-            `<div class="tip-path">点击节点或流召回样本</div>`
+            (d.tipMeta ? `<div class="tip-path">${esc(d.tipMeta)}</div>` : "")
         );
       },
     },
@@ -663,7 +727,7 @@ function sankeyOption(graph) {
         lineStyle: { curveness: 0.55, opacity: 0.5 },
         itemStyle: { borderWidth: 0, borderRadius: 2 },
         label: {
-          fontSize: 10,
+          fontSize: 11,
           fontFamily: FONT,
           color: T.ink2,
           distance: 5,
@@ -678,25 +742,6 @@ function sankeyOption(graph) {
       },
     ],
   };
-}
-
-function sankeyClick(p, graph) {
-  const compNames = new Set((graph.nodes || []).filter((n) => n.depth === 1).map((n) => n.name));
-  const sevNames = new Set(AIME_SEVERITIES);
-  let component = "";
-  let severity = "";
-  const pick = (name) => {
-    if (compNames.has(name)) component = name;
-    else if (sevNames.has(name)) severity = name;
-  };
-  if (p.dataType === "edge") {
-    pick(p.data.source);
-    pick(p.data.target);
-  } else {
-    pick(p.name);
-  }
-  if (!component && !severity) return;
-  recall({ component, severity });
 }
 
 function renderAttribution(product) {
@@ -730,11 +775,8 @@ function renderAttribution(product) {
     return;
   }
   el.innerHTML = "";
-  const chart = createChart(el, sankeyOption(graph));
-  if (chart) {
-    chart.on("click", (p) => sankeyClick(p, graph));
-    el.style.cursor = "pointer";
-  }
+  createChart(el, sankeyOption(graph));
+  el.style.removeProperty("cursor");
 }
 
 /* --------------------------------------------------------------- cluster */
@@ -746,6 +788,7 @@ function clusterValue(node) {
 function decorateCluster(node, color, depth, parentPath, index = 0, siblings = 1) {
   const path = [...parentPath, node.name];
   const value = clusterValue(node);
+  const level = depth + 1;
   const childMix = T.mode === "dark" ? "#ffffff" : T.surface;
   const mix = Math.min(0.48, 0.1 + depth * 0.06 + (siblings > 1 ? (index / (siblings - 1)) * 0.08 : 0));
   const out = {
@@ -754,6 +797,8 @@ function decorateCluster(node, color, depth, parentPath, index = 0, siblings = 1
     name: node.name,
     value,
     items: Number(node.items != null ? node.items : node.count || 0),
+    depth: level,
+    levelName: node.level_name || "",
     clusterPath: path,
     color: depth === 0 ? color : lerpColor(color, childMix, mix),
   };
@@ -798,12 +843,18 @@ function renderClusterLegend(product, current, expanded) {
   }
   el.innerHTML = rows
     .map(
-      (node) =>
-        `<button class="rl-row" type="button" data-key="${esc(node.key)}" title="${esc(node.name)} · ${fmt(node.value)} 会话 · ${Number(node.share || 0).toFixed(1)}%" aria-label="${esc(node.name)}，${fmt(node.value)} 会话">` +
+      (node) => {
+        const expandable = Boolean((node.children || []).length);
+        const tag = expandable ? "button" : "div";
+        const attrs = expandable
+          ? `type="button" aria-label="${esc(node.name)}，${fmt(node.value)} 会话"`
+          : "";
+        return `<${tag} class="rl-row" ${attrs} data-key="${esc(node.key)}" title="${esc(node.name)} · ${fmt(node.value)} 会话 · ${Number(node.share || 0).toFixed(1)}%">` +
         `<i class="rl-dot" style="background:${node.color}"></i>` +
         `<span class="rl-name">${esc(node.name)}</span>` +
         `<span class="rl-val">${fmt(node.value)}</span>` +
-        `</button>`
+        `</${tag}>`;
+      }
     )
     .join("");
   bindLegendHover(el, () => board.rings[product].cluster);
@@ -814,15 +865,12 @@ function renderClusterLegend(product, current, expanded) {
     if (!node) return;
     if (expanded) {
       if ((node.children || []).length) drillCluster(product, node);
-      else recall({ cluster: node.key });
       return;
     }
     if ((node.children || []).length) {
       const st = board.cluster[product];
       st.expandedKey = st.expandedKey === node.key ? "" : node.key;
       drawCluster(product);
-    } else {
-      recall({ cluster: node.key });
     }
   };
 }
@@ -839,9 +887,10 @@ function drawCluster(product) {
 
   if (metaEl) {
     const trail = [...st.stack, ...(expanded ? [expanded] : [])];
+    const maxDepth = Number(st.meta.depth) || 4;
     metaEl.textContent = trail.length
-      ? ["全部", ...trail.map((node) => node.name)].join(" / ")
-      : "";
+      ? `L${(expanded || current).depth || 1} · ${["全部", ...trail.map((node) => node.name)].join(" / ")}`
+      : `${maxDepth} 级聚类 · ${(current.children || []).length} 个分支`;
     metaEl.title = metaEl.textContent;
   }
 
@@ -861,9 +910,9 @@ function drawCluster(product) {
     collapseHint: "点击收起子集",
     switchHint: "点击切换展开 ›",
     burstHint: "点击进入下一层 ›",
-    leafHint: "点击查看样本 →",
+    leafHint: "已是最末级",
     backHint: "",
-    leafInteractive: true,
+    leafInteractive: false,
     burstInteractive: true,
     ariaLabel: `${productLabel(product)}聚类体系`,
     onHover: (arc) => markLegend(legendEl, arc ? arc.key : null),
@@ -873,13 +922,10 @@ function drawCluster(product) {
         if ((node.children || []).length) {
           st.expandedKey = st.expandedKey === node.key ? "" : node.key;
           drawCluster(product);
-        } else {
-          recall({ cluster: node.key });
         }
         return;
       }
       if ((node.children || []).length) drillCluster(product, node);
-      else recall({ cluster: node.key });
     },
     onBack: () => {
       if (st.expandedKey) {
@@ -897,13 +943,6 @@ function drawCluster(product) {
   if (stats) stats.innerHTML = `<span>${fmt(statsNode.items || 0)} <em>条目</em></span>`;
   renderClusterLegend(product, current, expanded);
 
-  const sampleBtn = $(isWc(product) ? "wcClusterSamples" : "aiClusterSamples");
-  if (sampleBtn) {
-    sampleBtn.onclick = () => {
-      const node = expanded || (st.stack.length ? current : null);
-      recall({ cluster: node ? node.key : "" });
-    };
-  }
 }
 
 function drillCluster(product, node) {
@@ -957,8 +996,6 @@ function renderCluster(product) {
     if (legend) legend.innerHTML = "";
     const stats = $(wc ? "wcClusterStats" : "aiClusterStats");
     if (stats) stats.textContent = "";
-    const sampleBtn = $(wc ? "wcClusterSamples" : "aiClusterSamples");
-    if (sampleBtn) sampleBtn.disabled = true;
     return;
   }
   if (centerEl) centerEl.hidden = false;
@@ -972,6 +1009,8 @@ function renderCluster(product) {
     name: root.name,
     value: total,
     items: Number(root.items != null ? root.items : root.count || 0),
+    depth: 0,
+    levelName: "根节点",
     clusterPath: [root.name],
     color: ringPalette(1)[0],
     children: rootKids.map((child) =>
@@ -1010,8 +1049,6 @@ function renderCluster(product) {
     if (restored) board.cluster[product].expandedKey = expandedKey;
   }
 
-  const sampleBtn = $(wc ? "wcClusterSamples" : "aiClusterSamples");
-  if (sampleBtn) sampleBtn.disabled = false;
   drawCluster(product);
 }
 
@@ -1019,6 +1056,9 @@ function renderCluster(product) {
 
 const PRED_MOCK = {
   wencai: {
+    share: 0.128,
+    reviewRatio: 0.859,
+    errorRate: 0.19,
     total: 312,
     inputTotal: 2400,
     reviewed: 268,
@@ -1049,6 +1089,9 @@ const PRED_MOCK = {
     },
   },
   aime: {
+    share: 0.124,
+    reviewRatio: 0.717,
+    errorRate: 0.21,
     total: 2146,
     inputTotal: 17243,
     reviewed: 1538,
@@ -1079,7 +1122,51 @@ const PRED_MOCK = {
 const PRED_ERROR_COLORS = () => [T.sev0, T.sev1, T.sev2, T.sev3, T.cl4];
 
 function predMock(product) {
-  return PRED_MOCK[product];
+  const base = PRED_MOCK[product];
+  const src = getSrc(product);
+  const inputTotal = maybeNumber(src.input && src.input.total) || base.inputTotal;
+  const total = Math.max(1, Math.round(inputTotal * base.share));
+  const reviewed = Math.min(total, Math.round(total * base.reviewRatio));
+  const pending = Math.max(0, total - reviewed);
+  const sourceDays = ((src.input && src.input.per_day) || []).slice(-14);
+  const weights = sourceDays.map((day) => Math.max(1, Number(day.value ?? day.answers ?? 0)));
+  const weightTotal = weights.reduce((n, value) => n + value, 0) || 1;
+  let remaining = reviewed;
+  const days = sourceDays.map((day, index) => {
+    const value = index === sourceDays.length - 1
+      ? remaining
+      : Math.min(remaining, Math.round((reviewed * weights[index]) / weightTotal));
+    remaining -= value;
+    return [String(day.date || "").slice(5), Math.max(0, value)];
+  });
+
+  const sourceFlows = base.attribution && base.attribution.flows ? base.attribution.flows : {};
+  const flowSum = Object.values(sourceFlows).reduce(
+    (sum, row) => sum + row.reduce((n, value) => n + (Number(value) || 0), 0),
+    0
+  ) || 1;
+  const errorTarget = Math.max(1, Math.round(reviewed * base.errorRate));
+  const ratio = errorTarget / flowSum;
+  let allocatedErrors = 0;
+  const flatEntries = Object.entries(sourceFlows).flatMap(([model, row]) => row.map((value, index) => [model, index, value]));
+  const flows = Object.fromEntries(Object.keys(sourceFlows).map((model) => [model, sourceFlows[model].map(() => 0)]));
+  flatEntries.forEach(([model, index, value], position) => {
+    const next = position === flatEntries.length - 1
+      ? errorTarget - allocatedErrors
+      : Math.round(value * ratio);
+    flows[model][index] = Math.max(0, next);
+    allocatedErrors += next;
+  });
+
+  return {
+    ...base,
+    total,
+    inputTotal,
+    reviewed,
+    pending,
+    days: days.length ? days : base.days,
+    attribution: base.attribution ? { ...base.attribution, flows } : base.attribution,
+  };
 }
 
 function predStats(el, rows) {
@@ -1147,44 +1234,136 @@ function predSankey(product) {
 
 function renderPredReview(product, chartEl) {
   const m = predMock(product);
-  const max = Math.max(1, ...m.days.map(([, v]) => v));
-  const share = pct(m.reviewed, m.total);
-  chartEl.innerHTML =
-    `<div class="pred-review">` +
-    `<div class="pr-top"><span>已评阅 <b>${fmt(m.reviewed)}</b> / ${fmt(m.total)}</span><span>${share.toFixed(1)}%</span></div>` +
-    `<div class="pr-bar"><i style="width:${clamp(share, 0, 100).toFixed(2)}%"></i></div>` +
-    `<div class="pr-bars" role="img" aria-label="近 14 天每日评阅量">` +
-    m.days
-      .map(
-        ([date, value]) =>
-          `<i class="pr-bar-col" style="--h:${((value / max) * 100).toFixed(1)}%" title="${date} · ${fmt(value)} 题"></i>`
-      )
-      .join("") +
-    `</div>` +
-    `<div class="pr-axis"><span>${m.days[0][0]}</span><span>${m.days[m.days.length - 1][0]}</span></div>` +
-    `</div>`;
+  const cumulative = [];
+  const daily = [];
+  let running = 0;
+  m.days.forEach(([date, value]) => {
+    running += Number(value) || 0;
+    daily.push([date, Number(value) || 0]);
+    cumulative.push([date, running]);
+  });
+  const pace = m.days.map(([date], i) => [date, m.total * ((i + 1) / m.days.length)]);
+  const peak = daily.reduce((best, row) => (row[1] > best[1] ? row : best), daily[0] || ["—", 0]);
+  const avg = m.reviewed / Math.max(1, daily.length);
+
+  createChart(chartEl, {
+    animationDuration: REDUCED ? 0 : 620,
+    animationEasing: "cubicOut",
+    tooltip: {
+      ...tip,
+      trigger: "axis",
+      axisPointer: { type: "line", lineStyle: { color: T.hairline } },
+      formatter: (params) => {
+        const p = params[0];
+        const date = p ? p.axisValue : "";
+        const day = daily.find((row) => row[0] === date);
+        const cumulativePoint = cumulative.find((row) => row[0] === date);
+        const pacePoint = pace.find((row) => row[0] === date);
+        return tipCard(
+          tipHead(date, "评阅完成曲线", T.forecast) +
+            tipRow(T.forecast, "累计完成", `${fmt(cumulativePoint ? cumulativePoint[1] : 0)} / ${fmt(m.total)}`) +
+            tipRow(T.faint, "均速参考", `${fmt(Math.round(pacePoint ? pacePoint[1] : 0))} 题`) +
+            tipRow(T.muted, "当日评阅", `${fmt(day ? day[1] : 0)} 题`)
+        );
+      },
+    },
+    grid: { left: 38, right: 46, top: 18, bottom: 24 },
+    xAxis: {
+      type: "category",
+      data: m.days.map(([date]) => date),
+      boundaryGap: false,
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { fontSize: 11, color: T.faint, fontFamily: FONT, interval: 2, margin: 8 },
+    },
+    yAxis: {
+      type: "value",
+      min: 0,
+      max: m.total,
+      splitNumber: 3,
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { fontSize: 11, color: T.faint, fontFamily: FONT },
+      splitLine: { lineStyle: { color: T.hairline, type: "solid" } },
+    },
+    series: [
+      {
+        name: "均速参考",
+        type: "line",
+        data: pace.map(([, value]) => Math.round(value)),
+        symbol: "none",
+        lineStyle: { width: 1, color: T.faint, type: "dashed" },
+        silent: true,
+      },
+      {
+        name: "累计完成",
+        type: "line",
+        data: cumulative.map(([, value]) => value),
+        smooth: 0.22,
+        symbol: "circle",
+        symbolSize: 5,
+        showSymbol: false,
+        lineStyle: { width: 2.2, color: T.forecast },
+        itemStyle: { color: T.forecast, borderColor: T.surface, borderWidth: 2 },
+        areaStyle: {
+          color: {
+            type: "linear",
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
+            colorStops: [
+              { offset: 0, color: hexA(T.forecast, 0.2) },
+              { offset: 1, color: hexA(T.forecast, 0) },
+            ],
+          },
+        },
+        emphasis: { focus: "series" },
+        endLabel: {
+          show: true,
+          formatter: `{c}`,
+          color: T.ink,
+          fontSize: 11,
+          fontWeight: 600,
+          offset: [4, 0],
+        },
+      },
+    ],
+  });
   predStats($(isWc(product) ? "wcForecastStats" : "aiForecastStats"), [
-    ["近 14 天", `${fmt(m.reviewed)} 题`],
-    ["单日峰值", `${fmt(max)} 题`],
+    ["日均", `${avg.toFixed(1)} 题`],
+    ["峰值日", `${peak[0]} · ${fmt(peak[1])} 题`],
     ["剩余", `${fmt(m.pending)} 题`],
   ]);
 }
 
 function renderPredCapability(product, chartEl) {
   const m = predMock(product).trend;
+  const allValues = m.models.flatMap((model) => model.values);
+  const minValue = Math.max(0, Math.floor((Math.min(...allValues) - 3) / 5) * 5);
+  const maxValue = Math.ceil((Math.max(...allValues) + 2) / 5) * 5;
+  const avgLine = allValues.reduce((n, value) => n + value, 0) / Math.max(1, allValues.length);
   const series = m.models.map((model) => {
     const color = VERSION_DEFS[model.key].color();
     return {
       name: VERSION_DEFS[model.key].label,
       type: "line",
       data: model.values,
-      smooth: 0.3,
+      smooth: 0.24,
       symbol: "circle",
-      symbolSize: 5,
-      showSymbol: false,
+      symbolSize: 6,
+      showSymbol: true,
       lineStyle: { width: 2, color },
       itemStyle: { color, borderColor: T.surface, borderWidth: 2 },
       emphasis: { focus: "series" },
+      endLabel: {
+        show: true,
+        formatter: (p) => `${p.seriesName} ${p.value}%`,
+        color,
+        fontSize: 11,
+        fontWeight: 600,
+        offset: [5, 0],
+      },
     };
   });
   createChart(chartEl, {
@@ -1205,34 +1384,43 @@ function renderPredCapability(product, chartEl) {
         ),
     },
     legend: {
-      top: 0,
-      left: 0,
+      top: 2,
+      left: 2,
       itemWidth: 8,
       itemHeight: 8,
       icon: "circle",
       itemGap: 12,
-      textStyle: { fontSize: 10.5, color: T.muted, fontFamily: FONT },
+      textStyle: { fontSize: 11, color: T.muted, fontFamily: FONT },
     },
-    grid: { left: 34, right: 24, top: 30, bottom: 18 },
+    grid: { left: 36, right: 76, top: 30, bottom: 24 },
     xAxis: {
       type: "category",
       data: m.dates,
       boundaryGap: false,
       axisLine: { show: false },
       axisTick: { show: false },
-      axisLabel: { fontSize: 9.5, color: T.faint, fontFamily: FONT, interval: 0, margin: 8 },
+      axisLabel: { fontSize: 11, color: T.faint, fontFamily: FONT, interval: 1, margin: 8 },
     },
     yAxis: {
       type: "value",
-      min: 40,
-      max: 85,
+      min: minValue,
+      max: maxValue,
       splitNumber: 3,
       axisLine: { show: false },
       axisTick: { show: false },
-      axisLabel: { fontSize: 9.5, color: T.faint, fontFamily: FONT, formatter: "{value}%" },
+      axisLabel: { fontSize: 11, color: T.faint, fontFamily: FONT, formatter: "{value}%" },
       splitLine: { lineStyle: { color: T.hairline, type: "solid" } },
     },
-    series,
+    series: series.map((item, index) => index === 0 ? {
+      ...item,
+      markLine: {
+        silent: true,
+        symbol: "none",
+        lineStyle: { color: T.hairline, type: "dashed" },
+        label: { show: false },
+        data: [{ yAxis: Number(avgLine.toFixed(1)) }],
+      },
+    } : item),
   });
 
   const latest = m.models.map((model) => ({
@@ -1247,7 +1435,7 @@ function renderPredCapability(product, chartEl) {
   predStats($(isWc(product) ? "wcForecastStats" : "aiForecastStats"), [
     ["最佳模型", `${best.name} ${best.value}%`],
     ["模型均值", `${avg.toFixed(1)}%`],
-    ["最佳环比", `${delta >= 0 ? "+" : ""}${delta.toFixed(0)}pp`],
+    ["较上期", `${delta >= 0 ? "+" : ""}${delta.toFixed(0)}pp`],
   ]);
 }
 
@@ -1297,7 +1485,7 @@ function renderPredAttribution(product, chartEl) {
         lineStyle: { curveness: 0.55, opacity: 0.5 },
         itemStyle: { borderWidth: 0, borderRadius: 2 },
         label: {
-          fontSize: 10,
+          fontSize: 11,
           fontFamily: FONT,
           color: T.ink2,
           distance: 4,
@@ -1342,12 +1530,16 @@ function renderPrediction(product) {
   if (reviewed) reviewed.textContent = fmt(m.reviewed);
   const pending = $(wc ? "wcPredPending" : "aiPredPending");
   if (pending) pending.textContent = fmt(m.pending);
-  const bar = $(wc ? "wcPredBar" : "aiPredBar");
-  if (bar) {
-    bar.style.width = `${clamp(share, 0, 100).toFixed(2)}%`;
-    const track = bar.parentElement;
-    if (track) track.setAttribute("aria-label", `预测题占全部输入的 ${share.toFixed(1)}%`);
+  const reviewProgress = clamp(pct(m.reviewed, m.total), 0, 100);
+  const gauge = $(wc ? "wcPredGauge" : "aiPredGauge");
+  if (gauge) {
+    gauge.style.setProperty("--progress", `${reviewProgress.toFixed(2)}%`);
+    gauge.setAttribute(
+      "aria-label",
+      `预测题评阅进度 ${reviewProgress.toFixed(1)}%，已评阅 ${fmt(m.reviewed)} 题，共 ${fmt(m.total)} 题`
+    );
   }
+  setNum(wc ? "wcPredGaugeText" : "aiPredGaugeText", reviewProgress, { decimals: 1, suffix: "%" });
 
   const chartEl = $(wc ? "wcForecastChart" : "aiForecastChart");
   if (!chartEl) return;
@@ -1402,7 +1594,6 @@ function renderedProducts() {
 
 export function initBoard(data, opts = {}) {
   board.data = data;
-  board.opts = opts || {};
   board.product = ["wencai", "aime"].includes(opts.product) ? opts.product : "wencai";
   board.rendered = { wencai: false, aime: false };
   readTokens();

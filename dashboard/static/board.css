@@ -910,24 +910,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.pred-sharebar {
-  flex: none;
-  height: 4px;
-  margin: 9px 0 10px;
-  border-radius: 999px;
-  background: var(--track);
-  overflow: hidden;
-}
-
-.pred-sharebar i {
-  display: block;
-  width: 0;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--forecast, var(--accent));
-  transition: width 800ms var(--ease-out);
-}
-
 .predict-tabs {
   flex: none;
   display: grid;
@@ -977,83 +959,6 @@
   position: relative;
 }
 
-.pred-review {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  padding-top: 2px;
-}
-
-.pr-top {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  font-size: 11px;
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.pr-top b {
-  font-size: 13px;
-  font-weight: var(--fw-strong);
-  color: var(--ink);
-  font-variant-numeric: tabular-nums;
-}
-
-.pr-top span:last-child {
-  font-weight: var(--fw-strong);
-  color: color-mix(in srgb, var(--forecast, var(--accent)) 74%, var(--ink));
-  font-variant-numeric: tabular-nums;
-}
-
-.pr-bar {
-  height: 5px;
-  border-radius: 999px;
-  background: var(--track);
-  overflow: hidden;
-}
-
-.pr-bar i {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--forecast, var(--accent));
-}
-
-.pr-bars {
-  flex: 1 1 auto;
-  min-height: 72px;
-  display: flex;
-  align-items: flex-end;
-  gap: 3px;
-  padding-top: 6px;
-}
-
-.pr-bar-col {
-  flex: 1 1 0;
-  height: var(--h);
-  min-height: 4px;
-  border-radius: 3px 3px 1px 1px;
-  background: color-mix(in srgb, var(--forecast, var(--accent)) 56%, var(--surface-2));
-  transition: background var(--dur-snap) var(--ease-snap), transform var(--dur-snap) var(--ease-snap);
-}
-
-.pr-bar-col:hover {
-  background: var(--forecast, var(--accent));
-  transform: translateY(-2px);
-}
-
-.pr-axis {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 11px;
-  color: var(--faint);
-  font-variant-numeric: tabular-nums;
-}
-
 .predict-foot {
   flex: none;
   height: 30px;
@@ -1062,7 +967,7 @@
   align-items: center;
   gap: 8px;
   padding-top: 5px;
-  border-top: 1px solid var(--hairline);
+
 }
 
 .predict-stat {
@@ -1165,10 +1070,7 @@
 
   .ring-arc,
   .ring-burst,
-  .ring-arc-label,
-  .cover-fill,
-  .pred-sharebar i,
-  .pr-bar-col {
+  .ring-arc-label {
     transition: none;
   }
 }

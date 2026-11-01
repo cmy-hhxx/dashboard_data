@@ -41,6 +41,15 @@ function labelFits(name, arc) {
   return span >= 0.08 && textUnits(name) * LABEL_SIZE + 1.4 <= chord;
 }
 
+function setRadialLift(el, angle) {
+  const ux = Math.sin(angle);
+  const uy = -Math.cos(angle);
+  el.style.setProperty("--hover-x", `${(ux * 1.15).toFixed(2)}px`);
+  el.style.setProperty("--hover-y", `${(uy * 1.15).toFixed(2)}px`);
+  el.style.setProperty("--selected-x", `${(ux * 2.05).toFixed(2)}px`);
+  el.style.setProperty("--selected-y", `${(uy * 2.05).toFixed(2)}px`);
+}
+
 export function createRing(chartEl, centerEl, opts = {}) {
   if (!chartEl) return null;
   chartEl.innerHTML = "";
@@ -70,6 +79,7 @@ export function createRing(chartEl, centerEl, opts = {}) {
       depth: 1,
       a0: angle + pad / 2,
       a1: angle + span - pad / 2,
+      midAngle: angle + span / 2,
       r0: HOLE,
       r1: R,
       parentKey: "root",
@@ -157,12 +167,13 @@ export function createRing(chartEl, centerEl, opts = {}) {
     path.setAttribute("fill", arc.color);
     path.setAttribute(
       "class",
-      `ring-arc${arc.expandable ? " is-expandable" : ""}${arc.key === opts.expandedKey ? " is-expanded" : ""}`
+      `ring-arc${arc.expandable ? " is-expandable" : ""}${arc.key === opts.expandedKey ? " is-expanded is-selected" : ""}`
     );
     path.setAttribute("data-key", arc.key);
     path.setAttribute("data-kind", arc.kind);
     path.setAttribute("data-expandable", String(arc.expandable));
     path.setAttribute("stroke-width", "0.8");
+    setRadialLift(path, arc.midAngle);
     group.appendChild(path);
     arc.el = path;
   });

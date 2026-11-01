@@ -338,15 +338,10 @@ body[data-view="samples"] .freshness-chip {
   font-variant-numeric: tabular-nums;
 }
 
-.smp-sort-label {
-  margin-left: auto;
-  color: var(--faint);
-}
-
 .smp-list-nav {
   display: inline-flex;
   gap: 2px;
-  margin-left: 3px;
+  margin-left: auto;
 }
 
 .smp-list-nav button {
@@ -530,7 +525,7 @@ body[data-view="samples"] .freshness-chip {
   justify-content: space-between;
   gap: 8px;
   padding: 8px 2px 10px;
-  border-top: 1px solid var(--hairline);
+
   font-size: 11px;
   color: var(--faint);
 }
@@ -1244,7 +1239,7 @@ body[data-view="samples"] .freshness-chip {
 .out-turn {
   margin-top: 2px;
   padding: 7px 0 2px;
-  border-top: 1px solid var(--hairline);
+
 }
 
 .out-turn > summary {
@@ -1506,7 +1501,7 @@ body[data-view="samples"] .freshness-chip {
 }
 
 .cmp-item + .cmp-item {
-  border-top: 1px solid color-mix(in srgb, var(--hairline) 70%, transparent);
+
 }
 
 .cmp-idx {
@@ -1546,7 +1541,7 @@ body[data-view="samples"] .freshness-chip {
 }
 
 .cmp-item--warn + .cmp-item--warn {
-  border-top: 0;
+
 }
 
 .cmp-components {
@@ -1562,7 +1557,7 @@ body[data-view="samples"] .freshness-chip {
 }
 
 .cmp-comp + .cmp-comp {
-  border-top: 1px solid color-mix(in srgb, var(--hairline) 70%, transparent);
+
 }
 
 .cmp-kind {
@@ -1686,9 +1681,10 @@ body[data-view="samples"] .freshness-chip {
 .smp-spinner {
   width: 18px;
   height: 18px;
-  border: 2px solid var(--surface-3);
-  border-top-color: var(--accent);
   border-radius: 50%;
+  background: conic-gradient(var(--accent) 0 90deg, var(--surface-3) 90deg 360deg);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 0);
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 0);
   animation: smp-spin .8s linear infinite;
 }
 
@@ -1876,10 +1872,6 @@ body[data-view="samples"] .freshness-chip {
 
   .smp-seg button {
     padding: 0 6px;
-  }
-
-  .smp-sort-label {
-    display: none;
   }
 
   .smp-more {

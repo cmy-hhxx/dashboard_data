@@ -90,32 +90,37 @@
               <h2>评测量</h2>
               <span class="card-meta" id="wcEvalMeta"></span>
             </header>
-            <div class="eval-body">
-              <div class="eval-cover">
-                <div class="cover-top">
-                  <span class="cover-num" id="wcEvaluated" data-count="0">0</span>
-                  <span class="cover-unit">条已评测</span>
-                  <span class="cover-of">共 <b id="wcInputTotal">—</b> 条输入</span>
-                  <span class="cover-pct" id="wcCoverPct" data-count="0" data-decimals="1" data-suffix="%">0%</span>
+            <div class="eval-body eval-dashboard">
+              <section class="eval-coverage" aria-label="评测覆盖率">
+                <div class="eval-module-head"><h3>整体进度</h3><span id="wcCoverBatch"></span></div>
+                <div class="eval-coverage-body">
+                  <div class="eval-ring" id="wcCoverBar" role="img" aria-label="评测覆盖率">
+                    <div class="eval-ring-hole">
+                      <span class="cover-pct" id="wcCoverPct" data-count="0" data-decimals="1" data-suffix="%">0%</span>
+                      <span>已评测</span>
+                    </div>
+                  </div>
+                  <div class="eval-coverage-copy">
+                    <div class="cover-top">
+                      <span class="cover-num" id="wcEvaluated" data-count="0">0</span>
+                      <span class="cover-unit">条已评测</span>
+                    </div>
+                    <span class="cover-of">共 <b id="wcInputTotal">—</b> 条输入</span>
+                    <div class="cover-legend">
+                      <span><i class="cover-dot" style="--dot:var(--wc)"></i>已完成 <b id="wcCoverDone">—</b></span>
+                      <span><i class="cover-dot cover-dot--rest"></i>待评测 <b id="wcCoverPending">—</b></span>
+                    </div>
+                  </div>
                 </div>
-                <div class="cover-bar" role="img" id="wcCoverBar" aria-label="评测覆盖率">
-                  <i class="cover-fill" id="wcCoverFill"></i>
-                </div>
-                <div class="cover-legend">
-                  <span><i class="cover-dot" style="--dot:var(--wc)"></i>已评测 <b id="wcCoverDone">—</b></span>
-                  <span><i class="cover-dot cover-dot--rest"></i>待评测 <b id="wcCoverPending">—</b></span>
-                  <span class="cover-batch" id="wcCoverBatch"></span>
-                </div>
-              </div>
-              <div class="eval-grid">
-                <section class="eval-versions">
-                  <div class="ev-head"><span>版本</span><span>回答</span><span>核心</span></div>
-                  <div class="ev-rows" id="wcModels"></div>
-                </section>
-                <section class="eval-side">
-                  <div class="diff-block" id="wcDifficulty"></div>
-                </section>
-              </div>
+              </section>
+              <section class="eval-versions">
+                <div class="eval-module-head"><h3>版本表现</h3><span>核心达成率</span></div>
+                <div class="ev-rows" id="wcModels"></div>
+              </section>
+              <section class="eval-side">
+                <div class="eval-module-head"><h3>难度构成</h3><span id="wcDiffTotal"></span></div>
+                <div class="diff-block" id="wcDifficulty"></div>
+              </section>
               <div class="eval-facts" id="wcEvalStats"></div>
             </div>
           </article>
@@ -145,7 +150,6 @@
             </div>
             <div class="card-foot">
               <span id="wcClusterStats" class="foot-stat"></span>
-              <button id="wcClusterSamples" class="ghost-link" type="button" title="召回当前聚类节点下的样本">查看样本</button>
             </div>
           </article>
 
@@ -160,12 +164,16 @@
                 <span class="pred-unit">预测题</span>
                 <span class="pred-sub" id="wcPredShare"></span>
               </div>
-              <div class="pred-side">
-                <span><em>已评阅</em><b id="wcPredReviewed">—</b></span>
-                <span><em>待评阅</em><b id="wcPredPending">—</b></span>
+              <div class="pred-progress-block">
+                <div class="pred-gauge" id="wcPredGauge" role="img" aria-label="预测题评阅进度">
+                  <span id="wcPredGaugeText" data-count="0" data-decimals="1" data-suffix="%">0%</span>
+                </div>
+                <div class="pred-side">
+                  <span><em>已评阅</em><b id="wcPredReviewed">—</b></span>
+                  <span><em>待评阅</em><b id="wcPredPending">—</b></span>
+                </div>
               </div>
             </div>
-            <div class="pred-sharebar" role="img" aria-label="预测题占全部输入的比例"><i id="wcPredBar"></i></div>
             <div class="predict-tabs" id="wcPredictTabs" role="tablist" aria-label="预测维度">
               <button class="predict-tab is-active" type="button" role="tab" data-dim="review" aria-selected="true">评阅数据</button>
               <button class="predict-tab" type="button" role="tab" data-dim="capability" aria-selected="false">能力趋势</button>
@@ -199,32 +207,37 @@
               <h2>评测量</h2>
               <span class="card-meta" id="aiEvalMeta"></span>
             </header>
-            <div class="eval-body">
-              <div class="eval-cover">
-                <div class="cover-top">
-                  <span class="cover-num" id="aiEvaluated" data-count="0">0</span>
-                  <span class="cover-unit">条已评测</span>
-                  <span class="cover-of">共 <b id="aiInputTotal">—</b> 条输入</span>
-                  <span class="cover-pct" id="aiCoverPct" data-count="0" data-decimals="1" data-suffix="%">0%</span>
+            <div class="eval-body eval-dashboard">
+              <section class="eval-coverage" aria-label="评测覆盖率">
+                <div class="eval-module-head"><h3>整体进度</h3><span id="aiCoverBatch"></span></div>
+                <div class="eval-coverage-body">
+                  <div class="eval-ring" id="aiCoverBar" role="img" aria-label="评测覆盖率">
+                    <div class="eval-ring-hole">
+                      <span class="cover-pct" id="aiCoverPct" data-count="0" data-decimals="1" data-suffix="%">0%</span>
+                      <span>已评测</span>
+                    </div>
+                  </div>
+                  <div class="eval-coverage-copy">
+                    <div class="cover-top">
+                      <span class="cover-num" id="aiEvaluated" data-count="0">0</span>
+                      <span class="cover-unit">条已评测</span>
+                    </div>
+                    <span class="cover-of">共 <b id="aiInputTotal">—</b> 条输入</span>
+                    <div class="cover-legend">
+                      <span><i class="cover-dot" style="--dot:var(--ai)"></i>已完成 <b id="aiCoverDone">—</b></span>
+                      <span><i class="cover-dot cover-dot--rest"></i>待评测 <b id="aiCoverPending">—</b></span>
+                    </div>
+                  </div>
                 </div>
-                <div class="cover-bar" role="img" id="aiCoverBar" aria-label="评测覆盖率">
-                  <i class="cover-fill" id="aiCoverFill"></i>
-                </div>
-                <div class="cover-legend">
-                  <span><i class="cover-dot" style="--dot:var(--ai)"></i>已评测 <b id="aiCoverDone">—</b></span>
-                  <span><i class="cover-dot cover-dot--rest"></i>待评测 <b id="aiCoverPending">—</b></span>
-                  <span class="cover-batch" id="aiCoverBatch"></span>
-                </div>
-              </div>
-              <div class="eval-grid">
-                <section class="eval-versions">
-                  <div class="ev-head"><span>版本</span><span>回答</span><span>核心</span></div>
-                  <div class="ev-rows" id="aiModels"></div>
-                </section>
-                <section class="eval-side">
-                  <div class="diff-block" id="aiDifficulty"></div>
-                </section>
-              </div>
+              </section>
+              <section class="eval-versions">
+                <div class="eval-module-head"><h3>版本表现</h3><span>核心达成率</span></div>
+                <div class="ev-rows" id="aiModels"></div>
+              </section>
+              <section class="eval-side">
+                <div class="eval-module-head"><h3>难度构成</h3><span id="aiDiffTotal"></span></div>
+                <div class="diff-block" id="aiDifficulty"></div>
+              </section>
               <div class="eval-facts" id="aiEvalStats"></div>
             </div>
           </article>
@@ -255,7 +268,6 @@
             </div>
             <div class="card-foot">
               <span id="aiClusterStats" class="foot-stat"></span>
-              <button id="aiClusterSamples" class="ghost-link" type="button" title="召回当前聚类节点下的样本">查看样本</button>
             </div>
           </article>
 
@@ -270,12 +282,16 @@
                 <span class="pred-unit">预测题</span>
                 <span class="pred-sub" id="aiPredShare"></span>
               </div>
-              <div class="pred-side">
-                <span><em>已评阅</em><b id="aiPredReviewed">—</b></span>
-                <span><em>待评阅</em><b id="aiPredPending">—</b></span>
+              <div class="pred-progress-block">
+                <div class="pred-gauge" id="aiPredGauge" role="img" aria-label="预测题评阅进度">
+                  <span id="aiPredGaugeText" data-count="0" data-decimals="1" data-suffix="%">0%</span>
+                </div>
+                <div class="pred-side">
+                  <span><em>已评阅</em><b id="aiPredReviewed">—</b></span>
+                  <span><em>待评阅</em><b id="aiPredPending">—</b></span>
+                </div>
               </div>
             </div>
-            <div class="pred-sharebar" role="img" aria-label="预测题占全部输入的比例"><i id="aiPredBar"></i></div>
             <div class="predict-tabs" id="aiPredictTabs" role="tablist" aria-label="预测维度">
               <button class="predict-tab is-active" type="button" role="tab" data-dim="review" aria-selected="true">评阅数据</button>
               <button class="predict-tab" type="button" role="tab" data-dim="capability" aria-selected="false">能力趋势</button>

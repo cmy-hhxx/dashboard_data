@@ -152,7 +152,10 @@ function setProduct(product, persist = true) {
     } catch (e) {}
   }
   if (boardModule) boardModule.setBoardProduct(product);
-  if (samplesModule) samplesModule.setSamplesProduct(product);
+  // The samples module owns its own URL/query sync. Only update it while the
+  // samples view is active, otherwise changing products on Data can rewrite
+  // the route back to Samples.
+  if (samplesModule && activeView === "samples") samplesModule.setSamplesProduct(product);
 }
 
 /* ------------------------------------------------------------ lazy loading */
@@ -324,6 +327,12 @@ function navigate(view, params = {}, { replace = false } = {}) {
 function setViewChrome() {
   document.body.dataset.view = activeView;
   setDocumentTitle();
+  const productSwitch = $("productSwitch");
+  if (productSwitch) {
+    const visible = activeView !== "system";
+    productSwitch.hidden = !visible;
+    productSwitch.setAttribute("aria-hidden", String(!visible));
+  }
   $$(".view").forEach((view) => {
     const on = view.dataset.view === activeView;
     view.classList.toggle("is-active", on);
@@ -345,6 +354,8 @@ function setViewChrome() {
 function sampleQueryFrom(route) {
   const turn = route.params.get("turn");
   return {
+    product: route.params.get("product") || activeProduct,
+    cluster: route.params.get("cluster") || "",
     component: route.params.get("component") || "",
     severity: route.params.get("severity") || "",
     model: route.params.get("model") || "",
@@ -436,8 +447,6 @@ async function applyRoute(route) {
     if (!boardInited) {
       mod.initBoard(DATA, {
         product: activeProduct,
-        onRecall: (detail) => onRecall({ detail }),
-        navigate,
       });
       boardInited = true;
     }
@@ -475,7 +484,7 @@ function initNav() {
   if (productSwitch) {
     productSwitch.addEventListener("click", (ev) => {
       const tab = ev.target.closest(".product-tab");
-      if (!tab) return;
+      if (!tab || activeView === "system") return;
       setProduct(tab.dataset.tab);
       const route = parseRoute();
       const params = activeView === "samples"
@@ -485,6 +494,7 @@ function initNav() {
     });
     productSwitch.addEventListener("keydown", (ev) => {
       if (ev.key !== "ArrowLeft" && ev.key !== "ArrowRight") return;
+      if (activeView === "system") return;
       ev.preventDefault();
       const next = activeProduct === "wencai" ? "aime" : "wencai";
       setProduct(next);
@@ -500,7 +510,7 @@ function initNav() {
 
   window.addEventListener("eval:switch-product", (ev) => {
     const product = ev.detail && ev.detail.product;
-    if (!PRODUCTS.has(product)) return;
+    if (activeView !== "samples" || !PRODUCTS.has(product)) return;
     setProduct(product);
     navigate(activeView, { product }, { replace: true });
   });
@@ -556,21 +566,6 @@ function initTheme() {
     };
     if (mq.addEventListener) mq.addEventListener("change", onChange);
   }
-}
-
-/* ------------------------------------------------------------------ recall */
-
-function onRecall(ev) {
-  const d = ev.detail || {};
-  const product = PRODUCTS.has(d.product) ? d.product : activeProduct;
-  navigate("samples", {
-    product,
-    component: d.component || "",
-    severity: d.severity || "",
-    cluster: d.cluster || "",
-    label: d.label || "",
-    case: d.case || "",
-  });
 }
 
 /* ------------------------------------------------------------------ status */
@@ -653,8 +648,6 @@ function boot() {
   window.addEventListener("resize", () => {
     if (boardModule) resizeAllCharts();
   });
-  window.addEventListener("eval:recall", onRecall);
-
   applyRoute(parseRoute());
 }
 

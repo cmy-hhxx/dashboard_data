@@ -389,7 +389,7 @@
   gap: 18px;
   margin-top: 16px;
   padding-top: 16px;
-  border-top: 1px solid var(--hairline);
+
 }
 
 .sys-term {
@@ -446,7 +446,7 @@
 .sys-stage-note {
   margin-top: 14px !important;
   padding-top: 12px;
-  border-top: 1px solid var(--hairline);
+
   color: var(--muted);
   font-size: var(--sx-small);
   line-height: 1.65;
@@ -552,7 +552,7 @@
   gap: 8px;
   margin-top: auto;
   padding-top: 14px;
-  border-top: 1px solid var(--hairline);
+
 }
 
 .sys-agent-foot .sys-term {
@@ -787,12 +787,12 @@
   grid-template-columns: 132px minmax(0, 1fr);
   gap: 12px;
   padding-top: 7px;
-  border-top: 1px solid var(--hairline);
+
 }
 
 .sys-file-card dl > div:first-child {
   padding-top: 0;
-  border-top: 0;
+
 }
 
 .sys-file-card dt code {
@@ -932,7 +932,7 @@
   margin: 0;
   padding: 16px 18px;
   overflow: auto;
-  border-top: 1px solid var(--hairline);
+
   background: var(--surface-3);
   font-size: 12px;
   line-height: 1.65;

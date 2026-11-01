@@ -26,7 +26,11 @@ from datetime import datetime, timedelta, timezone
 
 import dataset_layout as layout
 
-DATASETS = "/mnt/fin_bench/code_and_clean_data/datasets"
+# Production data root; override with EVAL_DATASETS to point at a local tree
+# (see dashboard/local_dev/README.md for the offline dev fixture).
+DATASETS = os.path.abspath(os.path.expanduser(
+    os.environ.get("EVAL_DATASETS", "/mnt/fin_bench/code_and_clean_data/datasets")
+))
 TZ = timezone(timedelta(hours=8), "CST")
 
 WENCAI_MODELS = ["a_expert", "a_fast", "b_expert", "b_fast"]
@@ -131,6 +135,8 @@ def read_cluster_meta(path):
         "pipeline_version": meta.get("pipeline_version"),
         "total_sessions": meta.get("total_sessions"),
         "total_items": meta.get("total_items"),
+        "depth": meta.get("depth"),
+        "level_names": meta.get("level_names") or [],
     }
 
 
@@ -473,6 +479,7 @@ def aime_outputs():
     answers = 0
     tokens = 0
     durations = []
+    difficulty = collections.Counter()
     tasks = collections.Counter()
     subtasks = collections.Counter()
     task_subtasks = collections.defaultdict(collections.Counter)
@@ -549,6 +556,7 @@ def aime_outputs():
                     day["tokens"] += record_tokens
 
                     last_meta = last_turn_meta or rec.get("session_meta") or {}
+                    difficulty[last_meta.get("difficulty") or "未标注"] += 1
                     task = last_meta.get("task") or "未标注"
                     subtask = last_meta.get("subtask") or "未标注"
                     tasks[task] += 1
@@ -599,6 +607,7 @@ def aime_outputs():
         "by_model": dict(totals),
         "severity": {s: severity.get(s, 0) for s in AIME_SEVERITIES},
         "problems": problems,
+        "difficulty": dict(difficulty),
         "components": comp,
         "tasks": dict(tasks),
         "subtasks": dict(subtasks),
@@ -675,8 +684,13 @@ def surface_of(name):
 
 
 
-def compact_cluster(path, top_n=6):
-    """Trim a real cluster_tree.json to a 3-level demo for the dashboard."""
+def compact_cluster(path, top_n=8, max_levels=4):
+    """Trim a cluster tree to a bounded four-level dashboard payload.
+
+    Real clusters can contain thousands of sibling nodes. Keep the largest
+    branches at each level and aggregate the rest so every drilldown remains
+    responsive while preserving the full session/item totals.
+    """
     if not path or not os.path.exists(path):
         return None
     try:
@@ -693,19 +707,40 @@ def compact_cluster(path, top_n=6):
             sessions = node.get("count") or 0
         items = node.get("count") or 0
         kids = node.get("children") or []
-        out = {"name": node.get("name") or "未命名", "value": int(sessions), "items": int(items)}
-        if depth >= 3 or not kids:
+        out = {
+            "name": node.get("name") or "未命名",
+            "value": int(sessions),
+            "items": int(items),
+            "level": depth,
+            "level_name": (meta.get("level_names") or [])[depth - 1] if depth else "根节点",
+        }
+        if node.get("id"):
+            out["id"] = node["id"]
+        if node.get("path"):
+            out["path"] = node["path"]
+        if depth >= max_levels or not kids:
             return out
         kids = sorted(
             kids,
             key=lambda x: (x.get("sessions") if x.get("sessions") is not None else x.get("count") or 0),
             reverse=True,
-        )[:top_n]
-        children = [trim(k, depth + 1) for k in kids]
-        used = sum(c["value"] for c in children)
+        )
+        kept = kids[:top_n]
+        children = [trim(k, depth + 1) for k in kept]
+        used = sum(
+            int(k.get("sessions") if k.get("sessions") is not None else k.get("count") or 0)
+            for k in kept
+        )
+        used_items = sum(int(k.get("count") or 0) for k in kept)
         rest = max(0, int(sessions) - used)
         if rest:
-            children.append({"name": "其他", "value": rest, "items": 0})
+            children.append({
+                "name": "其他",
+                "value": rest,
+                "items": max(0, int(items) - used_items),
+                "level": depth + 1,
+                "level_name": (meta.get("level_names") or [])[depth] if depth < len(meta.get("level_names") or []) else "",
+            })
         out["children"] = children
         return out
 
@@ -714,8 +749,9 @@ def compact_cluster(path, top_n=6):
         "meta": {
             "total_sessions": meta.get("total_sessions") or tree["value"],
             "total_items": meta.get("total_items") or tree["items"],
-            "depth": meta.get("depth") or 3,
-            "source": "a_fast",
+            "depth": min(int(meta.get("depth") or max_levels), max_levels),
+            "level_names": (meta.get("level_names") or [])[:max_levels],
+            "source": meta.get("source") or "a_fast",
         },
         "tree": tree,
     }
@@ -798,6 +834,7 @@ def build(counts_path, out_path):
                         for task, subs in aime_out["task_subtask"].items()
                     },
                     "task_total": aime_out["task_total"],
+                    "difficulty": top_categories(collections.Counter(aime_out["difficulty"])),
                     "comefrom": top_categories(collections.Counter(_surface_counts(ai_scan["categories"].get("comefrom", {})))),
                     "agent_mode": top_categories(collections.Counter(ai_scan["categories"].get("agent_mode", {}))),
                 },

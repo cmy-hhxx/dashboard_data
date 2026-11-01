@@ -27,7 +27,10 @@ from datetime import datetime, timedelta, timezone
 
 import dataset_layout as layout
 
-DATASETS = "/mnt/fin_bench/code_and_clean_data/datasets"
+# Production data root; override with EVAL_DATASETS for local dev.
+DATASETS = os.path.abspath(os.path.expanduser(
+    os.environ.get("EVAL_DATASETS", "/mnt/fin_bench/code_and_clean_data/datasets")
+))
 TZ = timezone(timedelta(hours=8), "CST")
 
 PRODUCTS = {
@@ -598,6 +601,9 @@ def build_sample(product, model, date, attribution, compact):
             "question_zh": question_text(turn_meta.get("question_zh")),
             "task": turn_meta.get("task") or "",
             "subtask": turn_meta.get("subtask") or "",
+            "intent": turn_meta.get("intent") or "",
+            "answer_type": turn_meta.get("answer_type") or "",
+            "cluster_path": turn_meta.get("cluster_path") or [],
             "difficulty": turn_meta.get("difficulty") or "",
             "summary": clip(turn.get("summary"), TURN_SUMMARY_CHARS),
             "is_correct": turn.get("is_correct"),
@@ -643,6 +649,9 @@ def build_sample(product, model, date, attribution, compact):
         ),
         "task": turns[0]["task"] if turns else "",
         "subtask": turns[0]["subtask"] if turns else "",
+        "intent": turns[0]["intent"] if turns else "",
+        "answer_type": turns[0]["answer_type"] if turns else "",
+        "cluster_path": turns[0]["cluster_path"] if turns else [],
         "difficulty": turns[0]["difficulty"] if turns else "",
         "source": session_meta.get("source") or "",
         "agent_mode": session_meta.get("agent_mode") or "",
@@ -825,12 +834,18 @@ def build_product(product, samples, attr_files, comp_files):
     dates = collections.Counter(sample["date"] for sample in samples)
     components = collections.Counter()
     tasks = collections.Counter()
+    intents = collections.Counter()
+    answer_types = collections.Counter()
     labels = collections.Counter()
     for sample in samples:
         for component in sample["components"]:
             components[component] += 1
         if sample["task"]:
             tasks[sample["task"]] += 1
+        if sample.get("intent"):
+            intents[sample["intent"]] += 1
+        if sample.get("answer_type"):
+            answer_types[sample["answer_type"]] += 1
         for label in sample["labels"]:
             labels[label] += 1
     return {
@@ -844,6 +859,8 @@ def build_product(product, samples, attr_files, comp_files):
             "severities": severity_counts(samples),
             "components": sorted_counts(components),
             "tasks": sorted_counts(tasks),
+            "intents": sorted_counts(intents),
+            "answer_types": sorted_counts(answer_types),
             "labels": [{"name": name, "value": count} for name, count in labels.most_common(30)],
         },
         "sources": {
