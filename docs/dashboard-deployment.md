@@ -7,22 +7,23 @@
 
 | 项 | 值 |
 |---|---|
-| SSH | `deploy@dashboard.example.com:22`，密钥 `$HOME/.ssh/id_ed25519` |
-| 本地 SSH 别名 | `eval_data`（见 `~/.ssh/config`，与 `servers.conf` 一致） |
+| SSH | 本地 SSH 配置中的部署主机（默认别名 `eval_data`） |
+| 本地 SSH 别名 | `eval_data`（见 `~/.ssh/config`；主机、端口与密钥都在本地配置，不入库） |
 | 远端目录 | `/opt/eval_dashboard` |
 | 服务监听 | 容器内 `0.0.0.0:5001` |
-| 对外地址 | `http://dashboard.example.com:2768/` |
-| 端口映射 | 容器 `5001` → 对外 `2768` |
+| 对外地址 | 由部署环境决定（示例：`http://<dashboard-host>:<port>/`） |
+| 端口映射 | 容器 `5001` → 对外端口（见本地 `servers.conf`） |
 | 运行环境 | 容器内 Python 3.12；只用标准库，无需 `pip install` / venv |
 
-`servers.conf` 里的 `dashboard_port_1 = [5001:2768]` 按「容器端口:对外端口」书写，与 Docker
-常见的「宿主:容器」顺序相反，改端口时注意不要弄反。`deploy.sh` 的 `HOST` / `PORT` / `KEY` /
-`REMOTE` 是脚本顶部的硬编码值，不读取 `servers.conf`；换服务器时要改脚本。外部 `:5001`
+仓库不包含 `servers.conf`，它是本地未跟踪配置（已加入 `.gitignore`）。`deploy.sh` 默认使用
+SSH 别名 `eval_data`；也可以用 `EVAL_DEPLOY_HOST` / `EVAL_DEPLOY_PORT` / `EVAL_DEPLOY_KEY` /
+`EVAL_DEPLOY_REMOTE` 覆盖，端口与密钥未设置时由 `~/.ssh/config` 管理。外部 `:5001`
 不可直连，排查时一律在容器内访问 `127.0.0.1:5001`。
 
 ## 快速部署
 
-前置条件：本地有 `ssh`、`rsync` 和上面的密钥；在仓库根目录执行。
+前置条件：本地有 `ssh`、`rsync`，并已配置部署主机的 SSH 别名（默认 `eval_data`）；
+在仓库根目录执行。
 
 ```bash
 ./dashboard/deploy.sh
@@ -46,7 +47,7 @@
 验证：
 
 ```bash
-curl -s http://dashboard.example.com:2768/healthz | jq
+curl -s "http://<dashboard-host>:<port>/healthz" | jq
 ```
 
 `healthz` 始终返回 HTTP 200，必须看 JSON 内容：
@@ -59,7 +60,7 @@ curl -s http://dashboard.example.com:2768/healthz | jq
 | `samples_last` / `samples_seconds` | 样本最近生成时间（epoch 秒）与生成耗时 |
 
 正常应看到 `ok=true`、`samples_ok=true`、两个 `error` 为空。随后打开
-`http://dashboard.example.com:2768/` 确认页面。
+`http://<dashboard-host>:<port>/` 确认页面。
 
 单独起停：
 
@@ -114,7 +115,7 @@ ssh eval_data 'cd /opt/eval_dashboard && ./stop.sh'
    服务启动后调度线程会立即重新 `scan` 再 `prepare`。需要强制重建样本时，先删
    `static/samples.json` 与 `static/samples/` 再重启。
 7. **改端口要三处同步**：`server.py` / `start.sh` 的监听端口、容器平台端口映射、
-   `servers.conf` 的 `dashboard_port_1`。对外继续走 2768，不要把 5001 直接暴露。
+   本地 `servers.conf` 的 `dashboard_port_1`。对外端口按部署环境配置，不要把 `5001` 直接暴露。
 8. **升级 ECharts 要换文件名或加版本**：`/echarts.min.js` 和 `/vendor/` 带一年 `immutable`
    缓存，同路径覆盖后老客户端一年内可能不更新。
 9. **没有进程守护**：服务由 `nohup` 启动（父进程已是容器 init），目前没有 cron / systemd

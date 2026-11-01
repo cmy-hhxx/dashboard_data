@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Serve the dashboard on 5001. Exposed as dashboard.example.com:2768 -> 5001.
+# Serve the dashboard on 5001. Public mapping is configured by the deployment environment.
 set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p logs

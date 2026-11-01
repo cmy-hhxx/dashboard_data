@@ -2,13 +2,13 @@
 
 AIME 评测数据在远端服务器上的**搬运、打包与看板**工程。
 
-数据不在这个仓库里——仓库只放流程、脚本和看板代码；数据始终留在远端 `eval_data`
-(`dashboard.example.com:22`) 与 `ceph-fuse` 挂载上。
+数据不在这个仓库里——仓库只放流程、脚本和看板代码；数据始终留在部署主机的挂载目录与
+`ceph-fuse` 上。
 
 ## 目录
 
 ```
-servers.conf                    # 服务器清单（ssh 别名、端口、密钥路径）
+servers.conf                    # 本地部署配置（已 gitignore，不入库）
 scripts/pack_aime_input.sh      # 把 AIME 评测输入流式打成单个 tar.zst
 docs/aime-input-packaging.md    # 打包流程与参数说明
 docs/aime-data-inventory.md     # 2026-10-30 那份数据的解压体量与目录拆解
@@ -60,7 +60,7 @@ ssh eval_data 'chmod +x /tmp/pack_aime_input.sh && /tmp/pack_aime_input.sh <目�
 ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
 ```
 
-服务监听容器 `:5001`，对外是 `http://dashboard.example.com:2768/`。服务每 30 分钟重扫数据集；
+服务监听容器 `:5001`，对外地址由部署环境决定。服务每 30 分钟重扫数据集；
 样本默认每 6 小时重算（`SAMPLES_REFRESH_SECONDS`），`samples.json` 或 `samples/` 缺失时启动即生成。
 部署时预压缩 JS/CSS/HTML/SVG，`data.json`、`samples.json` 与逐样本详情由生成脚本同时产出 `.gz`；
 这些 JSON 使用 `no-cache`，重复访问以 304 重验证，仅 `/healthz` 为 `no-store`。

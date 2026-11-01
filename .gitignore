@@ -2,6 +2,9 @@
 .DS_Store
 *.log
 
+# 本地服务器清单（含主机、端口与密钥路径，不入库）
+servers.conf
+
 # 打包产物（数据永远留在远端 ceph，不进仓库）
 *.tar.zst
 *.tar.zst.part
