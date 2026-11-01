@@ -63,8 +63,8 @@ server.py（标准库 HTTP，:5001，定时 build）──> app.js
 | 路由 | 模块 | 内容 |
 |---|---|---|
 | `?view=data&product=wencai\|aime` | `data.js` | 会话场、数据量、评测量、归因、聚类、预测、聚类矩阵；所有下钻都在页内 |
-| `?view=system&product=…` | `system.js` | 评测体系链路、证据闭环、阶段 → 环节 → 机制 → 模式 |
-| `?view=samples&product=…&case=…` | `samples.js` | 召回 / 评测输入 / 评测输出三栏；筛选、轮次、tab 同步到 URL |
+| `?view=system&product=…` | `system.js` | 评测体系机制图（输入 → 压缩 → 归因 → 聚类）、证据闭环 |
+| `?view=samples&product=…&case=…` | `samples.js` | 具体数据三栏：问句列表 / 对话原文 / 归因或轨迹；筛选、轮次、tab 同步到 URL |
 
 顶部右侧是全局产品切换（问财 / AIME），也是数据源指示；不要在每个卡片里重复放切换。
 数据页不跳样本；样本页负责深链进入。
@@ -78,8 +78,9 @@ server.py（标准库 HTTP，:5001，定时 build）──> app.js
 | `dashboard/static/js/app.js` | 路由、主题、产品切换、模块懒加载、错误兜底 | 页面级状态 |
 | `dashboard/static/js/core.js` | 共享格式化、数字动画、`segmented`、提示等 | 通用交互 |
 | `dashboard/static/js/data.js` | 数据页各卡片与聚类矩阵 | 数据页排版、下钻 |
-| `dashboard/static/js/system.js` | 评测体系、证据闭环、聚类体系 | 体系页 |
-| `dashboard/static/js/samples.js` | 样本三栏工作台 | 筛选、样本详情 |
+| `dashboard/static/js/system.js` | 评测体系机制图、聚类（阶段 → 环节 → 机制 → 模式）、证据闭环 | 体系页 |
+| `dashboard/static/js/samples.js` | 具体数据三栏工作台（对话气泡、证据高亮、归因卡片） | 筛选、样本详情 |
+| `dashboard/static/js/render.js` | 公共内容渲染：Markdown-lite、JSON 高亮、按偏移保留证据高亮 | 文本 / JSON 呈现 |
 | `dashboard/static/js/sunburst.js` | 原生 SVG 可下钻旭日图 | 数据量 / 聚类环 |
 | `dashboard/static/app.css` | 所有样式与 token | 样式微调、响应式 |
 | `dashboard/tests/test_empty_data.py` | 合成数据端到端构建测试 | 改 build.py 后 |
