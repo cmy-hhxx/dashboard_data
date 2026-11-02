@@ -546,7 +546,7 @@ function selectRound(i, { scroll = true } = {}) {
   S.trace = round;
   S.cturn = round;
   renderTrace();
-  if (outSeg.get() === "compact") renderOut();
+  renderOut();
   $$("#atabs .pill", root).forEach((b) => b.setAttribute("aria-pressed", String(Number(b.dataset.at) === round)));
   if (scroll) scrollRound(round);
 }
@@ -584,8 +584,7 @@ function renderIn() {
       ? `<span class="cg${cls ? ` ${cls}` : ""}"><span class="cg-k">${k}</span>${vals.map((v) => `<span class="pill">${esc(v)}</span>`).join("")}</span>`
       : "";
   $("#sin", root).innerHTML = `<div class="sample-head">
-      <h2>${esc(D.question || "（无提问）")}</h2>
-      ${D.question_zh && D.question_zh !== D.question ? `<div class="zh">${esc(D.question_zh)}</div>` : ""}
+      <h2 title="${esc(D.question || "")}">${esc(D.question || "（无提问）")}</h2>
       <div class="chip-groups">
         ${D.split === "lost" ? `<span class="cg"><span class="pill lost">流失用户</span></span>` : ""}
         ${group("模型", "is-model", [label])}
@@ -614,14 +613,40 @@ function renderTrace() {
 }
 
 function waterfall(msgs) {
-  const timed = msgs.filter((m) => m.at != null && m.dur != null && (m.k === "llm" || m.k === "call"));
+  const timed = msgs.filter((m) => Number.isFinite(m.at) && Number.isFinite(m.dur) && m.at >= 0 && m.dur > 0 && (m.k === "llm" || m.k === "call"));
   if (timed.length < 2) return "";
+  const start = Math.min(...timed.map((m) => m.at));
   const end = Math.max(...timed.map((m) => m.at + m.dur), 1);
+  const span = Math.max(1, end - start);
+  // Pack overlapping intervals into sub-lanes so simultaneous calls do not cover each other.
+  const pack = (kind) => {
+    const list = timed.filter((m) => m.k === kind).sort((a, b) => a.at - b.at || b.dur - a.dur);
+    const ends = [];
+    list.forEach((m) => {
+      let i = ends.findIndex((e) => m.at >= e);
+      if (i < 0) {
+        i = ends.length;
+        ends.push(0);
+      }
+      ends[i] = m.at + m.dur;
+      m.sub = i;
+    });
+    return Math.max(1, ends.length);
+  };
+  const llmRows = pack("llm");
+  const callRows = pack("call");
+  const toolTop = 8 + llmRows * 7 + 5;
+  const height = Math.max(34, toolTop + callRows * 7 + 6);
   const bars = timed
-    .map((m) => `<span class="k-${m.k}" style="left:${(100 * m.at) / end}%;width:${Math.max(0.4, (100 * m.dur) / end)}%;top:${m.k === "llm" ? 8 : 20}px"></span>`)
+    .map((m) => {
+      const left = Math.max(0, Math.min(99.8, (100 * (m.at - start)) / span));
+      const width = Math.max(0.2, Math.min(100 - left, (100 * m.dur) / span));
+      const top = (m.k === "llm" ? 8 : toolTop) + (m.sub || 0) * 7;
+      return `<span class="k-${m.k}" style="left:${left}%;width:${width}%;top:${top}px" title="${esc(m.name || (m.k === "llm" ? "模型" : "工具"))} · ${fmt(m.dur / 1000, 1)} s"></span>`;
+    })
     .join("");
-  return `<div class="waterfall" title="模型 / 工具调用时间轴 · 共 ${fmt(end / 1000, 1)} s">${bars}</div>
-    <div class="hist-axis num"><span>0 s</span><span>模型 ▬ 上 · 工具 ▬ 下</span><span>${fmt(end / 1000, 1)} s</span></div>`;
+  return `<div class="waterfall" style="height:${height}px" title="模型 / 工具调用时间轴 · 共 ${fmt(span / 1000, 1)} s">${bars}</div>
+    <div class="hist-axis num"><span>${start ? `${fmt(start / 1000, 1)} s` : "0 s"}</span><span>模型 ▬ 上 · 工具 ▬ 下</span><span>${fmt(end / 1000, 1)} s</span></div>`;
 }
 
 /* Chat scene: the user speaks on the right, the answer answers on the left,
@@ -634,19 +659,28 @@ function msgHTML(t, i, m) {
   const sevs = [...new Set((m.ev || []).map((e) => D._ix.sev.get(e)).filter(Boolean))].sort();
   const time = m.dur != null ? `<span class="num">${m.dur >= 1000 ? fmt(m.dur / 1000, 1) + " s" : m.dur + " ms"}</span>` : "";
   const who = KIND[m.k] || m.k;
+  const firstUser = t === 0 ? S.D.input.traces[0].messages.findIndex((x) => x.k === "user") : -1;
+  const trans = t === 0 && i === firstUser && S.D.question_zh && S.D.question_zh !== S.D.question ? S.D.question_zh : "";
   return `<div class="msg k-${m.k}${chat ? " is-chat" : ""}${folded ? " is-folded" : ""}" id="m-${t}-${i}" data-key="${key}">
     ${chat ? "" : '<span class="msg-dot" aria-hidden="true"></span>'}
     <div class="msg-body"><div class="msg-top"><span class="who">${who}</span><span class="num faint">#${i}</span>
       ${m.name ? `<span class="mname">${esc(m.name)}</span>` : ""}${m.model ? `<span class="faint">${esc(m.model)}</span>` : ""}${time}
       <span class="evs">${sevs.map((s) => `<i style="--c:${sevColor(s)}" title="${s} 证据"></i>`).join("")}</span>
       ${FOLD_OPEN.has(m.k) ? "" : `<button type="button" class="toggle" data-fold="${key}">${folded ? "展开" : "收起"}</button>`}</div>
-      ${blockHTML(t, i, m)}</div></div>`;
+      ${blockHTML(t, i, m)}${trans ? `<div class="msg-zh">${esc(trans)}</div>` : ""}</div></div>`;
 }
 
 function blockHTML(t, mi, m) {
-  if (!m.blocks.length) return `<div class="blk faint">（空）</div>`;
-  return m.blocks
-    .map((b, bi) => {
+  const blocks = m.blocks
+    .map((b, bi) => ({ b, bi }))
+    .filter(({ b }) => {
+      const text = b.x.map((x) => (typeof x === "string" ? x : "")).join("").trim();
+      const bare = text.replace(/^```(?:json)?\s*/i, "").replace(/```$/, "").trim();
+      return bare && !["[]", "{}", "null"].includes(bare);
+    });
+  if (!blocks.length) return "";
+  return blocks
+    .map(({ b, bi }) => {
       const lab = b.l === "think" ? "思考" : b.l && b.l.startsWith("call:") ? `→ ${b.l.slice(5)}` : "";
       const body = pieceHTML(t, mi, bi, b);
       return `${lab ? `<span class="blk-label">${esc(lab)}</span>` : ""}<div class="blk${b.f === "json" ? " is-json" : ""}">${body}</div>`;
@@ -818,17 +852,13 @@ function attrHTML(D) {
     if (!cards.length) return "";
     return `<section class="tgroup"${round != null ? ` id="round-${round}" data-round="${round}"` : ""}><header class="tgroup-head"><span>${title}</span><span class="faint num">${cards.length}</span>${note ? `<span class="faint">${note}</span>` : ""}</header>${cards.map(card).join("")}</section>`;
   };
-  let body = "";
-  A.turns.forEach((t, ti) => {
-    body += group(multi ? `第 ${ti + 1} 轮` : "本轮", t.correct === false ? "判为错误" : t.correct === true ? "判为正确" : "", t.problems, ti);
-  });
+  const current = A.turns[Math.max(0, Math.min(S.round, A.turns.length - 1))];
+  let body = current
+    ? group(multi ? `第 ${S.round + 1} 轮` : "本轮", current.correct === false ? "判为错误" : current.correct === true ? "判为正确" : "", current.problems, S.round)
+    : "";
   body += group("整场会话", "", A.session_problems);
 
-  const sumHTML = A.summary
-    ? `<div class="sum-box${A.summary.length > 130 ? " is-long" : ""}"><p class="summary">${esc(A.summary)}</p>${
-        A.summary.length > 130 ? '<button type="button" class="sum-toggle" data-sum>展开全部</button>' : ""
-      }</div>`
-    : "";
+  const sumHTML = A.summary ? `<div class="sum-box"><p class="summary">${esc(A.summary)}</p></div>` : "";
   return `<div class="attr-head">
       ${sumHTML}
       <div class="sevrow" role="list" aria-label="问题严重度">
@@ -948,13 +978,6 @@ function skillPoints(list, D, at) {
 }
 
 function onOutClick(e) {
-  const sum = e.target.closest("[data-sum]");
-  if (sum) {
-    const box = sum.closest(".sum-box");
-    const open = box.classList.toggle("is-open");
-    sum.textContent = open ? "收起" : "展开全部";
-    return;
-  }
   const at = e.target.closest("[data-at]");
   if (at) {
     selectRound(Number(at.dataset.at));

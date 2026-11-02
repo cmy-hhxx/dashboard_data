@@ -23,7 +23,8 @@ def write_jsonl(path, *rows):
 
 def seed(root):
     """One wencai a_fast session: input + attribution (one P1 problem) + compact."""
-    meta = {"session_id": "s1", "request_time": REQ, "question": "茅台今天收盘价"}
+    meta = {"session_id": "s1", "request_time": REQ, "question": "茅台今天收盘价",
+            "usage": {"input_tokens": 100, "output_tokens": 50}}
     write_jsonl(root / "0_wencai/eval_input/a_fast/2026-11-01.jsonl", {
         "request_time": REQ, "case_id": "c1", "trace_id": "t1", "version": "a", "meta": meta,
         "messages": [
@@ -76,7 +77,11 @@ class BuildTests(unittest.TestCase):
 
             _, data, index = self.build(datasets, static)
             self.assertEqual(data["source"]["pairs"], 1)
-            self.assertEqual(data["products"]["wencai"]["kpi"]["problems"], 1)
+            kpi = data["products"]["wencai"]["kpi"]
+            self.assertEqual(kpi["problems"], 1)
+            self.assertEqual((kpi["unique_sessions"], kpi["traces"], kpi["tokens"]), (1, 1, 150))
+            daily = data["products"]["wencai"]["daily"][0]
+            self.assertEqual((daily["sessions"], daily["traces"], daily["tokens"], daily["sids"]), (1, 1, 150, ["s1"]))
             row = index["products"]["wencai"]["rows"][0]
             self.assertEqual((row["w"], row["n"], row["m"]), ("P1", 1, "a_fast"))
             detail = json.loads((static / "samples" / f"{row['s']}.json").read_text())

@@ -196,10 +196,22 @@ export function segmented(el, onPick) {
   return { set, get: () => value };
 }
 
-export async function getJSON(url) {
-  const res = await fetch(url, { cache: "no-cache" });
-  if (!res.ok) throw new Error(`${url} ${res.status}`);
-  return res.json();
+export async function getJSON(url, { retries = 3 } = {}) {
+  for (let attempt = 0; ; attempt += 1) {
+    let res;
+    try {
+      res = await fetch(url, { cache: "no-cache" });
+    } catch (err) {
+      if (attempt >= retries) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
+      continue;
+    }
+    if (res.ok) return await res.json();
+    // A deploy/build can briefly put the reverse proxy in front of a restarting
+    // server; retry only gateway/server failures, never 4xx.
+    if (res.status < 500 || attempt >= retries) throw new Error(`${url} ${res.status}`);
+    await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
+  }
 }
 
 export function announce(text) {

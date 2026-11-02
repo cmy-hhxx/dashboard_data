@@ -1,11 +1,10 @@
 /* 数据: 会话场 · 数据量 · 评测量 · 归因体系 · 聚类体系 · 预测体系 · 聚类矩阵. Titles only; the layout carries the rest.
    Everything drills in place; this page never opens a sample. */
-import { $, $$, esc, fmt, pct, compact, sum, WORST, SEV_NAME, sevColor, counter, runCounters, bindTips, segmented, REDUCED } from "./core.js";
+import { $, $$, esc, fmt, pct, sum, WORST, SEV_NAME, sevColor, counter, runCounters, bindTips, segmented, REDUCED } from "./core.js";
 import { sunburst } from "./sunburst.js";
 
 let ctx;
 let shown = null;
-const RING = 168;
 const SPLIT_SHORT = { daily: "日常", lost: "流失" };
 const dot = (c) => `<i style="--c:${c}"></i>`;
 
@@ -36,71 +35,118 @@ const stats = (items) => `<div class="stats">${items.map(([l, v]) => `<div><b cl
 const shade = (i, n) =>
   i < Math.ceil(n / 2) ? `color-mix(in oklab, var(--accent) ${i % 2 ? 48 : 100}%, var(--card))` : `color-mix(in oklab, var(--ink) ${i % 2 ? 34 : 70}%, var(--card))`;
 
-/* ---------------------------------------------------------------- rings */
-function arc(r0, r1, a0, a1) {
-  if (a1 - a0 > 2 * Math.PI - 1e-6) return arc(r0, r1, a0, a0 + Math.PI) + arc(r0, r1, a0 + Math.PI, a1);
-  const R = RING / 2;
-  const pt = (r, a) => `${(R + r * Math.sin(a)).toFixed(2)} ${(R - r * Math.cos(a)).toFixed(2)}`;
-  const big = a1 - a0 > Math.PI ? 1 : 0;
-  return `M${pt(r1, a0)}A${r1} ${r1} 0 ${big} 1 ${pt(r1, a1)}L${pt(r0, a1)}A${r0} ${r0} 0 ${big} 0 ${pt(r0, a0)}Z`;
-}
-function arcs(segs, r0, r1) {
-  const total = sum(segs.map((s) => s.v)) || 1;
-  const gap = segs.filter((s) => s.v > 0).length > 1 ? 2.5 / r1 : 0;
-  let a = 0;
-  return segs
-    .map((s) => {
-      const span = (2 * Math.PI * s.v) / total;
-      const a0 = a + gap / 2;
-      const a1 = a + span - gap / 2;
-      a += span;
-      if (!(s.v > 0) || a1 <= a0) return "";
-      return `<path d="${arc(r0, r1, a0, a1)}" style="fill:${s.c}"${s.tip ? ` data-tip="${esc(s.tip)}"` : ""}/>`;
-    })
-    .join("");
-}
-const ring = (paths, num, unit) =>
-  `<div class="ring"><svg viewBox="0 0 ${RING} ${RING}">${paths}</svg><div class="ring-c"><b class="num">${num}</b><small class="num">${unit}</small></div></div>`;
-
 /* ---------------------------------------------------------------- 会话场 */
-const FIELD_BUDGET = 2000;
+const FIELD_ROWS = 16;
+const FIELD_TILE = 13; // 11px tile + 2px gap
+
 function fieldCard(p) {
-  const total = sum(p.field.map((g) => g.cells.length));
-  const k = Math.max(1, Math.ceil(total / FIELD_BUDGET));
-  const dense = k > 1;
-  // Keep one cell per session until the field gets too large; then merge adjacent
-  // same-severity sessions into one cell (heavier sessions still read as one tile).
-  const buckets = (cells) => {
-    const out = [];
-    cells.forEach((c, i) => {
-      const last = out[out.length - 1];
-      if (last && last.sev === c[1] && last.size < k) {
-        last.size += 1;
-        last.n += c[2];
-      } else out.push({ sev: c[1], size: 1, n: c[2], i });
-    });
-    return out;
-  };
   const groups = p.field
-    .map((g, gi) => {
-      const cells = dense ? buckets(g.cells) : g.cells.map((c, i) => ({ sev: c[1], size: 1, n: c[2], i }));
-      return `<div class="fgroup"><div class="fgroup-head"><b>${esc(groupName(p, g))}</b><span class="num">${fmt(g.cells.length)}</span>${
-        g.lost ? `<span class="fgroup-lost"><i></i>流失 ${fmt(g.lost)}</span>` : ""
-      }</div>
-      <div class="tiles">${cells.map((b, i) => `<span style="--c:${sevColor(b.sev)};--i:${Math.min(i, 400)}" data-cell="${gi}:${b.i}" data-w="${b.sev}"${dense ? ` data-k="${b.size}" data-p="${b.n}"` : ""}></span>`).join("")}</div></div>`;
-    })
+    .map((g, gi) => `<div class="fgroup" data-g="${gi}"><div class="fgroup-head"><b>${esc(groupName(p, g))}</b><span class="num">${fmt(g.cells.length)}</span>${
+      g.lost ? `<span class="fgroup-lost"><i></i>流失 ${fmt(g.lost)}</span>` : ""
+    }</div><div class="tiles"></div><div class="pager field-pager" data-pager="${gi}" hidden></div></div>`)
     .join("");
   const legend = `<div class="legend end" id="fieldLegend">${WORST.map(
     (w, i) => `<button type="button" style="--c:${sevColor(i)}" data-w="${i}" aria-pressed="false"><i></i>${SEV_NAME[w]}<b class="num">${fmt(p.worst[w])}</b></button>`,
   ).join("")}</div>`;
-  const note = dense ? `<span class="meta" title="会话过多时，相邻且同为最严重等级的会话合并为一格">每格 ≤ ${k} 场</span>` : "";
-  return card(12, "会话场", `<div class="field is-intro${dense ? " is-dense" : ""}" id="field"><div class="field-groups">${groups}</div></div>`, `${note}${legend}`);
+  return card(12, "会话场", `<div class="field is-intro" id="field"><div class="field-groups">${groups}</div></div>`, legend);
+}
+
+/* One tile per evaluation record. Each model/split group has its own pager. Pages
+   are filled to the measured capacity, and each severity is spread across the
+   pages in proportion so a full page keeps the same mix as the group. */
+function dealFieldPages(cells, capacity) {
+  const total = cells.length;
+  const count = Math.max(1, Math.ceil(total / capacity));
+  const counts = Array.from({ length: count }, (_, p) => Math.min(capacity, total - p * capacity));
+  const buckets = WORST.map(() => []);
+  cells.forEach((c, i) => buckets[c[1]].push({ c, i }));
+  const rem = buckets.map((b) => b.length);
+  const alloc = counts.map(() => Array(WORST.length).fill(0));
+  for (let p = 0; p < count; p++) {
+    if (p === count - 1) {
+      alloc[p] = rem.slice();
+      continue;
+    }
+    const need = counts[p];
+    const totalRem = sum(rem);
+    const quotas = rem.map((n) => (need * n) / totalRem);
+    const base = quotas.map(Math.floor);
+    let left = need - sum(base);
+    const order = quotas.map((q, s) => ({ s, f: q - base[s] })).sort((a, b) => b.f - a.f);
+    while (left > 0) {
+      let moved = false;
+      for (const { s } of order) {
+        if (left <= 0) break;
+        if (base[s] < rem[s]) {
+          base[s] += 1;
+          left -= 1;
+          moved = true;
+        }
+      }
+      if (!moved) break;
+    }
+    alloc[p] = base;
+    base.forEach((n, s) => (rem[s] -= n));
+  }
+  const pages = counts.map(() => []);
+  buckets.forEach((bucket, s) => {
+    let offset = 0;
+    for (let p = 0; p < count; p++) {
+      const n = alloc[p][s];
+      pages[p].push(...bucket.slice(offset, offset + n));
+      offset += n;
+    }
+  });
+  return { pages, counts };
+}
+
+function paintField(field, p, filter) {
+  const groups = $$(".fgroup", field);
+  if (!groups.length) return;
+  const groupsEl = $(".field-groups", field);
+  const cols = Math.max(1, getComputedStyle(groupsEl).gridTemplateColumns.split(" ").filter(Boolean).length);
+  const groupRows = Math.ceil(p.field.length / cols);
+  const rows = Math.max(1, Math.floor(FIELD_ROWS / groupRows));
+  field._page = field._page || [];
+  p.field.forEach((g, gi) => {
+    const group = groups[gi];
+    const tiles = $(".tiles", group);
+    const pager = $(".field-pager", group);
+    if (!tiles) return;
+    const perRow = Math.max(1, Math.floor((tiles.clientWidth + 2) / FIELD_TILE));
+    const capacity = Math.max(1, perRow * rows);
+    const dealt = dealFieldPages(g.cells, capacity);
+    const pages = dealt.pages.length;
+    const cur = Math.min(Math.max(1, field._page[gi] || 1), pages);
+    field._page[gi] = cur;
+    tiles.style.minHeight = `${Math.max(0, rows * FIELD_TILE - 2)}px`;
+    tiles.innerHTML = dealt.pages[cur - 1]
+      .map(({ c, i }, k) => `<span style="--c:${sevColor(c[1])};--i:${Math.min(k, 240)}" data-cell="${gi}:${i}" data-w="${c[1]}"></span>`)
+      .join("");
+    if (!pager) return;
+    pager.hidden = pages <= 1;
+    pager.dataset.page = String(cur);
+    pager.dataset.pages = String(pages);
+    if (pages > 1) {
+      const btn = (key, label, off) => `<button type="button" data-page="${key}"${off ? " disabled" : ""}>${label}</button>`;
+      pager.innerHTML = `${btn("prev", "上一页", cur === 1)}
+        <span class="pager-info">第 <b class="num">${cur}</b> / ${pages} 页 · ${fmt(g.cells.length)} 条</span>
+        ${btn("next", "下一页", cur === pages)}`;
+    }
+  });
+  field.classList.toggle("is-filtered", !!filter);
+  $$(".tiles span", field).forEach((t) => t.classList.toggle("on", !!filter && t.dataset.w === filter));
 }
 
 /* ---------------------------------------------------------------- 数据量: version → task → subtask */
 function volumeCard(p) {
   const k = p.kpi;
-  return card(6, "数据量", `<div class="duo" id="vol"></div>${stats([["轨迹", counter(k.traces)], ["消息", counter(k.messages)], ["工具调用", counter(k.tool_calls)], ["Tokens", compact(k.tokens)]])}`);
+  return card(6, "数据量", `<div class="duo" id="vol"></div>${stats([
+    ["会话", counter(k.unique_sessions ?? k.sessions)],
+    ["轨迹", counter(k.traces)],
+    ["工具调用", counter(k.tool_calls)],
+    ["总 Tokens", tokenNum(k.tokens)],
+  ])}`);
 }
 function volTree(p) {
   return {
@@ -118,42 +164,144 @@ function volTree(p) {
   };
 }
 
-/* ---------------------------------------------------------------- 评测量: how many were evaluated each day */
+/* ---------------------------------------------------------------- 评测量: inputs vs completed per day */
 const dayCount = (d) => Object.entries(d).reduce((n, [k, v]) => (k === "d" ? n : n + (v || 0)), 0);
+const DAY_MS = 86400000;
+const dayMs = (d) => Date.parse(`${d}T00:00:00Z`);
+const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
+const EV_PER_ROW = 15;
+const RANGE_LABEL = { 7: "近 7 天", 30: "近 30 天", all: "全部" };
+const EV = { range: "30", model: "all" };
+
+function evalRows(p) {
+  if (Array.isArray(p.daily) && p.daily.length) return p.daily;
+  // Fallback for a payload built before daily input counts existed.
+  return (p.dates || []).map((d) => {
+    const n = dayCount(d);
+    return { d: d.d, m: "all", sp: "", inputs: n, evaluated: n };
+  });
+}
+
+function evalModels(p) {
+  const labels = new Map(p.models.map((m) => [m.id, m.label]));
+  const present = [...new Set(evalRows(p).map((r) => r.m).filter(Boolean))];
+  const ids = p.models.map((m) => m.id).filter((id) => present.includes(id));
+  const extra = present.filter((id) => id !== "all" && !ids.includes(id));
+  return [{ id: "all", label: "全部" }, ...ids.map((id) => ({ id, label: labels.get(id) || id })),
+    ...extra.map((id) => ({ id, label: id }))];
+}
+
+function evalWindow(p) {
+  const byDay = new Map();
+  const blank = () => ({ inputs: 0, evaluated: 0, traces: 0, tokens: 0, sessions: 0, sids: new Set() });
+  evalRows(p)
+    .filter((r) => EV.model === "all" || r.m === EV.model)
+    .forEach((r) => {
+      const x = byDay.get(r.d) || blank();
+      x.inputs += r.inputs || 0;
+      x.evaluated += r.evaluated || 0;
+      x.traces += r.traces ?? r.evaluated ?? 0;
+      x.tokens += r.tokens || 0;
+      if (Array.isArray(r.sids)) r.sids.forEach((sid) => x.sids.add(`${r.sp}|${r.m}|${sid}`));
+      else x.sessions += r.sessions || r.evaluated || 0;
+      byDay.set(r.d, x);
+    });
+  const dates = [...byDay.keys()].sort();
+  if (!dates.length) return { days: [], totalInputs: 0, totalEval: 0, totalSessions: 0, totalTraces: 0, totalTokens: 0, peakEval: 0 };
+  const end = dayMs(dates[dates.length - 1]);
+  const start = EV.range === "all" ? dayMs(dates[0]) : end - (Number(EV.range) - 1) * DAY_MS;
+  const days = [];
+  for (let t = start; t <= end; t += DAY_MS) {
+    const d = isoDay(t);
+    days.push({ d, ...(byDay.get(d) || blank()) });
+  }
+  const sessions = new Set(days.flatMap((x) => [...x.sids]));
+  return {
+    days,
+    totalInputs: sum(days.map((x) => x.inputs)),
+    totalEval: sum(days.map((x) => x.evaluated)),
+    totalSessions: sessions.size || sum(days.map((x) => x.sessions)),
+    totalTraces: sum(days.map((x) => x.traces)),
+    totalTokens: sum(days.map((x) => x.tokens)),
+    peakEval: Math.max(0, ...days.map((x) => x.evaluated)),
+  };
+}
+
+function evalBuckets(days) {
+  if (EV.range !== "all") {
+    return days.map((x) => ({ ...x, label: x.d.slice(5), tip: x.d }));
+  }
+  // The full history gets at most 12 buckets, keeping the card height fixed.
+  const size = Math.max(1, Math.ceil(days.length / 12));
+  const out = [];
+  for (let i = 0; i < days.length; i += size) {
+    const chunk = days.slice(i, i + size);
+    const start = chunk[0].d.slice(5);
+    const end = chunk[chunk.length - 1].d.slice(5);
+    out.push({
+      d: chunk[0].d,
+      inputs: sum(chunk.map((x) => x.inputs)),
+      evaluated: sum(chunk.map((x) => x.evaluated)),
+      label: start,
+      tip: `${start}–${end}`,
+    });
+  }
+  return out;
+}
+
+const barNum = (v) => (v >= 1000 ? `${fmt(v / 1000, v >= 10000 ? 0 : 1)}k` : fmt(v));
+const tokenNum = (v) => {
+  const n = Number(v) || 0;
+  const [base, unit, digits] = n >= 1e9 ? [1e9, "B", 2] : n >= 1e6 ? [1e6, "M", 1] : n >= 1e3 ? [1e3, "K", 1] : [];
+  return base ? fmt(n / base, digits).replace(/\.0+$/, "") + unit : fmt(n);
+};
+
+function evalChart(p) {
+  const bars = evalBuckets(evalWindow(p).days);
+  if (!bars.length) return `<div class="empty">暂无评测日期</div>`;
+  const max = Math.max(1, ...bars.map((x) => Math.max(x.inputs, x.evaluated)));
+  const rows = [];
+  for (let i = 0; i < bars.length; i += EV_PER_ROW) rows.push(bars.slice(i, i + EV_PER_ROW));
+  const barH = rows.length === 1 ? 160 : 52;
+  return `<div class="evrows" style="--bar-h:${barH}px">${rows
+    .map((row) => `<div class="evrow" style="--n:${row.length}">${row
+      .map((x) => {
+        const total = Math.max(x.inputs, x.evaluated, 1);
+        const height = Math.max(3, (barH * total) / max);
+        const done = x.evaluated ? Math.min(100, (100 * x.evaluated) / Math.max(x.inputs, x.evaluated)) : 0;
+        const tip = `${x.tip || x.d}|输入 ${fmt(x.inputs)} · 已完成 ${fmt(x.evaluated)} · ${pct(x.evaluated, x.inputs, 1)}`;
+        return `<div class="evday"><div class="evnums"><b class="num">${barNum(x.evaluated)}</b><small class="num">${barNum(x.inputs)}</small></div>
+          <div class="evbar" style="height:${height}px" data-tip="${esc(tip)}"><i style="height:${done}%"></i></div>
+          <small class="evdate num">${esc(x.label)}</small></div>`;
+      })
+      .join("")}</div>`)
+    .join("")}</div>`;
+}
+
+function evalStats(p) {
+  const w = evalWindow(p);
+  return stats([
+    ["完成 Session", counter(w.totalSessions)],
+    ["完成 Trace", counter(w.totalTraces)],
+    ["评测 Tokens", tokenNum(w.totalTokens)],
+  ]);
+}
 
 function evalCard(p) {
-  const k = p.kpi;
-  const inputs = Math.max(k.inputs || 0, k.sessions);
-  const paths = arcs(
-    [{ v: k.sessions, c: "var(--accent)", tip: `已评测|${fmt(k.sessions)}` }, { v: inputs - k.sessions, c: "var(--t4)", tip: `待评测|${fmt(inputs - k.sessions)}` }],
-    RING / 2 - 18, RING / 2,
-  );
-  const max = Math.max(...p.field.map((g) => g.cells.length), 1);
-  const rows = p.field
-    .map((g) => {
-      const n = g.cells.length;
-      const name = groupName(p, g);
-      return `<div class="li vrow" data-tip="${esc(name)} · 已评测|${fmt(n)} 条 · ${pct(n, k.sessions)}"><span>${esc(name)}</span><span class="vbar"><i style="width:${(100 * n) / max}%"></i></span><b class="num">${fmt(n)}</b><em class="num">${pct(n, k.sessions)}</em></div>`;
-    })
-    .join("");
-  const days = (p.dates || []).map((d) => ({ d: d.d, n: dayCount(d) })).filter((d) => d.n);
-  const peak = Math.max(...days.map((d) => d.n), 1);
-  const total = sum(days.map((d) => d.n));
-  const avg = days.length ? total / days.length : 0;
-  const chart =
-    days.length === 1
-      ? `<div class="evsingle"><i></i><span class="num">${esc(days[0].d)}</span><b class="num">${fmt(days[0].n)}</b><small>条</small></div>`
-      : days.length
-        ? `<div class="evdays" style="--n:${days.length}">${days
-            .map(
-              (x) => `<div class="evday"><b class="num">${fmt(x.n)}</b><span style="height:${Math.max(3, (52 * x.n) / peak)}px" data-tip="${esc(x.d)}|${fmt(x.n)} 条"></span>
-        <small class="num">${esc(x.d.slice(5))}</small></div>`,
-            )
-            .join("")}</div>`
-        : "";
-  return card(6, "评测量", `<div class="eval-content"><div class="duo eval-summary">${ring(paths, pct(k.sessions, inputs, 1), `${fmt(k.sessions)} / ${fmt(inputs)}`)}<div class="list">${rows}</div></div>
-    ${chart}
-    ${stats([["评测总量", counter(k.sessions)], ["评测天数", counter(days.length)], ["日均", counter(avg, { d: avg % 1 ? 1 : 0 })], ["单日峰值", counter(days.length ? peak : 0)]])}</div>`);
+  const models = evalModels(p);
+  if (!models.some((m) => m.id === EV.model)) EV.model = "all";
+  return card(6, "评测量", `<div class="eval-content">
+    <div class="ev-tools">
+      <div class="seg ev-range" id="evRange"><span class="seg-knob" aria-hidden="true"></span>
+        ${["7", "30", "all"].map((v) => `<button type="button" data-value="${v}">${RANGE_LABEL[v]}</button>`).join("")}
+      </div>
+      <div class="seg ev-model" id="evModel"><span class="seg-knob" aria-hidden="true"></span>
+        ${models.map((m) => `<button type="button" data-value="${esc(m.id)}">${esc(m.label)}</button>`).join("")}
+      </div>
+    </div>
+    <div class="ev-legend"><span><i class="ev-done"></i>已完成</span><span><i class="ev-in"></i>评测输入</span></div>
+    <div id="evChart">${evalChart(p)}</div>
+    <div id="evStats">${evalStats(p)}</div></div>`);
 }
 
 /* ---------------------------------------------------------------- 归因体系: version → component role */
@@ -478,7 +626,7 @@ function matrixView(p, rows, cols) {
   return { rows, cols, cells };
 }
 
-function matrixTable(view) {
+function matrixTable(view, animate = false) {
   const { rows, cols, cells } = view;
   if (!rows.length || !cols.length) return `<div class="empty">暂无聚类数据</div>`;
   let max = 1, maxTot = 1;
@@ -493,7 +641,7 @@ function matrixTable(view) {
         ? `<button type="button" class="mh" data-col="${ci}" title="${esc(title)}" aria-label="下钻 ${esc(c.name)}">${label}<i class="mx-caret" aria-hidden="true"></i></button>`
         : `<span class="mh" title="${esc(title)}">${label}</span>`;
     })
-    .join("")}<span></span>`;
+    .join("")}<span class="rowtot-head" title="该场景在各问题聚类上的问题数合计">问题合计</span>`;
   rows.forEach((r, ri) => {
     const drill = r.children.length;
     const label = `<span class="mx-lab">${esc(r.name)}</span>${drill ? `<i class="mx-caret" aria-hidden="true"></i>` : ""}`;
@@ -509,7 +657,7 @@ function matrixTable(view) {
     });
     html += `<span class="rowtot num"><i style="width:${(72 * totals[ri]) / maxTot}px"></i>${fmt(totals[ri])}</span>`;
   });
-  return `<div class="matrix" style="--cols:${cols.length}">${html}</div>`;
+  return `<div class="matrix${animate ? " is-enter" : ""}" style="--cols:${cols.length}">${html}</div>`;
 }
 
 function crumbPath(path, axis) {
@@ -546,6 +694,8 @@ function matrixCard(p, tax) {
 /* ---------------------------------------------------------------- interaction */
 function wire(bento, p, tax) {
   const field = $("#field", bento);
+  let fieldFilter = null;
+  paintField(field, p, null);
   setTimeout(() => field.classList.remove("is-intro"), REDUCED ? 0 : 1600);
   const legend = $("#fieldLegend", bento);
   legend.addEventListener("click", (e) => {
@@ -553,13 +703,49 @@ function wire(bento, p, tax) {
     if (!b) return;
     const on = b.getAttribute("aria-pressed") !== "true";
     $$("button", legend).forEach((x) => x.setAttribute("aria-pressed", String(on && x === b)));
+    fieldFilter = on ? b.dataset.w : null;
     field.classList.toggle("is-filtered", on);
     $$(".tiles span", field).forEach((t) => t.classList.toggle("on", on && t.dataset.w === b.dataset.w));
   });
+  field.addEventListener("click", (e) => {
+    const b = e.target.closest(".field-pager button[data-page]");
+    if (!b) return;
+    const pager = b.closest(".field-pager");
+    const gi = Number(pager.dataset.pager);
+    const cur = Number(pager.dataset.page);
+    const pages = Number(pager.dataset.pages);
+    const key = b.dataset.page;
+    field._page[gi] = key === "prev" ? Math.max(1, cur - 1) : Math.min(pages, cur + 1);
+    paintField(field, p, fieldFilter);
+  });
+  if (window.ResizeObserver) {
+    let fieldW = field.clientWidth;
+    new ResizeObserver(() => {
+      if (Math.abs(field.clientWidth - fieldW) < 2) return;
+      fieldW = field.clientWidth;
+      field._page = [];
+      paintField(field, p, fieldFilter);
+    }).observe(field);
+  }
   const tabs = $("#predTab", bento);
   if (tabs) {
     const seg = segmented(tabs, (v) => $$(".pred-pane", bento).forEach((x) => x.classList.toggle("is-on", x.dataset.pane === v)));
     seg.set("vol", { silent: true });
+  }
+
+  const evRange = $("#evRange", bento);
+  const evModel = $("#evModel", bento);
+  if (evRange && evModel) {
+    const repaint = () => {
+      $("#evChart", bento).innerHTML = evalChart(p);
+      const s = $("#evStats", bento);
+      s.innerHTML = evalStats(p);
+      runCounters(s);
+    };
+    const range = segmented(evRange, (v) => { EV.range = v; repaint(); });
+    const model = segmented(evModel, (v) => { EV.model = v; repaint(); });
+    range.set(EV.range, { silent: true });
+    model.set(EV.model, { silent: true });
   }
 
   // Matrix: two axes walk their own trees and the whole table is redrawn in place.
@@ -575,7 +761,7 @@ function wire(bento, p, tax) {
     const syncTrail = () => {
       trail = [...Array(rowPath.length - 1).fill("r"), ...Array(colPath.length - 1).fill("c")];
     };
-    const paint = () => {
+    const paint = (animate = true) => {
       const rowNode = rowPath[rowPath.length - 1];
       const colNode = colPath[colPath.length - 1];
       const view = matrixView(p, rowNode.children || [], colNode.children || []);
@@ -592,13 +778,13 @@ function wire(bento, p, tax) {
         view.cells = cells;
       }
       mxView = view;
-      shell.innerHTML = matrixTable(mxView);
+      shell.innerHTML = matrixTable(mxView, animate);
       const crumbsEl = $("#mxCrumbs", bento);
       if (crumbsEl) crumbsEl.innerHTML = crumbs(rowPath, colPath);
       const back = $("#mxBack", bento);
       if (back) back.hidden = rowPath.length === 1 && colPath.length === 1;
     };
-    paint();
+    paint(false);
     bento.addEventListener("click", (e) => {
       const back = e.target.closest("#mxBack");
       if (back) {
@@ -646,7 +832,7 @@ function wire(bento, p, tax) {
     });
   }
 
-  sunburst($("#vol", bento), volTree(p), { unit: "会话" });
+  sunburst($("#vol", bento), volTree(p), { unit: "评测记录" });
   if (tax) sunburst($("#clu", bento), cluTree(p, tax), { unit: "问题" });
 
   $$(".sankey", bento).forEach((sk) => {
@@ -681,13 +867,8 @@ function wire(bento, p, tax) {
     if (!t.dataset.cell) return null;
     const [g, i] = t.dataset.cell.split(":").map(Number);
     const c = p.field[g].cells[i];
-    const bucketed = t.dataset.k != null;
-    const size = Number(t.dataset.k) || 1;
-    const probs = Number(t.dataset.p) || c[2];
-    return `<div style="font-weight:var(--w-medium);margin-bottom:4px">${bucketed ? `<span class="faint">示例</span> ` : ""}${esc(c[3])}</div>
+    return `<div style="font-weight:var(--w-medium);margin-bottom:4px">${esc(c[3])}</div>
       <div class="t-row"><span class="sev" style="--c:${sevColor(c[1])}"><i></i>${SEV_NAME[WORST[c[1]]]}</span>
-      <span>${esc(groupName(p, p.field[g]))}</span>${c[4] ? `<span class="dim">流失用户</span>` : ""}<b class="num" style="margin-left:auto">${
-        bucketed ? `${fmt(size)} 个会话 · ${fmt(probs)} 个问题` : `${c[2]} 个问题`
-      }</b></div>`;
+      <span>${esc(groupName(p, p.field[g]))}</span>${c[4] ? `<span class="dim">流失用户</span>` : ""}<b class="num" style="margin-left:auto">${c[2]} 个问题</b></div>`;
   });
 }

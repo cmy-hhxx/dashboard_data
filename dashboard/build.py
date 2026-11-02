@@ -53,6 +53,11 @@ def default_datasets():
 SEVERITIES = ["P0", "P1", "P2", "P3", "P4"]
 WORST_KEYS = SEVERITIES + ["none"]
 
+# Only fields the recall list and its filters/search actually read. Keeping the
+# index lean matters more than the full aggregate row: it is fetched by every
+# 具体数据 view and can be several MB.
+INDEX_FIELDS = ("s", "q", "m", "sp", "d", "sid", "tid", "w", "n", "tr", "pt", "st", "lb", "case", "task", "skill")
+
 PRODUCTS = {
     "wencai": {"label": "问财", "models": ["a_fast", "a_expert", "b_fast", "b_expert"]},
     "aime": {"label": "AIME", "models": ["aime_fast", "aime_expert"]},
@@ -89,6 +94,7 @@ OUTPUT_FILE = re.compile(
     r"(?P=model)_attribution-(?P<date>\d{4}-\d{2}-\d{2})\.jsonl$"
 )
 CJK = re.compile(r"[㐀-鿿]")
+DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 
 # Characters kept per text block before trimming to the head plus evidence windows.
 BLOCK_LIMIT = {
@@ -330,6 +336,71 @@ def input_total(datasets: Path, top: Path, product: str, cache: LineCache, count
         if rel not in live:
             counts.pop(rel)
     return total
+
+
+def daily_inputs(datasets: Path, top: Path, product: str, cache: LineCache, counts: dict):
+    """Input record counts by (date, model, split), using the same files as input_total."""
+    out = Counter()
+
+    def add(path: Path, split: str):
+        match = DATE_RE.search(path.name)
+        if not match:
+            return
+        rel = path.relative_to(datasets).as_posix()
+        if rel in cache._offsets:
+            n = cache.count(rel)
+        else:
+            entry = counts.get(rel)
+            try:
+                stat = path.stat()
+            except OSError:
+                return
+            if entry and entry.get("size") == stat.st_size and entry.get("mtime_ns") == stat.st_mtime_ns:
+                n = entry["lines"]
+            else:
+                n = count_records(path)
+                counts[rel] = {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns, "lines": n}
+        out[(match.group(1), path.parent.name, split)] += n
+
+    for path in (top / "eval_input").rglob("*.jsonl"):
+        if "1_lost_user_eval" in path.parts:
+            continue
+        add(path, "daily")
+    if product == "aime":
+        for path in (top / ".archive" / "1_lost_user_input").rglob("*.jsonl"):
+            add(path, "lost")
+    return out
+
+
+def daily_payload(samples, inputs):
+    """Per-day input volume plus the evaluated session/trace/token totals.
+
+    ``sids`` is carried alongside the count so the eval card can union sessions
+    across a selected window instead of adding per-day distinct counts.
+    """
+    evaluated = Counter()
+    traces = Counter()
+    tokens = Counter()
+    sids = defaultdict(set)
+    for slug, _, row, facts in samples:
+        key = (row["d"], row["m"], row["sp"])
+        evaluated[key] += 1
+        traces[key] += row["tr"]
+        tokens[key] += facts["tokens"]
+        sids[key].add(row["sid"] or slug)
+    keys = set(inputs) | set(evaluated)
+    return [
+        {
+            "d": d, "m": m, "sp": sp,
+            "inputs": inputs.get((d, m, sp), 0),
+            "evaluated": evaluated.get((d, m, sp), 0),
+            "sessions": len(sids.get((d, m, sp), ())),
+            "traces": traces.get((d, m, sp), 0),
+            "tokens": tokens.get((d, m, sp), 0),
+            "sids": sorted(sids.get((d, m, sp), ())),
+        }
+        for d, m, sp in sorted(keys)
+    ]
 
 
 def pairs_from_csv(root: Path, cache: LineCache):
@@ -1262,10 +1333,12 @@ def aggregate(product, samples, taxonomy):
                 "tree": task_tree(group),
             })
 
+    unique_sessions = len({(s[2]["sp"], s[2]["m"], s[2]["sid"] or s[0]) for s in samples})
     out = {
         "label": PRODUCTS[product]["label"],
         "kpi": {
-            "sessions": total, "problems": len(problems_all), "flagged": total - worst["none"], "clean": worst["none"],
+            "sessions": total, "unique_sessions": unique_sessions,
+            "problems": len(problems_all), "flagged": total - worst["none"], "clean": worst["none"],
             "substantive": sum(severity[s] for s in SEVERITIES[:4]), "hints": severity["P4"],
             "evidence": evidence_n, "located": located,
             "clustered": clustered, "unclustered": len(problems_all) - clustered,
@@ -1529,6 +1602,7 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print):
         if product not in products:
             continue
         products[product]["kpi"]["inputs"] = input_total(datasets, top, product, cache, counts)
+        products[product]["daily"] = daily_payload(samples[product], daily_inputs(datasets, top, product, cache, counts))
         feed = top / "prediction.json"
         if feed.is_file():
             try:
@@ -1551,7 +1625,7 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print):
             "label": PRODUCTS[product]["label"],
             "models": [{"id": m["id"], "label": m["label"]} for m in products[product]["models"]],
             "splits": products[product]["splits"],
-            "rows": [s[2] for s in rows_sorted],
+            "rows": [{k: s[2][k] for k in INDEX_FIELDS if k in s[2]} for s in rows_sorted],
         }
     save_counts(out_dir.parent / "cache" / "input_counts.json", counts)
     stats["seconds"] = round(time.time() - started, 1)

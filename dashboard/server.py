@@ -65,6 +65,10 @@ def scheduler(delay):
         time.sleep(REFRESH)
 
 class Handler(SimpleHTTPRequestHandler):
+    # HTTP/1.1 keeps the connection alive for the many sample-detail requests
+    # opened when a multi-trace session is selected.
+    protocol_version = "HTTP/1.1"
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=STATIC, **kwargs)
 
