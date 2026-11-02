@@ -1,0 +1,1773 @@
+{
+ "kind": "intent",
+ "version": "2026-10",
+ "status": "current",
+ "released_at": "2026-10-31T16:00:00Z",
+ "source": "derived from turns[].meta.task / subtask, 32 attribution files, 2026-10-10..2026-10-27",
+ "nodes": [
+  {
+   "code": "T01",
+   "label": "事件解读",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T01.S01",
+   "label": "财报与业绩发布解读",
+   "parent_code": "T01",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T01.S02",
+   "label": "行情事件解读",
+   "parent_code": "T01",
+   "level": 2,
+   "order": 2,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T01.S03",
+   "label": "公司经营与资本运作消息解读",
+   "parent_code": "T01",
+   "level": 2,
+   "order": 3,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T01.S04",
+   "label": "产业与突发公共事件解读",
+   "parent_code": "T01",
+   "level": 2,
+   "order": 4,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T01.S05",
+   "label": "货币财政重大事件解读",
+   "parent_code": "T01",
+   "level": 2,
+   "order": 5,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T01.S06",
+   "label": "其他事件解读",
+   "parent_code": "T01",
+   "level": 2,
+   "order": 6,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T01.S07",
+   "label": "行业政策与监管消息解读",
+   "parent_code": "T01",
+   "level": 2,
+   "order": 7,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T01.S08",
+   "label": "经济统计发布解读",
+   "parent_code": "T01",
+   "level": 2,
+   "order": 8,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T01.S09",
+   "label": "分红回购与股东回报事件解读",
+   "parent_code": "T01",
+   "level": 2,
+   "order": 9,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T02",
+   "label": "交易建议",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T02.S01",
+   "label": "入场与加仓时机建议",
+   "parent_code": "T02",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T02.S02",
+   "label": "持有减仓与退出建议",
+   "parent_code": "T02",
+   "level": 2,
+   "order": 2,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T02.S03",
+   "label": "止盈止损与失效条件制定",
+   "parent_code": "T02",
+   "level": 2,
+   "order": 3,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T02.S04",
+   "label": "投资适当性建议",
+   "parent_code": "T02",
+   "level": 2,
+   "order": 4,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T02.S05",
+   "label": "标的仓位与风险预算建议",
+   "parent_code": "T02",
+   "level": 2,
+   "order": 5,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T02.S06",
+   "label": "分批交易与仓位节奏建议",
+   "parent_code": "T02",
+   "level": 2,
+   "order": 6,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T03",
+   "label": "诊断分析类",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T03.S01",
+   "label": "个股多维综合诊断",
+   "parent_code": "T03",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T03.S02",
+   "label": "对比分析",
+   "parent_code": "T03",
+   "level": 2,
+   "order": 2,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T03.S03",
+   "label": "估值合理性与安全边际分析",
+   "parent_code": "T03",
+   "level": 2,
+   "order": 3,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T03.S04",
+   "label": "趋势与量价状态分析",
+   "parent_code": "T03",
+   "level": 2,
+   "order": 4,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T03.S05",
+   "label": "大盘行业与资产综合研判",
+   "parent_code": "T03",
+   "level": 2,
+   "order": 5,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T03.S06",
+   "label": "支撑阻力与关键位置分析",
+   "parent_code": "T03",
+   "level": 2,
+   "order": 6,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T03.S07",
+   "label": "业务模式与增长驱动分析",
+   "parent_code": "T03",
+   "level": 2,
+   "order": 7,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T03.S08",
+   "label": "财务质量与偿债风险分析",
+   "parent_code": "T03",
+   "level": 2,
+   "order": 8,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T03.S09",
+   "label": "盈利结构与业务驱动分析",
+   "parent_code": "T03",
+   "level": 2,
+   "order": 9,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T03.S10",
+   "label": "行业供需与竞争格局分析",
+   "parent_code": "T03",
+   "level": 2,
+   "order": 10,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T03.S11",
+   "label": "技术指标组合解读",
+   "parent_code": "T03",
+   "level": 2,
+   "order": 11,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T03.S12",
+   "label": "资金主体与流向分析",
+   "parent_code": "T03",
+   "level": 2,
+   "order": 12,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T03.S13",
+   "label": "技术形态成立与阶段判定",
+   "parent_code": "T03",
+   "level": 2,
+   "order": 13,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T03.S14",
+   "label": "资讯舆情与预期分歧分析",
+   "parent_code": "T03",
+   "level": 2,
+   "order": 14,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T03.S15",
+   "label": "市场与板块情绪分析",
+   "parent_code": "T03",
+   "level": 2,
+   "order": 15,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T03.S16",
+   "label": "股东与筹码结构分析",
+   "parent_code": "T03",
+   "level": 2,
+   "order": 16,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T03.S17",
+   "label": "宏观状态与经济周期分析",
+   "parent_code": "T03",
+   "level": 2,
+   "order": 17,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T03.S18",
+   "label": "业绩分析",
+   "parent_code": "T03",
+   "level": 2,
+   "order": 18,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T03.S19",
+   "label": "市场与板块资金联动分析",
+   "parent_code": "T03",
+   "level": 2,
+   "order": 19,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T04",
+   "label": "预测推演类",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T04.S01",
+   "label": "方向与趋势预测",
+   "parent_code": "T04",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T04.S02",
+   "label": "绝对水平预测",
+   "parent_code": "T04",
+   "level": 2,
+   "order": 2,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T04.S03",
+   "label": "事件发生与结果预测",
+   "parent_code": "T04",
+   "level": 2,
+   "order": 3,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T04.S04",
+   "label": "影响与传导预测",
+   "parent_code": "T04",
+   "level": 2,
+   "order": 4,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T04.S05",
+   "label": "相对比较与排名预测",
+   "parent_code": "T04",
+   "level": 2,
+   "order": 5,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T04.S06",
+   "label": "路径与轨迹预测",
+   "parent_code": "T04",
+   "level": 2,
+   "order": 6,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T04.S07",
+   "label": "发生时间与持续期预测",
+   "parent_code": "T04",
+   "level": 2,
+   "order": 7,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T04.S08",
+   "label": "相对变化与收益预测",
+   "parent_code": "T04",
+   "level": 2,
+   "order": 8,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T04.S09",
+   "label": "状态、阶段与等级预测",
+   "parent_code": "T04",
+   "level": 2,
+   "order": 9,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T04.S10",
+   "label": "形态与结构预测",
+   "parent_code": "T04",
+   "level": 2,
+   "order": 10,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T04.S11",
+   "label": "其他预测类",
+   "parent_code": "T04",
+   "level": 2,
+   "order": 11,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T05",
+   "label": "确定性标的筛选",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T05.S01",
+   "label": "明确字段与属性条件筛选",
+   "parent_code": "T05",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T05.S02",
+   "label": "集合与成分关系组合筛选",
+   "parent_code": "T05",
+   "level": 2,
+   "order": 2,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T05.S03",
+   "label": "排名与TopN筛选",
+   "parent_code": "T05",
+   "level": 2,
+   "order": 3,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T05.S04",
+   "label": "时序与跨周期条件筛选",
+   "parent_code": "T05",
+   "level": 2,
+   "order": 4,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T05.S05",
+   "label": "规则形式化后的复杂条件筛选",
+   "parent_code": "T05",
+   "level": 2,
+   "order": 5,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T06",
+   "label": "数据查询类",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T06.S01",
+   "label": "时点行情查询",
+   "parent_code": "T06",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T06.S02",
+   "label": "其他及综合结构化数据查询",
+   "parent_code": "T06",
+   "level": 2,
+   "order": 2,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T06.S03",
+   "label": "财务指标与报表字段查询",
+   "parent_code": "T06",
+   "level": 2,
+   "order": 3,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T06.S04",
+   "label": "历史区间行情查询",
+   "parent_code": "T06",
+   "level": 2,
+   "order": 4,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T06.S05",
+   "label": "技术指标数值查询",
+   "parent_code": "T06",
+   "level": 2,
+   "order": 5,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T06.S06",
+   "label": "业务客户与产能事实查询",
+   "parent_code": "T06",
+   "level": 2,
+   "order": 6,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T06.S07",
+   "label": "已有技术形态与信号查询",
+   "parent_code": "T06",
+   "level": 2,
+   "order": 7,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T06.S08",
+   "label": "产品身份与关联关系查询",
+   "parent_code": "T06",
+   "level": 2,
+   "order": 8,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T06.S09",
+   "label": "分红方案与权益日期查询",
+   "parent_code": "T06",
+   "level": 2,
+   "order": 9,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T06.S10",
+   "label": "资金流向查询",
+   "parent_code": "T06",
+   "level": 2,
+   "order": 10,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T06.S11",
+   "label": "宏观行业统计查询",
+   "parent_code": "T06",
+   "level": 2,
+   "order": 11,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T06.S12",
+   "label": "基金持仓与持有人查询",
+   "parent_code": "T06",
+   "level": 2,
+   "order": 12,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T06.S13",
+   "label": "股本股东与权益变动查询",
+   "parent_code": "T06",
+   "level": 2,
+   "order": 13,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T06.S14",
+   "label": "基金净值与历史绩效查询",
+   "parent_code": "T06",
+   "level": 2,
+   "order": 14,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T06.S15",
+   "label": "基金产品规模份额与费率查询",
+   "parent_code": "T06",
+   "level": 2,
+   "order": 15,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T06.S16",
+   "label": "盘中成交与分时数据查询",
+   "parent_code": "T06",
+   "level": 2,
+   "order": 16,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T06.S17",
+   "label": "人员机构履历与管理产品查询",
+   "parent_code": "T06",
+   "level": 2,
+   "order": 17,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T07",
+   "label": "标的推荐类",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T07.S01",
+   "label": "短期标的机会推荐",
+   "parent_code": "T07",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T07.S02",
+   "label": "其他开放式机会推荐",
+   "parent_code": "T07",
+   "level": 2,
+   "order": 2,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T07.S03",
+   "label": "中长期成长标的推荐",
+   "parent_code": "T07",
+   "level": 2,
+   "order": 3,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T07.S04",
+   "label": "画像约束下的产品推荐",
+   "parent_code": "T07",
+   "level": 2,
+   "order": 4,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T07.S05",
+   "label": "主题方向与赛道推荐",
+   "parent_code": "T07",
+   "level": 2,
+   "order": 5,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T08",
+   "label": "统计回测建模计算",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T08.S01",
+   "label": "公式指标与比率计算",
+   "parent_code": "T08",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T08.S02",
+   "label": "单标的策略历史仿真",
+   "parent_code": "T08",
+   "level": 2,
+   "order": 2,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T08.S03",
+   "label": "持仓价值与区间损益计算",
+   "parent_code": "T08",
+   "level": 2,
+   "order": 3,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T08.S04",
+   "label": "估值与定价计算",
+   "parent_code": "T08",
+   "level": 2,
+   "order": 4,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T08.S05",
+   "label": "事件频次与条件表现统计",
+   "parent_code": "T08",
+   "level": 2,
+   "order": 5,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T08.S06",
+   "label": "情景分析与压力测试",
+   "parent_code": "T08",
+   "level": 2,
+   "order": 6,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T08.S07",
+   "label": "分期投入与再投资收益计算",
+   "parent_code": "T08",
+   "level": 2,
+   "order": 7,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T08.S08",
+   "label": "风险水平与损失测算",
+   "parent_code": "T08",
+   "level": 2,
+   "order": 8,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T08.S09",
+   "label": "相关性与结构分析",
+   "parent_code": "T08",
+   "level": 2,
+   "order": 9,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T08.S10",
+   "label": "分组分布与描述统计",
+   "parent_code": "T08",
+   "level": 2,
+   "order": 10,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T08.S11",
+   "label": "隐含参数反推",
+   "parent_code": "T08",
+   "level": 2,
+   "order": 11,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T08.S12",
+   "label": "现金流与利息计算",
+   "parent_code": "T08",
+   "level": 2,
+   "order": 12,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T08.S13",
+   "label": "交易成本、税费与执行测算",
+   "parent_code": "T08",
+   "level": 2,
+   "order": 13,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T08.S14",
+   "label": "组合与再平衡历史仿真",
+   "parent_code": "T08",
+   "level": 2,
+   "order": 14,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T08.S15",
+   "label": "动态股票池策略历史仿真",
+   "parent_code": "T08",
+   "level": 2,
+   "order": 15,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T08.S16",
+   "label": "随机模拟与结果分布生成",
+   "parent_code": "T08",
+   "level": 2,
+   "order": 16,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T08.S17",
+   "label": "综合评分与评级计算",
+   "parent_code": "T08",
+   "level": 2,
+   "order": 17,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T08.S18",
+   "label": "其他复杂计算",
+   "parent_code": "T08",
+   "level": 2,
+   "order": 18,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T08.S19",
+   "label": "因子构造与数值变换",
+   "parent_code": "T08",
+   "level": 2,
+   "order": 19,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T08.S20",
+   "label": "组合优化与最优方案求解",
+   "parent_code": "T08",
+   "level": 2,
+   "order": 20,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T08.S21",
+   "label": "敏感度与风险敞口计算",
+   "parent_code": "T08",
+   "level": 2,
+   "order": 21,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T09",
+   "label": "投教问答",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T09.S01",
+   "label": "交易策略与图形方法教学",
+   "parent_code": "T09",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T09.S02",
+   "label": "金融术语与指标释义",
+   "parent_code": "T09",
+   "level": 2,
+   "order": 2,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T09.S03",
+   "label": "投资分析方法教学",
+   "parent_code": "T09",
+   "level": 2,
+   "order": 3,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T09.S04",
+   "label": "交易制度与业务规则科普",
+   "parent_code": "T09",
+   "level": 2,
+   "order": 4,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T09.S05",
+   "label": "金融产品机制与区别",
+   "parent_code": "T09",
+   "level": 2,
+   "order": 5,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T10",
+   "label": "客服问答",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T10.S01",
+   "label": "平台功能问答",
+   "parent_code": "T10",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T10.S02",
+   "label": "业务规则咨询",
+   "parent_code": "T10",
+   "level": 2,
+   "order": 2,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T10.S03",
+   "label": "交易账户类问答",
+   "parent_code": "T10",
+   "level": 2,
+   "order": 3,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T10.S04",
+   "label": "收费业务咨询类",
+   "parent_code": "T10",
+   "level": 2,
+   "order": 4,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T11",
+   "label": "账户诊断优化",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T11.S01",
+   "label": "账户资产持仓与余额查询",
+   "parent_code": "T11",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T11.S02",
+   "label": "账户持仓结构与风险诊断",
+   "parent_code": "T11",
+   "level": 2,
+   "order": 2,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T11.S03",
+   "label": "账户调仓与结构优化建议",
+   "parent_code": "T11",
+   "level": 2,
+   "order": 3,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T11.S04",
+   "label": "账户盈亏与收益来源分析",
+   "parent_code": "T11",
+   "level": 2,
+   "order": 4,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T11.S05",
+   "label": "账户成交流水与费用查询",
+   "parent_code": "T11",
+   "level": 2,
+   "order": 5,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T11.S06",
+   "label": "亏损恢复与账户目标调整计划",
+   "parent_code": "T11",
+   "level": 2,
+   "order": 6,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T12",
+   "label": "机会挖掘类",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T12.S01",
+   "label": "主题概念关联挖掘",
+   "parent_code": "T12",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T12.S02",
+   "label": "其他前提驱动机会挖掘",
+   "parent_code": "T12",
+   "level": 2,
+   "order": 2,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T12.S03",
+   "label": "事件驱动选标的",
+   "parent_code": "T12",
+   "level": 2,
+   "order": 3,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T12.S04",
+   "label": "参照标的类比挖掘",
+   "parent_code": "T12",
+   "level": 2,
+   "order": 4,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T12.S05",
+   "label": "产业环节关联标的挖掘",
+   "parent_code": "T12",
+   "level": 2,
+   "order": 5,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T12.S06",
+   "label": "跨市场产业对标挖掘",
+   "parent_code": "T12",
+   "level": 2,
+   "order": 6,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T12.S07",
+   "label": "客户供货关系标的挖掘",
+   "parent_code": "T12",
+   "level": 2,
+   "order": 7,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T12.S08",
+   "label": "主题分支与受益梯队挖掘",
+   "parent_code": "T12",
+   "level": 2,
+   "order": 8,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T13",
+   "label": "信息检索类",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T13.S01",
+   "label": "其他资料检索",
+   "parent_code": "T13",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T13.S02",
+   "label": "查新闻",
+   "parent_code": "T13",
+   "level": 2,
+   "order": 2,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T13.S03",
+   "label": "事件资料与背景检索",
+   "parent_code": "T13",
+   "level": 2,
+   "order": 3,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T13.S04",
+   "label": "查研报",
+   "parent_code": "T13",
+   "level": 2,
+   "order": 4,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T13.S05",
+   "label": "查大V社媒观点",
+   "parent_code": "T13",
+   "level": 2,
+   "order": 5,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T13.S06",
+   "label": "查公告",
+   "parent_code": "T13",
+   "level": 2,
+   "order": 6,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T13.S07",
+   "label": "查财报",
+   "parent_code": "T13",
+   "level": 2,
+   "order": 7,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T13.S08",
+   "label": "查电话会议",
+   "parent_code": "T13",
+   "level": 2,
+   "order": 8,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T13.S09",
+   "label": "视频与回放内容检索",
+   "parent_code": "T13",
+   "level": 2,
+   "order": 9,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T13.S10",
+   "label": "查法律",
+   "parent_code": "T13",
+   "level": 2,
+   "order": 10,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T14",
+   "label": "其它",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T14.S01",
+   "label": "其它",
+   "parent_code": "T14",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T14.S02",
+   "label": "翻译",
+   "parent_code": "T14",
+   "level": 2,
+   "order": 2,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T14.S03",
+   "label": "角色扮演",
+   "parent_code": "T14",
+   "level": 2,
+   "order": 3,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T15",
+   "label": "事实探究核实类",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T15.S01",
+   "label": "其他具体事实核实",
+   "parent_code": "T15",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T15.S02",
+   "label": "事件与消息真实性核实",
+   "parent_code": "T15",
+   "level": 2,
+   "order": 2,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T15.S03",
+   "label": "客户供应与商业合作核实",
+   "parent_code": "T15",
+   "level": 2,
+   "order": 3,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T16",
+   "label": "资产配置建议",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T16.S01",
+   "label": "投资组合优化建议",
+   "parent_code": "T16",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T16.S02",
+   "label": "大类资产配置建议",
+   "parent_code": "T16",
+   "level": 2,
+   "order": 2,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T17",
+   "label": "文件生成类",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T17.S01",
+   "label": "文档与演示报告生成",
+   "parent_code": "T17",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T17.S02",
+   "label": "静态数据图表生成",
+   "parent_code": "T17",
+   "level": 2,
+   "order": 2,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T17.S03",
+   "label": "指标策略与自动化代码生成",
+   "parent_code": "T17",
+   "level": 2,
+   "order": 3,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T17.S04",
+   "label": "生成图片",
+   "parent_code": "T17",
+   "level": 2,
+   "order": 4,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T17.S05",
+   "label": "表格与结构化清单文件生成",
+   "parent_code": "T17",
+   "level": 2,
+   "order": 5,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T17.S06",
+   "label": "数据处理与分析代码生成",
+   "parent_code": "T17",
+   "level": 2,
+   "order": 6,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T17.S07",
+   "label": "交互图表与仪表盘生成",
+   "parent_code": "T17",
+   "level": 2,
+   "order": 7,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T18",
+   "label": "目标跟踪执行类",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T18.S01",
+   "label": "价格指标条件预警",
+   "parent_code": "T18",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T18.S02",
+   "label": "周期简报与定期任务",
+   "parent_code": "T18",
+   "level": 2,
+   "order": 2,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T18.S03",
+   "label": "规则驱动的动态扫描与列表更新",
+   "parent_code": "T18",
+   "level": 2,
+   "order": 3,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T18.S04",
+   "label": "长期投资目标跟踪与动态调整",
+   "parent_code": "T18",
+   "level": 2,
+   "order": 4,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T18.S05",
+   "label": "新闻事件与进展预警",
+   "parent_code": "T18",
+   "level": 2,
+   "order": 5,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T18.S06",
+   "label": "一次性定时提醒与交付",
+   "parent_code": "T18",
+   "level": 2,
+   "order": 6,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T19",
+   "label": "操作指令类",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T19.S01",
+   "label": "其它指令",
+   "parent_code": "T19",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T19.S02",
+   "label": "交易委托与撤单操作",
+   "parent_code": "T19",
+   "level": 2,
+   "order": 2,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T19.S03",
+   "label": "账户持仓与自选同步",
+   "parent_code": "T19",
+   "level": 2,
+   "order": 3,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T19.S04",
+   "label": "页面功能与标的导航",
+   "parent_code": "T19",
+   "level": 2,
+   "order": 4,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T19.S05",
+   "label": "自选成员分组与标签维护",
+   "parent_code": "T19",
+   "level": 2,
+   "order": 5,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T19.S06",
+   "label": "资讯频道与偏好配置",
+   "parent_code": "T19",
+   "level": 2,
+   "order": 6,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T19.S07",
+   "label": "界面样式与条件高亮",
+   "parent_code": "T19",
+   "level": 2,
+   "order": 7,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T19.S08",
+   "label": "表格排序与筛选",
+   "parent_code": "T19",
+   "level": 2,
+   "order": 8,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T20",
+   "label": "情感表达",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T20.S01",
+   "label": "表达不满",
+   "parent_code": "T20",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T20.S02",
+   "label": "表达认同",
+   "parent_code": "T20",
+   "level": 2,
+   "order": 2,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T21",
+   "label": "金融逻辑推理",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T21.S01",
+   "label": "金融论断与推理链校核",
+   "parent_code": "T21",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T21.S02",
+   "label": "金融机制与条件关系推导",
+   "parent_code": "T21",
+   "level": 2,
+   "order": 2,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T22",
+   "label": "指令遵循",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T22.S01",
+   "label": "输出格式与结构遵循",
+   "parent_code": "T22",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T22.S02",
+   "label": "内容范围与排除条件遵循",
+   "parent_code": "T22",
+   "level": 2,
+   "order": 2,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T23",
+   "label": "复合意图",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T23.S01",
+   "label": "复合意图",
+   "parent_code": "T23",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T24",
+   "label": "时间感知",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T24.S01",
+   "label": "交易日期与市场时段判定",
+   "parent_code": "T24",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T24.S02",
+   "label": "相对日期与事件时间解析",
+   "parent_code": "T24",
+   "level": 2,
+   "order": 2,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T25",
+   "label": "交互澄清",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T25.S01",
+   "label": "对象与指代歧义澄清",
+   "parent_code": "T25",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T25.S02",
+   "label": "目标口径与必要参数澄清",
+   "parent_code": "T25",
+   "level": 2,
+   "order": 2,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T25.S03",
+   "label": "冲突需求识别与澄清",
+   "parent_code": "T25",
+   "level": 2,
+   "order": 3,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T26",
+   "label": "多模态问答",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T26.S01",
+   "label": "图片问答",
+   "parent_code": "T26",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T27",
+   "label": "安全合规",
+   "parent_code": null,
+   "level": 1,
+   "order": 0,
+   "definition": null,
+   "counts_as_error": null
+  },
+  {
+   "code": "T27.S01",
+   "label": "金融诈骗识别与防范",
+   "parent_code": "T27",
+   "level": 2,
+   "order": 1,
+   "definition": null,
+   "counts_as_error": null
+  }
+ ]
+}
