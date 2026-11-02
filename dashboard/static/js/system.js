@@ -1,23 +1,14 @@
 /* 评测体系: how a session becomes compact + attribution + clusters, told with the real batch. */
 import {
-  $, $$, esc, fmt, SEV, WORST, SEV_NAME, sevColor, KIND,
-  getJSON, bindTips, REDUCED,
+  $, $$, esc, fmt, SEV, sevColor, KIND,
+  bindTips, REDUCED,
 } from "./core.js";
 
 let shown = null;
 
 const ROLE = { planning: "规划", request_generation: "请求生成", tool: "工具执行", script: "脚本执行", skill: "技能装载", delivery: "交付" };
 
-const emptyFilter = () => ({ q: "", w: "", split: "", model: "", stage: "", mech: "", pattern: "" });
-const E = {
-  product: null, prod: null, rows: [], tax: null, filter: emptyFilter(), slug: null,
-  anatomy: null, rendered: null, cache: new Map(), seq: 0, obs: null, timer: null,
-};
-
-const clip = (s, n) => {
-  const t = String(s == null ? "" : s).replace(/\s+/g, " ").trim();
-  return t.length > n ? `${t.slice(0, n - 1)}…` : t;
-};
+const E = { product: null, goldens: [], index: 0, obs: null };
 
 function compactAnatomy(a) {
   if (!a || a.empty || !(a.messages || []).length || a.messages.length <= 22) return a;
@@ -40,56 +31,33 @@ export async function render(root, c) {
   const key = `${c.product}|${d.generated_at}`;
   if (shown === key && root.firstChild) return;
   shown = key;
-  if (E.timer) {
-    clearTimeout(E.timer);
-    E.timer = null;
-  }
+
   const prods = Object.values(d.products || {});
   if (!prods.length) {
     root.innerHTML = `<div class="bento"><div class="card" style="--span:12"><div class="empty">暂无评测数据。</div></div></div>`;
     return;
   }
 
-  let index = null;
-  try {
-    index = await c.loadIndex();
-  } catch (e) {
-    index = null;
-  }
-  const prod = (index && index.products && index.products[c.product]) || null;
-  if (E.product !== c.product) {
-    E.product = c.product;
-    E.filter = emptyFilter();
-    E.slug = null;
-    E.anatomy = null;
-    E.rendered = null;
-    E.cache.clear();
-    E.seq++;
-  }
-  E.prod = prod;
-  E.rows = (prod && prod.rows) || [];
-  E.tax = d.taxonomy || null;
-
-  const raw = d.system && d.system.anatomy;
-  const anatomyMap = raw ? (raw.product ? { [raw.product]: raw } : raw) : {};
-  const curated = anatomyMap[c.product] || Object.values(anatomyMap)[0] || null;
-  if (!E.anatomy) E.anatomy = compactAnatomy(curated);
-  if (E.anatomy) E.cache.set(E.anatomy.slug, E.anatomy);
-  if (!E.slug || !E.rows.some((r) => r.s === E.slug)) E.slug = (E.anatomy && E.anatomy.slug) || (E.rows[0] && E.rows[0].s) || null;
-  if (E.anatomy && E.anatomy.slug !== E.slug) E.anatomy = null;
+  const src = d.system && d.system.goldens;
+  let picked = [];
+  if (Array.isArray(src)) picked = src;
+  else if (src) picked = src[c.product] || [];
+  if (E.product !== c.product) E.index = 0;
+  E.product = c.product;
+  E.goldens = (Array.isArray(picked) ? picked : picked ? [picked] : []).map(compactAnatomy);
+  if (E.index >= E.goldens.length) E.index = 0;
 
   root.innerHTML = `<div class="bento">
     ${flowCard(d.taxonomy)}
-    ${anatomyCard(E.anatomy, E.rows.length > 0)}
+    ${goldenCard(E.goldens, E.index)}
   </div>`;
-  E.rendered = E.anatomy ? E.anatomy.slug : null;
   if (!root._sysTips) {
     root._sysTips = true;
     bindTips(root);
   }
-  wireAnatomy(root, E.anatomy);
-  if (E.rows.length) wireEvidence(root, c);
-  else renderMeta(root, E.anatomy);
+  wireGoldens(root);
+  renderMeta(root, E.goldens[E.index]);
+  wireAnatomy(root, E.goldens[E.index]);
   wireFx(root, d.taxonomy);
 }
 
@@ -197,19 +165,21 @@ function patternMatrix(tax, sid) {
 
 /* ---------------------------------------------------------------- evidence closure */
 
-function anatomyCard(a, hasIndex) {
-  const body = a ? anatomyBody(a) : `<div class="empty">正在读取样本…</div>`;
+const ICON_PREV = `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M15 5 8 12l7 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const ICON_NEXT = `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 5l7 7-7 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+function goldenCard(cases, index) {
+  const a = cases[index];
+  const control = cases.length > 1
+    ? `<span class="meta-end end">
+        <span class="meta num" id="eIndex">${index + 1} / ${fmt(cases.length)}</span>
+        <button type="button" class="icon-btn" id="ePrev" aria-label="上一条">${ICON_PREV}</button>
+        <button type="button" class="icon-btn" id="eNext" aria-label="下一条">${ICON_NEXT}</button>
+      </span>`
+    : "";
   return `<article class="card" style="--span:12">
-    <header class="card-head"><h2>证据闭环</h2><span class="meta end" id="eMeta"></span></header>
-    ${hasIndex ? `<div class="echo">
-      <aside class="echo-side" aria-label="证据样本筛选">
-        <input class="search" id="eq" type="search" placeholder="搜索问题 · Session ID · Trace ID" autocomplete="off">
-        <div class="filters" id="ef"></div>
-        <div class="list-meta"><span id="ecount"></span></div>
-        <div class="echo-list" id="elist"></div>
-      </aside>
-      <div class="echo-main"><div id="anatomyBody">${body}</div></div>
-    </div>` : `<div class="echo-main"><div id="anatomyBody">${body}</div></div>`}
+    <header class="card-head"><h2>证据闭环</h2><span class="meta" id="eMeta"></span>${control}</header>
+    ${a ? `<div class="echo"><div class="echo-main"><div id="anatomyBody">${anatomyBody(a)}</div></div></div>` : `<div class="empty">暂无 golden case。</div>`}
   </article>`;
 }
 
@@ -242,174 +212,6 @@ function anatomyBody(a) {
 
 const roleName = (r) => ROLE[r] || r || "—";
 
-/* Filter the reconstruction from samples.json; the detail rail is fetched per pick. */
-function wireEvidence(root, c) {
-  const eq = $("#eq", root);
-  const ef = $("#ef", root);
-  const list = $("#elist", root);
-  if (!eq || !ef || !list) return;
-  applyEcho(root);
-  ef.addEventListener("click", (e) => {
-    const b = e.target.closest("button[data-k]");
-    if (!b) return;
-    const cur = E.filter[b.dataset.k];
-    E.filter[b.dataset.k] = cur === b.dataset.v ? "" : b.dataset.v;
-    applyEcho(root);
-  });
-  ef.addEventListener("change", (e) => {
-    const s = e.target.closest("select[data-k]");
-    if (!s) return;
-    const k = s.dataset.k;
-    E.filter[k] = s.value;
-    if (k === "stage") Object.assign(E.filter, { mech: "", pattern: "" });
-    if (k === "mech") E.filter.pattern = "";
-    applyEcho(root);
-  });
-  eq.addEventListener("input", (e) => {
-    clearTimeout(E.timer);
-    E.timer = setTimeout(() => {
-      E.filter.q = e.target.value.trim();
-      applyEcho(root);
-    }, 140);
-  });
-  list.addEventListener("click", (e) => {
-    const clear = e.target.closest("[data-clear]");
-    if (clear) {
-      E.filter = emptyFilter();
-      const q = $("#eq", root);
-      if (q) q.value = "";
-      applyEcho(root);
-      return;
-    }
-    const b = e.target.closest(".srow");
-    if (!b) return;
-    E.slug = b.dataset.s;
-    markCurrent(root);
-    loadSample(root, E.slug);
-  });
-}
-
-function syncEchoFilters(root) {
-  const ef = $("#ef", root);
-  if (!ef) return;
-  const prod = E.prod;
-  if (!prod) {
-    ef.innerHTML = "";
-    return;
-  }
-  const f = E.filter;
-  const btn = (k, v, label, color) =>
-    `<button type="button" data-k="${k}" data-v="${esc(v)}" aria-pressed="${f[k] === v}"${color ? ` style="--c:${color}"` : ""}>${color ? "<i></i>" : ""}${esc(label)}</button>`;
-  const row = (cls, items) => `<div class="frow${cls ? ` ${cls}` : ""}">${items}</div>`;
-  let html = row("sev", WORST.map((w, i) => btn("w", w, SEV_NAME[w], sevColor(i))).join(""));
-  if ((prod.splits || []).some((s) => s.id === "lost")) html += row("", btn("split", "lost", "仅看流失用户"));
-  html += row("", (prod.models || []).map((m) => btn("model", m.id, m.label)).join(""));
-  const tax = E.tax;
-  if (tax) {
-    const byNum = (a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1));
-    const stages = tax.stages.filter((s) => E.rows.some((r) => (r.st || []).includes(s.id))).sort(byNum);
-    const mechs = tax.mechanisms
-      .filter((m) => E.rows.some((r) => (r.pt || []).some((x) => x.split(".")[1] === m.id && (!f.stage || x.startsWith(`${f.stage}.`)))))
-      .sort(byNum);
-    const pats = Object.keys(tax.patterns)
-      .filter((id) => {
-        const [s, m] = id.split(".");
-        return (!f.stage || s === f.stage) && (!f.mech || m === f.mech) && E.rows.some((r) => (r.pt || []).includes(id));
-      })
-      .sort((a, b) => {
-        const pa = a.split(".").map((x) => Number(x.slice(1)));
-        const pb = b.split(".").map((x) => Number(x.slice(1)));
-        return pa[0] - pb[0] || pa[1] - pb[1] || pa[2] - pb[2];
-      });
-    const opt = (v, label, on) => `<option value="${esc(v)}"${on ? " selected" : ""}>${esc(label)}</option>`;
-    html += `<div class="cascade">
-      <select data-k="stage" aria-label="阶段"><option value="">全部阶段</option>${stages.map((s) => opt(s.id, `${s.id} ${s.name}`, f.stage === s.id)).join("")}</select>
-      <select data-k="mech" aria-label="机制"><option value="">全部机制</option>${mechs.map((m) => opt(m.id, `${m.id} ${m.name}`, f.mech === m.id)).join("")}</select>
-      <select data-k="pattern" aria-label="模式" class="wide"><option value="">全部模式</option>${pats.map((id) => opt(id, `${(tax.patterns[id] || {}).name || id} · ${id}`, f.pattern === id)).join("")}</select>
-    </div>`;
-  }
-  ef.innerHTML = html;
-}
-
-function applyEcho(root) {
-  const count = $("#ecount", root);
-  const list = $("#elist", root);
-  const body = $("#anatomyBody", root);
-  if (!count || !list || !body) return;
-  const rows = filterRows(E.rows, E.filter).sort((a, b) => sevRank(a.w) - sevRank(b.w) || (b.n || 0) - (a.n || 0));
-  if (!rows.length) {
-    count.textContent = `${prodLabel()} · 0 / ${fmt(E.rows.length)} 个会话`;
-    list.innerHTML = `<div class="empty">没有符合条件的会话<br><button type="button" class="link" data-clear>清除筛选</button></div>`;
-    body.innerHTML = `<div class="empty">没有符合条件的会话</div>`;
-    E.slug = null;
-    E.rendered = null;
-    renderMeta(root, null);
-    syncEchoFilters(root);
-    return;
-  }
-  if (!E.slug || !rows.some((r) => r.s === E.slug)) E.slug = rows[0].s;
-  count.textContent = `${prodLabel()} · ${fmt(rows.length)} / ${fmt(E.rows.length)} 个会话`;
-  list.innerHTML = rows.map(rowHTML).join("");
-  syncEchoFilters(root);
-  markCurrent(root);
-  scrollCurrent(root);
-  if (E.anatomy && E.anatomy.slug === E.slug && E.rendered === E.slug) {
-    renderMeta(root, E.anatomy);
-    return;
-  }
-  if (E.anatomy && E.anatomy.slug === E.slug) {
-    showAnatomy(root, E.anatomy);
-    return;
-  }
-  loadSample(root, E.slug);
-}
-
-function rowHTML(r) {
-  const models = (E.prod && E.prod.models) || [];
-  const label = ((models.find((m) => m.id === r.m) || {}).label) || r.m;
-  return `<button type="button" class="srow" data-s="${r.s}" style="--c:${sevColor(r.w)}" aria-current="${r.s === E.slug}">
-    <span class="bar"></span><span><span class="q">${esc(r.q || "（无提问）")}</span>
-    <span class="m num"><span>${esc(label)}</span><span>${esc((r.d || "").slice(5))}</span><span>${r.n ? `${r.w} · ${r.n} 个问题` : "无问题"}</span>${r.sp === "lost" ? '<span class="tag-lost">流失</span>' : ""}</span></span></button>`;
-}
-
-function filterRows(rows, f) {
-  const needle = f.q.toLowerCase();
-  return rows.filter((r) => {
-    const hay = [r.q, r.lb, r.s, r.sid, r.tid, r.case, r.task, r.skill].filter(Boolean).join(" ").toLowerCase();
-    return (
-      (!f.w || r.w === f.w) &&
-      (!f.split || r.sp === f.split) &&
-      (!f.model || r.m === f.model) &&
-      (!f.stage || (r.st || []).includes(f.stage)) &&
-      (!f.mech || (r.pt || []).some((x) => {
-        const [s, m] = x.split(".");
-        return m === f.mech && (!f.stage || s === f.stage);
-      })) &&
-      (!f.pattern || (r.pt || []).some((x) => x === f.pattern || x.startsWith(`${f.pattern}.`))) &&
-      (!needle || hay.includes(needle))
-    );
-  });
-}
-
-const sevRank = (w) => (SEV.includes(w) ? SEV.indexOf(w) : 99);
-const prodLabel = () => (E.prod && E.prod.label) || (E.product === "wencai" ? "问财" : "AIME");
-
-function markCurrent(root) {
-  const list = $("#elist", root);
-  if (!list) return;
-  $$(".srow", list).forEach((b) => b.setAttribute("aria-current", String(b.dataset.s === E.slug)));
-}
-
-function scrollCurrent(root) {
-  const list = $("#elist", root);
-  const cur = list && $(`.srow[data-s="${E.slug}"]`, list);
-  if (!list || !cur) return;
-  const lr = list.getBoundingClientRect();
-  const cr = cur.getBoundingClientRect();
-  if (cr.top < lr.top) list.scrollTop -= lr.top - cr.top;
-  else if (cr.bottom > lr.bottom) list.scrollTop += cr.bottom - lr.bottom;
-}
-
 function renderMeta(root, a) {
   const el = $("#eMeta", root);
   if (!el) return;
@@ -423,106 +225,29 @@ function renderMeta(root, a) {
   el.textContent = `${trace}${shown < total ? `${fmt(shown)} / ${fmt(total)} 条消息` : `${fmt(total)} 条消息`}`;
 }
 
-/* ---------------------------------------------------------------- detail loading */
-
-async function loadSample(root, slug) {
-  if (!slug) return;
+function showCase(root) {
+  const a = E.goldens[E.index];
   const body = $("#anatomyBody", root);
-  if (!body) return;
-  const token = ++E.seq;
-  E.rendered = null;
-  const hit = E.cache.get(slug);
-  if (hit) {
-    showAnatomy(root, hit);
-    return;
-  }
-  body.innerHTML = `<div class="empty">正在读取样本…</div>`;
-  renderMeta(root, null);
-  try {
-    const detail = await getJSON(`samples/${slug}.json`);
-    if (token !== E.seq) return;
-    const a = anatomyFrom(detail);
-    E.cache.set(slug, a);
-    if (E.cache.size > 16) E.cache.delete(E.cache.keys().next().value);
-    showAnatomy(root, a);
-  } catch (e) {
-    if (token !== E.seq) return;
-    body.innerHTML = `<div class="empty">样本详情读取失败（${esc(e.message)}）</div>`;
-    renderMeta(root, null);
-  }
-}
-
-function showAnatomy(root, a) {
-  E.anatomy = a;
-  E.slug = a.slug;
-  E.rendered = a.slug;
-  const body = $("#anatomyBody", root);
-  if (body) body.innerHTML = anatomyBody(a);
+  if (!a || !body) return;
+  body.innerHTML = anatomyBody(a);
+  body.scrollTop = 0;
   renderMeta(root, a);
   wireAnatomy(root, a);
-  markCurrent(root);
+  const index = $("#eIndex", root);
+  if (index) index.textContent = `${E.index + 1} / ${fmt(E.goldens.length)}`;
 }
 
-function anatomyFrom(detail) {
-  const traces = (detail.input && detail.input.traces) || [];
-  let best = null;
-  traces.forEach((tr, ti) => {
-    const msgs = tr.messages || [];
-    const probs = ((detail.attribution && detail.attribution.problems) || [])
-      .map((p) => {
-        const seen = new Set();
-        (p.ev || []).forEach((e) => {
-          const ev = detail.evidence && detail.evidence[e];
-          if (!ev || (ev.t == null ? 0 : ev.t) !== ti || ev.m == null) return;
-          if (ev.m >= 0 && ev.m < msgs.length) seen.add(ev.m);
-        });
-        return {
-          id: p.id, sev: p.sev, label: p.label, role: p.role, comp: p.comp,
-          path: p.cl ? p.cl.path : null,
-          msgs: [...seen].sort((a, b) => a - b),
-        };
-      })
-      .filter((p) => p.msgs.length);
-    const evCount = probs.reduce((a, p) => a + p.msgs.length, 0);
-    const score = probs.length * 20 + Math.min(evCount, 24) - Math.max(0, msgs.length - 40);
-    if (!best || score > best.score) best = { tr, ti, probs, score };
-  });
-  const base = { slug: detail.slug, product: detail.product, model: detail.model, question: detail.question, traces: traces.length };
-  if (!best) return { ...base, empty: true, messages: [], problems: [], trace: 0, total: 0, shown: 0 };
-  const all = best.tr.messages || [];
-  if (!best.probs.length) return { ...base, empty: true, messages: [], problems: [], trace: best.ti, total: all.length, shown: 0 };
-  const keep = new Set();
-  best.probs.forEach((p) => p.msgs.forEach((i) => keep.add(i)));
-  if (all.length > 22) {
-    keep.add(0);
-    keep.add(all.length - 1);
-    [...keep].forEach((i) => {
-      [i - 1, i + 1].forEach((j) => {
-        if (j >= 0 && j < all.length) keep.add(j);
-      });
-    });
-  } else {
-    all.forEach((_, i) => keep.add(i));
-  }
-  const indices = [...keep].sort((a, b) => a - b);
-  const messages = indices.map((i) => ({
-    i, k: all[i].k, name: all[i].name, dur: all[i].dur, text: clip(messageText(all[i]), 90),
-  }));
-  const problems = best.probs.map((p) => ({ ...p, msgs: p.msgs.filter((i) => keep.has(i)) }));
-  return { ...base, messages, problems, trace: best.ti, total: all.length, shown: indices.length };
+function wireGoldens(root) {
+  if (E.goldens.length < 2) return;
+  const go = (step) => {
+    E.index = (E.index + step + E.goldens.length) % E.goldens.length;
+    showCase(root);
+  };
+  const prev = $("#ePrev", root);
+  const next = $("#eNext", root);
+  if (prev) prev.addEventListener("click", () => go(-1));
+  if (next) next.addEventListener("click", () => go(1));
 }
-
-function messageText(m) {
-  const blocks = m.blocks || [];
-  for (const b of blocks) {
-    const xs = Array.isArray(b.x) ? b.x : [b.x];
-    const text = xs.find((x) => typeof x === "string" && x.trim());
-    if (text) return text;
-  }
-  return "";
-}
-
-/* ---------------------------------------------------------------- anatomy wiring */
 
 function wireAnatomy(root, a) {
   if (E.obs) {

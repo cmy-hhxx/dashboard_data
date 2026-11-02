@@ -2,23 +2,27 @@
 import { $, $$, esc, fmt, compact, SEV, WORST, SEV_NAME, sevColor, KIND, segmented, getJSON, bindTips, REDUCED } from "./core.js";
 import { renderContent, segment } from "./render.js";
 
-const ROLE = { planning: "规划", request_generation: "请求生成", tool: "工具执行", script: "脚本执行", skill: "技能装载", delivery: "交付" };
 const FOLD_OPEN = new Set(["user", "answer"]);
 const PAGE = 50;
-const S = { product: null, all: [], rows: [], pageRows: [], page: 1, slug: null, sessionKey: null, D: null, round: 0, trace: 0, cturn: 0, open: new Set(), active: null, cache: new Map() };
+const S = { product: null, all: [], rows: [], pageRows: [], page: 1, slug: null, sessionKey: null, D: null, round: 0, trace: 0, turn: 0, cturn: 0, sessionView: false, open: new Set(), active: null, cache: new Map() };
 let ctx;
 let root;
-let outSeg;
 
 const params = () => new URLSearchParams(location.search);
 const F = () => {
   const q = params();
   return {
     q: q.get("q") || "", w: q.get("w") || "", split: q.get("split") || "", model: q.get("model") || "",
-    stage: q.get("stage") || "", mech: q.get("mech") || "", pattern: q.get("pattern") || "", sort: q.get("sort") || "sev",
+    scene: q.get("scene") || "", sub: q.get("sub") || "", stage: q.get("stage") || "", mech: q.get("mech") || "", pattern: q.get("pattern") || "", sort: q.get("sort") || "sev",
   };
 };
 const dirty = () => Object.entries(F()).some(([k, v]) => k !== "sort" && v);
+const sceneOf = (r) => r.task || r.skill || "未标注";
+const subOf = (r) => r.sub || "";
+const problemHit = (r, f) =>
+  (!f.stage || r.st.includes(f.stage)) &&
+  (!f.mech || r.pt.some((x) => x.split(".")[1] === f.mech && (!f.stage || x.startsWith(`${f.stage}.`)))) &&
+  (!f.pattern || r.pt.some((x) => x === f.pattern || x.startsWith(f.pattern + ".")));
 
 /* One list row is one session (per model); traces that were evaluated separately stay
    as rounds of that session instead of separate rows. */
@@ -31,7 +35,7 @@ function groupSessions(rows) {
       g = {
         key, s: key, rows: [], sid: r.sid, m: r.m, sp: r.sp,
         w: "none", n: 0, tr: 0, pt: new Set(), st: new Set(), tg: new Set(), lb: new Set(),
-        q: "", d: "", tid: "", case: "", task: "", skill: "", lang: r.lang,
+        q: "", d: "", tid: "", case: "", task: "", sub: "", skill: "", lang: r.lang,
       };
       groups.set(key, g);
     }
@@ -46,6 +50,7 @@ function groupSessions(rows) {
     g.tid = g.tid || r.tid || "";
     g.case = g.case || r.case || "";
     g.task = g.task || r.task || "";
+    g.sub = g.sub || r.sub || "";
     g.skill = g.skill || r.skill || "";
   });
   return [...groups.values()].map((g) => {
@@ -55,7 +60,7 @@ function groupSessions(rows) {
       ...last, key: g.key, s: g.key, rows: g.rows,
       q: last.q, d: last.d, w: g.w, n: g.n, tr: g.tr,
       pt: [...g.pt], st: [...g.st], tg: [...g.tg], lb: [...g.lb].join("｜"),
-      tid: g.tid, case: g.case, task: g.task, skill: g.skill,
+      tid: g.tid, case: g.case, task: g.task, sub: g.sub, skill: g.skill,
     };
   });
 }
@@ -97,11 +102,6 @@ export async function render(r, c) {
   if (key !== S.sessionKey || !S.D) await loadSession(session, focusSlug);
   else if (focusSlug) selectSlugRound(focusSlug);
   markCurrent();
-  const tab = params().get("tab") === "compact" ? "compact" : "attr";
-  if (outSeg.get() !== tab) {
-    outSeg.set(tab, { silent: true });
-    renderOut();
-  }
   const p = params().get("p");
   if (p != null && S.D) {
     let pid = Number(p);
@@ -129,18 +129,19 @@ function skeleton() {
       <div class="pane-scroll" id="slist" tabindex="0" aria-label="样本"></div>
       <div class="pager" id="spager" hidden></div>
     </aside>
-    <section class="pane" id="sin" aria-label="评测输入"></section>
-    <section class="pane pane-out pane-sticky" aria-label="评测输出">
-      <div class="otabs"><div class="seg" id="otab"><span class="seg-knob"></span><button type="button" data-value="attr">归因</button><button type="button" data-value="compact">轨迹</button></div></div>
-      <div class="pane-scroll" id="sout"></div>
+    <section class="pane pane-out pane-sticky" aria-label="评测输入与输出">
+      <div class="pane-scroll" id="sbody">
+        <div id="shead"></div>
+        <div class="anatomy" id="sanatomy">
+          <div class="traj" id="sout"></div>
+          <div class="timeline" id="stl"></div>
+          <div class="threads"><svg aria-hidden="true"></svg></div>
+          <div class="aprobs" id="sattr"></div>
+        </div>
+      </div>
     </section>
   </div>`;
-  outSeg = segmented($("#otab", root), (v) => {
-    ctx.navigate({ tab: v }, { replace: true });
-    renderOut();
-    if (v === "attr") requestAnimationFrame(() => scrollRound(S.round));
-  });
-  outSeg.set(params().get("tab") === "compact" ? "compact" : "attr", { silent: true });
+  wireThreads();
   let timer;
   $("#sq", root).addEventListener("input", (e) => {
     clearTimeout(timer);
@@ -148,7 +149,7 @@ function skeleton() {
   });
   $("#ssort", root).addEventListener("change", (e) => setFilter({ sort: e.target.value }));
   $("#sreset", root).addEventListener("click", () =>
-    setFilter({ q: "", w: "", split: "", model: "", stage: "", mech: "", pattern: "", sort: "sev" }),
+    setFilter({ q: "", w: "", split: "", model: "", scene: "", sub: "", stage: "", mech: "", pattern: "", sort: "sev" }),
   );
   $("#sf", root).addEventListener("click", (e) => {
     const b = e.target.closest("button[data-k]");
@@ -161,6 +162,8 @@ function skeleton() {
     if (!s) return;
     const k = s.dataset.k;
     const patch = { [k]: s.value };
+    if (k === "scene") Object.assign(patch, { sub: "", stage: "", mech: "", pattern: "" });
+    if (k === "sub") Object.assign(patch, { stage: "", mech: "", pattern: "" });
     if (k === "stage") Object.assign(patch, { mech: "", pattern: "" });
     if (k === "mech") patch.pattern = "";
     setFilter(patch);
@@ -189,10 +192,12 @@ function skeleton() {
     const next = S.rows[Math.max(0, Math.min(S.rows.length - 1, i + (e.key === "ArrowDown" ? 1 : -1)))];
     if (next) ctx.navigate({ case: next.s, p: null }, { replace: true }) || render(root, ctx);
   });
-  $("#sin", root).addEventListener("click", onInputClick);
+  $("#sbody", root).addEventListener("click", onInputClick);
+  $("#shead", root).addEventListener("click", onOutClick);
   $("#sout", root).addEventListener("click", onOutClick);
-  wireCmapPan($("#sout", root));
-  bindTips($("#sout", root), (t) => {
+  $("#sattr", root).addEventListener("click", onOutClick);
+  wireCmapPan($("#shead", root));
+  bindTips($("#shead", root), (t) => {
     if ((!t.closest(".cmap") && !t.closest(".sp")) || !t.dataset.tip) return null;
     const i = t.dataset.tip.indexOf("|");
     return `<div style="font-weight:var(--w-medium);margin-bottom:4px">${esc(t.dataset.tip.slice(0, i))}</div><div style="max-width:300px;white-space:normal;line-height:1.6">${esc(t.dataset.tip.slice(i + 1))}</div>`;
@@ -241,6 +246,15 @@ function markCmapScroll() {
     const overflow = c.scrollWidth > c.clientWidth + 1;
     c.classList.toggle("is-scrollable", overflow);
     c.title = overflow ? "拖动查看完整链路" : "";
+    let label = c.querySelector(":scope > .cmap-k");
+    if (overflow && !label) {
+      label = document.createElement("div");
+      label.className = "cmap-k";
+      label.textContent = "链路概览";
+      c.prepend(label);
+    } else if (!overflow && label) {
+      label.remove();
+    }
   });
 }
 
@@ -278,14 +292,19 @@ function syncFilters() {
   const tax = ctx.data.taxonomy;
   if (tax) {
     const byNum = (a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1));
-    const stages = tax.stages.filter((s) => S.all.some((r) => r.st.includes(s.id))).sort(byNum);
+    const scenePool = S.all.filter((r) => (!f.scene || sceneOf(r) === f.scene) && (!f.sub || subOf(r) === f.sub));
+    const scenes = [...new Set([...S.all.filter((r) => problemHit(r, f) && (!f.sub || subOf(r) === f.sub)).map(sceneOf), f.scene].filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, "zh"));
+    const subs = [...new Set([...S.all.filter((r) => problemHit(r, f) && (!f.scene || sceneOf(r) === f.scene)).map(subOf), f.sub].filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, "zh"));
+    const stages = tax.stages.filter((s) => scenePool.some((r) => r.st.includes(s.id))).sort(byNum);
     const mechs = tax.mechanisms
-      .filter((m) => S.all.some((r) => r.pt.some((x) => x.split(".")[1] === m.id && (!f.stage || x.startsWith(`${f.stage}.`)))))
+      .filter((m) => scenePool.some((r) => r.pt.some((x) => x.split(".")[1] === m.id && (!f.stage || x.startsWith(`${f.stage}.`)))))
       .sort(byNum);
     const pats = Object.keys(tax.patterns)
       .filter((id) => {
         const [s, m] = id.split(".");
-        return (!f.stage || s === f.stage) && (!f.mech || m === f.mech) && S.all.some((r) => r.pt.includes(id));
+        return (!f.stage || s === f.stage) && (!f.mech || m === f.mech) && scenePool.some((r) => r.pt.includes(id));
       })
       .sort((a, b) => {
         const pa = a.split(".").map((x) => Number(x.slice(1)));
@@ -294,6 +313,8 @@ function syncFilters() {
       });
     const opt = (v, label, on) => `<option value="${esc(v)}"${on ? " selected" : ""}>${esc(label)}</option>`;
     html += `<div class="cascade">
+      <select data-k="scene" aria-label="场景"><option value="">全部场景</option>${scenes.map((s) => opt(s, s, f.scene === s)).join("")}</select>
+      <select data-k="sub" aria-label="子场景"><option value="">全部子场景</option>${subs.map((s) => opt(s, s, f.sub === s)).join("")}</select>
       <select data-k="stage" aria-label="阶段"><option value="">全部阶段</option>${stages.map((s) => opt(s.id, `${s.id} ${s.name}`, f.stage === s.id)).join("")}</select>
       <select data-k="mech" aria-label="机制"><option value="">全部机制</option>${mechs.map((m) => opt(m.id, `${m.id} ${m.name}`, f.mech === m.id)).join("")}</select>
       <select data-k="pattern" aria-label="模式" class="wide"><option value="">全部模式</option>${pats.map((id) => opt(id, `${(tax.patterns[id] || {}).name || id} · ${id}`, f.pattern === id)).join("")}</select>
@@ -307,17 +328,14 @@ function renderList() {
   const needle = f.q.toLowerCase();
   const hit = (r) =>
     !needle ||
-    [r.q, r.lb, r.s, r.sid, r.tid, r.case, r.task, r.skill].some((x) => x && String(x).toLowerCase().includes(needle)) ||
-    r.rows.some((x) => [x.q, x.sid, x.tid, x.case, x.task, x.skill].some((v) => v && String(v).toLowerCase().includes(needle)));
+    [r.q, r.lb, r.s, r.sid, r.tid, r.case, r.task, r.sub, r.skill].some((x) => x && String(x).toLowerCase().includes(needle)) ||
+    r.rows.some((x) => [x.q, x.sid, x.tid, x.case, x.task, x.sub, x.skill].some((v) => v && String(v).toLowerCase().includes(needle)));
   S.rows = S.all.filter(
     (r) =>
       (!f.w || r.w === f.w) && (!f.split || r.sp === f.split) && (!f.model || r.m === f.model) &&
-      (!f.stage || r.st.includes(f.stage)) &&
-      (!f.mech || r.pt.some((x) => {
-        const [s, m] = x.split(".");
-        return m === f.mech && (!f.stage || s === f.stage);
-      })) &&
-      (!f.pattern || r.pt.some((x) => x === f.pattern || x.startsWith(f.pattern + "."))) &&
+      (!f.scene || sceneOf(r) === f.scene) &&
+      (!f.sub || subOf(r) === f.sub) &&
+      problemHit(r, f) &&
       hit(r),
   );
   if (f.sort === "n") S.rows = S.rows.slice().sort((a, b) => b.n - a.n);
@@ -340,7 +358,7 @@ function renderList() {
     : `<div class="empty">没有符合条件的会话<br><button type="button" class="link" id="sclear">清除筛选</button></div>`;
   renderPager(pages);
   const clear = $("#sclear", root);
-  clear && clear.addEventListener("click", () => setFilter({ q: "", w: "", split: "", model: "", stage: "", mech: "", pattern: "" }));
+  clear && clear.addEventListener("click", () => setFilter({ q: "", w: "", split: "", model: "", scene: "", sub: "", stage: "", mech: "", pattern: "" }));
 }
 
 function renderPager(pages) {
@@ -406,7 +424,13 @@ function dropSubsetParts(parts) {
 function withRounds(part) {
   const d = part.detail;
   const n = roundCount(d);
-  d.rounds = Array.from({ length: n }, (_, i) => ({ slug: part.slug, trace: i, turn: i, compact: i }));
+  const lastTrace = Math.max(0, (d.input?.traces?.length || 1) - 1);
+  d.rounds = Array.from({ length: n }, (_, i) => ({
+    slug: part.slug,
+    trace: Math.min(i, lastTrace),
+    turn: i,
+    compact: i,
+  }));
   return d;
 }
 
@@ -502,13 +526,20 @@ async function loadSession(session, focusSlug) {
   S.slug = session.key;
   S.sessionKey = session.key;
   S.session = session;
-  $("#sin", root).innerHTML = `<div class="empty">正在读取会话…</div>`;
+  $("#shead", root).innerHTML = `<div class="empty">正在读取会话…</div>`;
+  $("#stl", root).innerHTML = "";
+  $("#sout", root).innerHTML = "";
+  $("#sattr", root).innerHTML = "";
+  scheduleThreads();
   let parts;
   try {
     parts = await Promise.all(session.rows.map(async (row) => ({ slug: row.s, detail: await fetchDetail(row.s) })));
   } catch (e) {
-    $("#sin", root).innerHTML = `<div class="empty">会话详情读取失败（${esc(e.message)}）。运行 local_dev/refresh.sh 重新生成。</div>`;
+    $("#shead", root).innerHTML = `<div class="empty">会话详情读取失败（${esc(e.message)}）。运行 local_dev/refresh.sh 重新生成。</div>`;
+    $("#stl", root).innerHTML = "";
     $("#sout", root).innerHTML = "";
+    $("#sattr", root).innerHTML = "";
+    scheduleThreads();
     return;
   }
   parts.sort((a, b) => String(a.detail.meta?.request_time || a.detail.date || "").localeCompare(String(b.detail.meta?.request_time || b.detail.date || "")));
@@ -517,12 +548,17 @@ async function loadSession(session, focusSlug) {
   index(D);
   S.D = D;
   S.round = D.rounds.length - 1;
-  if (focusSlug) {
+  S.sessionView = false;
+  // A single part's rounds share the same slug, so a case deep link must not
+  // pin the first round; only merged parts have round-specific slugs.
+  if (focusSlug && kept.length > 1) {
     const at = D.rounds.findIndex((r) => r.slug === focusSlug);
     if (at >= 0) S.round = at;
   }
-  S.trace = S.round;
-  S.cturn = S.round;
+  const init = D.rounds[S.round];
+  S.trace = init?.trace ?? 0;
+  S.turn = init?.turn ?? S.round;
+  S.cturn = init?.compact ?? S.round;
   S.open = new Set();
   S.active = null;
   renderIn();
@@ -530,7 +566,6 @@ async function loadSession(session, focusSlug) {
 }
 
 function scrollRound(i) {
-  if (outSeg.get() !== "attr") return;
   const el = $(`#round-${i}`, root);
   if (!el) return;
   el.scrollIntoView({ block: "nearest", behavior: REDUCED ? "auto" : "smooth" });
@@ -540,20 +575,29 @@ function scrollRound(i) {
 function selectRound(i, { scroll = true } = {}) {
   const D = S.D;
   if (!D) return;
+  if (i === "session") {
+    S.sessionView = true;
+    renderTrace();
+    renderOut();
+    return;
+  }
+  S.sessionView = false;
   const n = D.rounds?.length || 1;
   const round = Math.max(0, Math.min(n - 1, Number(i) || 0));
+  const r = D.rounds?.[round];
   S.round = round;
-  S.trace = round;
-  S.cturn = round;
+  S.trace = r?.trace ?? round;
+  S.turn = r?.turn ?? round;
+  S.cturn = r?.compact ?? round;
   renderTrace();
   renderOut();
-  $$("#atabs .pill", root).forEach((b) => b.setAttribute("aria-pressed", String(Number(b.dataset.at) === round)));
   if (scroll) scrollRound(round);
 }
 
 function selectSlugRound(slug) {
-  const at = S.D?.rounds?.findIndex((r) => r.slug === slug) ?? -1;
-  if (at >= 0) selectRound(at, { scroll: false });
+  const rounds = S.D?.rounds || [];
+  const hits = rounds.filter((r) => r.slug === slug);
+  if (hits.length === 1) selectRound(rounds.indexOf(hits[0]), { scroll: false });
 }
 
 function index(D) {
@@ -570,21 +614,64 @@ function index(D) {
   D._ix = { byBlock, sev, owner };
 }
 
+function summaryInner(D) {
+  const turns = D.attribution.turns || [];
+  const turn = turns[Math.max(0, Math.min(S.turn, turns.length - 1))];
+  const text = S.sessionView ? D.attribution.summary : (turn?.summary || "");
+  return `<div class="sum-box"><span class="sp-k">${S.sessionView ? "Session 点评" : "Trace 点评"}</span>${
+    text ? `<p class="summary">${esc(text)}</p>` : `<p class="summary faint">暂无点评</p>`
+  }</div>`;
+}
+
+function renderSummary() {
+  const box = $("#sumBox", root);
+  if (box && S.D) box.innerHTML = summaryInner(S.D);
+}
+
+function overviewItems(D) {
+  const C = D.compact;
+  if (!C?.turns?.length) return [];
+  const t = C.turns[Math.max(0, Math.min(S.cturn || 0, C.turns.length - 1))];
+  const comps = (t.components || []).filter((c) => c.kind === "model" && c.c).map((c) => c.c);
+  if (comps.length) return comps;
+  const answer = (t.components || []).find((c) => /答案|answer|合成|final/i.test(c.name || ""));
+  return [...(t.plans || []).slice(0, 2).map((x) => x.c), answer?.c].filter(Boolean);
+}
+
+function renderOverviewItems() {
+  const box = $("#ovBox", root);
+  if (!box || !S.D) return;
+  const items = overviewItems(S.D);
+  box.innerHTML = items.length
+    ? `<span class="sp-k">Overview</span><div class="ov-list">${items
+        .map((x, i) => `<div class="ov-item" title="${esc(x)}"><p><span class="ov-n">${String(i + 1).padStart(2, "0")}</span>${esc(x)}</p></div>`)
+        .join("")}</div>`
+    : "";
+}
+
 function renderIn() {
   const D = S.D;
+  $("#sanatomy", root)?.classList.remove("is-session");
+  $("#shead", root)?.classList.remove("is-session");
   const m = D.meta || {};
   const label = (S.prod.models.find((x) => x.id === D.model) || { label: D.model }).label;
   const scene = [m.task, m.subtask, m.difficulty, m.skill, m.mode].filter(Boolean);
   const scale = [m.tokens_in ? `${compact((m.tokens_in || 0) + (m.tokens_out || 0))} tokens` : null,
     m.finish_ms ? `${fmt(m.finish_ms / 1000, 1)} s` : null].filter(Boolean);
   const ids = [["会话 ID", D.ids.session], ["Trace ID", D.ids.trace], ["Case ID", D.ids.case]].filter((x) => x[1]);
-  const traces = D.input.traces;
+  const rounds = D.rounds || [];
   const group = (k, cls, vals) =>
     vals.length
       ? `<span class="cg${cls ? ` ${cls}` : ""}"><span class="cg-k">${k}</span>${vals.map((v) => `<span class="pill">${esc(v)}</span>`).join("")}</span>`
       : "";
-  $("#sin", root).innerHTML = `<div class="sample-head">
-      <h2 title="${esc(D.question || "")}">${esc(D.question || "（无提问）")}</h2>
+  const fullQ = D.question || "（无提问）";
+  const shortQ = fullQ.length > 80 ? `${fullQ.slice(0, 80)}…` : fullQ;
+  const idline = `<div class="idline">${ids.map(([k, v]) => `<button type="button" class="copy" data-copy="${esc(v)}">${k} <span class="num">${esc(v.length > 18 ? `${v.slice(0, 8)}…${v.slice(-6)}` : v)}</span></button>`).join("")}</div>`;
+  $("#shead", root).innerHTML = `<div class="sample-head">
+      <div class="headline">
+        <h2 title="${esc(fullQ)}">${esc(shortQ)}</h2>
+        ${idline}
+      </div>
       <div class="chip-groups">
         ${D.split === "lost" ? `<span class="cg"><span class="pill lost">流失用户</span></span>` : ""}
         ${group("模型", "is-model", [label])}
@@ -592,61 +679,57 @@ function renderIn() {
         ${group("场景", "is-scene", scene)}
         ${group("规模", "is-scale", scale)}
       </div>
-      <div class="idline">${ids.map(([k, v]) => `<button type="button" class="copy" data-copy="${esc(v)}">${k} <span class="num">${esc(v.length > 18 ? `${v.slice(0, 8)}…${v.slice(-6)}` : v)}</span></button>`).join("")}</div>
-      ${traces.length > 1 ? `<div class="trace-tabs" id="ttabs">${traces.map((t, i) => `<button type="button" class="pill" data-t="${i}" aria-pressed="${i === S.trace}">第 ${i + 1} 轮${t.agent ? ` · ${esc(t.agent)}` : ""}</button>`).join("")}</div>` : ""}
-      <div id="wf"></div>
-    </div>
-    <div class="timeline" id="tl"></div>`;
+      ${rounds.length || D.attribution.summary || D.attribution.session_problems?.length ? `<div class="trace-tabs" id="ttabs">${rounds.map((r, i) => {
+        const t = D.input.traces[r.trace];
+        return `<button type="button" class="pill" data-t="${i}" aria-pressed="${!S.sessionView && i === S.round}"${t?.agent ? ` title="${esc(t.agent)}"` : ""}>第 ${i + 1} 轮</button>`;
+      }).join("")}<button type="button" class="pill" data-t="session" aria-pressed="${S.sessionView}">session 总评</button></div>` : ""}
+      <div id="ovBox" class="ov-box"></div>
+      <div id="sumBox">${summaryInner(D)}</div>
+      <div id="ov" class="ov-grid"></div>
+    </div>`;
   if (D.input.missing) {
-    $("#tl", root).innerHTML = `<div class="empty">这一组没有找到对应的评测输入。</div>`;
+    $("#stl", root).innerHTML = `<div class="empty">这一组没有找到对应的评测输入。</div>`;
+    $("#ov", root).innerHTML = "";
+    scheduleThreads();
     return;
   }
   renderTrace();
 }
 
 function renderTrace() {
-  const tr = S.D.input.traces[S.trace];
+  renderSummary();
+  const D = S.D;
+  const session = S.sessionView;
+  renderOverviewItems();
+  $("#sanatomy", root)?.classList.toggle("is-session", session);
+  $("#shead", root)?.classList.toggle("is-session", session);
+  $$("#ttabs .pill", root).forEach((b) => {
+    const tab = b.dataset.t === "session";
+    b.setAttribute("aria-pressed", String(tab ? session : (!session && Number(b.dataset.t) === S.round)));
+  });
+  if (session) {
+    $("#sout", root).innerHTML = "";
+    $("#stl", root).innerHTML = qaHTML(D);
+    scheduleThreads();
+    return;
+  }
+  const tr = D.input.traces[S.trace];
   if (!tr) return;
-  $$("#ttabs .pill", root).forEach((b) => b.setAttribute("aria-pressed", String(Number(b.dataset.t) === S.trace)));
-  $("#wf", root).innerHTML = waterfall(tr.messages);
-  $("#tl", root).innerHTML = tr.messages.map((m, i) => msgHTML(S.trace, i, m)).join("") || `<div class="empty">该轮没有消息</div>`;
+  renderOverview();
+  $("#stl", root).innerHTML = tr.messages.map((m, i) => msgHTML(S.trace, i, m)).join("") || `<div class="empty">该轮没有消息</div>`;
+  scheduleThreads();
 }
 
-function waterfall(msgs) {
-  const timed = msgs.filter((m) => Number.isFinite(m.at) && Number.isFinite(m.dur) && m.at >= 0 && m.dur > 0 && (m.k === "llm" || m.k === "call"));
-  if (timed.length < 2) return "";
-  const start = Math.min(...timed.map((m) => m.at));
-  const end = Math.max(...timed.map((m) => m.at + m.dur), 1);
-  const span = Math.max(1, end - start);
-  // Pack overlapping intervals into sub-lanes so simultaneous calls do not cover each other.
-  const pack = (kind) => {
-    const list = timed.filter((m) => m.k === kind).sort((a, b) => a.at - b.at || b.dur - a.dur);
-    const ends = [];
-    list.forEach((m) => {
-      let i = ends.findIndex((e) => m.at >= e);
-      if (i < 0) {
-        i = ends.length;
-        ends.push(0);
-      }
-      ends[i] = m.at + m.dur;
-      m.sub = i;
+/* Session 总评: only the chat turns, so the page reads Q → A → Q → A instead of
+   the full tool/LLM trace. */
+function qaHTML(D) {
+  const rows = [];
+  (D.input.traces || []).forEach((tr, t) => {
+    (tr.messages || []).forEach((m, i) => {
+      if (m.k === "user" || m.k === "answer") rows.push(msgHTML(t, i, m));
     });
-    return Math.max(1, ends.length);
-  };
-  const llmRows = pack("llm");
-  const callRows = pack("call");
-  const toolTop = 8 + llmRows * 7 + 5;
-  const height = Math.max(34, toolTop + callRows * 7 + 6);
-  const bars = timed
-    .map((m) => {
-      const left = Math.max(0, Math.min(99.8, (100 * (m.at - start)) / span));
-      const width = Math.max(0.2, Math.min(100 - left, (100 * m.dur) / span));
-      const top = (m.k === "llm" ? 8 : toolTop) + (m.sub || 0) * 7;
-      return `<span class="k-${m.k}" style="left:${left}%;width:${width}%;top:${top}px" title="${esc(m.name || (m.k === "llm" ? "模型" : "工具"))} · ${fmt(m.dur / 1000, 1)} s"></span>`;
-    })
-    .join("");
-  return `<div class="waterfall" style="height:${height}px" title="模型 / 工具调用时间轴 · 共 ${fmt(span / 1000, 1)} s">${bars}</div>
-    <div class="hist-axis num"><span>${start ? `${fmt(start / 1000, 1)} s` : "0 s"}</span><span>模型 ▬ 上 · 工具 ▬ 下</span><span>${fmt(end / 1000, 1)} s</span></div>`;
+  });
+  return rows.join("") || `<div class="empty">这一组没有 QA 消息</div>`;
 }
 
 /* Chat scene: the user speaks on the right, the answer answers on the left,
@@ -661,13 +744,15 @@ function msgHTML(t, i, m) {
   const who = KIND[m.k] || m.k;
   const firstUser = t === 0 ? S.D.input.traces[0].messages.findIndex((x) => x.k === "user") : -1;
   const trans = t === 0 && i === firstUser && S.D.question_zh && S.D.question_zh !== S.D.question ? S.D.question_zh : "";
+  const body = blockHTML(t, i, m);
+  const hasBody = body || trans;
   return `<div class="msg k-${m.k}${chat ? " is-chat" : ""}${folded ? " is-folded" : ""}" id="m-${t}-${i}" data-key="${key}">
     ${chat ? "" : '<span class="msg-dot" aria-hidden="true"></span>'}
     <div class="msg-body"><div class="msg-top"><span class="who">${who}</span><span class="num faint">#${i}</span>
       ${m.name ? `<span class="mname">${esc(m.name)}</span>` : ""}${m.model ? `<span class="faint">${esc(m.model)}</span>` : ""}${time}
       <span class="evs">${sevs.map((s) => `<i style="--c:${sevColor(s)}" title="${s} 证据"></i>`).join("")}</span>
-      ${FOLD_OPEN.has(m.k) ? "" : `<button type="button" class="toggle" data-fold="${key}">${folded ? "展开" : "收起"}</button>`}</div>
-      ${blockHTML(t, i, m)}${trans ? `<div class="msg-zh">${esc(trans)}</div>` : ""}</div></div>`;
+      ${FOLD_OPEN.has(m.k) || !hasBody ? "" : `<button type="button" class="toggle" data-fold="${key}">${folded ? "展开" : "收起"}</button>`}</div>
+      ${body}${trans ? `<div class="msg-zh">${esc(trans)}</div>` : ""}</div></div>`;
 }
 
 function blockHTML(t, mi, m) {
@@ -682,7 +767,7 @@ function blockHTML(t, mi, m) {
   return blocks
     .map(({ b, bi }) => {
       const lab = b.l === "think" ? "思考" : b.l && b.l.startsWith("call:") ? `→ ${b.l.slice(5)}` : "";
-      const body = pieceHTML(t, mi, bi, b);
+      const body = pieceHTML(t, mi, bi, b, m.k === "answer");
       return `${lab ? `<span class="blk-label">${esc(lab)}</span>` : ""}<div class="blk${b.f === "json" ? " is-json" : ""}">${body}</div>`;
     })
     .join("");
@@ -696,13 +781,17 @@ function markHTML(cover, body) {
   return `<mark class="ev" data-e="${e.join(" ")}" style="--c:${sevColor(S.D._ix.sev.get(e[0]))}">${body}</mark>`;
 }
 
-function pieceHTML(t, mi, bi, b) {
+function pieceHTML(t, mi, bi, b, plain = false) {
   const D = S.D;
+  const gaps = b.x.some((x) => typeof x !== "string");
+  // The final answer is prose we want to read: give Markdown precedence over
+  // per-character evidence highlighting, which would otherwise leave raw
+  // tables/lists on screen. Evidence dots stay in the message header.
+  if (plain && !gaps) return renderContent(b.x.join(""), b.f);
   const ids = (D._ix.byBlock.get(`${t}:${mi}:${bi}`) || []).filter((e) => D.evidence[e].src === "attr" || e === S.active);
   const marks = ids
     .filter((e) => D.evidence[e].o)
     .map((e) => ({ e: [e], src: D.evidence[e].src, s: D.evidence[e].o[0], z: D.evidence[e].o[1] }));
-  const gaps = b.x.some((x) => typeof x !== "string");
 
   if (!marks.length && !gaps) return renderContent(b.x.join(""), b.f);
   if (!marks.length) {
@@ -740,6 +829,32 @@ function rerenderMsg(t, i) {
   if (el) el.outerHTML = msgHTML(t, i, S.D.input.traces[t].messages[i]);
 }
 
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) {}
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "0";
+    ta.style.left = "-9999px";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  } catch (e) {
+    return false;
+  }
+}
+
 function onInputClick(e) {
   const fold = e.target.closest("[data-fold]");
   if (fold) {
@@ -750,29 +865,25 @@ function onInputClick(e) {
   }
   const tab = e.target.closest("#ttabs [data-t]");
   if (tab) {
-    selectRound(Number(tab.dataset.t));
+    selectRound(tab.dataset.t === "session" ? "session" : Number(tab.dataset.t));
     return;
   }
   const copy = e.target.closest("[data-copy]");
   if (copy) {
-    navigator.clipboard && navigator.clipboard.writeText(copy.dataset.copy);
     const old = copy.textContent;
-    copy.textContent = "已复制";
-    copy.classList.add("done");
-    setTimeout(() => {
-      copy.textContent = old;
-      copy.classList.remove("done");
-    }, 1200);
+    copyText(copy.dataset.copy).then((ok) => {
+      copy.textContent = ok ? "已复制" : "复制失败";
+      copy.classList.add("done");
+      setTimeout(() => {
+        copy.textContent = old;
+        copy.classList.remove("done");
+      }, 1200);
+    });
     return;
   }
   const mark = e.target.closest("mark.ev");
   if (mark) {
     const p = S.D._ix.owner.get(Number(mark.dataset.e.split(" ")[0]));
-    if (outSeg.get() !== "attr") {
-      outSeg.set("attr", { silent: true });
-      ctx.navigate({ tab: "attr" }, { replace: true });
-      renderOut();
-    }
     flash($(`#pc-${p}`, root), true);
   }
 }
@@ -780,12 +891,22 @@ function onInputClick(e) {
 function jump(eid) {
   const ev = S.D.evidence[eid];
   if (!ev || ev.m == null) return;
+  const wasSession = S.sessionView;
+  S.sessionView = false;
   if (ev.t !== S.trace) {
+    const at = S.D.rounds?.findIndex((r) => r.trace === ev.t) ?? -1;
+    const rr = at >= 0 ? S.D.rounds[at] : null;
     S.trace = ev.t;
-    S.round = ev.t;
-    S.cturn = ev.t;
+    if (rr) {
+      S.round = at;
+      S.turn = rr.turn;
+      S.cturn = rr.compact;
+    }
     renderTrace();
-    $$("#atabs .pill", root).forEach((b) => b.setAttribute("aria-pressed", String(Number(b.dataset.at) === ev.t)));
+    renderOut();
+  } else if (wasSession) {
+    renderTrace();
+    renderOut();
   }
   const prev = S.active;
   S.active = ev.src === "compact" ? eid : null;
@@ -808,12 +929,83 @@ function flash(el, scroll) {
   el.classList.add("flash");
 }
 
+/* ---------------------------------------------------------------- evidence threads */
+let threadFrame = 0;
+let threadObs = null;
+
+function wireThreads() {
+  const box = $("#sanatomy", root);
+  if (!box) return;
+  const focus = (pid) => {
+    const svg = $(".threads svg", box);
+    if (!svg) return;
+    const prob = pid == null || !S.D ? null : S.D.attribution.problems.find((p) => p.id === pid);
+    const msgs = new Set(prob ? prob.ev.map((e) => S.D.evidence[e]).filter((ev) => ev && ev.t === S.trace && ev.m != null).map((ev) => ev.m) : []);
+    box.classList.toggle("is-focus", !!prob);
+    $$(".msg", box).forEach((m) => m.classList.toggle("on", msgs.has(Number(m.dataset.key.split(":")[1]))));
+    $$("path", svg).forEach((p) => p.classList.toggle("on", p.dataset.p === String(pid)));
+  };
+  box.addEventListener("pointerover", (e) => {
+    const c = e.target.closest(".pcard");
+    if (c) focus(Number(c.id.replace("pc-", "")));
+  });
+  box.addEventListener("pointerleave", () => focus(null));
+  if (threadObs) threadObs.disconnect();
+  threadObs = new ResizeObserver(scheduleThreads);
+  threadObs.observe(box);
+}
+
+function scheduleThreads() {
+  if (threadFrame) return;
+  threadFrame = requestAnimationFrame(() => {
+    threadFrame = 0;
+    drawThreads();
+  });
+}
+
+function drawThreads() {
+  const box = $("#sanatomy", root);
+  const svg = box && $(".threads svg", box);
+  if (!svg) return;
+  if (!S.D) {
+    svg.innerHTML = "";
+    return;
+  }
+  const host = svg.getBoundingClientRect();
+  if (!host.width) return;
+  let paths = "";
+  $$("#sattr .pcard", root).forEach((card) => {
+    const pid = Number(card.id.replace("pc-", ""));
+    const prob = S.D.attribution.problems.find((p) => p.id === pid);
+    if (!prob) return;
+    const pr = card.getBoundingClientRect();
+    const x2 = pr.left - host.left;
+    const y2 = pr.top + 22 - host.top;
+    const seen = new Set();
+    prob.ev.forEach((e) => {
+      const ev = S.D.evidence[e];
+      if (!ev || ev.t !== S.trace || ev.m == null || seen.has(ev.m)) return;
+      const msg = $(`#m-${S.trace}-${ev.m}`, root);
+      if (!msg) return;
+      seen.add(ev.m);
+      const r = ($(".msg-body", msg) || msg).getBoundingClientRect();
+      const x1 = r.right - host.left;
+      const y1 = r.top + Math.min(26, r.height / 2) - host.top;
+      const span = Math.max(24, x2 - x1);
+      paths += `<path data-p="${pid}" data-m="${ev.m}" style="--c:${sevColor(prob.sev)}" d="M${x1} ${y1} C ${x1 + span * 0.55} ${y1}, ${x2 - span * 0.45} ${y2}, ${x2} ${y2}"/>`;
+    });
+  });
+  svg.innerHTML = paths;
+}
+
 /* ---------------------------------------------------------------- output */
 function renderOut() {
   const D = S.D;
   if (!D) return;
-  $("#sout", root).innerHTML = `<div class="out">${outSeg.get() === "compact" ? compactHTML(D) : attrHTML(D)}</div>`;
+  $("#sout", root).innerHTML = `<div class="out">${compactHTML(D)}</div>`;
+  $("#sattr", root).innerHTML = `<div class="out">${attrHTML(D)}</div>`;
   requestAnimationFrame(markCmapScroll);
+  scheduleThreads();
 }
 
 const evAt = (ev, multi) => (ev.m == null ? "未定位" : `${multi ? `${ev.t + 1}·` : ""}#${ev.m}`);
@@ -821,8 +1013,6 @@ const evAt = (ev, multi) => (ev.m == null ? "未定位" : `${multi ? `${ev.t + 1
 function attrHTML(D) {
   const A = D.attribution;
   const multi = D.input.traces.length > 1;
-  const counts = SEV.map((s) => A.problems.filter((p) => p.sev === s).length);
-  const total = A.problems.length;
   const tax = ctx.data.taxonomy;
 
   const card = (p) => {
@@ -831,46 +1021,40 @@ function attrHTML(D) {
       const ev = D.evidence[e];
       return `<button type="button" class="evbtn" data-e="${e}"${ev.m == null ? " disabled" : ""}><span class="at">${evAt(ev, multi)}</span><span class="qt">${esc(ev.q)}</span></button>`;
     };
-    const CAP = 3;
-    const evs = p.ev.length > CAP
-      ? `${p.ev.slice(0, CAP).map(evOne).join("")}<details class="evmore"><summary>其余 ${p.ev.length - CAP} 条证据</summary>${p.ev.slice(CAP).map(evOne).join("")}</details>`
-      : p.ev.map(evOne).join("");
-    const more = [p.why && ["原因", p.why], p.sevr && ["定级理由", p.sevr], p.calc && p.calc.length && ["核算", p.calc.join("\n")]].filter(Boolean);
+    const evs = p.ev.map(evOne).join("");
+    const more = [p.ph && ["现象", p.ph], p.why && ["原因", p.why], p.sevr && ["定级理由", p.sevr], p.calc && p.calc.length && ["核算", p.calc.join("\n")]].filter(Boolean);
+    const comp = p.fam && p.comp && p.fam !== p.comp ? `${p.fam} › ${p.comp}` : (p.comp || p.fam || "");
     return `<article class="pcard" id="pc-${p.id}" style="--c:${sevColor(p.sev)}">
       <div class="pcard-head"><span class="sev-badge">${p.sev || "—"}</span><h3>${esc(p.label)}</h3></div>
-      <div class="pcard-meta"><span>${esc(ROLE[p.role] || p.role || "—")}</span>${p.fam ? `<span class="faint">${esc(p.fam)} › ${esc(p.comp || "")}</span>` : ""}
-        ${p.cl ? `<button type="button" class="path" data-pattern="${p.cl.path}" title="${esc((pat && pat.plain) || "")}"><span class="mono">${p.cl.path}</span>${esc(pat ? pat.name : "")}</button>` : `<span class="faint">未聚类</span>`}</div>
-      ${p.ph ? `<p class="pcard-ph">${esc(p.ph)}</p>` : ""}
+      <div class="pcard-meta">${comp ? `<span class="faint">${esc(comp)}</span>` : ""}
+        ${p.cl ? `<button type="button" class="path" data-pattern="${p.cl.path}" title="${esc((pat && pat.plain) || "")}"><span class="mono">${p.cl.path}</span><span>${esc(pat ? pat.name : "")}</span></button>` : `<span class="faint">未聚类</span>`}</div>
       ${more.length ? `<details class="pcard-more"><summary>${more.map(([k]) => k).join(" · ")}</summary><dl>${
         more.map(([k, v]) => `<dt>${k}</dt><dd${k === "核算" ? ' class="mono"' : ""}>${esc(v)}</dd>`).join("")
       }</dl></details>` : ""}
-      <div class="evlist">${evs}</div></article>`;
+      ${p.ev.length ? `<details class="pcard-more pcard-evidence"><summary>证据 ${p.ev.length}</summary><div class="evlist">${evs}</div></details>` : ""}</article>`;
   };
   const order = (ids) => ids.map((i) => A.problems[i]).sort((a, b) => SEV.indexOf(a.sev) - SEV.indexOf(b.sev));
-  const group = (title, note, ids, round = null) => {
+  const group = (ids, round = null) => {
     const cards = order(ids);
     if (!cards.length) return "";
-    return `<section class="tgroup"${round != null ? ` id="round-${round}" data-round="${round}"` : ""}><header class="tgroup-head"><span>${title}</span><span class="faint num">${cards.length}</span>${note ? `<span class="faint">${note}</span>` : ""}</header>${cards.map(card).join("")}</section>`;
+    return `<section class="tgroup"${round != null ? ` id="round-${round}" data-round="${round}"` : ""}>${cards.map(card).join("")}</section>`;
   };
-  const current = A.turns[Math.max(0, Math.min(S.round, A.turns.length - 1))];
-  let body = current
-    ? group(multi ? `第 ${S.round + 1} 轮` : "本轮", current.correct === false ? "判为错误" : current.correct === true ? "判为正确" : "", current.problems, S.round)
-    : "";
-  body += group("整场会话", "", A.session_problems);
+  const turn = D.rounds?.[S.round]?.turn ?? S.turn ?? S.round;
+  const current = A.turns[Math.max(0, Math.min(turn, A.turns.length - 1))];
+  let body = S.sessionView ? group(A.session_problems || []) : (current ? group(current.problems, S.round) : "");
+  return body || `<div class="empty">未发现 跨trace 问题 👍</div>`;
+}
 
-  const sumHTML = A.summary ? `<div class="sum-box"><p class="summary">${esc(A.summary)}</p></div>` : "";
-  return `<div class="attr-head">
-      ${sumHTML}
-      <div class="sevrow" role="list" aria-label="问题严重度">
-        ${SEV.map((s, i) => counts[i]
-          ? `<span class="sev-tile" role="listitem" style="--c:${sevColor(i)}"><b class="num">${counts[i]}</b><span>${s}</span></span>`
-          : "").join("")}
-        <span class="sev-total num">${total ? `${total} 个问题` : "无问题"}</span>
-      </div>
-    </div>
-    ${multi ? `<div class="trace-tabs ctabs" id="atabs">${A.turns.map((t, i) =>
-      `<button type="button" class="pill" data-at="${i}" aria-pressed="${i === S.round}">第 ${i + 1} 轮</button>`).join("")}</div>` : ""}
-    ${body || `<div class="empty">归因没有记下问题</div>`}`;
+function renderOverview() {
+  const ov = $("#ov", root);
+  if (!ov) return;
+  requestAnimationFrame(() => {
+    if (!ov.isConnected) return;
+    const C = S.D && S.D.compact;
+    const t = C && C.turns && C.turns[S.cturn];
+    ov.innerHTML = t ? compactMapHTML(S.D, t, C.turns.length > 1) : "";
+    requestAnimationFrame(markCmapScroll);
+  });
 }
 
 function compactHTML(D) {
@@ -879,19 +1063,13 @@ function compactHTML(D) {
   const turns = C.turns;
   const multi = turns.length > 1;
   S.cturn = Math.max(0, Math.min(S.cturn || 0, turns.length - 1));
-  let html = (C.overview || []).length
-    ? `<ol class="overview">${C.overview.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>`
-    : "";
-  if (multi) {
-    html += `<div class="trace-tabs ctabs">${turns.map((t, i) =>
-      `<button type="button" class="pill" data-ct="${i}" aria-pressed="${i === S.cturn}">第 ${i + 1} 轮</button>`).join("")}</div>`;
-  }
   const t = turns[S.cturn];
-  return html + (t ? compactTurnHTML(D, t, multi) : "");
+  return t ? compactFlowHTML(D, t, multi) : "";
 }
 
-function compactTurnHTML(D, t, multi) {
+function compactParts(D, t, multi) {
   const nodes = [];
+  const trace = D.rounds?.find((r) => r.compact === t.turn)?.trace ?? t.turn;
   CX.forEach(([key, name, cls], ci) => {
     let prev = cls === "plan" ? -1 : null;
     (t[key] || []).forEach((x, i) => {
@@ -901,8 +1079,38 @@ function compactTurnHTML(D, t, multi) {
       nodes.push({ x, name, cls, ci, i, pos, ev: x.ev.filter((e) => D.evidence[e] && D.evidence[e].m != null) });
     });
   });
+  const answer = (t.components || []).find((c) => /答案|answer|合成|final/i.test(c.name || ""));
+  const msgs = D.input.traces?.[trace]?.messages || [];
+  let lastAnswer = -1;
+  msgs.forEach((m, i) => { if (m.k === "answer") lastAnswer = i; });
+  if (answer || lastAnswer >= 0) {
+    let ev = (answer?.ev || []).filter((e) => D.evidence[e] && D.evidence[e].m != null);
+    if (!ev.length && lastAnswer >= 0) {
+      const anchor = D.evidence.findIndex((e) => e.t === trace && e.m === lastAnswer && e.src === "attr");
+      if (anchor >= 0) ev = [anchor];
+    }
+    const ms = ev.map((e) => D.evidence[e].m);
+    const pos = ms.length ? Math.max(...ms) : (lastAnswer >= 0 ? lastAnswer : Infinity);
+    nodes.push({
+      x: { c: answer?.c || "生成最终答案并交付" }, name: "答案生成", cls: "answer",
+      ci: CX.length + 1, i: 0, pos, ev,
+    });
+  }
   nodes.sort((a, b) => a.pos - b.pos || a.ci - b.ci || a.i - b.i);
-  const at = (pos) => (Number.isFinite(pos) && pos >= 0 ? `${multi ? `${t.turn + 1}·` : ""}#${pos}` : "");
+  const at = (pos) => (Number.isFinite(pos) && pos >= 0 ? `${multi ? `${trace + 1}·` : ""}#${pos}` : "");
+  return { nodes, at };
+}
+
+function compactMapHTML(D, t, multi) {
+  const { nodes, at } = compactParts(D, t, multi);
+  const sp = skillPoints(t.components || [], D, at);
+  const ov = $("#ov", root);
+  const avail = Math.max(300, ov ? ov.clientWidth : 900);
+  return `${flowMap(nodes, t.turn, at, avail)}${sp}`;
+}
+
+function compactFlowHTML(D, t, multi) {
+  const { nodes, at } = compactParts(D, t, multi);
   const flow = nodes
     .map((n, k) => {
       const tag = !k || nodes[k - 1].cls !== n.cls ? n.name : "";
@@ -911,26 +1119,25 @@ function compactTurnHTML(D, t, multi) {
         <span class="cf-tag">${tag}</span><div class="cf-body"><span class="cf-at num">${at(n.pos)}</span><span class="cf-text">${esc(n.x.c)}</span>${refs}</div></div>`;
     })
     .join("");
-  return `${flowMap(nodes, t.turn, at)}${skillPoints(t.components || [], D, at)}<div class="cflow">${flow}</div>`;
+  return `<div class="cflow">${flow}</div>`;
 }
 
 const CX = [
   ["plans", "规划", "plan"], ["reasoning", "推理", "think"], ["execution", "执行", "exec"], ["tool_errors", "报错", "err"],
-  ["reflections", "反思", "refl"], ["key_data", "关键数据", "data"], ["artifacts", "产物", "art"],
+  ["reflections", "反思", "refl"], ["artifacts", "产物", "art"],
 ];
 
 /* Swimlane map of one turn: lanes are step types, x is the order in the trace, one path threads the steps. */
 const LANES = ["plan", "think", "exec", "err", "refl"];
 const LANE_NAME = Object.fromEntries(CX.map(([, name, cls]) => [cls, name]));
-function flowMap(nodes, turn, at) {
+function flowMap(nodes, turn, at, avail) {
   const steps = nodes.map((n, k) => ({ n, k })).filter((s) => LANES.includes(s.n.cls));
   if (steps.length < 2) return "";
   const lanes = LANES.filter((c) => steps.some((s) => s.n.cls === c));
   const L = 40;
   const H = 26;
   const P = 12;
-  const avail = Math.max(280, ($("#sout", root) || {}).clientWidth - 56 || 400);
-  const dx = Math.max(10, Math.min(44, (avail - L - 2 * P) / (steps.length - 1)));
+  const dx = Math.max(8, (avail - L - 2 * P) / Math.max(1, steps.length - 1));
   const W = L + 2 * P + dx * (steps.length - 1);
   const h = 2 * P + (lanes.length - 1) * H;
   const xy = steps.map((s, i) => [L + P + i * dx, P + lanes.indexOf(s.n.cls) * H]);
@@ -970,24 +1177,14 @@ function skillPoints(list, D, at) {
     .map((x) => {
       const [label, c] = COMP_KIND[x.kind] || [x.x.kind || "组件", "var(--t3)"];
       const base = String(x.x.name).split("/").filter(Boolean).pop() || x.x.name;
-      return `<button type="button" class="sp" style="--c:${c}" data-e="${x.ev[0]}" data-tip="${esc(x.x.name)}|${esc(label)} · ${x.ev.length} 处证据 · ${at(x.first) || "—"}${x.x.c ? ` — ${esc(x.x.c)}` : ""}">
-        <i class="sp-dot"></i><span class="sp-name">${esc(base)}</span><span class="sp-n num">${x.ev.length}</span></button>`;
+      return `<button type="button" class="sp" style="--c:${c}" data-e="${x.ev[0]}" data-tip="${esc(x.x.name)}|${esc(label)} · ${x.ev.length} 次调用 · ${at(x.first) || "—"}${x.x.c ? ` — ${esc(x.x.c)}` : ""}">
+        <i class="sp-dot"></i><span class="sp-name">${esc(base)}</span><span class="sp-n num">${x.ev.length} 次调用</span></button>`;
     })
     .join("");
   return `<div class="sp-box"><span class="sp-k">组件</span><div class="sp-list">${chips}</div></div>`;
 }
 
 function onOutClick(e) {
-  const at = e.target.closest("[data-at]");
-  if (at) {
-    selectRound(Number(at.dataset.at));
-    return;
-  }
-  const ct = e.target.closest("[data-ct]");
-  if (ct) {
-    selectRound(Number(ct.dataset.ct), { scroll: false });
-    return;
-  }
   const cm = e.target.closest("[data-cf]");
   if (cm) {
     const row = document.getElementById(cm.dataset.cf);

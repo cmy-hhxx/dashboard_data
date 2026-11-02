@@ -56,7 +56,7 @@ WORST_KEYS = SEVERITIES + ["none"]
 # Only fields the recall list and its filters/search actually read. Keeping the
 # index lean matters more than the full aggregate row: it is fetched by every
 # 具体数据 view and can be several MB.
-INDEX_FIELDS = ("s", "q", "m", "sp", "d", "sid", "tid", "w", "n", "tr", "pt", "st", "lb", "case", "task", "skill")
+INDEX_FIELDS = ("s", "q", "m", "sp", "d", "sid", "tid", "w", "n", "tr", "pt", "st", "lb", "case", "task", "sub", "skill")
 
 PRODUCTS = {
     "wencai": {"label": "问财", "models": ["a_fast", "a_expert", "b_fast", "b_expert"]},
@@ -468,8 +468,37 @@ def debug(message):
         print(f"[build] {message}", file=sys.stderr, flush=True)
 
 
+def choose_input(cands, turn_tids, cache):
+    """Pick the duplicate input snapshot that actually covers the attribution turns.
+
+    The same session can be exported twice with the same request time: once with
+    only the first trace and once with every round.  Pairing used to take the
+    first row, so later rounds' ``trace_index`` had no transcript and all their
+    evidence ended up unlocated.
+    """
+    need = {t for t in turn_tids if t}
+    if len(cands) < 2 or not need:
+        return cands[0]
+    best = None
+    for cand in cands:
+        try:
+            record = json.loads(cache.line(*cand))
+        except (OSError, IndexError, ValueError):
+            continue
+        ids = [(t.get("meta") or {}).get("trace_id") for t in record.get("traces") or []]
+        cover = len(need & set(ids))
+        # Prefer full coverage, then the snapshot with the fewest extra traces.
+        score = (cover == len(need), cover, -len(ids) if cover == len(need) else len(ids))
+        if best is None or score > best[0]:
+            best = (score, cand)
+    return best[1] if best else cands[0]
+
+
 def pairs_from_keys(root: Path, cache: LineCache):
-    """Pair by session id + request time inside each model/date file; duplicates in file order."""
+    """Pair by session id + request time inside each model/date file.
+
+    Duplicate inputs for one key are resolved by trace coverage, not file order.
+    """
     pairs, unmatched = [], Counter()
     for out in sorted(root.glob("*/eval_output/*/*/*_attribution-*.jsonl")):
         rel = out.relative_to(root).as_posix()
@@ -509,10 +538,15 @@ def pairs_from_keys(root: Path, cache: LineCache):
         compacts = index([cmp_rel] if cmp_rel else [], lambda d: d.get("session_meta") or {})
         for n, raw in enumerate(cache.iter_lines(rel), 1):
             try:
-                key = pair_key(json.loads(raw).get("session_meta") or {})
+                payload = json.loads(raw)
+                key = pair_key(payload.get("session_meta") or {})
             except ValueError:
                 continue
-            inp = inputs[key].pop(0) if inputs.get(key) else None
+            turn_tids = [(t.get("meta") or {}).get("trace_id") for t in payload.get("turns") or []]
+            cands = inputs.get(key) or []
+            inp = choose_input(cands, turn_tids, cache) if cands else None
+            if inp:
+                cands.remove(inp)
             comp = compacts[key].pop(0) if compacts.get(key) else None
             if inp is None:
                 unmatched["input"] += 1
@@ -871,6 +905,15 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
         stats["ev_located" if exact else "ev_anchored"] += 1
         return {"t": t, "m": mi, "b": bi, "o": [s, e]}
 
+    def place_global(idx, path, quote):
+        """Compact evidence IDs index the flattened session transcript, not one trace."""
+        for t, (_, rows) in enumerate(traces):
+            if idx < len(rows):
+                return place(t, idx, path, quote)
+            idx -= len(rows)
+        stats["ev_missing_msg"] += 1
+        return None
+
     # ---- attribution
     evidence = []
 
@@ -936,7 +979,7 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
             refs = []
             for ev in items or []:
                 m = EVIDENCE_ID.match(ev.get("evidence_id") or "")
-                loc = place(turn, int(m[1]), ev.get("evidence_id", "").split("_", 6)[-1] if m else "", ev.get("quote")) if m else None
+                loc = place_global(int(m[1]), ev.get("evidence_id", "").split("_", 6)[-1] if m else "", ev.get("quote")) if m else None
                 eid = add_evidence(ev, loc, {"src": "compact"})
                 refs.append(eid)
             return refs
@@ -1066,7 +1109,8 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
         "tr": len(out_traces), "mc": sum(len(t["messages"]) for t in out_traces), "tc": tool_calls,
         "lang": detail["lang"],
     }
-    for key, value in (("task", first_meta.get("task")), ("diff", first_meta.get("difficulty")),
+    for key, value in (("task", first_meta.get("task")), ("sub", first_meta.get("subtask")),
+                       ("diff", first_meta.get("difficulty")),
                        ("skill", imeta.get("skill_name") or None), ("case", case if product == "wencai" else None)):
         if value:
             row[key] = value
@@ -1409,8 +1453,11 @@ def taxonomy_out(taxonomy, used_patterns):
     }
 
 
-def anatomy_candidate(detail):
-    """One mid-sized single-trace example per product, selected while the input is in memory."""
+GOLDEN_LIMIT = 10
+
+
+def golden_candidate(detail):
+    """A mid-sized single-trace example, selected while the input is in memory."""
     traces = detail["input"]["traces"]
     if len(traces) != 1:
         return None
@@ -1425,7 +1472,7 @@ def anatomy_candidate(detail):
     msgs = traces[0]["messages"]
     return score, {
         "slug": detail["slug"], "product": detail["product"], "model": detail["model"],
-        "question": detail["question"],
+        "date": detail["date"], "question": detail["question"],
         "messages": [
             {"k": m["k"], "name": m.get("name"), "dur": m.get("dur"),
              "text": clip(next((x for b in m["blocks"] for x in b["x"] if isinstance(x, str) and x.strip()), ""), 90)}
@@ -1437,17 +1484,34 @@ def anatomy_candidate(detail):
              "msgs": sorted({detail["evidence"][e]["m"] for e in p["ev"] if "m" in detail["evidence"][e]})}
             for p in probs
         ],
-        "compact": {
-            k: len(detail["compact"]["turns"][0][k]) if detail["compact"] and detail["compact"]["turns"] else 0
-            for k in ("plans", "reasoning", "execution", "reflections", "tool_errors", "components", "key_data")
-        },
-        "overview": (detail["compact"] or {}).get("overview", [])[:3],
-        "summary": clip(detail["attribution"]["summary"], 260),
     }
 
 
-def system_facts(all_samples, anatomy):
-    """Real material for the 评测体系 page: severity examples and one anatomy sample."""
+def golden_candidates(items, limit=GOLDEN_LIMIT):
+    """Top-scoring cases, taking a new severity/role mix before repeats."""
+    ordered = sorted(items, key=lambda x: x[0], reverse=True)
+    seen, out = set(), []
+    for _, case in ordered:
+        key = (
+            tuple(sorted({p["sev"] for p in case["problems"] if p["sev"]})),
+            tuple(sorted({p["role"] for p in case["problems"] if p["role"]})),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(case)
+        if len(out) >= limit:
+            return out
+    for _, case in ordered:
+        if case not in out:
+            out.append(case)
+            if len(out) >= limit:
+                break
+    return out
+
+
+def system_facts(all_samples, pool):
+    """Real material for the 评测体系 page: severity examples and golden cases."""
     examples = {s: [] for s in SEVERITIES}
     ev_per_problem = Counter()
     ev_component = Counter()
@@ -1473,7 +1537,7 @@ def system_facts(all_samples, anatomy):
         "severity_examples": picked,
         "evidence_per_problem": {str(k): v for k, v in sorted(ev_per_problem.items())},
         "evidence_component": [{"id": k, "n": v} for k, v in ev_component.most_common(6)],
-        "anatomy": {product: value[1] for product, value in anatomy.items()},
+        "goldens": {product: golden_candidates(items) for product, items in pool.items()},
     }
 
 
@@ -1540,7 +1604,7 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print):
     stats = Counter()
     samples = defaultdict(list)
     seen_slugs = set()
-    anatomy = {}
+    golden_pool = defaultdict(list)
     out_dir.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=".samples-", dir=out_dir))
     detail_bytes = 0
@@ -1567,9 +1631,13 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print):
         seen_slugs.add(slug)
         detail, row, facts = build_sample(pair, inp, attr, comp, cluster_index, stats)
         detail["slug"] = row["s"] = slug
-        candidate = anatomy_candidate(detail)
-        if candidate and (pair["product"] not in anatomy or candidate[0] > anatomy[pair["product"]][0]):
-            anatomy[pair["product"]] = candidate
+        candidate = golden_candidate(detail)
+        if candidate:
+            picked = golden_pool[pair["product"]]
+            picked.append(candidate)
+            if len(picked) > GOLDEN_LIMIT * 4:
+                picked.sort(key=lambda x: x[0], reverse=True)
+                del picked[GOLDEN_LIMIT * 4:]
         detail_bytes += write_json(staging / f"{slug}.json", detail)
         samples[pair["product"]].append((slug, slim_detail(detail), row, facts))
         stats["details"] += 1
@@ -1615,7 +1683,7 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print):
         "schema": 2, "generated_at": generated,
         "source": {**pairing_info, "pairs": len(pairs), "root": datasets.name},
         "taxonomy": taxonomy_out(taxonomy, used_patterns) if taxonomy["stages"] else None,
-        "system": system_facts(all_samples, anatomy),
+        "system": system_facts(all_samples, golden_pool),
         "products": products,
     }
     index = {"schema": 2, "generated_at": generated, "products": {}}

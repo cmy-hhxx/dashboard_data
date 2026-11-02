@@ -5,13 +5,20 @@ import { sunburst } from "./sunburst.js";
 
 let ctx;
 let shown = null;
+let lastDetail = null;
 const SPLIT_SHORT = { daily: "日常", lost: "流失" };
 const dot = (c) => `<i style="--c:${c}"></i>`;
 
-export function render(root, c) {
+export async function render(root, c) {
   ctx = c;
   const p = c.data.products[c.product];
-  const key = `${c.product}|${c.data.generated_at}`;
+  const params = new URLSearchParams(location.search);
+  const detail = params.get("detail") === "eval";
+  const ed = detail ? params.get("ed") || "" : "";
+  const em = detail ? params.get("em") || "" : "";
+  const ep = Math.max(1, Number(params.get("ep")) || 1);
+  const edp = Math.max(1, Number(params.get("edp")) || 1);
+  const key = `${c.product}|${c.data.generated_at}|${detail ? `eval|${ed}|${em}|${ep}|${edp}` : "home"}`;
   if (shown === key && root.firstChild) return;
   shown = key;
   if (!p) {
@@ -20,10 +27,24 @@ export function render(root, c) {
     } 暂无评测数据。把数据放入 datasets/ 后运行 local_dev/refresh.sh。</div></article></div>`;
     return;
   }
+  if (detail) {
+    const state = evalDetailState(p, { ed, em, ep, edp });
+    const indexP = c.loadIndex().catch(() => null);
+    const index = state.model ? await indexP : null;
+    root.innerHTML = evalDetailPage(p, state, index);
+    wireEvalDetail(root, state);
+    window.scrollTo(0, 0);
+    lastDetail = true;
+    return;
+  }
   const tax = c.data.taxonomy;
   root.innerHTML = `<div class="bento">${fieldCard(p)}${volumeCard(p)}${evalCard(p)}${attrCard(p)}${clusterCard(tax)}${predictCard(p)}${matrixCard(p, tax)}</div>`;
   wire($(".bento", root), p, tax);
   runCounters(root);
+  if (lastDetail) {
+    window.scrollTo(0, 0);
+    lastDetail = null;
+  }
 }
 
 const card = (span, title, body, end = "") =>
@@ -141,27 +162,50 @@ function paintField(field, p, filter) {
 /* ---------------------------------------------------------------- 数据量: version → task → subtask */
 function volumeCard(p) {
   const k = p.kpi;
-  return card(6, "数据量", `<div class="duo" id="vol"></div>${stats([
-    ["会话", counter(k.unique_sessions ?? k.sessions)],
-    ["轨迹", counter(k.traces)],
-    ["工具调用", counter(k.tool_calls)],
-    ["总 Tokens", tokenNum(k.tokens)],
-  ])}`);
+  const input = p.input || {};
+  const pending = `<span class="stat-pending" title="当前 data.json 还没有评测输入的工具调用 / Tokens 聚合，需补数据后接入">—</span>`;
+  const tin = input.tokens_in;
+  const tout = input.tokens_out;
+  const tokens = tin != null || tout != null
+    ? `${tokenNum(tin || 0)}<span class="stat-of"> / </span>${tokenNum(tout || 0)}`
+    : pending;
+  const items = [
+    ["评测输入记录", counter(input.records ?? k.inputs)],
+    ["轨迹", counter(input.traces ?? k.traces)],
+    ["工具调用（输入口径）", input.tool_calls != null ? counter(input.tool_calls) : pending],
+    ["Tokens 输入/输出", tokens],
+  ];
+  return card(6, "数据量", `<div class="duo" id="vol"></div>${stats(items)}`);
+}
+function inputTaskNodes(prefix, tasks) {
+  return (tasks || []).map((t) => ({
+    id: `${prefix}/${t.task}`, name: t.task, n: t.n,
+    children: (t.sub || []).map((s) => ({ id: `${prefix}/${t.task}/${s.sub}`, name: s.sub, n: s.n })),
+  }));
 }
 function volTree(p) {
-  return {
-    id: "v", name: "全部", n: p.kpi.sessions,
-    children: p.field.map((g) => {
-      const id = `v/${g.split}/${g.model}`;
-      return {
-        id, name: groupName(p, g), n: g.cells.length,
-        children: (g.tree || []).map((t) => ({
-          id: `${id}/${t.id}`, name: t.id, n: t.n,
-          children: t.sub.map((s) => ({ id: `${id}/${t.id}/${s.id}`, name: s.id, n: s.n })),
-        })),
-      };
-    }),
-  };
+  const input = p.input;
+  if (input?.models) {
+    return {
+      id: "v", name: "全部", n: input.traces || sum(Object.values(input.models).map((m) => m.traces)),
+      children: (() => {
+        const order = new Map((p.models || []).map((m, i) => [m.id, i]));
+        return Object.entries(input.models)
+          .sort(([a], [b]) => (order.get(a) ?? 99) - (order.get(b) ?? 99))
+          .map(([id, m]) => ({
+            id: `v/${id}`, name: modelName(p, id), n: m.traces,
+            children: inputTaskNodes(`v/${id}`, m.tasks),
+          }));
+      })(),
+    };
+  }
+  if (input?.tasks?.length) {
+    return {
+      id: "v", name: "全部", n: input.traces || sum(input.tasks.map((t) => t.n)),
+      children: inputTaskNodes("v", input.tasks),
+    };
+  }
+  return { id: "v", name: "全部", n: p.kpi.inputs || 0, children: [] };
 }
 
 /* ---------------------------------------------------------------- 评测量: inputs vs completed per day */
@@ -280,11 +324,17 @@ function evalChart(p) {
 
 function evalStats(p) {
   const w = evalWindow(p);
-  return stats([
-    ["完成 Session", counter(w.totalSessions)],
-    ["完成 Trace", counter(w.totalTraces)],
-    ["评测 Tokens", tokenNum(w.totalTokens)],
-  ]);
+  const ratio = (a, b) => `${counter(a)}<span class="stat-of"> / ${fmt(b)}</span>`;
+  const tin = p.kpi.tokens_in;
+  const tout = p.kpi.tokens_out;
+  const items = [
+    ["完成 Session / 总量", ratio(w.totalSessions, p.kpi.unique_sessions)],
+    ["完成 Trace / 总量", ratio(w.totalTraces, p.kpi.traces)],
+    ["评测 Tokens 输入/输出", tin != null || tout != null
+      ? `${tokenNum(tin || 0)}<span class="stat-of"> / </span>${tokenNum(tout || 0)}`
+      : tokenNum(w.totalTokens)],
+  ];
+  return stats(items);
 }
 
 function evalCard(p) {
@@ -301,7 +351,222 @@ function evalCard(p) {
     </div>
     <div class="ev-legend"><span><i class="ev-done"></i>已完成</span><span><i class="ev-in"></i>评测输入</span></div>
     <div id="evChart">${evalChart(p)}</div>
-    <div id="evStats">${evalStats(p)}</div></div>`);
+    <div id="evStats">${evalStats(p)}</div></div>`,
+    `<button type="button" class="link end" id="evDetail" aria-label="查看评测数据详情">详情</button>`);
+}
+
+/* ---------------------------------------------------------------- 评测量详情: day → model → session */
+const ED_PAGE = 30;
+const ES_PAGE = 30;
+
+function edDays(p) {
+  const by = new Map();
+  evalRows(p).forEach((r) => {
+    const x = by.get(r.d) || { d: r.d, inputs: 0, evaluated: 0, sessions: 0, traces: 0, tokens: 0 };
+    x.inputs += r.inputs || 0;
+    x.evaluated += r.evaluated || 0;
+    x.sessions += r.sessions ?? r.evaluated ?? 0;
+    x.traces += r.traces ?? r.evaluated ?? 0;
+    x.tokens += r.tokens || 0;
+    by.set(r.d, x);
+  });
+  return [...by.values()].sort((a, b) => b.d.localeCompare(a.d));
+}
+
+function edModels(p, day) {
+  const by = new Map();
+  evalRows(p)
+    .filter((r) => r.d === day)
+    .forEach((r) => {
+      const key = p.unified ? `|${r.m}` : `${r.sp || ""}|${r.m}`;
+      const x = by.get(key) || {
+        key, label: groupName(p, { split: r.sp || "", model: r.m }),
+        inputs: 0, evaluated: 0, sessions: 0, traces: 0, tokens: 0,
+      };
+      x.inputs += r.inputs || 0;
+      x.evaluated += r.evaluated || 0;
+      x.sessions += r.sessions ?? r.evaluated ?? 0;
+      x.traces += r.traces ?? r.evaluated ?? 0;
+      x.tokens += r.tokens || 0;
+      by.set(key, x);
+    });
+  return [...by.values()].sort((a, b) => b.inputs - a.inputs || b.evaluated - a.evaluated || a.label.localeCompare(b.label));
+}
+
+const edTotals = (rows) => ({
+  inputs: sum(rows.map((r) => r.inputs || 0)),
+  evaluated: sum(rows.map((r) => r.evaluated || 0)),
+  sessions: sum(rows.map((r) => r.sessions || 0)),
+  traces: sum(rows.map((r) => r.traces || 0)),
+  tokens: sum(rows.map((r) => r.tokens || 0)),
+});
+const edPending = (r) => Math.max(0, (r.inputs || 0) - (r.evaluated || 0));
+const edStatus = (r) =>
+  r.evaluated > 0
+    ? `<span class="ok" aria-label="已评测">✅</span>`
+    : r.inputs > 0
+      ? `<span class="pending">未评测</span>`
+      : `<span class="faint">—</span>`;
+
+function edSessionGroups(rows) {
+  const groups = new Map();
+  rows.forEach((r) => {
+    const key = `${r.sp}|${r.m}|${r.sid || r.s}`;
+    let g = groups.get(key);
+    if (!g) {
+      g = { key, q: r.q || "", tr: 0, n: 0, w: "none" };
+      groups.set(key, g);
+    }
+    g.tr += r.tr || 1;
+    g.n += r.n || 0;
+    if (r.q) g.q = r.q;
+    if (WORST.indexOf(r.w) >= 0 && (g.w === "none" || WORST.indexOf(r.w) < WORST.indexOf(g.w))) g.w = r.w;
+  });
+  return [...groups.values()].sort((a, b) => WORST.indexOf(a.w) - WORST.indexOf(b.w) || b.n - a.n || (a.q || "").localeCompare(b.q || ""));
+}
+
+function evalDetailState(p, raw) {
+  const days = edDays(p);
+  const day = days.some((x) => x.d === raw.ed) ? raw.ed : "";
+  const models = day ? edModels(p, day) : [];
+  const model = models.some((x) => x.key === raw.em) ? raw.em : "";
+  return { days, day, models, model, ep: raw.ep, edp: raw.edp };
+}
+
+const edTable = (head, rows, cls = "") =>
+  `<div class="md-table ed-table${cls ? ` ${cls}` : ""}"><table><thead><tr>${head}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+
+function edPager(page, pages, total, unit, kind) {
+  if (pages <= 1) return "";
+  const btn = (to, label, off) => `<button type="button" data-${kind}="${to}"${off ? " disabled" : ""}>${label}</button>`;
+  return `<div class="pager">${btn(1, "«", page === 1)}${btn(page - 1, "上一页", page === 1)}
+    <span class="pager-info">第 <b class="num">${page}</b> / ${pages} 页 · ${fmt(total)} ${unit}</span>
+    ${btn(page + 1, "下一页", page === pages)}${btn(pages, "»", page === pages)}</div>`;
+}
+
+function evalDetailPage(p, state, index) {
+  const { days, day, models, model } = state;
+  const total = edTotals(days);
+  const dPages = Math.max(1, Math.ceil(days.length / ED_PAGE));
+  const dpage = Math.min(Math.max(1, state.edp), dPages);
+  const dayRow = days.find((x) => x.d === day);
+  const modelRow = models.find((x) => x.key === model);
+  const all = ((index && index.products && index.products[ctx.product]) || {}).rows || [];
+  const mid = p.unified ? model.slice(1) : "";
+  const picked = model
+    ? all.filter((r) => r.d === day && (p.unified ? r.m === mid : `${r.sp}|${r.m}` === model))
+    : [];
+  const groups = edSessionGroups(picked);
+  const sPages = Math.max(1, Math.ceil(groups.length / ES_PAGE));
+  const spage = Math.min(Math.max(1, state.ep), sPages);
+  const rowTotal = modelRow || {};
+
+  const rootCrumb = day ? `<button type="button" class="mx-crumb" data-ed="root">全部日期</button>` : `<b>全部日期</b>`;
+  const dayCrumb = day
+    ? ` <i class="mx-sep">/</i> ${model ? `<button type="button" class="mx-crumb" data-ed="day">${esc(day)}</button>` : `<b>${esc(day)}</b>`}`
+    : "";
+  const modelCrumb = model ? ` <i class="mx-sep">/</i> <b>${esc(rowTotal.label || model)}</b>` : "";
+  const summary = model
+    ? `评测输入 ${fmt(rowTotal.inputs)} · 评测输出 ${fmt(rowTotal.evaluated)} · 未评测 ${fmt(edPending(rowTotal))} 条 · 完成率 ${pct(rowTotal.evaluated, rowTotal.inputs, 1)} · ${fmt(rowTotal.sessions)} 个 session`
+    : day
+      ? `评测输入 ${fmt(dayRow?.inputs || 0)} · 评测输出 ${fmt(dayRow?.evaluated || 0)} · 未评测 ${fmt(edPending(dayRow))} 条 · 完成率 ${pct(dayRow?.evaluated || 0, dayRow?.inputs || 0, 1)}`
+      : `${fmt(days.length)} 天 · 评测输入 ${fmt(total.inputs)} · 评测输出 ${fmt(total.evaluated)} · 未评测 ${fmt(edPending(total))} 条 · 完成率 ${pct(total.evaluated, total.inputs, 1)}`;
+
+  let body = "";
+  let pager = "";
+  if (!days.length) {
+    body = `<div class="empty">暂无评测日期</div>`;
+  } else if (!day) {
+    const head = `<th>日期</th><th>状态</th><th class="num">评测输入</th><th class="num">评测输出</th><th class="num">完成率</th><th class="num">Session</th><th class="num">Trace</th><th class="num">Tokens</th>`;
+    const rows = days.slice((dpage - 1) * ED_PAGE, dpage * ED_PAGE).map((r) => `<tr>
+      <td><button type="button" class="link" data-eday="${esc(r.d)}">${esc(r.d)}</button></td>
+      <td>${edStatus(r)}</td>
+      <td class="num">${fmt(r.inputs)}</td>
+      <td class="num">${fmt(r.evaluated)}</td>
+      <td class="num">${pct(r.evaluated, r.inputs, 1)}</td>
+      <td class="num">${fmt(r.sessions)}</td>
+      <td class="num">${fmt(r.traces)}</td>
+      <td class="num">${tokenNum(r.tokens)}</td>
+    </tr>`);
+    body = edTable(head, rows);
+    pager = edPager(dpage, dPages, days.length, "天", "edp");
+  } else if (!model) {
+    const head = `<th>模型</th><th>状态</th><th class="num">评测输入</th><th class="num">评测输出</th><th class="num">完成率</th><th class="num">Session</th><th class="num">Trace</th><th class="num">Tokens</th>`;
+    const rows = models.map((r) => `<tr>
+      <td><button type="button" class="link" data-emodel="${esc(r.key)}">${esc(r.label)}</button></td>
+      <td>${edStatus(r)}</td>
+      <td class="num">${fmt(r.inputs)}</td>
+      <td class="num">${fmt(r.evaluated)}</td>
+      <td class="num">${pct(r.evaluated, r.inputs, 1)}</td>
+      <td class="num">${fmt(r.sessions)}</td>
+      <td class="num">${fmt(r.traces)}</td>
+      <td class="num">${tokenNum(r.tokens)}</td>
+    </tr>`);
+    body = edTable(head, rows);
+  } else if (!index) {
+    body = `<div class="empty">样本索引读取失败，无法列出会话。</div>`;
+  } else if (!groups.length) {
+    body = `<div class="empty">该分组当天没有已完成的评测输出。</div>`;
+  } else {
+    const head = `<th>评测输入</th><th>评测输出</th><th class="num">轮</th><th></th>`;
+    const rows = groups.slice((spage - 1) * ES_PAGE, spage * ES_PAGE).map((g) => `<tr>
+      <td>${esc(g.q || "（无提问）")}</td>
+      <td><span class="ok" aria-label="已评测">✅</span> <span class="sev" style="--c:${sevColor(g.w)}"><i></i>${g.w === "none" ? "无问题" : `${g.w} · ${g.n} 个问题`}</span></td>
+      <td class="num">${fmt(g.tr)}</td>
+      <td class="num"><button type="button" class="link" data-ecase="${esc(g.key)}">查看</button></td>
+    </tr>`);
+    body = edTable(head, rows, "is-session");
+    pager = edPager(spage, sPages, groups.length, "个 session", "ep");
+  }
+
+  return `<div class="bento"><article class="card" style="--span:12">
+    <header class="card-head"><h2>评测数据详情</h2><button type="button" class="link end" id="edBack">返回数据看板</button></header>
+    <div class="list-meta"><span>${rootCrumb}${dayCrumb}${modelCrumb}</span><span class="num">${summary}</span></div>
+    ${body}${pager}
+  </article></div>`;
+}
+
+function wireEvalDetail(root, state) {
+  const card = $(".card", root) || root;
+  card.addEventListener("click", (e) => {
+    const back = e.target.closest("#edBack");
+    if (back) {
+      ctx.navigate({ detail: null, ed: null, em: null, ep: null, edp: null });
+      return;
+    }
+    const crumb = e.target.closest("[data-ed]");
+    if (crumb) {
+      if (crumb.dataset.ed === "root") ctx.navigate({ detail: "eval", ed: null, em: null, ep: null, edp: null });
+      else ctx.navigate({ detail: "eval", ed: state.day, em: null, ep: null, edp: null });
+      return;
+    }
+    const day = e.target.closest("[data-eday]");
+    if (day) {
+      ctx.navigate({ detail: "eval", ed: day.dataset.eday, em: null, ep: null, edp: null });
+      return;
+    }
+    const model = e.target.closest("[data-emodel]");
+    if (model) {
+      ctx.navigate({ detail: "eval", ed: state.day, em: model.dataset.emodel, ep: null });
+      return;
+    }
+    const session = e.target.closest("[data-ecase]");
+    if (session) {
+      ctx.navigate({
+        view: "samples", product: ctx.product, case: session.dataset.ecase,
+        detail: null, ed: null, em: null, ep: null, edp: null,
+        p: null, tab: null, q: null, w: null, split: null, model: null, stage: null, mech: null, pattern: null,
+      });
+      return;
+    }
+    const dpage = e.target.closest("[data-edp]");
+    if (dpage) {
+      ctx.navigate({ detail: "eval", edp: Number(dpage.dataset.edp), ep: null });
+      return;
+    }
+    const spage = e.target.closest("[data-ep]");
+    if (spage) ctx.navigate({ detail: "eval", ep: Number(spage.dataset.ep) });
+  });
 }
 
 /* ---------------------------------------------------------------- 归因体系: version → component role */
@@ -733,6 +998,9 @@ function wire(bento, p, tax) {
     seg.set("vol", { silent: true });
   }
 
+  const evDetail = $("#evDetail", bento);
+  if (evDetail) evDetail.addEventListener("click", () => ctx.navigate({ detail: "eval" }));
+
   const evRange = $("#evRange", bento);
   const evModel = $("#evModel", bento);
   if (evRange && evModel) {
@@ -832,7 +1100,7 @@ function wire(bento, p, tax) {
     });
   }
 
-  sunburst($("#vol", bento), volTree(p), { unit: "评测记录" });
+  sunburst($("#vol", bento), volTree(p), { unit: "评测输入" });
   if (tax) sunburst($("#clu", bento), cluTree(p, tax), { unit: "问题" });
 
   $$(".sankey", bento).forEach((sk) => {

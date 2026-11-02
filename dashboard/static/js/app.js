@@ -39,6 +39,7 @@ async function loadIndex() {
 
 async function render() {
   readURL();
+  document.documentElement.dataset.view = state.view;
   viewSeg.set(state.view, { silent: true });
   productSeg.set(state.product, { silent: true });
   $$(".view").forEach((v) => v.classList.toggle("is-active", v.dataset.view === state.view));
@@ -58,9 +59,15 @@ async function render() {
 async function boot() {
   viewSeg = segmented($("#viewSwitch"), (v) => {
     announce(`切换到${{ data: "数据看板", system: "评测体系", samples: "具体数据" }[v]}`);
-    navigate({ view: v });
+    navigate(v === "data" ? { view: v, detail: null, ed: null, em: null, ep: null, edp: null } : { view: v });
   });
   productSeg = segmented($("#productSwitch"), (p) => navigate({ product: p, case: null }));
+  // 数据 tab already active on the evaluation-detail subpage: clicking it returns to the dashboard.
+  $("#viewSwitch").addEventListener("click", (e) => {
+    const b = e.target.closest('button[data-value="data"]');
+    if (!b || !new URLSearchParams(location.search).get("detail")) return;
+    navigate({ view: "data", detail: null, ed: null, em: null, ep: null, edp: null });
+  });
   $("#themeToggle").addEventListener("click", () => {
     const next = document.documentElement.dataset.mode === "dark" ? "light" : "dark";
     document.documentElement.dataset.mode = next;
