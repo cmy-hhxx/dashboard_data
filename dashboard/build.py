@@ -33,7 +33,8 @@ import sys
 import tempfile
 import time
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -62,7 +63,6 @@ MODEL_LABEL = {
 }
 SPLITS = {"0_daily_eval": "daily", "1_lost_user_eval": "lost"}
 SPLIT_LABEL = {"daily": "日常评测", "lost": "流失用户"}
-INPUT_SPLIT_DIRS = {"daily": ["0_daily_eval_input", ""], "lost": ["1_lost_user_eval"]}
 
 # The agent's own order: decide → build the request → run it → deliver.
 ROLE_ORDER = ["planning", "request_generation", "tool", "script", "skill", "delivery"]
@@ -105,8 +105,11 @@ def product_of(top: str) -> str | None:
     return name if name in PRODUCTS else None
 
 
+TZ = timezone(timedelta(hours=8), "CST")
+
+
 def iso_now() -> str:
-    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    return datetime.now(TZ).isoformat(timespec="seconds")
 
 
 def decode_question(text) -> str:
@@ -181,27 +184,152 @@ def quantile(values, q):
 # --------------------------------------------------------------------------- pairing
 
 class LineCache:
-    """Raw JSONL lines by file; input files are large, so they are released per group."""
+    """Random access to JSONL lines without holding whole files in memory.
+
+    Evaluation inputs are 0.5–2.4 GB each. Indexing offsets costs one sequential
+    read; fetching a line seeks to its byte range, so the builder only keeps the
+    records it is actively turning into a sample.
+    """
 
     def __init__(self, root: Path):
         self.root = root
-        self.files: dict[str, list[bytes]] = {}
+        self._offsets: dict[str, list[int]] = {}
+        self._size: dict[str, int] = {}
 
-    def lines(self, rel: str) -> list[bytes]:
-        if rel not in self.files:
-            with open(self.root / rel, "rb") as fh:
-                data = fh.read()
-            lines = data.split(b"\n")
-            if lines and lines[-1] == b"":
-                lines.pop()
-            self.files[rel] = lines
-        return self.files[rel]
+    def _load_offsets(self, rel: str) -> list[int]:
+        offsets, pos = [0], 0
+        with open(self.root / rel, "rb", buffering=8 << 20) as fh:
+            for raw in fh:
+                pos += len(raw)
+                offsets.append(pos)
+        if len(offsets) > 1 and offsets[-1] == pos:
+            offsets.pop()
+        self._offsets[rel] = offsets
+        self._size[rel] = pos
+        return offsets
+
+    def iter_lines(self, rel: str):
+        """Stream lines while recording offsets, so ``line()`` stays cheap later."""
+        if rel in self._offsets:
+            for number in range(1, len(self._offsets[rel]) + 1):
+                yield self.line(rel, number)
+            return
+        offsets, pos = [0], 0
+        with open(self.root / rel, "rb", buffering=8 << 20) as fh:
+            for raw in fh:
+                pos += len(raw)
+                offsets.append(pos)
+                yield raw[:-1] if raw.endswith(b"\n") else raw
+        if len(offsets) > 1 and offsets[-1] == pos:
+            offsets.pop()
+        self._offsets[rel] = offsets
+        self._size[rel] = pos
+
+    def count(self, rel: str) -> int:
+        return len(self._offsets.get(rel) or self._load_offsets(rel))
 
     def line(self, rel: str, number: int) -> bytes:
-        return self.lines(rel)[number - 1]
+        offsets = self._offsets.get(rel) or self._load_offsets(rel)
+        start = offsets[number - 1]
+        end = offsets[number] if number < len(offsets) else self._size[rel]
+        # Unbuffered: buffered readers prefetch far past a single sought line,
+        # which multiplies I/O by the sample count on multi-GB inputs.
+        with open(self.root / rel, "rb", buffering=0) as fh:
+            fh.seek(start)
+            raw = fh.read(end - start)
+        return raw[:-1] if raw.endswith(b"\n") else raw
 
     def drop(self, rel: str):
-        self.files.pop(rel, None)
+        self._offsets.pop(rel, None)
+        self._size.pop(rel, None)
+
+
+def input_candidates(root: Path, top: str, split: str, model: str, date: str) -> list[str]:
+    """Input files for one output, newest layout first.
+
+    AIME lost-user evaluation is temporarily reading the archived full input
+    (``.archive/1_lost_user_input``) while the published output keeps updating
+    under ``eval_output/1_lost_user_eval``.
+    """
+    top_dir = root / top
+    if split == "daily":
+        paths = [
+            top_dir / "eval_input" / "0_daily_eval_input" / model / f"{date}.jsonl",
+            top_dir / "eval_input" / model / f"{date}.jsonl",
+        ]
+    else:
+        paths = [
+            top_dir / ".archive" / "1_lost_user_input" / model / f"{model}-{date}_input.jsonl",
+            top_dir / ".archive" / "1_lost_user_input" / model / f"{date}.jsonl",
+            top_dir / "eval_input" / "1_lost_user_eval" / model / f"{date}.jsonl",
+            top_dir / "eval_input" / "1_lost_user_input" / model / f"{date}.jsonl",
+        ]
+    return [p.relative_to(root).as_posix() for p in paths if p.is_file()]
+
+
+def count_records(path: Path) -> int:
+    """Count non-empty JSONL records without decoding them."""
+    lines, last = 0, b""
+    with open(path, "rb", buffering=0) as fh:
+        while chunk := fh.read(8 << 20):
+            lines += chunk.count(b"\n")
+            last = chunk[-1:]
+    if last and last != b"\n":
+        lines += 1
+    return lines
+
+
+def load_counts(path: Path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def save_counts(path: Path, counts: dict):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(counts, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def input_total(datasets: Path, top: Path, product: str, cache: LineCache, counts: dict):
+    """Every input record, including queued days without an attribution output.
+
+    AIME lost-user inputs currently come from ``.archive/1_lost_user_input``; the
+    smaller ``eval_input/1_lost_user_eval`` copy is excluded so days are not
+    counted twice while that evaluation is in flight.
+    """
+    files = [f for f in (top / "eval_input").rglob("*.jsonl") if "1_lost_user_eval" not in f.parts]
+    if product == "aime":
+        files += list((top / ".archive" / "1_lost_user_input").rglob("*.jsonl"))
+    todo = []
+    total = 0
+    for path in files:
+        rel = path.relative_to(datasets).as_posix()
+        if rel in cache._offsets:  # already streamed while pairing
+            total += cache.count(rel)
+            continue
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        entry = counts.get(rel)
+        if entry and entry.get("size") == stat.st_size and entry.get("mtime_ns") == stat.st_mtime_ns:
+            total += entry["lines"]
+        else:
+            todo.append((rel, path, stat))
+    if todo:
+        with ThreadPoolExecutor(max_workers=min(8, len(todo))) as pool:
+            results = list(pool.map(lambda item: count_records(item[1]), todo))
+        for (rel, path, stat), lines in zip(todo, results):
+            counts[rel] = {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns, "lines": lines}
+            total += lines
+    live = {path.relative_to(datasets).as_posix() for path in files}
+    for rel in list(counts):
+        if rel not in live:
+            counts.pop(rel)
+    return total
 
 
 def pairs_from_csv(root: Path, cache: LineCache):
@@ -247,6 +375,28 @@ def pair_key(meta: dict) -> tuple:
     return (meta.get("session_id") or meta.get("thread_id") or meta.get("trace_id"), rt)
 
 
+RAW_SID = re.compile(rb'"session_id"\s*:\s*"([^"]*)"')
+RAW_THREAD = re.compile(rb'"thread_id"\s*:\s*"([^"]*)"')
+RAW_TRACE = re.compile(rb'"trace_id"\s*:\s*"([^"]*)"')
+RAW_RT = re.compile(rb'"request_time"\s*:\s*"([^"]*)"')
+
+
+def raw_key(raw: bytes):
+    """Read the join key from the head of a large JSONL record without parsing it."""
+    head = raw[:65536]
+    match = RAW_SID.search(head) or RAW_THREAD.search(head) or RAW_TRACE.search(head)
+    if not match:
+        return None
+    clock = RAW_RT.search(head)
+    rt = clock.group(1).decode("utf-8", "replace").replace("T", " ")[:19] if clock else ""
+    return match.group(1).decode("utf-8", "replace"), rt
+
+
+def debug(message):
+    if os.environ.get("EVAL_BUILD_DEBUG"):
+        print(f"[build] {message}", file=sys.stderr, flush=True)
+
+
 def pairs_from_keys(root: Path, cache: LineCache):
     """Pair by session id + request time inside each model/date file; duplicates in file order."""
     pairs, unmatched = [], Counter()
@@ -259,24 +409,22 @@ def pairs_from_keys(root: Path, cache: LineCache):
         if not product or not split:
             continue
         model, date = m["model"], m["date"]
-        inp_rel = None
-        for sub in INPUT_SPLIT_DIRS[split]:
-            cand = Path(m["product"]) / "eval_input" / sub / model / f"{date}.jsonl"
-            if (root / cand).exists():
-                inp_rel = cand.as_posix()
-                break
-        cmp_rel = (out.parent / "compact" / f"{model}_compact-{date}.jsonl")
-        cmp_rel = cmp_rel.relative_to(root).as_posix() if cmp_rel.exists() else None
+        inp_rels = input_candidates(root, m["product"], split, model, date)
+        debug(f"pair {rel} inputs={len(inp_rels)}")
+        cmp_path = out.parent / "compact" / f"{model}_compact-{date}.jsonl"
+        cmp_rel = cmp_path.relative_to(root).as_posix() if cmp_path.exists() else None
 
-        def index(rel, meta_of):
+        def index(rels, meta_of):
             slots = defaultdict(list)
-            if not rel:
-                return slots
-            for n, raw in enumerate(cache.lines(rel), 1):
-                try:
-                    slots[pair_key(meta_of(json.loads(raw)))].append(n)
-                except (ValueError, TypeError):
-                    continue
+            for rel_path in rels:
+                for n, raw in enumerate(cache.iter_lines(rel_path), 1):
+                    key = raw_key(raw)
+                    if key is None:
+                        try:
+                            key = pair_key(meta_of(json.loads(raw)))
+                        except (ValueError, TypeError):
+                            continue
+                    slots[key].append((rel_path, n))
             return slots
 
         def input_meta(d):
@@ -286,24 +434,24 @@ def pairs_from_keys(root: Path, cache: LineCache):
             meta.setdefault("request_time", d.get("request_time"))
             return meta
 
-        inputs = index(inp_rel, input_meta)
-        compacts = index(cmp_rel, lambda d: d.get("session_meta") or {})
-        for n, raw in enumerate(cache.lines(rel), 1):
+        inputs = index(inp_rels, input_meta)
+        compacts = index([cmp_rel] if cmp_rel else [], lambda d: d.get("session_meta") or {})
+        for n, raw in enumerate(cache.iter_lines(rel), 1):
             try:
                 key = pair_key(json.loads(raw).get("session_meta") or {})
             except ValueError:
                 continue
-            i = inputs[key].pop(0) if inputs.get(key) else None
-            c = compacts[key].pop(0) if compacts.get(key) else None
-            if i is None:
+            inp = inputs[key].pop(0) if inputs.get(key) else None
+            comp = compacts[key].pop(0) if compacts.get(key) else None
+            if inp is None:
                 unmatched["input"] += 1
-            if c is None:
+            if comp is None:
                 unmatched["compact"] += 1
             pairs.append({
                 "product": product, "split": split, "model": model, "date": date, "run": "",
-                "input": (inp_rel, i) if i else None,
+                "input": inp,
                 "output": (rel, n),
-                "compact": (cmp_rel, c) if c else None,
+                "compact": comp,
             })
     return pairs, {"mode": "key", "rows": len(pairs), "unmatched": dict(unmatched)}
 
@@ -1188,7 +1336,44 @@ def taxonomy_out(taxonomy, used_patterns):
     }
 
 
-def system_facts(all_samples):
+def anatomy_candidate(detail):
+    """One mid-sized single-trace example per product, selected while the input is in memory."""
+    traces = detail["input"]["traces"]
+    if len(traces) != 1:
+        return None
+    n_msgs = len(traces[0]["messages"])
+    probs = detail["attribution"]["problems"]
+    if not (14 <= n_msgs <= 34) or not (3 <= len(probs) <= 5):
+        return None
+    located = sum(1 for p in probs for e in p["ev"] if "m" in detail["evidence"][e])
+    score = len({p["sev"] for p in probs}) * 3 + len({p["role"] for p in probs}) * 2 + min(located, 14) / 2
+    if detail["lang"] == "zh":
+        score += 1.5
+    msgs = traces[0]["messages"]
+    return score, {
+        "slug": detail["slug"], "product": detail["product"], "model": detail["model"],
+        "question": detail["question"],
+        "messages": [
+            {"k": m["k"], "name": m.get("name"), "dur": m.get("dur"),
+             "text": clip(next((x for b in m["blocks"] for x in b["x"] if isinstance(x, str) and x.strip()), ""), 90)}
+            for m in msgs
+        ],
+        "problems": [
+            {"id": p["id"], "sev": p["sev"], "label": p["label"], "role": p["role"], "comp": p["comp"],
+             "path": p["cl"]["path"] if p["cl"] else None,
+             "msgs": sorted({detail["evidence"][e]["m"] for e in p["ev"] if "m" in detail["evidence"][e]})}
+            for p in probs
+        ],
+        "compact": {
+            k: len(detail["compact"]["turns"][0][k]) if detail["compact"] and detail["compact"]["turns"] else 0
+            for k in ("plans", "reasoning", "execution", "reflections", "tool_errors", "components", "key_data")
+        },
+        "overview": (detail["compact"] or {}).get("overview", [])[:3],
+        "summary": clip(detail["attribution"]["summary"], 260),
+    }
+
+
+def system_facts(all_samples, anatomy):
     """Real material for the 评测体系 page: severity examples and one anatomy sample."""
     examples = {s: [] for s in SEVERITIES}
     ev_per_problem = Counter()
@@ -1211,58 +1396,11 @@ def system_facts(all_samples):
             seen.add(label)
             out.append({"slug": slug, "product": product, "p": pid, "label": label, "reason": reason, "comp": comp})
         picked[s] = out
-
-    # Anatomy: one mid-sized single-trace session per product, so the page can switch examples.
-    def pick_anatomy(samples):
-        best, best_score = None, -1
-        for slug, detail, row, facts in samples:
-            traces = detail["input"]["traces"]
-            if len(traces) != 1:
-                continue
-            n_msgs = len(traces[0]["messages"])
-            probs = detail["attribution"]["problems"]
-            if not (14 <= n_msgs <= 34) or not (3 <= len(probs) <= 5):
-                continue
-            located = sum(1 for p in probs for e in p["ev"] if "m" in detail["evidence"][e])
-            score = len({p["sev"] for p in probs}) * 3 + len({p["role"] for p in probs}) * 2 + min(located, 14) / 2
-            if detail["lang"] == "zh":
-                score += 1.5
-            if score > best_score:
-                best, best_score = (slug, detail), score
-        if not best:
-            return None
-        slug, detail = best
-        msgs = detail["input"]["traces"][0]["messages"]
-        return {
-            "slug": slug, "product": detail["product"], "model": detail["model"], "question": detail["question"],
-            "messages": [
-                {"k": m["k"], "name": m.get("name"), "dur": m.get("dur"),
-                 "text": clip(next((x for b in m["blocks"] for x in b["x"] if isinstance(x, str) and x.strip()), ""), 90)}
-                for m in msgs
-            ],
-            "problems": [
-                {"id": p["id"], "sev": p["sev"], "label": p["label"], "role": p["role"], "comp": p["comp"],
-                 "path": p["cl"]["path"] if p["cl"] else None,
-                 "msgs": sorted({detail["evidence"][e]["m"] for e in p["ev"] if "m" in detail["evidence"][e]})}
-                for p in detail["attribution"]["problems"]
-            ],
-            "compact": {
-                k: len(detail["compact"]["turns"][0][k]) if detail["compact"] and detail["compact"]["turns"] else 0
-                for k in ("plans", "reasoning", "execution", "reflections", "tool_errors", "components", "key_data")
-            },
-            "overview": (detail["compact"] or {}).get("overview", [])[:3],
-            "summary": clip(detail["attribution"]["summary"], 260),
-        }
-
-    by_product = {}
-    for item in all_samples:
-        by_product.setdefault(item[1]["product"], []).append(item)
-    anatomy = {product: a for product, samples in by_product.items() if (a := pick_anatomy(samples))}
     return {
         "severity_examples": picked,
         "evidence_per_problem": {str(k): v for k, v in sorted(ev_per_problem.items())},
         "evidence_component": [{"id": k, "n": v} for k, v in ev_component.most_common(6)],
-        "anatomy": anatomy,
+        "anatomy": {product: value[1] for product, value in anatomy.items()},
     }
 
 
@@ -1290,22 +1428,49 @@ def empty_payloads(reason):
     return data, index
 
 
+def slim_detail(detail):
+    """Drop the parts of a sample that only the on-disk copy needs.
+
+    The dashboard detail file is written before this runs; aggregates only need
+    problem structure, evidence anchors and compact counts, not the transcript
+    itself or the evidence quote strings.
+    """
+    detail["input"] = {"traces": [], "missing": detail["input"].get("missing", True)}
+    evidence = []
+    for e in detail["evidence"]:
+        item = {}
+        if e.get("c") is not None:
+            item["c"] = e["c"]
+        if "m" in e:
+            item["m"] = e["m"]
+        if "o" in e:
+            item["o"] = True
+        evidence.append(item)
+    detail["evidence"] = evidence
+    return detail
+
+
 def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print):
     started = time.time()
     cache = LineCache(datasets)
     if not datasets.is_dir():
-        return empty_payloads("missing"), [], {}
+        return empty_payloads("missing"), {}
     if pairing in ("auto", "csv") and (datasets / "对应关系.csv").exists():
         pairs, pairing_info = pairs_from_csv(datasets, cache)
     else:
         pairs, pairing_info = pairs_from_keys(datasets, cache)
     if not pairs:
-        return empty_payloads("no-pairs"), [], {}
+        return empty_payloads("no-pairs"), {}
+    debug(f"paired {len(pairs)} rows")
 
     taxonomy, cluster_index = load_clusters(datasets)
     stats = Counter()
     samples = defaultdict(list)
     seen_slugs = set()
+    anatomy = {}
+    out_dir.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".samples-", dir=out_dir))
+    detail_bytes = 0
 
     # Group by input file so each large input file is read once and released.
     pairs.sort(key=lambda p: ((p["input"] or ("", 0))[0], (p["input"] or ("", 0))[1]))
@@ -1329,10 +1494,28 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print):
         seen_slugs.add(slug)
         detail, row, facts = build_sample(pair, inp, attr, comp, cluster_index, stats)
         detail["slug"] = row["s"] = slug
-        samples[pair["product"]].append((slug, detail, row, facts))
+        candidate = anatomy_candidate(detail)
+        if candidate and (pair["product"] not in anatomy or candidate[0] > anatomy[pair["product"]][0]):
+            anatomy[pair["product"]] = candidate
+        detail_bytes += write_json(staging / f"{slug}.json", detail)
+        samples[pair["product"]].append((slug, slim_detail(detail), row, facts))
+        stats["details"] += 1
+        if len(samples[pair["product"]]) % 500 == 0:
+            debug(f"{pair['product']} samples {len(samples[pair['product']])}")
     if current:
         cache.drop(current)
+    stats["details_mb"] = round(detail_bytes / 1e6, 1)
 
+    debug(f"built samples {sum(len(v) for v in samples.values())}")
+    sample_dir = out_dir / "samples"
+    old = None
+    if sample_dir.exists():
+        old = out_dir / f".samples-old-{os.getpid()}"
+        os.replace(sample_dir, old)
+    staging.chmod(0o755)
+    os.replace(staging, sample_dir)
+    if old:
+        shutil.rmtree(old, ignore_errors=True)
     all_samples = [s for rows in samples.values() for s in rows]
     used_patterns = {p["cl"]["path"] for _, d, _, _ in all_samples for p in d["attribution"]["problems"] if p["cl"]}
     products = {}
@@ -1340,12 +1523,12 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print):
         if samples.get(product):
             products[product] = aggregate(product, samples[product], taxonomy)
     # Input volume (every eval_input line, evaluated or not) and an optional prediction feed.
+    counts = load_counts(out_dir.parent / "cache" / "input_counts.json")
     for top in sorted(p for p in datasets.glob("*") if p.is_dir()) if datasets.is_dir() else []:
         product = product_of(top.name)
         if product not in products:
             continue
-        products[product]["kpi"]["inputs"] = sum(
-            sum(1 for line in f.open("rb") if line.strip()) for f in (top / "eval_input").rglob("*.jsonl"))
+        products[product]["kpi"]["inputs"] = input_total(datasets, top, product, cache, counts)
         feed = top / "prediction.json"
         if feed.is_file():
             try:
@@ -1358,7 +1541,7 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print):
         "schema": 2, "generated_at": generated,
         "source": {**pairing_info, "pairs": len(pairs), "root": datasets.name},
         "taxonomy": taxonomy_out(taxonomy, used_patterns) if taxonomy["stages"] else None,
-        "system": system_facts(all_samples),
+        "system": system_facts(all_samples, anatomy),
         "products": products,
     }
     index = {"schema": 2, "generated_at": generated, "products": {}}
@@ -1370,9 +1553,9 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print):
             "splits": products[product]["splits"],
             "rows": [s[2] for s in rows_sorted],
         }
-    details = [(slug, detail) for slug, detail, _, _ in all_samples]
+    save_counts(out_dir.parent / "cache" / "input_counts.json", counts)
     stats["seconds"] = round(time.time() - started, 1)
-    return (data, index), details, stats
+    return (data, index), stats
 
 
 def main(argv=None):
@@ -1387,9 +1570,9 @@ def main(argv=None):
     args = ap.parse_args(argv)
     args.datasets = args.datasets or default_datasets()
 
-    (data, index), details, stats = build(args.datasets.resolve(), args.out, args.pairing)
+    (data, index), stats = build(args.datasets.resolve(), args.out, args.pairing)
     out = args.out
-    if args.keep_on_empty and not details:
+    if args.keep_on_empty and not stats.get("details"):
         try:
             previous = json.loads((out / "data.json").read_text(encoding="utf-8"))["source"].get("pairs", 0)
         except (OSError, ValueError, KeyError, TypeError):
@@ -1397,32 +1580,20 @@ def main(argv=None):
         if previous:
             print(json.dumps({"pairs": 0, "kept_previous": previous, "root": str(args.datasets)}, ensure_ascii=False))
             return 0
-    sample_dir = out / "samples"
-    staging = Path(tempfile.mkdtemp(prefix=".samples-", dir=out)) if out.exists() else None
-    if staging is None:
-        out.mkdir(parents=True, exist_ok=True)
-        staging = Path(tempfile.mkdtemp(prefix=".samples-", dir=out))
-    detail_bytes = 0
-    try:
-        for slug, detail in details:
-            detail_bytes += write_json(staging / f"{slug}.json", detail)
-        old = None
+    if not stats.get("details"):
+        # An explicit build with no samples must not leave previous detail files behind.
+        sample_dir = out / "samples"
         if sample_dir.exists():
-            old = out / f".samples-old-{os.getpid()}"
-            os.replace(sample_dir, old)
-        staging.chmod(0o755)
-        os.replace(staging, sample_dir)
-        if old:
-            shutil.rmtree(old, ignore_errors=True)
-    finally:
-        if staging.exists():
-            shutil.rmtree(staging, ignore_errors=True)
+            shutil.rmtree(sample_dir)
+        sample_dir.mkdir(parents=True, exist_ok=True)
+        for stale in out.glob(".samples-*"):
+            shutil.rmtree(stale, ignore_errors=True)
     data_bytes = write_json(out / "data.json", data)
     index_bytes = write_json(out / "samples.json", index)
     summary = {
         "pairs": data["source"].get("pairs", 0), "pairing": data["source"].get("mode"),
         "data_kb": round(data_bytes / 1024), "index_kb": round(index_bytes / 1024),
-        "details": len(details), "details_mb": round(detail_bytes / 1e6, 1), **stats,
+        **stats,
     }
     print(json.dumps(summary, ensure_ascii=False))
     return 0

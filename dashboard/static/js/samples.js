@@ -4,7 +4,8 @@ import { renderContent, segment } from "./render.js";
 
 const ROLE = { planning: "规划", request_generation: "请求生成", tool: "工具执行", script: "脚本执行", skill: "技能装载", delivery: "交付" };
 const FOLD_OPEN = new Set(["user", "answer"]);
-const S = { product: null, all: [], rows: [], slug: null, D: null, trace: 0, open: new Set(), active: null, cache: new Map() };
+const PAGE = 50;
+const S = { product: null, all: [], rows: [], pageRows: [], page: 1, slug: null, sessionKey: null, D: null, round: 0, trace: 0, cturn: 0, open: new Set(), active: null, cache: new Map() };
 let ctx;
 let root;
 let outSeg;
@@ -19,6 +20,46 @@ const F = () => {
 };
 const dirty = () => Object.entries(F()).some(([k, v]) => k !== "sort" && v);
 
+/* One list row is one session (per model); traces that were evaluated separately stay
+   as rounds of that session instead of separate rows. */
+function groupSessions(rows) {
+  const groups = new Map();
+  rows.forEach((r) => {
+    const key = `${r.sp}|${r.m}|${r.sid || r.s}`;
+    let g = groups.get(key);
+    if (!g) {
+      g = {
+        key, s: key, rows: [], sid: r.sid, m: r.m, sp: r.sp,
+        w: "none", n: 0, tr: 0, pt: new Set(), st: new Set(), tg: new Set(), lb: new Set(),
+        q: "", d: "", tid: "", case: "", task: "", skill: "", lang: r.lang,
+      };
+      groups.set(key, g);
+    }
+    g.rows.push(r);
+    g.n += r.n || 0;
+    g.tr += r.tr || 1;
+    if (WORST.indexOf(r.w) >= 0 && (g.w === "none" || WORST.indexOf(r.w) < WORST.indexOf(g.w))) g.w = r.w;
+    (r.pt || []).forEach((x) => g.pt.add(x));
+    (r.st || []).forEach((x) => g.st.add(x));
+    (r.tg || []).forEach((x) => g.tg.add(x));
+    if (r.lb) g.lb.add(r.lb);
+    g.tid = g.tid || r.tid || "";
+    g.case = g.case || r.case || "";
+    g.task = g.task || r.task || "";
+    g.skill = g.skill || r.skill || "";
+  });
+  return [...groups.values()].map((g) => {
+    const rowsByDate = g.rows.slice().sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0));
+    const last = rowsByDate[rowsByDate.length - 1];
+    return {
+      ...last, key: g.key, s: g.key, rows: g.rows,
+      q: last.q, d: last.d, w: g.w, n: g.n, tr: g.tr,
+      pt: [...g.pt], st: [...g.st], tg: [...g.tg], lb: [...g.lb].join("｜"),
+      tid: g.tid, case: g.case, task: g.task, skill: g.skill,
+    };
+  });
+}
+
 export async function render(r, c) {
   ctx = c;
   root = r;
@@ -26,9 +67,12 @@ export async function render(r, c) {
   const prod = index.products[c.product];
   if (S.product !== c.product || !$(".bench", root)) {
     S.product = c.product;
-    S.all = prod ? prod.rows : [];
+    S.all = prod ? groupSessions(prod.rows) : [];
     S.prod = prod;
     S.slug = null;
+    S.sessionKey = null;
+    S.D = null;
+    S.page = 1;
     skeleton();
   }
   if (!prod || !S.all.length) {
@@ -41,12 +85,17 @@ export async function render(r, c) {
   }
   syncFilters();
   renderList();
-  let slug = params().get("case");
-  if (!slug || !S.all.some((x) => x.s === slug)) {
-    slug = (S.rows[0] || S.all[0]).s;
-    c.navigate({ case: slug }, { replace: true });
-  }
-  if (slug !== S.slug) await loadDetail(slug);
+  const wanted = params().get("case");
+  let session = wanted
+    ? S.all.find((x) => x.key === wanted) || S.all.find((x) => x.rows.some((r) => r.s === wanted))
+    : null;
+  if (!session) session = S.rows[0] || S.all[0];
+  const key = session.key;
+  const focusSlug = wanted && wanted !== key ? wanted : null;
+  if (wanted !== key) c.navigate({ case: key }, { replace: true });
+  revealPage(key);
+  if (key !== S.sessionKey || !S.D) await loadSession(session, focusSlug);
+  else if (focusSlug) selectSlugRound(focusSlug);
   markCurrent();
   const tab = params().get("tab") === "compact" ? "compact" : "attr";
   if (outSeg.get() !== tab) {
@@ -54,7 +103,14 @@ export async function render(r, c) {
     renderOut();
   }
   const p = params().get("p");
-  if (p != null && S.D) requestAnimationFrame(() => flash($(`#pc-${p}`, root)));
+  if (p != null && S.D) {
+    let pid = Number(p);
+    if (focusSlug) {
+      const at = S.D.attribution.problems.findIndex((x) => x.origin?.slug === focusSlug && x.origin?.id === Number(p));
+      if (at >= 0) pid = at;
+    }
+    requestAnimationFrame(() => flash($(`#pc-${pid}`, root)));
+  }
 }
 
 /* ---------------------------------------------------------------- skeleton & filters */
@@ -71,6 +127,7 @@ function skeleton() {
           </span></div>
       </div>
       <div class="pane-scroll" id="slist" tabindex="0" aria-label="样本"></div>
+      <div class="pager" id="spager" hidden></div>
     </aside>
     <section class="pane" id="sin" aria-label="评测输入"></section>
     <section class="pane pane-out pane-sticky" aria-label="评测输出">
@@ -81,6 +138,7 @@ function skeleton() {
   outSeg = segmented($("#otab", root), (v) => {
     ctx.navigate({ tab: v }, { replace: true });
     renderOut();
+    if (v === "attr") requestAnimationFrame(() => scrollRound(S.round));
   });
   outSeg.set(params().get("tab") === "compact" ? "compact" : "attr", { silent: true });
   let timer;
@@ -107,6 +165,18 @@ function skeleton() {
     if (k === "mech") patch.pattern = "";
     setFilter(patch);
   });
+  const pager = $("#spager", root);
+  pager.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-page]");
+    if (!b) return;
+    const pages = Math.max(1, Math.ceil(S.rows.length / PAGE));
+    S.page = b.dataset.page === "first" ? 1
+      : b.dataset.page === "last" ? pages
+      : b.dataset.page === "prev" ? S.page - 1 : S.page + 1;
+    S.page = Math.max(1, Math.min(pages, S.page));
+    renderList();
+    $("#slist", root).scrollTop = 0;
+  });
   const list = $("#slist", root);
   list.addEventListener("click", (e) => {
     const b = e.target.closest(".srow");
@@ -121,6 +191,7 @@ function skeleton() {
   });
   $("#sin", root).addEventListener("click", onInputClick);
   $("#sout", root).addEventListener("click", onOutClick);
+  wireCmapPan($("#sout", root));
   bindTips($("#sout", root), (t) => {
     if ((!t.closest(".cmap") && !t.closest(".sp")) || !t.dataset.tip) return null;
     const i = t.dataset.tip.indexOf("|");
@@ -128,10 +199,66 @@ function skeleton() {
   });
 }
 
+function wireCmapPan(host) {
+  let drag = null;
+  let suppress = false;
+  host.addEventListener("pointerdown", (e) => {
+    if (e.pointerType !== "mouse" || e.button !== 0) return;
+    const c = e.target.closest(".cmap");
+    if (!c || c.scrollWidth <= c.clientWidth + 1) return;
+    drag = { c, x: e.clientX, left: c.scrollLeft, moved: false, id: e.pointerId };
+    c.setPointerCapture(e.pointerId);
+    c.classList.add("is-dragging");
+  });
+  host.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x;
+    if (Math.abs(dx) > 3) drag.moved = true;
+    drag.c.scrollLeft = drag.left - dx;
+  });
+  const end = () => {
+    if (!drag) return;
+    const d = drag;
+    drag = null;
+    d.c.classList.remove("is-dragging");
+    try { d.c.releasePointerCapture(d.id); } catch (e) {}
+    if (d.moved) {
+      suppress = true;
+      setTimeout(() => { suppress = false; }, 0);
+    }
+  };
+  host.addEventListener("pointerup", end);
+  host.addEventListener("pointercancel", end);
+  host.addEventListener("click", (e) => {
+    if (!suppress) return;
+    e.stopPropagation();
+    e.preventDefault();
+  }, true);
+}
+
+function markCmapScroll() {
+  $$(".cmap", root).forEach((c) => {
+    const overflow = c.scrollWidth > c.clientWidth + 1;
+    c.classList.toggle("is-scrollable", overflow);
+    c.title = overflow ? "拖动查看完整链路" : "";
+  });
+}
+
 function setFilter(patch) {
   ctx.navigate(patch, { replace: true });
+  S.page = 1;
   syncFilters();
   renderList();
+}
+
+function revealPage(slug) {
+  const at = S.rows.findIndex((r) => r.s === slug);
+  if (at < 0) return;
+  const page = Math.floor(at / PAGE) + 1;
+  if (page !== S.page) {
+    S.page = page;
+    renderList();
+  }
 }
 
 function syncFilters() {
@@ -180,7 +307,8 @@ function renderList() {
   const needle = f.q.toLowerCase();
   const hit = (r) =>
     !needle ||
-    [r.q, r.lb, r.s, r.sid, r.tid, r.case, r.task, r.skill].some((x) => x && String(x).toLowerCase().includes(needle));
+    [r.q, r.lb, r.s, r.sid, r.tid, r.case, r.task, r.skill].some((x) => x && String(x).toLowerCase().includes(needle)) ||
+    r.rows.some((x) => [x.q, x.sid, x.tid, x.case, x.task, x.skill].some((v) => v && String(v).toLowerCase().includes(needle)));
   S.rows = S.all.filter(
     (r) =>
       (!f.w || r.w === f.w) && (!f.split || r.sp === f.split) && (!f.model || r.m === f.model) &&
@@ -194,26 +322,44 @@ function renderList() {
   );
   if (f.sort === "n") S.rows = S.rows.slice().sort((a, b) => b.n - a.n);
   if (f.sort === "date") S.rows = S.rows.slice().sort((a, b) => (a.d < b.d ? 1 : -1));
+  const pages = Math.max(1, Math.ceil(S.rows.length / PAGE));
+  S.page = Math.max(1, Math.min(pages, S.page));
+  S.pageRows = S.rows.slice((S.page - 1) * PAGE, S.page * PAGE);
   const label = (id) => (S.prod.models.find((m) => m.id === id) || { label: id }).label;
   $("#scount", root).textContent = `${fmt(S.rows.length)} / ${fmt(S.all.length)} 个会话`;
-  $("#slist", root).innerHTML = S.rows.length
-    ? S.rows
+  $("#slist", root).innerHTML = S.pageRows.length
+    ? S.pageRows
         .map(
           (r) => `<button type="button" class="srow" data-s="${r.s}" style="--c:${sevColor(r.w)}" aria-current="${r.s === S.slug}">
       <span class="bar"></span><span class="srow-body"><span class="q">${esc(r.q || "（无提问）")}</span>
-      <span class="m num"><span class="srow-model">${esc(label(r.m))}</span><span>${r.d.slice(5)}</span><span class="srow-sev" style="color:${r.w === "none" ? "var(--muted)" : sevColor(r.w)}">${r.n ? `${r.w} · ${r.n}` : "无问题"}</span>${
+      <span class="m num"><span class="srow-model">${esc(label(r.m))}</span><span>${r.d.slice(5)}</span>${r.tr > 1 ? `<span>${r.tr} 轮</span>` : ""}<span class="srow-sev" style="color:${r.w === "none" ? "var(--muted)" : sevColor(r.w)}">${r.n ? `${r.w} · ${r.n}` : "无问题"}</span>${
             r.sp === "lost" ? '<span class="tag-lost">流失</span>' : ""
           }</span></span></button>`,
         )
         .join("")
     : `<div class="empty">没有符合条件的会话<br><button type="button" class="link" id="sclear">清除筛选</button></div>`;
+  renderPager(pages);
   const clear = $("#sclear", root);
   clear && clear.addEventListener("click", () => setFilter({ q: "", w: "", split: "", model: "", stage: "", mech: "", pattern: "" }));
 }
 
+function renderPager(pages) {
+  const el = $("#spager", root);
+  if (!el) return;
+  el.hidden = S.rows.length <= PAGE;
+  if (el.hidden) {
+    el.innerHTML = "";
+    return;
+  }
+  const btn = (key, label, off) => `<button type="button" data-page="${key}"${off ? " disabled" : ""}>${label}</button>`;
+  el.innerHTML = `${btn("first", "«", S.page === 1)}${btn("prev", "上一页", S.page === 1)}
+    <span class="pager-info">第 <b class="num">${S.page}</b> / ${pages} 页 · ${fmt(S.rows.length)} 个会话</span>
+    ${btn("next", "下一页", S.page === pages)}${btn("last", "»", S.page === pages)}`;
+}
+
 function markCurrent() {
   $$(".srow", root).forEach((b) => b.setAttribute("aria-current", String(b.dataset.s === S.slug)));
-  const cur = $(`.srow[data-s="${S.slug}"]`, root);
+  const cur = $$(".srow", root).find((b) => b.dataset.s === S.slug);
   if (cur) {
     const list = $("#slist", root);
     const r = cur.getBoundingClientRect();
@@ -223,29 +369,191 @@ function markCurrent() {
 }
 
 /* ---------------------------------------------------------------- detail */
-async function loadDetail(slug) {
-  S.slug = slug;
-  $("#sin", root).innerHTML = `<div class="empty">正在读取样本…</div>`;
+const clone = (value) => JSON.parse(JSON.stringify(value));
+const traceSet = (d) => new Set((d.attribution?.turns || []).map((t) => t.trace_id).filter(Boolean));
+const roundCount = (d) => Math.max(d.input?.traces?.length || 0, d.attribution?.turns?.length || 0, d.compact?.turns?.length || 0, 1);
+
+async function fetchDetail(slug) {
   let D = S.cache.get(slug);
   if (!D) {
-    try {
-      D = await getJSON(`samples/${slug}.json`);
-    } catch (e) {
-      $("#sin", root).innerHTML = `<div class="empty">样本详情读取失败（${esc(e.message)}）。运行 local_dev/refresh.sh 重新生成。</div>`;
-      $("#sout", root).innerHTML = "";
-      return;
-    }
+    D = await getJSON(`samples/${slug}.json`);
     S.cache.set(slug, D);
-    if (S.cache.size > 24) S.cache.delete(S.cache.keys().next().value);
+    if (S.cache.size > 32) S.cache.delete(S.cache.keys().next().value);
   }
-  if (S.slug !== slug) return;
+  return D;
+}
+
+/* If a full-session detail and a per-trace detail overlap, keep the one that contains
+   the other's trace ids. Disjoint per-trace evaluations are all kept. */
+function dropSubsetParts(parts) {
+  const meta = parts.map((part) => ({ part, ids: traceSet(part.detail) }));
+  return meta
+    .filter((a, i) =>
+      !meta.some((b, j) => {
+        if (i === j || !a.ids.size || !b.ids.size) return false;
+        if (![...a.ids].every((id) => b.ids.has(id))) return false;
+        if (b.ids.size > a.ids.size) return true;
+        if (b.ids.size === a.ids.size) {
+          if (b.part.detail.evidence.length > a.part.detail.evidence.length) return true;
+          if (b.part.detail.evidence.length === a.part.detail.evidence.length && j < i) return true;
+        }
+        return false;
+      }),
+    )
+    .map((x) => x.part);
+}
+
+function withRounds(part) {
+  const d = part.detail;
+  const n = roundCount(d);
+  d.rounds = Array.from({ length: n }, (_, i) => ({ slug: part.slug, trace: i, turn: i, compact: i }));
+  return d;
+}
+
+function mergeSessionDetails(parts, session) {
+  const D = {
+    session: true,
+    product: S.product,
+    split: session.sp,
+    model: session.m,
+    date: session.d,
+    question: session.q,
+    question_zh: parts[0].detail.question_zh,
+    lang: parts[0].detail.lang,
+    ids: { session: session.sid, trace: "", case: session.case },
+    meta: { ...(parts[parts.length - 1].detail.meta || {}) },
+    input: { traces: [], missing: false },
+    attribution: { summary: "", turns: [], problems: [], session_problems: [] },
+    compact: { overview: [], turns: [] },
+    evidence: [],
+    rounds: [],
+  };
+  for (const part of parts) {
+    const d = part.detail;
+    const traces = d.input?.traces || [];
+    const turns = d.attribution?.turns || [];
+    const compacts = d.compact?.turns || [];
+    const baseEv = D.evidence.length;
+    const baseProb = D.attribution.problems.length;
+    const startTrace = D.input.traces.length;
+    const n = Math.max(traces.length, turns.length, compacts.length);
+    for (let i = 0; i < n; i++) {
+      const round = D.rounds.length;
+      const trace = traces[i] ? clone(traces[i]) : { messages: [] };
+      (trace.messages || []).forEach((m) => {
+        if (m.ev) m.ev = m.ev.map((id) => id + baseEv);
+      });
+      D.input.traces.push(trace);
+
+      const turn = turns[i];
+      if (turn) {
+        const copy = clone(turn);
+        copy.problems = (copy.problems || []).map((id) => id + baseProb);
+        D.attribution.turns.push(copy);
+      }
+
+      const compactTurn = compacts[i];
+      if (compactTurn) {
+        const copy = clone(compactTurn);
+        ["plans", "reasoning", "execution", "reflections", "tool_errors", "key_data", "artifacts"].forEach((key) => {
+          (copy[key] || []).forEach((step) => {
+            if (step.ev) step.ev = step.ev.map((id) => id + baseEv);
+          });
+        });
+        (copy.components || []).forEach((step) => {
+          if (step.ev) step.ev = step.ev.map((id) => id + baseEv);
+        });
+        copy.turn = round;
+        D.compact.turns.push(copy);
+      }
+
+      D.rounds.push({
+        slug: part.slug, trace: startTrace + i,
+        turn: D.attribution.turns.length - 1,
+        compact: D.compact.turns.length - 1,
+      });
+    }
+
+    (d.attribution?.problems || []).forEach((problem, localId) => {
+      const copy = clone(problem);
+      copy.origin = { slug: part.slug, id: problem.id ?? localId };
+      copy.id = D.attribution.problems.length;
+      copy.ev = (copy.ev || []).map((id) => id + baseEv);
+      D.attribution.problems.push(copy);
+    });
+    (d.evidence || []).forEach((ev) => {
+      const copy = clone(ev);
+      if (typeof copy.t === "number") copy.t += startTrace;
+      D.evidence.push(copy);
+    });
+    (d.attribution?.session_problems || []).forEach((id) => D.attribution.session_problems.push(id + baseProb));
+    (d.compact?.overview || []).forEach((line) => {
+      if (!D.compact.overview.includes(line)) D.compact.overview.push(line);
+    });
+    if (!D.attribution.summary && d.attribution?.summary) D.attribution.summary = d.attribution.summary;
+  }
+  D.attribution.problems.forEach((p, i) => { p.id = i; });
+  const firstTurn = D.attribution.turns.find((t) => t.trace_id);
+  D.ids.trace = firstTurn?.trace_id || parts[0].detail.ids?.trace || "";
+  return D;
+}
+
+async function loadSession(session, focusSlug) {
+  S.slug = session.key;
+  S.sessionKey = session.key;
+  S.session = session;
+  $("#sin", root).innerHTML = `<div class="empty">正在读取会话…</div>`;
+  let parts;
+  try {
+    parts = await Promise.all(session.rows.map(async (row) => ({ slug: row.s, detail: await fetchDetail(row.s) })));
+  } catch (e) {
+    $("#sin", root).innerHTML = `<div class="empty">会话详情读取失败（${esc(e.message)}）。运行 local_dev/refresh.sh 重新生成。</div>`;
+    $("#sout", root).innerHTML = "";
+    return;
+  }
+  parts.sort((a, b) => String(a.detail.meta?.request_time || a.detail.date || "").localeCompare(String(b.detail.meta?.request_time || b.detail.date || "")));
+  const kept = dropSubsetParts(parts);
+  const D = kept.length === 1 ? withRounds(kept[0]) : mergeSessionDetails(kept, session);
   index(D);
   S.D = D;
-  S.trace = 0;
+  S.round = D.rounds.length - 1;
+  if (focusSlug) {
+    const at = D.rounds.findIndex((r) => r.slug === focusSlug);
+    if (at >= 0) S.round = at;
+  }
+  S.trace = S.round;
+  S.cturn = S.round;
   S.open = new Set();
   S.active = null;
   renderIn();
   renderOut();
+}
+
+function scrollRound(i) {
+  if (outSeg.get() !== "attr") return;
+  const el = $(`#round-${i}`, root);
+  if (!el) return;
+  el.scrollIntoView({ block: "nearest", behavior: REDUCED ? "auto" : "smooth" });
+  flash(el);
+}
+
+function selectRound(i, { scroll = true } = {}) {
+  const D = S.D;
+  if (!D) return;
+  const n = D.rounds?.length || 1;
+  const round = Math.max(0, Math.min(n - 1, Number(i) || 0));
+  S.round = round;
+  S.trace = round;
+  S.cturn = round;
+  renderTrace();
+  if (outSeg.get() === "compact") renderOut();
+  $$("#atabs .pill", root).forEach((b) => b.setAttribute("aria-pressed", String(Number(b.dataset.at) === round)));
+  if (scroll) scrollRound(round);
+}
+
+function selectSlugRound(slug) {
+  const at = S.D?.rounds?.findIndex((r) => r.slug === slug) ?? -1;
+  if (at >= 0) selectRound(at, { scroll: false });
 }
 
 function index(D) {
@@ -408,8 +716,7 @@ function onInputClick(e) {
   }
   const tab = e.target.closest("#ttabs [data-t]");
   if (tab) {
-    S.trace = Number(tab.dataset.t);
-    renderTrace();
+    selectRound(Number(tab.dataset.t));
     return;
   }
   const copy = e.target.closest("[data-copy]");
@@ -441,7 +748,10 @@ function jump(eid) {
   if (!ev || ev.m == null) return;
   if (ev.t !== S.trace) {
     S.trace = ev.t;
+    S.round = ev.t;
+    S.cturn = ev.t;
     renderTrace();
+    $$("#atabs .pill", root).forEach((b) => b.setAttribute("aria-pressed", String(Number(b.dataset.at) === ev.t)));
   }
   const prev = S.active;
   S.active = ev.src === "compact" ? eid : null;
@@ -469,6 +779,7 @@ function renderOut() {
   const D = S.D;
   if (!D) return;
   $("#sout", root).innerHTML = `<div class="out">${outSeg.get() === "compact" ? compactHTML(D) : attrHTML(D)}</div>`;
+  requestAnimationFrame(markCmapScroll);
 }
 
 const evAt = (ev, multi) => (ev.m == null ? "未定位" : `${multi ? `${ev.t + 1}·` : ""}#${ev.m}`);
@@ -502,14 +813,14 @@ function attrHTML(D) {
       <div class="evlist">${evs}</div></article>`;
   };
   const order = (ids) => ids.map((i) => A.problems[i]).sort((a, b) => SEV.indexOf(a.sev) - SEV.indexOf(b.sev));
-  const group = (title, note, ids) => {
+  const group = (title, note, ids, round = null) => {
     const cards = order(ids);
     if (!cards.length) return "";
-    return `<section class="tgroup"><header class="tgroup-head"><span>${title}</span><span class="faint num">${cards.length}</span>${note ? `<span class="faint">${note}</span>` : ""}</header>${cards.map(card).join("")}</section>`;
+    return `<section class="tgroup"${round != null ? ` id="round-${round}" data-round="${round}"` : ""}><header class="tgroup-head"><span>${title}</span><span class="faint num">${cards.length}</span>${note ? `<span class="faint">${note}</span>` : ""}</header>${cards.map(card).join("")}</section>`;
   };
   let body = "";
   A.turns.forEach((t, ti) => {
-    body += group(multi ? `第 ${ti + 1} 轮` : "本轮", t.correct === false ? "判为错误" : t.correct === true ? "判为正确" : "", t.problems);
+    body += group(multi ? `第 ${ti + 1} 轮` : "本轮", t.correct === false ? "判为错误" : t.correct === true ? "判为正确" : "", t.problems, ti);
   });
   body += group("整场会话", "", A.session_problems);
 
@@ -527,39 +838,52 @@ function attrHTML(D) {
         <span class="sev-total num">${total ? `${total} 个问题` : "无问题"}</span>
       </div>
     </div>
+    ${multi ? `<div class="trace-tabs ctabs" id="atabs">${A.turns.map((t, i) =>
+      `<button type="button" class="pill" data-at="${i}" aria-pressed="${i === S.round}">第 ${i + 1} 轮</button>`).join("")}</div>` : ""}
     ${body || `<div class="empty">归因没有记下问题</div>`}`;
 }
 
 function compactHTML(D) {
   const C = D.compact;
-  if (!C) return `<div class="empty">这一组没有 compact 输出</div>`;
-  const multi = D.input.traces.length > 1;
-  let html = C.overview.length ? `<ol class="overview">${C.overview.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>` : "";
-  C.turns.forEach((t) => {
-    const nodes = [];
-    CX.forEach(([key, name, cls], ci) => {
-      let prev = cls === "plan" ? -1 : null;
-      (t[key] || []).forEach((x, i) => {
-        const ms = x.ev.map((e) => D.evidence[e]).filter((ev) => ev && ev.m != null).map((ev) => ev.m);
-        const pos = ms.length ? Math.min(...ms) : prev ?? (cls === "data" || cls === "art" ? Infinity : -1);
-        prev = pos;
-        nodes.push({ x, name, cls, ci, i, pos, ev: x.ev.filter((e) => D.evidence[e] && D.evidence[e].m != null) });
-      });
-    });
-    nodes.sort((a, b) => a.pos - b.pos || a.ci - b.ci || a.i - b.i);
-    const at = (pos) => (Number.isFinite(pos) && pos >= 0 ? `${multi ? `${t.turn + 1}·` : ""}#${pos}` : "");
-    const flow = nodes
-      .map((n, k) => {
-        const tag = !k || nodes[k - 1].cls !== n.cls ? `<span class="cf-tag">${n.name}</span>` : "";
-        const refs = n.ev.length > 1 ? `<span class="refs">${n.ev.map((e) => `<button type="button" data-e="${e}">${evAt(D.evidence[e], multi)}</button>`).join("")}</span>` : "";
-        return `<div class="cf ${n.cls}" id="cf-${t.turn}-${k}"${n.ev.length ? ` data-e="${n.ev[0]}"` : ""}><span class="cf-at num">${at(n.pos)}</span><span class="cf-dot"></span>
-          <div class="cf-body">${tag}<span class="cf-text">${esc(n.x.c)}</span>${refs}</div></div>`;
-      })
-      .join("");
-    html += `${flowMap(nodes, t.turn, at)}${skillPoints(t.components || [], D, at)}<div class="cflow">${flow}</div>`;
-  });
-  return html;
+  if (!C || !C.turns || !C.turns.length) return `<div class="empty">这一组没有 compact 输出</div>`;
+  const turns = C.turns;
+  const multi = turns.length > 1;
+  S.cturn = Math.max(0, Math.min(S.cturn || 0, turns.length - 1));
+  let html = (C.overview || []).length
+    ? `<ol class="overview">${C.overview.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>`
+    : "";
+  if (multi) {
+    html += `<div class="trace-tabs ctabs">${turns.map((t, i) =>
+      `<button type="button" class="pill" data-ct="${i}" aria-pressed="${i === S.cturn}">第 ${i + 1} 轮</button>`).join("")}</div>`;
+  }
+  const t = turns[S.cturn];
+  return html + (t ? compactTurnHTML(D, t, multi) : "");
 }
+
+function compactTurnHTML(D, t, multi) {
+  const nodes = [];
+  CX.forEach(([key, name, cls], ci) => {
+    let prev = cls === "plan" ? -1 : null;
+    (t[key] || []).forEach((x, i) => {
+      const ms = x.ev.map((e) => D.evidence[e]).filter((ev) => ev && ev.m != null).map((ev) => ev.m);
+      const pos = ms.length ? Math.min(...ms) : prev ?? (cls === "data" || cls === "art" ? Infinity : -1);
+      prev = pos;
+      nodes.push({ x, name, cls, ci, i, pos, ev: x.ev.filter((e) => D.evidence[e] && D.evidence[e].m != null) });
+    });
+  });
+  nodes.sort((a, b) => a.pos - b.pos || a.ci - b.ci || a.i - b.i);
+  const at = (pos) => (Number.isFinite(pos) && pos >= 0 ? `${multi ? `${t.turn + 1}·` : ""}#${pos}` : "");
+  const flow = nodes
+    .map((n, k) => {
+      const tag = !k || nodes[k - 1].cls !== n.cls ? n.name : "";
+      const refs = n.ev.length > 1 ? `<span class="refs">${n.ev.map((e) => `<button type="button" data-e="${e}">${evAt(D.evidence[e], multi)}</button>`).join("")}</span>` : "";
+      return `<div class="cf ${n.cls}" id="cf-${t.turn}-${k}"${n.ev.length ? ` data-e="${n.ev[0]}"` : ""}><span class="cf-dot"></span>
+        <span class="cf-tag">${tag}</span><div class="cf-body"><span class="cf-at num">${at(n.pos)}</span><span class="cf-text">${esc(n.x.c)}</span>${refs}</div></div>`;
+    })
+    .join("");
+  return `${flowMap(nodes, t.turn, at)}${skillPoints(t.components || [], D, at)}<div class="cflow">${flow}</div>`;
+}
+
 const CX = [
   ["plans", "规划", "plan"], ["reasoning", "推理", "think"], ["execution", "执行", "exec"], ["tool_errors", "报错", "err"],
   ["reflections", "反思", "refl"], ["key_data", "关键数据", "data"], ["artifacts", "产物", "art"],
@@ -629,6 +953,16 @@ function onOutClick(e) {
     const box = sum.closest(".sum-box");
     const open = box.classList.toggle("is-open");
     sum.textContent = open ? "收起" : "展开全部";
+    return;
+  }
+  const at = e.target.closest("[data-at]");
+  if (at) {
+    selectRound(Number(at.dataset.at));
+    return;
+  }
+  const ct = e.target.closest("[data-ct]");
+  if (ct) {
+    selectRound(Number(ct.dataset.ct), { scroll: false });
     return;
   }
   const cm = e.target.closest("[data-cf]");

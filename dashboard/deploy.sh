@@ -13,7 +13,7 @@ if [ -n "${EVAL_DEPLOY_PORT:-}" ]; then SSH_OPTS+=(-p "$EVAL_DEPLOY_PORT"); fi
 if [ -n "${EVAL_DEPLOY_KEY:-}" ]; then SSH_OPTS+=(-i "$EVAL_DEPLOY_KEY"); fi
 
 SSH=(ssh "${SSH_OPTS[@]}")
-RSYNC=(rsync -az --delete --exclude 'data.json' --exclude 'data.json.gz' --exclude 'samples.json' --exclude 'samples.json.gz' --exclude 'static/samples' --exclude 'static/.samples-*' --exclude 'server.pid' --exclude 'logs' --exclude '*.log' --exclude '__pycache__' --exclude 'local_dev' --exclude 'tests'
+RSYNC=(rsync -az --delete --exclude 'data.json' --exclude 'data.json.gz' --exclude 'samples.json' --exclude 'samples.json.gz' --exclude 'static/samples' --exclude 'static/.samples-*' --exclude 'server.pid' --exclude 'logs' --exclude 'cache' --exclude '*.log' --exclude '__pycache__' --exclude 'local_dev' --exclude 'tests'
   -e "ssh ${SSH_OPTS[*]}")
 
 "${SSH[@]}" "$HOST" "mkdir -p $REMOTE/static $REMOTE/logs"

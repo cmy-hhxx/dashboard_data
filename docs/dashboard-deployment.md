@@ -88,6 +88,9 @@ ssh eval_data 'cd /opt/eval_dashboard && ./stop.sh'
   （`deploy.sh` 会自动做）。
 - 缓存头：`/healthz` 为 `no-store`，其余全部为 `no-cache`（可以用 304 重新验证）。
 - 日志：`logs/server.log` 记录服务输出，`logs/build.log` 记录部署时的构建；仓库没有日志轮转。
+- 输入行数缓存在 `cache/input_counts.json`（按文件大小与 mtime 失效），`deploy.sh` 的 rsync 会保留这个目录；
+  首次构建会完整扫一遍输入，之后只统计新增或变化的文件。
+- 当前全量约 7,700 个样本、550 MB 逐样本详情；一次构建约 5–6 分钟、峰值内存约 0.6 GB，部署脚本的 900 秒超时足够。
 
 ## 部署最佳实践
 

@@ -169,6 +169,18 @@ class Handler(SimpleHTTPRequestHandler):
         sys.stderr.write("%s %s\n" % (time.strftime("%H:%M:%S"), fmt % args))
 
 
+def seed_state():
+    """Expose the payload produced by deploy.sh before this process started."""
+    try:
+        stat = os.stat(OUTPUTS[0])
+        with open(OUTPUTS[0], encoding="utf-8") as fh:
+            source = json.load(fh).get("source") or {}
+        _state["build"] = {"pairs": source.get("pairs"), "pairing": source.get("mode")}
+        _state["last_run"] = stat.st_mtime
+    except (OSError, ValueError):
+        pass
+
+
 def main():
     if not all(os.path.exists(p) for p in OUTPUTS):
         print("[serve] payloads missing, building once before serving", flush=True)
@@ -178,6 +190,7 @@ def main():
         age = time.time() - os.path.getmtime(OUTPUTS[0])
     except OSError:
         age = 0
+    seed_state()
     threading.Thread(target=scheduler, args=(REFRESH if age < 120 else 0,), daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"[serve] http://0.0.0.0:{PORT} static={STATIC} refresh={REFRESH}s", flush=True)

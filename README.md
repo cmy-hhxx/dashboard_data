@@ -95,8 +95,12 @@ ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
 
 **3. 具体样本页**：三栏工作台，重点是评测输入与评测输出。
 
-- 左栏（召回）：Trace / Session / 问题关键词搜索；严重度、模型、日常 / 流失与「阶段 → 机制 → 模式」多级筛选，支持排序；
-  当前条件逐项清除；列表显示问题、模型/日期、最严重等级、问题数与环节；↑↓ / Enter 选择。
+- 左栏（召回）：按 `session_id + 模型` 聚合，一个会话只占一行；同一会话的多条 trace 评测显示为轮次。
+  Trace / Session / 问题关键词搜索；严重度、模型、日常 / 流失与「阶段 → 机制 → 模式」多级筛选，支持排序；
+  当前条件逐项清除；列表显示问题、模型/日期、轮次数、最严重等级、问题数与环节；↑↓ / Enter 选择。
+  全量会话索引按每页 50 条分页，页码固定在左栏底部，筛选或换产品回到第 1 页。
+- 轮次：评测输入、归因、紧凑轨迹共用同一组「第 1 轮 … 第 N 轮」页签；点击任一处会同步另外两栏，
+  并把归因定位到对应轮次。同一会话里被分开评测的 trace 会在这里合并成轮次，而不是变成多条独立样本。
 - 中栏（评测输入）：原问与中文翻译、任务/难度/用量；多轮可切换；按 System / User / Reason /
   Tool / Return / Answer 图标展开时间线；系统提示、思考、调用参数、结构化返回默认折叠，
   最终回答超长折叠；缺失输入显式提示。
@@ -117,13 +121,13 @@ ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
 | `static/js/` | `app.js` 路由/主题/数据加载，`data.js` 数据页，`sunburst.js` 可下钻旭日图，`system.js` 评测体系页，`samples.js` 样本页（含 compact 流程图），`core.js` 共享格式化/提示/数字动效 |
 | `precompress.sh` | 部署时预压缩 JS/CSS/HTML |
 
-AIME 输出以 `1_aime/eval_output/demo_data/<model>/<model>_attribution-<date>.jsonl` 与
-`compact/<model>_compact-<date>.jsonl` 为准（demo 格式，后续沿用）；
-旧 `eval_output/<split>/...` 与 `.archive/` 只作回退。问财暂无 demo_data 样本。
-问财输出当前回退到 `0_wencai/.archive/0_daily_eval_output`（旧
-`.archive/eval_output/0_daily_eval_output` 仍兼容），输入为
+AIME 日常输出以 `1_aime/eval_output/0_daily_eval/<model>/<model>_attribution-<date>.jsonl` 与
+`compact/<model>_compact-<date>.jsonl` 为准；流失用户输出在
+`1_aime/eval_output/1_lost_user_eval/`，其评测输入暂时读取归档
+`1_aime/.archive/1_lost_user_input/<model>/<model>-<date>_input.jsonl`（该目录正在持续补评测，
+看板每轮构建会重新配对）。问财输出与输入都在 `0_wencai/eval_output/0_daily_eval/` 与
 `0_wencai/eval_input/<model>/<date>.jsonl`。
-`demo_data` 目前没有 `cluster_tree`；数据板块聚类沿用最近的归档聚类快照，样本页不再依赖聚类树。
+`cluster_tree` 仍按现有 `eval_output/**/cluster/` 快照读取，没有聚类的样本在聚类卡片中计为未聚类。
 
 口径：输入 = 数据集中的 `*_input.jsonl`，以及 AIME / 问财新布局的 `<date>.jsonl`；已评测 = 输出侧回答记录数（问财四个版本 answer 合计，
 不含 comparison / compact 汇总记录；AIME 统计 `*_attribution-YYYY-MM-DD.jsonl`）；待评测 = 输入 − 已评测。
