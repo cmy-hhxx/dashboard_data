@@ -114,9 +114,13 @@ def connect(path):
     return conn
 
 
+# ceph-fuse 上小块读的往返代价很高；与看板 build_store 一样用 8 MB 缓冲
+READ_BUFFER = 8 << 20
+
+
 def _lines(path: Path):
     """逐行读，读完即关文件（直接迭代 path.open() 要等 GC 才释放句柄）。"""
-    with path.open("rb") as handle:
+    with path.open("rb", buffering=READ_BUFFER) as handle:
         yield from handle
 
 
@@ -469,7 +473,7 @@ def ingest_inputs(conn, aime: Path, log):
         rows = []
         offset = committed = start
         lines = line_no
-        with path.open("rb") as handle:
+        with path.open("rb", buffering=READ_BUFFER) as handle:
             handle.seek(start)
             for raw in handle:
                 line_no += 1
