@@ -1173,7 +1173,8 @@ function pushPull(bento, p, tax, u) {
     const spec = card === "vol" ? volSpec(focus, opened) : cluSpec(focus, opened);
     const cur = u.deep[row];
     if (spec) {
-      if (cur && cur.id === spec.id) {
+      // Same spec on a live board: only the highlight moved. While booting the DOM is new, so apply.
+      if (cur && cur.id === spec.id && !booting) {
         cur.focus = spec.focus;
         if (maps[card] && maps[card].id === spec.id) maps[card].map.focus(spec.focus);
         return;
