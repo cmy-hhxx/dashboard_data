@@ -42,7 +42,9 @@ async function boot() {
 
   let response;
   try {
-    response = await fetch(`/api/context?${query}`, { cache: "no-store" });
+    // 保持相对路径：页面也会挂在路径前缀下（如 /bmtp/proxy/dsw/trace-detail/），
+    // 前导 "/" 会跳出前缀导致接口 404。
+    response = await fetch(`api/context?${query}`, { cache: "no-store" });
   } catch (err) {
     return message("数据服务暂时不可用", "请稍后重试。");
   }
