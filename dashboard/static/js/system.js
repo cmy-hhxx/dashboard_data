@@ -1,14 +1,15 @@
 /* 评测体系: how a session becomes compact + attribution + clusters, told with the real batch. */
 import {
-  $, $$, esc, fmt, SEV, sevColor, KIND,
+  $, $$, esc, fmt, pct, SEV, sevColor, KIND,
   bindTips, REDUCED,
 } from "./core.js";
+import { threadFlow } from "./particles.js";
 
 let shown = null;
 
 const ROLE = { planning: "规划", request_generation: "请求生成", tool: "工具执行", script: "脚本执行", skill: "技能装载", delivery: "交付" };
 
-const E = { product: null, goldens: [], index: 0, obs: null };
+const E = { product: null, goldens: [], index: 0, obs: null, flow: null };
 
 function compactAnatomy(a) {
   if (!a || a.empty || !(a.messages || []).length || a.messages.length <= 22) return a;
@@ -48,7 +49,7 @@ export async function render(root, c) {
   if (E.index >= E.goldens.length) E.index = 0;
 
   root.innerHTML = `<div class="bento">
-    ${flowCard(d.taxonomy)}
+    ${flowCard(d.taxonomy, (d.products || {})[c.product])}
     ${goldenCard(E.goldens, E.index)}
   </div>`;
   if (!root._sysTips) {
@@ -63,23 +64,27 @@ export async function render(root, c) {
 
 /* ---------------------------------------------------------------- 评测体系: one mechanism diagram */
 const FX_IN = [
-  ["user", "用户提问", "原始问句 · 追问", "user"],
-  ["think", "模型思考", "推理 · 规划 · 自我修正", "llm"],
-  ["call", "工具调用", "参数 → 返回 · 报错", "tool"],
-  ["answer", "最终回答", "交付给用户的结论", "final"],
+  ["user", "用户提问", "原始问句与追问", "user"],
+  ["think", "模型思考", "推理、规划与自我修正", "llm"],
+  ["call", "工具调用", "参数、返回与报错", "tool"],
+  ["answer", "最终回答", "交给用户的结论", "final"],
 ];
 const FX_STEPS = [["规划", "var(--t0)"], ["推理", "var(--t2)"], ["执行", "var(--accent)"], ["报错", "var(--sev-1)"], ["反思", "var(--t2)"], ["关键数据", "var(--t1)"], ["产物", "var(--t1)"]];
 const FX_OUT = [
-  ["问题", "一句话标签 + 现象", "只记能回链原文的问题", "var(--sev-1)"],
-  ["定级", "P0 最严重 → P4 最轻", "按对用户的影响定级", "var(--sev-0)"],
-  ["证据", "引用原文 → 消息 #n", "点一下就回到原文", "var(--accent)"],
-  ["归属", "组件 · 环节角色", "交给聚类归入模式", "var(--t1)"],
+  ["问题", "标签与现象", "只记能回到原文的问题", "var(--sev-1)"],
+  ["定级", "P0 最重 → P4 最轻", "按对用户的影响", "var(--sev-0)"],
+  ["证据", "原文引用 → 消息位置", "逐字回链原文", "var(--accent)"],
+  ["归属", "组件与环节角色", "交给聚类归入模式", "var(--t1)"],
 ];
 const taxoNum = (a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1));
 const patNum = (id) => id.split(".").map((x) => Number(x.replace(/\D/g, "")) || 0);
 const mechTint = (i, n) => `color-mix(in oklab, var(--accent) ${Math.round(n > 1 ? 88 - (i * 54) / (n - 1) : 88)}%, var(--card))`;
 
-function flowCard(tax) {
+/* Each stage's real volume for the current product, next to its name. */
+const fig = (text) => (text ? `<span class="fx-fig num">${text}</span>` : "");
+
+function flowCard(tax, p) {
+  const k = (p && p.kpi) || null;
   const ticks = Array.from({ length: 60 }, (_, k) => {
     const c = k % 9 === 0 ? FX_STEPS[(k / 9) % FX_STEPS.length][1] : "";
     const a = (k * Math.PI) / 30;
@@ -112,7 +117,7 @@ function flowCard(tax) {
     const mechRows = mechs.map((m, i) =>
       `<span class="fx-mech" data-m="${m.id}" title="${esc(m.def || "")}"><i style="--c:${mechTint(i, mechs.length)}"></i><code>${m.id}</code><b>${esc(m.name)}</b><small>${esc(m.def || "")}</small></span>`).join("");
     taxHTML = `<div class="fx-tax" id="fxTax">
-      <div class="fx-label"><span class="num">04</span>聚类</div>
+      <div class="fx-label"><span class="num">04</span>聚类${fig(k && p.patterns && `${fmt(p.patterns.length)} 个模式 · 覆盖 ${pct(k.clustered, k.problems)} 问题`)}</div>
       <div class="fx-tax-grid">
         <div class="fx-box fx-stgbox"><span class="fx-k">环节</span><div class="fx-phs">${phases}</div></div>
         <div class="fx-box fx-mechbox"><span class="fx-k">机制</span><div class="fx-mechs">${mechRows}</div></div>
@@ -122,15 +127,15 @@ function flowCard(tax) {
   return `<article class="card" style="--span:12">
     <header class="card-head"><h2>评测体系</h2><span class="meta end">会话 → 压缩 → 归因 → 聚类</span></header>
     <div class="fx" id="fx"><svg class="fx-wires" aria-hidden="true"></svg>
-      <div class="fx-col"><div class="fx-label"><span class="num">01</span>会话输入</div>${ins}</div>
-      <div class="fx-col fx-mid"><div class="fx-label"><span class="num">02</span>Compact 压缩</div>
+      <div class="fx-col"><div class="fx-label"><span class="num">01</span>会话输入${fig(k && `${fmt(k.unique_sessions)} 个会话 · ${fmt(k.messages)} 条消息`)}</div>${ins}</div>
+      <div class="fx-col fx-mid"><div class="fx-label"><span class="num">02</span>Compact 压缩${fig(k && `${fmt(k.compacted)} 条轨迹`)}</div>
         <div class="fx-hubwrap">
-          <div class="fx-ask">保留轨迹顺序<b>是</b></div>
+          <div class="fx-ask">轨迹顺序<b>不变</b></div>
           <div class="fx-hub"><span class="fx-orbit"><i></i></span><svg class="fx-ring" viewBox="-80 -80 160 160" aria-hidden="true">${ticks}</svg><span class="fx-core"><span>${tiles}</span></span></div>
           <p class="fx-cap"><em>每一步都带原文位置</em></p>
           <div class="fx-steps">${FX_STEPS.map(([n, c]) => `<span style="--c:${c}"><i></i>${n}</span>`).join("")}</div>
         </div></div>
-      <div class="fx-col"><div class="fx-label"><span class="num">03</span>归因</div>${outs}</div>
+      <div class="fx-col"><div class="fx-label"><span class="num">03</span>归因${fig(k && `${fmt(k.problems)} 个问题 · ${pct(k.located, k.evidence)} 证据可定位`)}</div>${outs}</div>
     </div>${taxHTML}</article>`;
 }
 
@@ -283,6 +288,8 @@ function wireAnatomy(root, a) {
   requestAnimationFrame(draw);
   E.obs = new ResizeObserver(draw);
   E.obs.observe(box);
+  if (E.flow) E.flow.destroy();
+  E.flow = threadFlow($(".threads svg", box));
 
   const focus = (pid) => {
     box.classList.toggle("is-focus", pid != null);

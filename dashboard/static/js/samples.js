@@ -1,6 +1,7 @@
 /* 具体数据: recall list → chat transcript → attribution / compact, with evidence → message links. */
 import { $, $$, esc, fmt, compact, SEV, WORST, SEV_NAME, sevColor, KIND, getJSON, bindTips, REDUCED } from "./core.js";
 import { renderContent, segment } from "./render.js";
+import { threadFlow } from "./particles.js";
 
 const FOLD_OPEN = new Set(["user", "answer"]);
 const PAGE = 50;
@@ -960,6 +961,7 @@ function wireThreads() {
     if (c) focus(Number(c.id.replace("pc-", "")));
   });
   box.addEventListener("pointerleave", () => focus(null));
+  threadFlow($(".threads svg", box));
   if (threadObs) threadObs.disconnect();
   threadObs = new ResizeObserver(scheduleThreads);
   threadObs.observe(box);

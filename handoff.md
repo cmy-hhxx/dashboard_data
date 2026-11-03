@@ -106,6 +106,8 @@ server.py（标准库 HTTP，:5001，定时 build）──> app.js
 | `dashboard/static/js/samples.js` | 具体数据两栏工作台（顶部轨迹概览、三列轨迹 / 对话 / 归因、证据连线） | 筛选、样本详情 |
 | `dashboard/static/js/render.js` | 公共内容渲染：Markdown-lite、JSON 高亮、按偏移保留证据高亮 | 文本 / JSON 呈现 |
 | `dashboard/static/js/sunburst.js` | 原生 SVG 可下钻旭日图 | 数据量 / 聚类环 |
+| `dashboard/static/js/galaxy.js` | 星图：一颗星一个 case、按分组成团的 canvas 视图（推拉展开的卡片里） | 星图布局、配色、交互 |
+| `dashboard/static/js/particles.js` | 证据流：沿证据连线流动的低密度粒子（体系页证据闭环、样本页） | 粒子密度、速度 |
 | `dashboard/static/app.css` | 所有样式与 token | 样式微调、响应式 |
 | `dashboard/tests/*.py` | 合成数据端到端构建、增量、sidecar、懒详情测试 | 改 build.py 后 |
 | `dashboard/deploy.sh` | 同步、远端构建、预压缩、重启 | 发布 |
@@ -214,8 +216,16 @@ tr 轮数 · mc 消息数 · lang · case · s 短 slug
   `datasets/stats.json` 是 stats worker 的旁路统计，删除后 build 会局部重扫。
 - **流失口径**：AIME 用 `.archive/1_lost_user_input` 目录；问财用输入 `meta.lost_user`。
   改口径时同时改 `build_store.split_from_rel` / `_aggregate_line` 和前端 `volTree`。
-- **服务没有守护进程**：容器/环境重启后需要手动 `start.sh`；端口和刷新间隔可用
-  `PORT` / `REFRESH_SECONDS` 覆盖（`start.sh` 里写死了默认 `PORT=5001`）。
+- **服务没有守护进程**：容器/环境重启后需要手动 `start.sh`；端口、刷新间隔和是否起统计旁路可用
+  `PORT` / `REFRESH_SECONDS` / `STATS_WORKER` 覆盖（`deploy.sh` 会把本地设置的这三个变量带到远端）。
+  预发：`EVAL_DEPLOY_REMOTE=/opt/eval_dashboard_2 PORT=5002 STATS_WORKER=0 ./dashboard/deploy.sh`（对外 :2833）。
+- **推拉布局**：`data.js` 的 `pushPull` 管两行（`bento[data-top]` / `bento[data-bottom]`）。旭日图到最里层（焦点的子节点都是叶子，
+  或在非根焦点下选中叶子）时自动展开，评测量 / 归因 / 预测由点击触发；同一行其它卡加 `.is-compact` 只留 `.compact` 关键数字。
+  宽度动画是 FLIP + WAAPI（量旧盒子 → 切布局 → 从旧盒子播到新盒子），只在 ≥ 1181px；861–1180px 展开卡占整行，手机星图在图表下方。
+  星图数据来自 `samples-<product>.json`（按需加载），索引行的 `r`（归因环节）和预测 payload 的 `items` 都是为它加的。
+- **就地刷新**：`app.js` 每 2 分钟条件请求 `data.json`，`generated_at` 变了才换 payload 并带 `refresh: true` 重画；
+  数据页的筛选/翻页/下钻/页签/推拉状态在 `data.js` 的 `UI[product]` 里，样本页靠 URL，重画时都会保留。
+- **样本页消息对齐**：用户消息不再做右侧气泡，和模型/调用/返回/回答共用同一条左边线与 12px 文字内边距，只用底色区分。
 
 ## 8. 发布命令
 

@@ -54,6 +54,13 @@ class PredictionFeedTests(unittest.TestCase):
             feed = datasets / "4_forecast" / "wencai" / "prediction.json"
             feed.parent.mkdir(parents=True)
             feed.write_text(json.dumps(FEED, ensure_ascii=False), encoding="utf-8")
+            items = [
+                {"question": "茅台明天涨吗", "version": "a_fast", "status": "revealed", "result": "wrong",
+                 "forecast_type_label": "个股走势", "error_cause_label": "趋势外推"},
+                {"question": "大盘下周", "version": "a_fast", "status": "unverifiable", "result": None},
+            ]
+            (feed.parent / "prediction_items.jsonl").write_text(
+                "".join(json.dumps(x, ensure_ascii=False) + "\n" for x in items), encoding="utf-8")
             summary = run_build(datasets, static)
             self.assertNotIn("reused", summary)
             pred = json.loads((static / "data-wencai.json").read_text())["products"]["wencai"]["prediction"]
@@ -64,6 +71,8 @@ class PredictionFeedTests(unittest.TestCase):
             self.assertEqual(pred["attribution"], {"models": ["a_fast"], "errors": ["趋势外推"],
                                                    "flows": {"a_fast": [1]}})
             self.assertEqual(pred["accuracy"], FEED["accuracy"])
+            # Only judged answers reach the star map; unverifiable ones stay a count.
+            self.assertEqual(pred["items"], [{"q": "茅台明天涨吗", "v": "a_fast", "r": "wrong", "t": "个股走势", "e": "趋势外推"}])
             for dropped in ("labels", "summary", "sources", "schema"):
                 self.assertNotIn(dropped, pred)
             self.assertEqual(run_build(datasets, static).get("reused"), 1)
