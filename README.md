@@ -9,7 +9,8 @@ AIME 评测数据在远端服务器上的**搬运、打包与看板**工程。
 
 ```
 servers.conf                    # 本地部署配置（已 gitignore，不入库）
-scripts/pack_aime_input.sh      # 把 AIME 评测输入流式打成单个 tar.zst
+scripts/pack_aime_io.sh         # 常规打包：AIME 输入 + 输出 → 单个 tar.zst（约 2.5-3 分钟）
+scripts/pack_aime_input.sh      # 旧版单流口径（ceph 单流限速后已不推荐）
 docs/aime-input-packaging.md    # 打包流程与参数说明
 docs/aime-data-inventory.md     # 2026-10-30 那份数据的解压体量与目录拆解
 docs/design-principles.md       # 界面设计原则：层级、字重、数字与动效
@@ -20,29 +21,30 @@ docs/build-performance.md       # 构建基线、增量索引、实测耗时与�
 ## 快速开始
 
 ```bash
-scp scripts/pack_aime_input.sh eval_data:/tmp/
-# 打包范围由调用方显式给出（不传则默认两棵目录树，仅作省事用）
-ssh eval_data 'chmod +x /tmp/pack_aime_input.sh && /tmp/pack_aime_input.sh <目录…>'
+scp scripts/pack_aime_io.sh eval_data:/tmp/
+ssh eval_data 'chmod +x /tmp/pack_aime_io.sh && /tmp/pack_aime_io.sh'
 ```
 
-产物落在 `/mnt/fin_bench/aime_data/aime_input_<日期>.tar.zst`。
+产物落在 `/mnt/fin_bench/aime_data/aime_input_output_<日期>.tar.zst`。
 
-默认 `LEVEL=12`：10.3 GB 输入约 **47 秒 / 620 MB（16.6×）**。要更小用 `LEVEL=15`
-（129 秒 / 597 MB），极致压缩用 `LEVEL=19`（392 秒 / 539 MB / 19.06×）。
-依据见 [docs/aime-input-packaging.md](docs/aime-input-packaging.md)。
+端到端实测 **151 秒**：12.1 GiB（459 文件）→ **826 MB（6.34% / 15.8×）**，其中 8 路并行
+搬运 88 秒、`tar | zstd -12 --long=27` 压缩 39 秒、校验 24 秒。慢在 `ceph-fuse` 单流读只有
+~20 MB/s，所以先把文件并行搬到本地暂存再压；产物仍是标准单流 tar.zst，解压不需要特殊参数。
+参数与口径见 [docs/aime-input-packaging.md](docs/aime-input-packaging.md)。
 
 ## 数据现状
 
 | 数据 | 位置（远端） | 规模 |
 |---|---|---|
-| AIME 评测输入 | `…/1_aime/2_eval_input/` | 287 文件 / 9.92 GiB / 10,648,360,770 B |
-| 归档产物 | `/mnt/fin_bench/aime_data/` | `2_eval_input_20261030.tar.zst` 675 MB（6.34% / 15.8×） |
+| AIME 评测输入 | `…/1_aime/eval_input/` | 346 文件 / 11.39 GiB / 12,233,839,658 B |
+| AIME 评测输出 | `…/1_aime/eval_output/` | 113 文件 / 0.74 GiB（排除 `.runs`/`.delivery`） |
+| 打包产物 | `/mnt/fin_bench/aime_data/` | `aime_input_output_20261103.tar.zst` 826 MB（6.34% / 15.8×） |
 
-包内结构与源目录一致（顶层 `2_eval_input/`，下面是 `0_daily_eval_input/`、
-`1_lost_user_eval/{.archive,aime_expert,aime_fast}`）。解压后体量、目录结构、逐日期记录数见
-[docs/aime-data-inventory.md](docs/aime-data-inventory.md)。
+包内结构与源目录一致（顶层 `eval_input/`、`eval_output/`）。解压后体量、目录结构、
+逐日期记录数见 [docs/aime-data-inventory.md](docs/aime-data-inventory.md)。
 
-`0_daily_eval_input` 是**实时目录**，流水线在持续写入；打包按快照语义处理，详见流程文档 §5。
+实时目录（`0_daily_eval_input` 及输出的 `.runs`/`.delivery`）流水线仍在写入；打包按快照语义
+处理，并默认排除 `.archive` 与运行现场，详见流程文档「打包口径」。
 
 ## 数据看板
 

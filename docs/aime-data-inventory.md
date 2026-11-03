@@ -202,3 +202,19 @@ aime_input_20261030.tar.zst
 2026-10-30 14:39，归档输入从 `2_eval_input/1_lost_user_eval/.archive/` 移到了
 `0_archive/.archive_lost_user/`（内容一致：expert 528,386,050 B / fast 3,924,673,852 B）。
 §6 里"归档 13,099 条"的口径不变，只是路径变了。
+
+## 8. 2026-11-03 输入+输出包（常规打包口径）
+
+目录已改名：`1_aime/2_eval_input/` → `1_aime/eval_input/`，`3_eval_output/` → `1_aime/eval_output/`；
+历史运行现场统一收到 `1_aime/.archive/`（5.1 GiB），输出目录下另有实时写入的 `.runs/`（1.0 GiB）与
+`.delivery/`（0.1 GiB）。常规打包见 [aime-input-packaging.md](aime-input-packaging.md)。
+
+| 口径 | 文件 | 字节 |
+|---|---:|---:|
+| `eval_input/` | 346 | 12,233,839,658（11.39 GiB） |
+| `eval_output/`（不含 `.runs`/`.delivery`） | 113 | 798,367,779（0.74 GiB） |
+| **合计**（不含 `.archive`/`.runs`/`.delivery`） | **459** | **13,024,899,110（12.13 GiB）** |
+
+产物 `aime_input_output_20261103.tar.zst`：825,967,485 B（788 MiB），**6.34% / 15.77×**，
+单流 `tar.zst`，解压不需要特殊参数。同口径下输出业务 jsonl（attribution / compact）只占
+0.74 GiB，其余历史体量都在 `.archive` 与实时运行现场里。
