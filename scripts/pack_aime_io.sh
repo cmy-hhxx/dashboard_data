@@ -37,7 +37,9 @@ PAR=${PAR:-8}            # ceph 并行读流数；单流 ~20MB/s，8 流 ~130MB/
 STAGE=${STAGE:-/tmp/aime_stage}
 VERIFY=${VERIFY:-1}
 EXCLUDE=${EXCLUDE:-.archive,.runs,.delivery}
-export EXCLUDE
+EXCLUDE_FILES=${EXCLUDE_FILES-}
+EXCLUDE_SUFFIX=${EXCLUDE_SUFFIX:-.lock,.tmp}
+export EXCLUDE EXCLUDE_FILES EXCLUDE_SUFFIX
 TAG=""
 DIRS=()
 
@@ -87,6 +89,8 @@ from concurrent.futures import ThreadPoolExecutor
 src_base, stage, par = sys.argv[1], sys.argv[2], int(sys.argv[3])
 dirs = sys.argv[4:]
 excl = set(filter(None, os.environ.get("EXCLUDE", ".archive,.runs,.delivery").split(",")))
+excl_files = set(filter(None, os.environ.get("EXCLUDE_FILES", "").split(",")))
+excl_suf = tuple(filter(None, os.environ.get("EXCLUDE_SUFFIX", ".lock,.tmp").split(",")))
 
 
 def walk():
@@ -95,6 +99,8 @@ def walk():
         for root, subdirs, files in os.walk(os.path.join(src_base, top)):
             subdirs[:] = [d for d in subdirs if d not in excl]
             for f in files:
+                if f in excl_files or f.endswith(excl_suf):
+                    continue
                 p = os.path.join(root, f)
                 want[os.path.relpath(p, src_base)] = os.lstat(p).st_size
     return want
@@ -126,6 +132,8 @@ for rnd in range(1, 4):
     if os.path.isdir(stage):
         for root, _, files in os.walk(stage):
             for f in files:
+                if f in excl_files or f.endswith(excl_suf):
+                    continue
                 p = os.path.join(root, f)
                 have[os.path.relpath(p, stage)] = os.lstat(p).st_size
     todo = sorted(((s, r) for r, s in want.items() if have.get(r) != s), reverse=True)
