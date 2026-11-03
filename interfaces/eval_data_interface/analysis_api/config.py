@@ -27,8 +27,8 @@ STATE_DIR = Path(os.environ.get("ANALYSIS_STATE", str(REPO / "state"))).expandus
 PORT = int(os.environ.get("PORT", "5003"))
 HOST = os.environ.get("HOST", "0.0.0.0")
 
-# 后台重建间隔（秒）
-REFRESH_SECONDS = int(os.environ.get("REFRESH_SECONDS", "1800"))
+# 后台重建间隔（秒）：10 分钟一轮，数据延迟控制在 30 分钟以内
+REFRESH_SECONDS = int(os.environ.get("REFRESH_SECONDS", "600"))
 
 # cursor 有效期（秒）
 CURSOR_TTL = int(os.environ.get("CURSOR_TTL", "1800"))

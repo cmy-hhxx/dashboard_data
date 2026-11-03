@@ -39,7 +39,7 @@ for f in static/js/*.js; do node --check "$f"; done
 ## 2. 数据流
 
 ```text
-datasets/ ──> stats_worker.py ──> datasets/stats.json（每 30 分钟，独立进程）
+datasets/ ──> stats_worker.py ──> datasets/stats.json（每 10 分钟，独立进程）
    │
    └─ build.py（cache/build.sqlite3 增量索引）
         ├─ static/data.json(.gz)              共享 taxonomy/system + 产品元数据
@@ -72,7 +72,7 @@ server.py（标准库 HTTP，:5001，定时 build）──> app.js
 - compact 的 `evidence_id` 里 message index 是**整场扁平 trace 的全局下标**；build 需按
   各 trace 消息数累加换算成 `(trace, local_index)`，不能把 compact turn 当 trace 直接
   `place()`，否则第 2 条 trace 起的 compact 证据会越界或错位。
-- `server.py` 启动时缺数据会构建，之后默认每 30 分钟刷新；`/healthz`
+- `server.py` 启动时缺数据会构建，之后默认每 10 分钟刷新，页面每 2 分钟条件请求检查并就地刷新；`/healthz`
   返回最近一次构建摘要。
 - 前端无框架、无打包器、无外部运行时依赖；原生 ES modules + SVG + 手写 CSS。
 - 生产由 `deploy.sh` 同步代码到远端，在远端构建数据、预压缩并重启；不要手改远端目录。
@@ -87,7 +87,7 @@ server.py（标准库 HTTP，:5001，定时 build）──> app.js
 | `?view=data&detail=eval&ed=…&em=…` | `data.js` | 评测量详情：日期 → 模型 → session 三层表格；最后一层进入具体数据的完整输入/输出 |
 
 顶部右侧是全局产品切换（问财 / AIME），也是数据源指示；不要在每个卡片里重复放切换。
-数据页不跳样本；样本页负责深链进入。
+图表都在页内下钻；会话场格子跳到该条样本，聚类矩阵格子跳到「场景 × 问题聚类」预填好的样本筛选（「其他场景」折叠行的格子先展开）。
 
 ## 4. 文件地图
 
@@ -201,8 +201,8 @@ tr 轮数 · mc 消息数 · lang · case · s 短 slug
   否则“单输入、多归因轮”的会话会拿不到 `input.traces[S.trace]`，中间对话与顶部 cmap 会空白。
 - **复制**：`navigator.clipboard` 在 HTTP 下不可用，`copyText` 必须有 textarea + `execCommand`
   回退；按钮反馈「已复制 / 复制失败」。
-- **数据页只做页内下钻**：聚类矩阵、旭日图、预测页签都不跳样本；只有样本页
-  承接 `case` 深链。
+- **数据页跳样本只有两处**：会话场格子带 `case`，聚类矩阵格子带 `scene/sub/stage/mech/pattern`；旭日图、桑基图、预测页签仍只在页内下钻。
+  问财的场景在 `build.py` 里来自 skill 投票，索引行用 `sc` 携带与 task/skill 不一致的场景，`samples.js` 的 `sceneOf` 优先读它。
 - **生成物不是源码**：`static/data.json`、`static/data-<product>.json`、`static/samples.json`、
   `static/samples-<product>.json` 由构建产生，`static/samples/` 是详情懒加载缓存，都不入库；
   本地刷新/远端部署会自动重建。详情缓存可以安全删除，下一次访问按需补。

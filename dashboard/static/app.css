@@ -140,6 +140,11 @@ h1, h2, h3, h4, p { margin: 0; }
 .brand-mark i:nth-child(3) { background: var(--sev-0); }
 .brand-mark i:nth-child(8) { background: var(--sev-4); }
 .top-spacer { flex: 1; }
+.stamp { color: var(--faint); font-size: 12px; white-space: nowrap; }
+.stamp.is-new { animation: stamp-new 2.4s cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes stamp-new { 0%, 30% { color: var(--accent); } }
+/* An in-place data refresh swaps the payload under the reader; nothing replays its entrance. */
+.view.is-refresh, .view.is-refresh * { animation: none !important; }
 
 .seg {
   position: relative; display: inline-flex; padding: 3px; height: 36px;
@@ -237,10 +242,11 @@ html[data-view="samples"] main { max-width: none; padding-bottom: 16px; }
 .fgroup-lost i { width: 5px; height: 5px; border-radius: 50%; box-shadow: inset 0 0 0 1px currentColor; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fill, 11px); grid-auto-rows: 11px; gap: 2px; align-content: start; }
 .tiles span {
-  width: 11px; height: 11px; border-radius: 2px; background: var(--c);
-  transition: opacity var(--snap), transform var(--snap);
+  width: 11px; height: 11px; border-radius: 2px; background: var(--c); cursor: pointer;
+  transition: opacity var(--snap), transform var(--spring);
 }
-.tiles span:hover { transform: scale(1.45); position: relative; z-index: 2; box-shadow: 0 0 0 2px var(--card); }
+.tiles span:hover { transform: scale(1.45); position: relative; z-index: 2; box-shadow: 0 0 0 2px var(--card); transition: opacity var(--snap), transform var(--snap); }
+.tiles span:active { transform: scale(1.1); }
 .field.is-filtered .tiles span:not(.on) { opacity: 0.14; }
 .field.is-filtered .tiles span.on { animation: pop var(--spring); }
 @keyframes pop { 40% { transform: scale(1.35); } }
@@ -456,7 +462,7 @@ mark.cx { background: color-mix(in oklab, var(--accent) 22%, transparent); color
 @media (max-width: 860px) {
   :root { --gutter: 16px; --r-card: 22px; }
   .top { flex-wrap: wrap; gap: 10px; }
-  .top-spacer { display: none; }
+  .top-spacer, .stamp { display: none; }
   .bento { grid-template-columns: minmax(0, 1fr); }
   .card, .card.keep { grid-column: 1 / -1; padding: var(--py) var(--px); }
   .bench { grid-template-columns: minmax(0, 1fr); height: auto; min-height: 0; }
@@ -691,8 +697,10 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .matrix .cell {
   display: grid; place-items: center; height: 30px; border-radius: 6px; font-size: 12px; color: var(--ink-2);
   background: color-mix(in oklab, var(--ink) calc(var(--v) * 100%), transparent);
-  transition: opacity var(--snap);
+  transition: opacity var(--snap), transform var(--spring);
 }
+.matrix .cell:not(.is-empty) { cursor: pointer; }
+.matrix .cell:not(.is-empty):active { transform: scale(0.94); transition: transform var(--snap); }
 .matrix .cell.is-empty { background: none; }
 .matrix .cell.hot { color: var(--card); }
 .matrix .rowtot { transition: opacity var(--snap); display: flex; align-items: center; gap: 8px; padding-left: 12px; font-size: 12px; color: var(--muted); }

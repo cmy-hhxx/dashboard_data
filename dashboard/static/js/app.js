@@ -55,7 +55,7 @@ async function loadIndex(product = state.product) {
   }
 }
 
-async function render() {
+async function render({ refresh = false } = {}) {
   readURL();
   document.documentElement.dataset.view = state.view;
   viewSeg.set(state.view, { silent: true });
@@ -73,12 +73,68 @@ async function render() {
         console.error(err);
       }
     }
-    await modules[state.view].render(root, { ...state, navigate, loadIndex });
+    await modules[state.view].render(root, { ...state, navigate, loadIndex, refresh });
   } catch (err) {
     console.error(err);
     root.innerHTML = `<div class="bento"><div class="card" style="--span:12"><div class="empty">页面加载失败：${String(err.message || err)}</div></div></div>`;
   }
   $("#mask").classList.add("is-off");
+}
+
+/* ---------------------------------------------------------------- incremental refresh
+   The server rebuilds every 10 minutes; the page revalidates data.json every 2 (a 304 when
+   nothing changed) and, when a new build landed, swaps the payloads under the current view
+   without touching the URL or the view's own drill / filter / page state. */
+const POLL_MS = 120000;
+let polling = false;
+
+function stamp(pulse = false) {
+  const el = $("#stamp");
+  const at = state.data && state.data.generated_at;
+  if (!el || !at) return;
+  const t = new Date(at);
+  if (Number.isNaN(t.getTime())) return;
+  const p2 = (n) => String(n).padStart(2, "0");
+  const today = new Date().toDateString() === t.toDateString();
+  el.textContent = `截至 ${today ? "" : `${p2(t.getMonth() + 1)}-${p2(t.getDate())} `}${p2(t.getHours())}:${p2(t.getMinutes())}`;
+  el.dateTime = at;
+  el.hidden = false;
+  if (pulse) {
+    el.classList.remove("is-new");
+    void el.offsetWidth;
+    el.classList.add("is-new");
+  }
+}
+
+async function poll() {
+  if (polling || document.hidden || !state.data) return;
+  polling = true;
+  try {
+    const fresh = await getJSON("data.json", { retries: 0 });
+    const index = state.indexes[state.product];
+    const staleIndex = index && index.generated_at !== state.data.generated_at;
+    if (!fresh || !fresh.generated_at) return;
+    if (fresh.generated_at === state.data.generated_at) {
+      // samples-<p>.json is written right after data.json; pick it up if we raced the build.
+      if (staleIndex && state.view === "samples") {
+        state.indexes = {};
+        state.indexP = {};
+        await render({ refresh: true });
+      }
+      return;
+    }
+    state.data = fresh;
+    state.productData = {};
+    state.productP = {};
+    state.indexes = {};
+    state.indexP = {};
+    await render({ refresh: true });
+    stamp(true);
+  } catch (err) {
+    // A failed check just waits for the next one.
+  } finally {
+    polling = false;
+  }
 }
 
 async function boot() {
@@ -120,6 +176,11 @@ async function boot() {
     console.error(err);
   }
   render();
+  stamp();
+  setInterval(poll, POLL_MS);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) poll();
+  });
 }
 
 boot();

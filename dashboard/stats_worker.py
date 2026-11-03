@@ -5,7 +5,7 @@ The dashboard needs records / traces / tool calls / tokens / task-subtask / lost
 counts for every input file.  Scanning 44 GB on every cold build is the largest
 remaining cost, so this small worker keeps a sidecar aggregate up to date:
 
-    python3 stats_worker.py --datasets /path/to/datasets --interval 1800
+    python3 stats_worker.py --datasets /path/to/datasets --interval 600
 
 It shares ``cache/build.sqlite3`` with ``build.py``; a file already scanned by a
 build is reused without reading it again.  ``build.py`` only trusts an entry
@@ -111,7 +111,7 @@ def main(argv=None):
     ap.add_argument("--out", type=Path, default=None,
                     help="default: <datasets>/stats.json, falling back to dashboard/cache/stats.json")
     ap.add_argument("--interval", type=int,
-                    default=int(os.environ.get("STATS_REFRESH_SECONDS", "1800")))
+                    default=int(os.environ.get("STATS_REFRESH_SECONDS", "600")))
     ap.add_argument("--jobs", type=int, default=0)
     ap.add_argument("--once", action="store_true")
     args = ap.parse_args(argv)

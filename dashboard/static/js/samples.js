@@ -17,7 +17,8 @@ const F = () => {
   };
 };
 const dirty = () => Object.entries(F()).some(([k, v]) => k !== "sort" && v);
-const sceneOf = (r) => r.task || r.skill || "未标注";
+// `sc` is the scene the matrix filed the sample under when it differs from task / skill (问财 B versions).
+const sceneOf = (r) => r.sc || r.task || r.skill || "未标注";
 const subOf = (r) => r.sub || "";
 const problemHit = (r, f) =>
   (!f.stage || r.st.includes(f.stage)) &&
@@ -35,7 +36,7 @@ function groupSessions(rows) {
       g = {
         key, s: key, rows: [], sid: r.sid, m: r.m, sp: r.sp,
         w: "none", n: 0, tr: 0, pt: new Set(), st: new Set(), tg: new Set(), lb: new Set(),
-        q: "", d: "", tid: "", case: "", task: "", sub: "", skill: "", lang: r.lang,
+        q: "", d: "", tid: "", case: "", task: "", sub: "", skill: "", sc: "", lang: r.lang,
       };
       groups.set(key, g);
     }
@@ -52,6 +53,7 @@ function groupSessions(rows) {
     g.task = g.task || r.task || "";
     g.sub = g.sub || r.sub || "";
     g.skill = g.skill || r.skill || "";
+    g.sc = g.sc || r.sc || "";
   });
   return [...groups.values()].map((g) => {
     const rowsByDate = g.rows.slice().sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0));
@@ -60,7 +62,7 @@ function groupSessions(rows) {
       ...last, key: g.key, s: g.key, rows: g.rows,
       q: last.q, d: last.d, w: g.w, n: g.n, tr: g.tr,
       pt: [...g.pt], st: [...g.st], tg: [...g.tg], lb: [...g.lb].join("｜"),
-      tid: g.tid, case: g.case, task: g.task, sub: g.sub, skill: g.skill,
+      tid: g.tid, case: g.case, task: g.task, sub: g.sub, skill: g.skill, sc: g.sc,
     };
   });
 }
@@ -70,6 +72,11 @@ export async function render(r, c) {
   root = r;
   const index = await c.loadIndex(c.product);
   const prod = index.products[c.product];
+  if (S.product === c.product && S.prod && prod && S.prod !== prod && $(".bench", root)) {
+    // Fresh index from an in-place refresh: regroup, keep the reader's session and filters.
+    S.all = groupSessions(prod.rows);
+    S.prod = prod;
+  }
   if (S.product !== c.product || !$(".bench", root)) {
     S.product = c.product;
     S.all = prod ? groupSessions(prod.rows) : [];

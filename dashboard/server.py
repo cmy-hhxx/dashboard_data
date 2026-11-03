@@ -17,7 +17,8 @@ STATIC = os.path.join(HERE, "static")
 BUILD = os.path.join(HERE, "build.py")
 OUTPUTS = [os.path.join(STATIC, n) for n in ("data.json", "samples.json", "samples")]
 PORT = int(os.environ.get("PORT", "5001"))
-REFRESH = int(os.environ.get("REFRESH_SECONDS", "1800"))
+# 10 minutes plus the ~1 minute incremental build keeps the board well inside 30 minutes of the data.
+REFRESH = int(os.environ.get("REFRESH_SECONDS", "600"))
 
 _state = {"last_run": 0, "running": False, "error": "", "seconds": 0, "build": None}
 _lock = threading.Lock()

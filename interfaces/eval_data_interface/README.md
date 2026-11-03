@@ -103,7 +103,7 @@ python3 run.py status
 ```
 
 环境变量：`EVAL_DATASETS`（数据集根）、`ANALYSIS_STATE`（索引与密钥目录，默认 `./state`）、
-`PORT`（默认 5003）、`HOST`、`REFRESH_SECONDS`（默认 1800）、`CURSOR_TTL`（默认 1800）。
+`PORT`（默认 5003）、`HOST`、`REFRESH_SECONDS`（默认 600）、`CURSOR_TTL`（默认 1800）。
 
 ## 部署与运维
 

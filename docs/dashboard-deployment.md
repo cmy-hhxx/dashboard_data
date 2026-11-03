@@ -83,7 +83,8 @@ ssh eval_data 'cd /opt/eval_dashboard && ./stop.sh'
 
 - 启动时若 `data.json`、`data-<product>.json`、`samples.json`、`samples-<product>.json`
   或 `samples/` 缺失，先同步构建一次。
-- 调度线程每 `REFRESH_SECONDS`（默认 1800 秒 / 30 分钟）执行一次 `build.py --keep-on-empty`。
+- 调度线程每 `REFRESH_SECONDS`（默认 600 秒 / 10 分钟）执行一次 `build.py --keep-on-empty`；增量构建约 1 分钟，
+  页面每 2 分钟用条件请求（304）检查一次 `data.json`，有新数据就地刷新，整体延迟在 30 分钟以内。
   启动时如果 `data.json` 已超过 2 分钟没有更新，会先立即构建一轮；`deploy.sh` 或 `start.sh` 刚构建过时跳过。
 - 可用环境变量覆盖 `PORT`（默认 5001）和 `REFRESH_SECONDS`。
   注意 `start.sh` 启动时写死 `PORT=5001`，要改监听端口需同时改 `start.sh` 或手动启动。
@@ -108,7 +109,7 @@ ssh eval_data 'cd /opt/eval_dashboard && ./stop.sh'
   首次全量摘要 225–267 秒（含一次性输出行号索引），冷全量预计 4–5 分钟；详情首次打开
   0.6–4 秒，之后静态缓存。删除 `cache/` 会强制全量重建；部署时可以预先把已验证的
   `cache/` 同步过去，跳过首轮扫描。
-- `stats_worker.py` 每 30 分钟刷新 `<datasets>/stats.json`；日志在 `logs/stats.log`。
+- `stats_worker.py` 每 10 分钟刷新 `<datasets>/stats.json`；日志在 `logs/stats.log`。
   该文件只用于加速 build，删除后 build 会局部重扫。`start.sh` / `stop.sh` 管进程。
 
 ## 部署最佳实践

@@ -50,7 +50,7 @@ REPO = DASHBOARD.parent
 STATIC = DASHBOARD / "static"
 PRODUCTION_DATASETS = Path("/mnt/fin_bench/code_and_clean_data/datasets")
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-03.4"
+PAYLOAD_VERSION = "2026-11-03.5"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 2
 
@@ -67,7 +67,7 @@ WORST_KEYS = SEVERITIES + ["none"]
 # Only fields the recall list and its filters/search actually read. Keeping the
 # index lean matters more than the full aggregate row: it is fetched by every
 # 具体数据 view and can be several MB.
-INDEX_FIELDS = ("s", "q", "m", "sp", "d", "sid", "tid", "w", "n", "tr", "pt", "st", "lb", "case", "task", "sub", "skill")
+INDEX_FIELDS = ("s", "q", "m", "sp", "d", "sid", "tid", "w", "n", "tr", "pt", "st", "lb", "case", "task", "sub", "skill", "sc")
 
 PRODUCTS = {
     "wencai": {"label": "问财", "models": ["a_fast", "a_expert", "b_fast", "b_expert"]},
@@ -1300,22 +1300,30 @@ def sev_counter():
     return {s: 0 for s in SEVERITIES}
 
 
+def scene_votes(product, samples):
+    """问财 has no task/subtask in the source; its scene is the skill the A versions
+    routed to, and B versions take the skill recorded for the same question."""
+    if product != "wencai":
+        return {}
+    votes = defaultdict(Counter)
+    for s in samples:
+        if s[1]["meta"].get("skill"):
+            votes[s[1]["question"]][s[1]["meta"]["skill"]] += 1
+    return {q: c.most_common(1)[0][0] for q, c in votes.items()}
+
+
+def scene_of(brief, scene):
+    m = brief["meta"]
+    return m.get("task") or m.get("skill") or scene.get(brief["question"]) or "未标注"
+
+
 def aggregate(product, samples, taxonomy):
     """``samples`` = list of (slug, detail, row, facts) for one product."""
     total = len(samples)
     models = [m for m in PRODUCTS[product]["models"] if any(s[2]["m"] == m for s in samples)]
     models += sorted({s[2]["m"] for s in samples} - set(models))
     splits = [sp for sp in ("daily", "lost") if any(s[2]["sp"] == sp for s in samples)]
-
-    # 问财 has no task/subtask in the source; its scene is the skill the A versions
-    # routed to; B versions take the skill recorded for the same question.
-    scene = {}
-    if product == "wencai":
-        votes = defaultdict(Counter)
-        for s in samples:
-            if s[1]["meta"].get("skill"):
-                votes[s[1]["question"]][s[1]["meta"]["skill"]] += 1
-        scene = {q: c.most_common(1)[0][0] for q, c in votes.items()}
+    scene = scene_votes(product, samples)
 
     severity, worst = sev_counter(), {k: 0 for k in WORST_KEYS}
     evidence_n = located = 0
@@ -1434,9 +1442,8 @@ def aggregate(product, samples, taxonomy):
         pats = Counter(p["cl"]["path"] for p in detail["attribution"]["problems"] if p["cl"])
         if not pats:
             continue
-        m = detail["meta"]
-        task = m.get("task") or m.get("skill") or scene.get(detail["question"]) or "未标注"
-        cross.append([task, m.get("subtask") or "", [[pid, n] for pid, n in pats.most_common()]])
+        cross.append([scene_of(detail, scene), detail["meta"].get("subtask") or "",
+                      [[pid, n] for pid, n in pats.most_common()]])
 
     # Input profile.
     msgs = [s[3]["messages"] for s in samples]
@@ -1515,8 +1522,7 @@ def aggregate(product, samples, taxonomy):
     def task_tree(rows):
         tree = defaultdict(Counter)
         for s in rows:
-            m = s[1]["meta"]
-            tree[m.get("task") or m.get("skill") or scene.get(s[1]["question"]) or "未标注"][m.get("subtask") or ""] += 1
+            tree[scene_of(s[1], scene)][s[1]["meta"].get("subtask") or ""] += 1
         return [
             {"id": t, "n": sum(c.values()), "sub": [{"id": k or "未标注", "n": v} for k, v in c.most_common()] if any(c) else []}
             for t, c in sorted(tree.items(), key=lambda kv: -sum(kv[1].values()))
@@ -2392,6 +2398,15 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
         indexes = {}
         for product, rows in samples.items():
             rows_sorted = sorted(rows, key=lambda s: (WORST_KEYS.index(s[2]["w"]), -s[2]["n"], s[2]["d"]))
+            # The matrix files a sample under its voted scene; carry it where the plain
+            # task/skill fallback would disagree, so a matrix cell and its 具体数据 filter agree.
+            scene = scene_votes(product, rows)
+            for s in rows_sorted:
+                sc = scene_of(s[1], scene)
+                if sc != (s[2].get("task") or s[2].get("skill") or "未标注"):
+                    s[2]["sc"] = sc
+                else:
+                    s[2].pop("sc", None)
             indexes[product] = {
                 "schema": 2, "generated_at": generated, "product": product,
                 "available": available,

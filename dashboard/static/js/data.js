@@ -1,11 +1,16 @@
 /* 数据: 会话场 · 数据量 · 评测量 · 归因体系 · 聚类体系 · 预测体系 · 聚类矩阵. Titles only; the layout carries the rest.
-   Everything drills in place; this page never opens a sample. */
+   Charts drill in place; a session tile or a matrix cell opens 具体数据 with that case / filter set. */
 import { $, $$, esc, fmt, pct, sum, WORST, SEV_NAME, sevColor, counter, runCounters, bindTips, segmented, REDUCED } from "./core.js";
 import { sunburst } from "./sunburst.js";
 
 let ctx;
 let shown = null;
 let lastDetail = null;
+/* View state per product that outlives a redraw: an in-place data refresh (or switching product
+   and back) lands on the same filter, page, ring, drill path and tab. */
+const UI = {};
+const ui = (product) =>
+  (UI[product] = UI[product] || { field: { w: null, pages: [] }, vol: {}, clu: {}, mx: { rows: [], cols: [], trail: [] }, pred: "vol" });
 const SPLIT_SHORT = { daily: "日常", lost: "流失" };
 const dot = (c) => `<i style="--c:${c}"></i>`;
 
@@ -38,9 +43,12 @@ export async function render(root, c) {
     return;
   }
   const tax = c.data.taxonomy;
-  root.innerHTML = `<div class="bento">${fieldCard(p)}${volumeCard(p)}${evalCard(p)}${attrCard(p)}${clusterCard(p, tax)}${predictCard(p)}${matrixCard(p, tax)}</div>`;
-  wire($(".bento", root), p, tax);
-  runCounters(root);
+  const u = ui(c.product);
+  if (c.refresh) root.classList.add("is-refresh");
+  root.innerHTML = `<div class="bento">${fieldCard(p, u)}${volumeCard(p)}${evalCard(p)}${attrCard(p)}${clusterCard(p, tax)}${predictCard(p)}${matrixCard(p, tax)}</div>`;
+  wire($(".bento", root), p, tax, u);
+  if (c.refresh) requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove("is-refresh")));
+  else runCounters(root);
   if (lastDetail) {
     window.scrollTo(0, 0);
     lastDetail = null;
@@ -60,16 +68,25 @@ const shade = (i, n) =>
 const FIELD_ROWS = 16;
 const FIELD_TILE = 13; // 11px tile + 2px gap
 
-function fieldCard(p) {
+function fieldCard(p, u) {
   const groups = p.field
     .map((g, gi) => `<div class="fgroup" data-g="${gi}"><div class="fgroup-head"><b>${esc(groupName(p, g))}</b><span class="num">${fmt(g.cells.length)}</span>${
       g.lost ? `<span class="fgroup-lost"><i></i>流失会话 ${fmt(g.lost)}</span>` : ""
     }</div><div class="tiles"></div><div class="pager field-pager" data-pager="${gi}" hidden></div></div>`)
     .join("");
   const legend = `<div class="legend end" id="fieldLegend">${WORST.map(
-    (w, i) => `<button type="button" style="--c:${sevColor(i)}" data-w="${i}" aria-pressed="false"><i></i>${SEV_NAME[w]}<b class="num">${fmt(p.worst[w])}</b></button>`,
+    (w, i) => `<button type="button" style="--c:${sevColor(i)}" data-w="${i}" aria-pressed="${u.field.w === String(i)}"><i></i>${SEV_NAME[w]}<b class="num">${fmt(p.worst[w])}</b></button>`,
   ).join("")}</div>`;
   return card(12, "会话场", `<div class="field is-intro" id="field"><div class="field-groups">${groups}</div></div>`, legend);
+}
+
+/* Every jump into 具体数据 starts from a clean filter set plus what the click pins down. */
+const SAMPLE_RESET = {
+  detail: null, ed: null, em: null, ep: null, edp: null, p: null, tab: null, q: null, w: null, split: null,
+  model: null, scene: null, sub: null, stage: null, mech: null, pattern: null, case: null,
+};
+function openSamples(patch) {
+  ctx.navigate({ ...SAMPLE_RESET, view: "samples", product: ctx.product, ...patch });
 }
 
 /* One tile per evaluation record. Each model/split group has its own pager. Pages
@@ -1054,22 +1071,29 @@ function matrixCard(p, tax) {
 }
 
 /* ---------------------------------------------------------------- interaction */
-function wire(bento, p, tax) {
+function wire(bento, p, tax, u) {
   const field = $("#field", bento);
-  let fieldFilter = null;
-  paintField(field, p, null);
-  setTimeout(() => field.classList.remove("is-intro"), REDUCED ? 0 : 1600);
+  field._page = u.field.pages;
+  paintField(field, p, u.field.w);
+  setTimeout(() => field.classList.remove("is-intro"), REDUCED || ctx.refresh ? 0 : 1600);
   const legend = $("#fieldLegend", bento);
   legend.addEventListener("click", (e) => {
     const b = e.target.closest("button");
     if (!b) return;
     const on = b.getAttribute("aria-pressed") !== "true";
     $$("button", legend).forEach((x) => x.setAttribute("aria-pressed", String(on && x === b)));
-    fieldFilter = on ? b.dataset.w : null;
+    u.field.w = on ? b.dataset.w : null;
     field.classList.toggle("is-filtered", on);
     $$(".tiles span", field).forEach((t) => t.classList.toggle("on", on && t.dataset.w === b.dataset.w));
   });
   field.addEventListener("click", (e) => {
+    const tile = e.target.closest(".tiles span[data-cell]");
+    if (tile) {
+      const [g, i] = tile.dataset.cell.split(":").map(Number);
+      const c = p.field[g] && p.field[g].cells[i];
+      if (c) openSamples({ case: c[0] });
+      return;
+    }
     const b = e.target.closest(".field-pager button[data-page]");
     if (!b) return;
     const pager = b.closest(".field-pager");
@@ -1078,21 +1102,26 @@ function wire(bento, p, tax) {
     const pages = Number(pager.dataset.pages);
     const key = b.dataset.page;
     field._page[gi] = key === "prev" ? Math.max(1, cur - 1) : Math.min(pages, cur + 1);
-    paintField(field, p, fieldFilter);
+    paintField(field, p, u.field.w);
   });
   if (window.ResizeObserver) {
     let fieldW = field.clientWidth;
     new ResizeObserver(() => {
       if (Math.abs(field.clientWidth - fieldW) < 2) return;
       fieldW = field.clientWidth;
-      field._page = [];
-      paintField(field, p, fieldFilter);
+      field._page = u.field.pages = [];
+      paintField(field, p, u.field.w);
     }).observe(field);
   }
   const tabs = $("#predTab", bento);
   if (tabs) {
-    const seg = segmented(tabs, (v) => $$(".pred-pane", bento).forEach((x) => x.classList.toggle("is-on", x.dataset.pane === v)));
-    seg.set("vol", { silent: true });
+    const show = (v) => $$(".pred-pane", bento).forEach((x) => x.classList.toggle("is-on", x.dataset.pane === v));
+    const seg = segmented(tabs, (v) => {
+      u.pred = v;
+      show(v);
+    });
+    seg.set(u.pred, { silent: true });
+    show(seg.get());
   }
 
   const evDetail = $("#evDetail", bento);
@@ -1120,12 +1149,29 @@ function wire(bento, p, tax) {
   if (shell && tax) {
     const sceneRoot = { name: "全部", children: capScenes(sceneTree(p)) };
     const clusterRoot = clusterTree(p, tax);
-    let rowPath = [sceneRoot];
-    let colPath = [clusterRoot];
-    let trail = [];
+    // Paths are kept as names / prefixes so they can be walked again on a fresh tree.
+    const walk = (rootNode, keys, keyOf) => {
+      const path = [rootNode];
+      for (const k of keys) {
+        const next = (path[path.length - 1].children || []).find((n) => keyOf(n) === k);
+        if (!next) break;
+        path.push(next);
+      }
+      return path;
+    };
+    const rowKey = (n) => n.name;
+    const colKey = (n) => n.prefix || n.name;
+    let rowPath = walk(sceneRoot, u.mx.rows, rowKey);
+    let colPath = walk(clusterRoot, u.mx.cols, colKey);
+    let trail = u.mx.trail.filter((a) => (a === "r" ? rowPath.length > 1 : colPath.length > 1));
     let mxKey = "";
     const syncTrail = () => {
       trail = [...Array(rowPath.length - 1).fill("r"), ...Array(colPath.length - 1).fill("c")];
+    };
+    const remember = () => {
+      u.mx.rows = rowPath.slice(1).map(rowKey);
+      u.mx.cols = colPath.slice(1).map(colKey);
+      u.mx.trail = trail.slice();
     };
     const paint = (animate = true) => {
       const rowNode = rowPath[rowPath.length - 1];
@@ -1145,6 +1191,7 @@ function wire(bento, p, tax) {
       }
       mxView = view;
       mxKey = "";
+      remember();
       swapMatrix(shell, matrixTable(mxView), animate);
       const crumbsEl = $("#mxCrumbs", bento);
       if (crumbsEl) crumbsEl.innerHTML = crumbs(rowPath, colPath);
@@ -1199,6 +1246,25 @@ function wire(bento, p, tax) {
         paint();
         return;
       }
+      const cell = e.target.closest("#mxShell .cell[data-mx]:not(.is-empty)");
+      if (cell) {
+        // A cell is a ready-made 具体数据 filter: its scene row × its problem column.
+        const [ri, ci] = cell.dataset.mx.split(":").map(Number);
+        const r = mxView.rows[ri];
+        const c = mxView.cols[ci];
+        if (!r || !c) return;
+        if (r.group) {
+          rowPath = [...rowPath, r];
+          trail.push("r");
+          paint();
+          return;
+        }
+        const task = r.task || rowPath.slice(1).map((n) => n.task).find(Boolean);
+        const sub = r.sub || "";
+        const [stage, mech] = (c.prefix || "").split(".");
+        openSamples({ scene: task || null, sub: sub || null, stage: stage || null, mech: mech || null, pattern: c.pat || null });
+        return;
+      }
       const row = e.target.closest("#mxShell [data-row]");
       if (row) {
         const node = mxView.rows[Number(row.dataset.row)];
@@ -1235,8 +1301,8 @@ function wire(bento, p, tax) {
     });
   }
 
-  sunburst($("#vol", bento), volTree(p), { unit: "评测输入" });
-  if (tax) sunburst($("#clu", bento), cluTree(p, tax), { unit: "问题", sort: true });
+  sunburst($("#vol", bento), volTree(p), { unit: "评测输入", state: u.vol, animate: !ctx.refresh });
+  if (tax) sunburst($("#clu", bento), cluTree(p, tax), { unit: "问题", sort: true, state: u.clu, animate: !ctx.refresh });
 
   $$(".sankey", bento).forEach((sk) => {
     sk.addEventListener("pointerover", (e) => {

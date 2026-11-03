@@ -1,6 +1,8 @@
 /* Drill-down sunburst: the inner ring holds the focus's children; the outer ring holds the open child's
    children, inside that child's arc. Click an inner arc to open it (again to drill in), an outer arc to
-   drill in, the centre to step back. Arcs tween between states; nothing navigates away. */
+   drill in, the centre to step back. Arcs tween between states; nothing navigates away.
+   `state` ({focus, open} node ids) is kept up to date so a redraw on fresh data lands on the same
+   ring; `onChange(focus, open)` reports every move. */
 import { esc, fmt, pct, REDUCED } from "./core.js";
 
 const S = 220;
@@ -56,10 +58,24 @@ const marks = (node) =>
 const markTotal = (node) => marks(node).reduce((s, m) => s + m.n, 0);
 const byVolume = (a, b) => b.n - a.n || String(a.name).localeCompare(String(b.name));
 
-export function sunburst(host, tree, { unit = "", sort = false } = {}) {
+export function sunburst(host, tree, { unit = "", sort = false, state = null, animate = true, onChange = null } = {}) {
   const root = prep(tree, null);
-  let focus = root;
-  let open = biggest(root);
+  const byId = new Map();
+  const index = (n) => {
+    byId.set(n.id, n);
+    (n.children || []).forEach(index);
+  };
+  index(root);
+  let focus = (state && byId.get(state.focus)) || root;
+  let open = state && state.open !== undefined && state.focus === focus.id ? byId.get(state.open) || null : biggest(focus);
+  if (open && open.parent !== focus) open = biggest(focus);
+  const save = () => {
+    if (state) {
+      state.focus = focus.id;
+      state.open = open ? open.id : null;
+    }
+    if (onChange) onChange(focus, open);
+  };
   host.classList.add("sbx");
   host.innerHTML = `<div class="sb-view"><div class="sb"><svg viewBox="0 0 ${S} ${S}"></svg><button type="button" class="sb-c"></button></div><div class="list sb-list"></div></div>`;
   const svg = host.querySelector("svg");
@@ -208,6 +224,7 @@ export function sunburst(host, tree, { unit = "", sort = false } = {}) {
       open = node;
     }
     draw(true);
+    save();
   }
 
   svg.addEventListener("click", (e) => {
@@ -224,6 +241,7 @@ export function sunburst(host, tree, { unit = "", sort = false } = {}) {
     open = focus;
     focus = focus.parent;
     draw(true);
+    save();
   });
   const hl = (id) => {
     host.classList.toggle("hovering", !!id);
@@ -235,5 +253,16 @@ export function sunburst(host, tree, { unit = "", sort = false } = {}) {
     hl(el && (el.tagName !== "path" || el._t) ? el.dataset.n : null);
   });
   host.addEventListener("pointerleave", () => hl(null));
-  draw(true);
+  draw(animate);
+  save();
+  return {
+    /* Step back to the root ring (used when a pushed card is folded away). */
+    reset() {
+      if (focus === root) return;
+      focus = root;
+      open = biggest(root);
+      draw(true);
+      save();
+    },
+  };
 }
