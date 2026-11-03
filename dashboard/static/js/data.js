@@ -29,7 +29,7 @@ export async function render(root, c) {
   }
   if (detail) {
     const state = evalDetailState(p, { ed, em, ep, edp });
-    const indexP = c.loadIndex().catch(() => null);
+    const indexP = c.loadIndex(c.product).catch(() => null);
     const index = state.model ? await indexP : null;
     root.innerHTML = evalDetailPage(p, state, index);
     wireEvalDetail(root, state);
@@ -38,7 +38,7 @@ export async function render(root, c) {
     return;
   }
   const tax = c.data.taxonomy;
-  root.innerHTML = `<div class="bento">${fieldCard(p)}${volumeCard(p)}${evalCard(p)}${attrCard(p)}${clusterCard(tax)}${predictCard(p)}${matrixCard(p, tax)}</div>`;
+  root.innerHTML = `<div class="bento">${fieldCard(p)}${volumeCard(p)}${evalCard(p)}${attrCard(p)}${clusterCard(p, tax)}${predictCard(p)}${matrixCard(p, tax)}</div>`;
   wire($(".bento", root), p, tax);
   runCounters(root);
   if (lastDetail) {
@@ -51,7 +51,7 @@ const card = (span, title, body, end = "") =>
   `<article class="card" style="--span:${span}"><header class="card-head"><h2>${title}</h2>${end}</header>${body}</article>`;
 const modelName = (p, id) => (p.models.find((m) => m.id === id) || { label: id }).label;
 const groupName = (p, g) => (p.unified || p.splits.length <= 1 ? "" : `${SPLIT_SHORT[g.split] || g.split} · `) + modelName(p, g.model);
-const stats = (items) => `<div class="stats">${items.map(([l, v]) => `<div><b class="num">${v}</b><small>${l}</small></div>`).join("")}</div>`;
+const stats = (items, cols = 4) => `<div class="stats${cols === 5 ? " stats-5" : ""}">${items.map(([l, v]) => `<div><b class="num">${v}</b><small>${l}</small></div>`).join("")}</div>`;
 /* Versions: first half accent, second half ink; Fast full, Expert lighter. */
 const shade = (i, n) =>
   i < Math.ceil(n / 2) ? `color-mix(in oklab, var(--accent) ${i % 2 ? 48 : 100}%, var(--card))` : `color-mix(in oklab, var(--ink) ${i % 2 ? 34 : 70}%, var(--card))`;
@@ -63,7 +63,7 @@ const FIELD_TILE = 13; // 11px tile + 2px gap
 function fieldCard(p) {
   const groups = p.field
     .map((g, gi) => `<div class="fgroup" data-g="${gi}"><div class="fgroup-head"><b>${esc(groupName(p, g))}</b><span class="num">${fmt(g.cells.length)}</span>${
-      g.lost ? `<span class="fgroup-lost"><i></i>流失 ${fmt(g.lost)}</span>` : ""
+      g.lost ? `<span class="fgroup-lost"><i></i>流失会话 ${fmt(g.lost)}</span>` : ""
     }</div><div class="tiles"></div><div class="pager field-pager" data-pager="${gi}" hidden></div></div>`)
     .join("");
   const legend = `<div class="legend end" id="fieldLegend">${WORST.map(
@@ -169,31 +169,37 @@ function volumeCard(p) {
   const tokens = tin != null || tout != null
     ? `${tokenNum(tin || 0)}<span class="stat-of"> / </span>${tokenNum(tout || 0)}`
     : pending;
+  const lost = input.lost;
   const items = [
     ["评测输入记录", counter(input.records ?? k.inputs)],
     ["轨迹", counter(input.traces ?? k.traces)],
-    ["工具调用（输入口径）", input.tool_calls != null ? counter(input.tool_calls) : pending],
+    ...(lost != null ? [["流失轨迹", counter(lost)]] : []),
+    ["工具调用", input.tool_calls != null ? counter(input.tool_calls) : pending],
     ["Tokens 输入/输出", tokens],
   ];
-  return card(6, "数据量", `<div class="duo" id="vol"></div>${stats(items)}`);
+  const note = lost ? `<div class="sb-key"><i></i><span>外圈细环 = 流失用户 trace 占该分支比例 · 红字 = 流失 trace 数</span></div>` : "";
+  return card(6, "数据量", `<div class="duo" id="vol"></div>${note}${stats(items, items.length > 4 ? 5 : 4)}`);
 }
 function inputTaskNodes(prefix, tasks) {
   return (tasks || []).map((t) => ({
-    id: `${prefix}/${t.task}`, name: t.task, n: t.n,
-    children: (t.sub || []).map((s) => ({ id: `${prefix}/${t.task}/${s.sub}`, name: s.sub, n: s.n })),
+    id: `${prefix}/${t.task}`, name: t.task, n: t.n, lost: t.lost || 0,
+    children: (t.sub || []).map((s) => ({
+      id: `${prefix}/${t.task}/${s.sub}`, name: s.sub, n: s.n, lost: s.lost || 0,
+    })),
   }));
 }
 function volTree(p) {
   const input = p.input;
-  if (input?.models) {
+  if (input?.models && Object.keys(input.models).length) {
     return {
       id: "v", name: "全部", n: input.traces || sum(Object.values(input.models).map((m) => m.traces)),
+      lost: input.lost || 0,
       children: (() => {
         const order = new Map((p.models || []).map((m, i) => [m.id, i]));
         return Object.entries(input.models)
           .sort(([a], [b]) => (order.get(a) ?? 99) - (order.get(b) ?? 99))
           .map(([id, m]) => ({
-            id: `v/${id}`, name: modelName(p, id), n: m.traces,
+            id: `v/${id}`, name: m.label || modelName(p, id), n: m.traces, lost: m.lost || 0,
             children: inputTaskNodes(`v/${id}`, m.tasks),
           }));
       })(),
@@ -202,10 +208,10 @@ function volTree(p) {
   if (input?.tasks?.length) {
     return {
       id: "v", name: "全部", n: input.traces || sum(input.tasks.map((t) => t.n)),
-      children: inputTaskNodes("v", input.tasks),
+      lost: input.lost || 0, children: inputTaskNodes("v", input.tasks),
     };
   }
-  return { id: "v", name: "全部", n: p.kpi.inputs || 0, children: [] };
+  return { id: "v", name: "全部", n: p.kpi.inputs || 0, lost: 0, children: [] };
 }
 
 /* ---------------------------------------------------------------- 评测量: inputs vs completed per day */
@@ -393,20 +399,16 @@ function edModels(p, day) {
   return [...by.values()].sort((a, b) => b.inputs - a.inputs || b.evaluated - a.evaluated || a.label.localeCompare(b.label));
 }
 
-const edTotals = (rows) => ({
-  inputs: sum(rows.map((r) => r.inputs || 0)),
-  evaluated: sum(rows.map((r) => r.evaluated || 0)),
-  sessions: sum(rows.map((r) => r.sessions || 0)),
-  traces: sum(rows.map((r) => r.traces || 0)),
-  tokens: sum(rows.map((r) => r.tokens || 0)),
-});
-const edPending = (r) => Math.max(0, (r.inputs || 0) - (r.evaluated || 0));
-const edStatus = (r) =>
-  r.evaluated > 0
-    ? `<span class="ok" aria-label="已评测">✅</span>`
-    : r.inputs > 0
-      ? `<span class="pending">未评测</span>`
-      : `<span class="faint">—</span>`;
+/* Status is progress: a quiet ring for partially evaluated days/models, ✅ only when every input is done. */
+const edRing = (ratio, title) =>
+  `<span class="st-ring" role="img" aria-label="${esc(title)}" title="${esc(title)}"><svg viewBox="0 0 18 18" aria-hidden="true"><circle class="st-track" cx="9" cy="9" r="6.5"/><circle class="st-arc" cx="9" cy="9" r="6.5" pathLength="100" style="stroke-dasharray:${Math.round(ratio * 100)} 100"/></svg></span>`;
+const edStatus = (r) => {
+  const inputs = r.inputs || 0;
+  const done = r.evaluated || 0;
+  if (!inputs) return `<span class="faint">—</span>`;
+  if (done >= inputs) return `<span class="ok" aria-label="全部评测完成" title="全部评测完成">✅</span>`;
+  return edRing(done / inputs, `已评测 ${fmt(done)} / ${fmt(inputs)} · ${pct(done, inputs, 1)}`);
+};
 
 function edSessionGroups(rows) {
   const groups = new Map();
@@ -446,10 +448,8 @@ function edPager(page, pages, total, unit, kind) {
 
 function evalDetailPage(p, state, index) {
   const { days, day, models, model } = state;
-  const total = edTotals(days);
   const dPages = Math.max(1, Math.ceil(days.length / ED_PAGE));
   const dpage = Math.min(Math.max(1, state.edp), dPages);
-  const dayRow = days.find((x) => x.d === day);
   const modelRow = models.find((x) => x.key === model);
   const all = ((index && index.products && index.products[ctx.product]) || {}).rows || [];
   const mid = p.unified ? model.slice(1) : "";
@@ -466,43 +466,34 @@ function evalDetailPage(p, state, index) {
     ? ` <i class="mx-sep">/</i> ${model ? `<button type="button" class="mx-crumb" data-ed="day">${esc(day)}</button>` : `<b>${esc(day)}</b>`}`
     : "";
   const modelCrumb = model ? ` <i class="mx-sep">/</i> <b>${esc(rowTotal.label || model)}</b>` : "";
-  const summary = model
-    ? `评测输入 ${fmt(rowTotal.inputs)} · 评测输出 ${fmt(rowTotal.evaluated)} · 未评测 ${fmt(edPending(rowTotal))} 条 · 完成率 ${pct(rowTotal.evaluated, rowTotal.inputs, 1)} · ${fmt(rowTotal.sessions)} 个 session`
-    : day
-      ? `评测输入 ${fmt(dayRow?.inputs || 0)} · 评测输出 ${fmt(dayRow?.evaluated || 0)} · 未评测 ${fmt(edPending(dayRow))} 条 · 完成率 ${pct(dayRow?.evaluated || 0, dayRow?.inputs || 0, 1)}`
-      : `${fmt(days.length)} 天 · 评测输入 ${fmt(total.inputs)} · 评测输出 ${fmt(total.evaluated)} · 未评测 ${fmt(edPending(total))} 条 · 完成率 ${pct(total.evaluated, total.inputs, 1)}`;
+  // One obvious way out of each level: model → day → date list → dashboard.
+  const backLabel = model ? `← ${esc(day)}` : day ? "← 全部日期" : "← 返回数据看板";
+  const num = (v, d = 0) => `<td class="num${v ? "" : " is-zero"}">${fmt(v, d)}</td>`;
+  const rate = (part, whole) => `<td class="num${part ? "" : " is-zero"}">${pct(part, whole, 1)}</td>`;
 
   let body = "";
   let pager = "";
   if (!days.length) {
     body = `<div class="empty">暂无评测日期</div>`;
   } else if (!day) {
-    const head = `<th>日期</th><th>状态</th><th class="num">评测输入</th><th class="num">评测输出</th><th class="num">完成率</th><th class="num">Session</th><th class="num">Trace</th><th class="num">Tokens</th>`;
+    const head = `<th>日期</th><th title="圆环 = 评测进度（已评测 / 评测输入）；全部评测完才显示 ✅">状态</th><th class="num">评测输入</th><th class="num">评测输出</th><th class="num">完成率</th><th class="num">Session</th><th class="num">Trace</th><th class="num">Tokens</th>`;
     const rows = days.slice((dpage - 1) * ED_PAGE, dpage * ED_PAGE).map((r) => `<tr>
       <td><button type="button" class="link" data-eday="${esc(r.d)}">${esc(r.d)}</button></td>
-      <td>${edStatus(r)}</td>
-      <td class="num">${fmt(r.inputs)}</td>
-      <td class="num">${fmt(r.evaluated)}</td>
-      <td class="num">${pct(r.evaluated, r.inputs, 1)}</td>
-      <td class="num">${fmt(r.sessions)}</td>
-      <td class="num">${fmt(r.traces)}</td>
-      <td class="num">${tokenNum(r.tokens)}</td>
+      <td class="st">${edStatus(r)}</td>
+      ${num(r.inputs)}${num(r.evaluated)}${rate(r.evaluated, r.inputs)}${num(r.sessions)}${num(r.traces)}
+      <td class="num${r.tokens ? "" : " is-zero"}">${tokenNum(r.tokens)}</td>
     </tr>`);
-    body = edTable(head, rows);
+    body = edTable(head, rows, "is-day");
     pager = edPager(dpage, dPages, days.length, "天", "edp");
   } else if (!model) {
-    const head = `<th>模型</th><th>状态</th><th class="num">评测输入</th><th class="num">评测输出</th><th class="num">完成率</th><th class="num">Session</th><th class="num">Trace</th><th class="num">Tokens</th>`;
+    const head = `<th>模型</th><th title="圆环 = 评测进度（已评测 / 评测输入）；全部评测完才显示 ✅">状态</th><th class="num">评测输入</th><th class="num">评测输出</th><th class="num">完成率</th><th class="num">Session</th><th class="num">Trace</th><th class="num">Tokens</th>`;
     const rows = models.map((r) => `<tr>
       <td><button type="button" class="link" data-emodel="${esc(r.key)}">${esc(r.label)}</button></td>
-      <td>${edStatus(r)}</td>
-      <td class="num">${fmt(r.inputs)}</td>
-      <td class="num">${fmt(r.evaluated)}</td>
-      <td class="num">${pct(r.evaluated, r.inputs, 1)}</td>
-      <td class="num">${fmt(r.sessions)}</td>
-      <td class="num">${fmt(r.traces)}</td>
-      <td class="num">${tokenNum(r.tokens)}</td>
+      <td class="st">${edStatus(r)}</td>
+      ${num(r.inputs)}${num(r.evaluated)}${rate(r.evaluated, r.inputs)}${num(r.sessions)}${num(r.traces)}
+      <td class="num${r.tokens ? "" : " is-zero"}">${tokenNum(r.tokens)}</td>
     </tr>`);
-    body = edTable(head, rows);
+    body = edTable(head, rows, "is-model");
   } else if (!index) {
     body = `<div class="empty">样本索引读取失败，无法列出会话。</div>`;
   } else if (!groups.length) {
@@ -511,17 +502,19 @@ function evalDetailPage(p, state, index) {
     const head = `<th>评测输入</th><th>评测输出</th><th class="num">轮</th><th></th>`;
     const rows = groups.slice((spage - 1) * ES_PAGE, spage * ES_PAGE).map((g) => `<tr>
       <td>${esc(g.q || "（无提问）")}</td>
-      <td><span class="ok" aria-label="已评测">✅</span> <span class="sev" style="--c:${sevColor(g.w)}"><i></i>${g.w === "none" ? "无问题" : `${g.w} · ${g.n} 个问题`}</span></td>
+      <td class="st"><span class="ok" aria-label="已评测">✅</span><span class="sev" style="--c:${sevColor(g.w)}"><i></i>${g.w === "none" ? "无问题" : `${g.w} · ${g.n} 个问题`}</span></td>
       <td class="num">${fmt(g.tr)}</td>
-      <td class="num"><button type="button" class="link" data-ecase="${esc(g.key)}">查看</button></td>
+      <td class="num act"><button type="button" class="link" data-ecase="${esc(g.key)}">查看</button></td>
     </tr>`);
     body = edTable(head, rows, "is-session");
     pager = edPager(spage, sPages, groups.length, "个 session", "ep");
   }
 
   return `<div class="bento"><article class="card" style="--span:12">
-    <header class="card-head"><h2>评测数据详情</h2><button type="button" class="link end" id="edBack">返回数据看板</button></header>
-    <div class="list-meta"><span>${rootCrumb}${dayCrumb}${modelCrumb}</span><span class="num">${summary}</span></div>
+    <header class="card-head"><h2>评测数据详情</h2>
+      <button type="button" class="link ed-back" id="edBack">${backLabel}</button>
+      <div class="mx-crumbs" id="edCrumbs">${day ? `<span class="mx-crumb-group">${rootCrumb}${dayCrumb}${modelCrumb}</span>` : ""}</div>
+      ${day ? `<button type="button" class="link ed-home" id="edHome">返回数据看板</button>` : ""}</header>
     ${body}${pager}
   </article></div>`;
 }
@@ -531,6 +524,12 @@ function wireEvalDetail(root, state) {
   card.addEventListener("click", (e) => {
     const back = e.target.closest("#edBack");
     if (back) {
+      if (state.model) ctx.navigate({ detail: "eval", ed: state.day, em: null, ep: null });
+      else if (state.day) ctx.navigate({ detail: "eval", ed: null, em: null, ep: null, edp: null });
+      else ctx.navigate({ detail: null, ed: null, em: null, ep: null, edp: null });
+      return;
+    }
+    if (e.target.closest("#edHome")) {
       ctx.navigate({ detail: null, ed: null, em: null, ep: null, edp: null });
       return;
     }
@@ -636,25 +635,87 @@ function attrCard(p) {
 }
 
 /* ---------------------------------------------------------------- 聚类体系: phase → stage → mechanism → pattern */
-const clusterCard = (tax) => card(4, "聚类体系", tax ? `<div class="duo sm" id="clu"></div>` : `<div class="empty">缺少聚类体系文件</div>`);
+function clusterCard(p, tax) {
+  if (!tax) return card(4, "聚类体系", `<div class="empty">缺少聚类体系文件</div>`);
+  const note = p.kpi.unclustered
+    ? `<div class="sb-key is-note" title="按产品 + 模型 + 样本标识 + 归因文件 + 问题标签匹配聚类结果，未命中即未聚类"><i></i><span>未聚类 = 归因未匹配到聚类模式，计入问题总数、不进矩阵</span></div>`
+    : "";
+  return card(4, "聚类体系", `<div class="duo sm" id="clu"></div>
+    <div class="sb-key"><i></i><span>外圈细环 = P0·P1 问题占该分支比例 · 红字 = P0+P1 数</span></div>${note}`);
+}
+
+const sevPair = (s) => [(s && s.P0) || 0, (s && s.P1) || 0];
+const addPair = (a, b) => [a[0] + b[0], a[1] + b[1]];
+const toSev = (pair) => ({ P0: pair[0], P1: pair[1] });
+
+/* Patterns drill one level further than L3: a four-part path such as S9.M5.4.4 is a
+   child of S9.M5.4. Build the parent tier from the ids themselves, so a branch whose
+   matched problems only sit at L4 still gets its named L3 parent. */
+const patName = (tax, id) => ((tax.patterns || {})[id] || {}).name || id;
+const patOrder = (a, b) => {
+  const pa = a.split(".").map((x) => Number(x.replace(/\D/g, "")) || 0);
+  const pb = b.split(".").map((x) => Number(x.replace(/\D/g, "")) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
+  }
+  return 0;
+};
+function patIds(p) {
+  const ids = new Set();
+  (p.patterns || []).forEach((x) => {
+    const parts = x.id.split(".");
+    for (let i = 3; i <= parts.length; i += 1) ids.add(parts.slice(0, i).join("."));
+  });
+  return [...ids];
+}
+function cluPatterns(ids, depth, byId, tax) {
+  return ids
+    .filter((id) => id.split(".").length === depth)
+    .sort(patOrder)
+    .map((id) => {
+      const children = cluPatterns(ids.filter((x) => x.startsWith(`${id}.`)), depth + 1, byId, tax);
+      const own = byId.get(id) || {};
+      const sev = children.reduce((a, c) => addPair(a, sevPair(c.sev)), sevPair(own.sev));
+      return {
+        id: `c/${id}`, name: patName(tax, id), n: (own.n || 0) + sum(children.map((c) => c.n)),
+        sev: toSev(sev), children,
+      };
+    });
+}
+
 function cluTree(p, tax) {
-  const cell = (s, m) => ((p.matrix[s] || {})[m] || {}).n || 0;
+  const cell = (s, m) => (p.matrix[s] || {})[m] || {};
+  let clusteredSev = [0, 0];
+  Object.values(p.matrix || {}).forEach((mechs) =>
+    Object.values(mechs).forEach((c) => (clusteredSev = addPair(clusteredSev, sevPair(c.sev)))));
+  const ids = patIds(p);
+  const byId = new Map((p.patterns || []).map((x) => [x.id, x]));
   const phases = tax.phases.map((ph) => {
+    let phaseSev = [0, 0];
     const stages = tax.stages
       .filter((s) => s.phase === ph.id)
       .map((s) => {
-        const mechs = tax.mechanisms.map((m) => ({
-          id: `c/${s.id}.${m.id}`, name: m.name, n: cell(s.id, m.id),
-          children: p.patterns
-            .filter((x) => x.id.startsWith(`${s.id}.${m.id}.`))
-            .map((x) => ({ id: `c/${x.id}`, name: (tax.patterns[x.id] || {}).name || x.id, n: x.n })),
-        }));
-        return { id: `c/${s.id}`, name: s.name, n: sum(mechs.map((m) => m.n)), children: mechs };
+        let stageSev = [0, 0];
+        const mechs = tax.mechanisms.map((m) => {
+          const c = cell(s.id, m.id);
+          const sev = sevPair(c.sev);
+          stageSev = addPair(stageSev, sev);
+          return {
+            id: `c/${s.id}.${m.id}`, name: m.name, n: c.n || 0, sev: toSev(sev),
+            children: cluPatterns(ids.filter((id) => id.startsWith(`${s.id}.${m.id}.`)), 3, byId, tax),
+          };
+        });
+        phaseSev = addPair(phaseSev, stageSev);
+        return { id: `c/${s.id}`, name: s.name, n: sum(mechs.map((m) => m.n)), sev: toSev(stageSev), children: mechs };
       });
-    return { id: `c/${ph.id}`, name: ph.name, n: sum(stages.map((s) => s.n)), children: stages };
+    return { id: `c/${ph.id}`, name: ph.name, n: sum(stages.map((s) => s.n)), sev: toSev(phaseSev), children: stages };
   });
-  if (p.kpi.unclustered) phases.push({ id: "c/~un", name: "未聚类", n: p.kpi.unclustered, other: true });
-  return { id: "c", name: "全部", n: p.kpi.problems, children: phases };
+  if (p.kpi.unclustered) {
+    const total = sevPair(p.severity);
+    const rest = [Math.max(0, total[0] - clusteredSev[0]), Math.max(0, total[1] - clusteredSev[1])];
+    phases.push({ id: "c/~un", name: "未聚类", n: p.kpi.unclustered, sev: toSev(rest), other: true });
+  }
+  return { id: "c", name: "全部", n: p.kpi.problems, sev: toSev(sevPair(p.severity)), children: phases };
 }
 
 /* ---------------------------------------------------------------- 预测体系 (docs/prediction-data.md; labelled mock until the file lands) */
@@ -853,14 +914,21 @@ function capScenes(nodes) {
 const sceneMatches = (node, task, sub) =>
   node.group ? node.tasks.includes(task) : node.sub ? node.task === task && node.sub === sub : !node.task || node.task === task;
 
+function patternTree(ids, depth, tax) {
+  return ids
+    .filter((id) => id.split(".").length === depth)
+    .sort(patOrder)
+    .map((id) => ({
+      name: patName(tax, id), id, pat: id, prefix: id,
+      children: patternTree(ids.filter((x) => x.startsWith(`${id}.`)), depth + 1, tax),
+    }));
+}
+
 function clusterTree(p, tax) {
-  const pats = new Map((p.patterns || []).map((x) => [x.id, x]));
+  const ids = patIds(p);
   const stages = [...tax.stages].sort(byNum).map((s) => {
     const mechs = tax.mechanisms.map((m) => {
-      const children = [...pats.values()]
-        .filter((x) => x.id.startsWith(`${s.id}.${m.id}.`))
-        .sort((a, b) => Number(a.id.split(".")[2]) - Number(b.id.split(".")[2]))
-        .map((x) => ({ name: (tax.patterns[x.id] || {}).name || x.id, id: x.id, pat: x.id, prefix: x.id, children: [] }));
+      const children = patternTree(ids.filter((id) => id.startsWith(`${s.id}.${m.id}.`)), 3, tax);
       return children.length ? { name: m.name, id: m.id, prefix: `${s.id}.${m.id}`, children } : null;
     }).filter(Boolean);
     return mechs.length ? { name: s.name, id: s.id, prefix: s.id, children: mechs } : null;
@@ -891,7 +959,7 @@ function matrixView(p, rows, cols) {
   return { rows, cols, cells };
 }
 
-function matrixTable(view, animate = false) {
+function matrixTable(view) {
   const { rows, cols, cells } = view;
   if (!rows.length || !cols.length) return `<div class="empty">暂无聚类数据</div>`;
   let max = 1, maxTot = 1;
@@ -918,11 +986,45 @@ function matrixTable(view, animate = false) {
       const v = cell.n ? 0.08 + 0.72 * Math.sqrt(cell.n / max) : 0;
       html += cell.n
         ? `<span class="cell num${v > 0.5 ? " hot" : ""}" style="--v:${v.toFixed(3)}" data-mx="${ri}:${ci}">${fmt(cell.n)}</span>`
-        : `<span class="cell is-empty"></span>`;
+        : `<span class="cell is-empty" data-mx="${ri}:${ci}"></span>`;
     });
     html += `<span class="rowtot num"><i style="width:${(72 * totals[ri]) / maxTot}px"></i>${fmt(totals[ri])}</span>`;
   });
-  return `<div class="matrix${animate ? " is-enter" : ""}" style="--cols:${cols.length}">${html}</div>`;
+  return `<div class="matrix" style="--cols:${cols.length}">${html}</div>`;
+}
+
+/* Swap one matrix for the next without the layout jump: the old table fades out where it stands,
+   the card height eases to the new table, and the new one fades up into place. */
+function swapMatrix(shell, html, animate) {
+  clearTimeout(shell._swap);
+  shell.classList.remove("is-swapping");
+  shell.style.height = "";
+  shell.querySelectorAll(".matrix.is-out").forEach((el) => el.remove());
+  const prev = shell.querySelector(".matrix");
+  if (!animate || REDUCED || !prev) {
+    shell.innerHTML = html;
+    return;
+  }
+  prev.classList.remove("is-in", "is-on");
+  const from = shell.offsetHeight;
+  shell.insertAdjacentHTML("beforeend", html);
+  const next = shell.lastElementChild;
+  const to = next.offsetHeight;
+  shell.style.height = `${from}px`;
+  shell.classList.add("is-swapping");
+  prev.classList.add("is-out");
+  next.classList.add("is-in");
+  void next.offsetWidth;
+  requestAnimationFrame(() => {
+    shell.style.height = `${to}px`;
+    setTimeout(() => next.classList.add("is-on"), 70);
+  });
+  shell._swap = setTimeout(() => {
+    prev.remove();
+    next.classList.remove("is-in", "is-on");
+    shell.classList.remove("is-swapping");
+    shell.style.height = "";
+  }, 460);
 }
 
 function crumbPath(path, axis) {
@@ -1026,6 +1128,7 @@ function wire(bento, p, tax) {
     let rowPath = [sceneRoot];
     let colPath = [clusterRoot];
     let trail = [];
+    let mxKey = "";
     const syncTrail = () => {
       trail = [...Array(rowPath.length - 1).fill("r"), ...Array(colPath.length - 1).fill("c")];
     };
@@ -1046,12 +1149,49 @@ function wire(bento, p, tax) {
         view.cells = cells;
       }
       mxView = view;
-      shell.innerHTML = matrixTable(mxView, animate);
+      mxKey = "";
+      swapMatrix(shell, matrixTable(mxView), animate);
       const crumbsEl = $("#mxCrumbs", bento);
       if (crumbsEl) crumbsEl.innerHTML = crumbs(rowPath, colPath);
       const back = $("#mxBack", bento);
       if (back) back.hidden = rowPath.length === 1 && colPath.length === 1;
     };
+    const clearHover = () => {
+      if (!mxKey) return;
+      mxKey = "";
+      const m = shell.querySelector(".matrix");
+      if (!m) return;
+      m.classList.remove("is-hover");
+      $$(".is-hl, .is-cur", m).forEach((x) => x.classList.remove("is-hl", "is-cur"));
+    };
+    const hover = (ri, ci) => {
+      const key = `${ri}:${ci}`;
+      if (key === mxKey) return;
+      mxKey = key;
+      const m = shell.querySelector(".matrix");
+      if (!m) return;
+      m.classList.add("is-hover");
+      $$(".cell", m).forEach((c) => {
+        const [r, k] = (c.dataset.mx || "").split(":").map(Number);
+        c.classList.toggle("is-hl", r === ri || k === ci);
+        c.classList.toggle("is-cur", r === ri && k === ci);
+      });
+      $$(".rh", m).forEach((h, i) => h.classList.toggle("is-hl", i === ri));
+      $$(".mh", m).forEach((h, i) => h.classList.toggle("is-hl", i === ci));
+      $$(".rowtot", m).forEach((h, i) => h.classList.toggle("is-hl", i === ri));
+    };
+    shell.addEventListener("pointerover", (e) => {
+      const cell = e.target.closest(".cell[data-mx]");
+      if (cell) {
+        const [ri, ci] = cell.dataset.mx.split(":").map(Number);
+        return hover(ri, ci);
+      }
+      const rh = e.target.closest(".rh");
+      if (rh) return hover($$(".rh", shell).indexOf(rh), -1);
+      const mh = e.target.closest(".mh");
+      if (mh) return hover(-1, $$(".mh", shell).indexOf(mh));
+    });
+    shell.addEventListener("pointerleave", clearHover);
     paint(false);
     bento.addEventListener("click", (e) => {
       const back = e.target.closest("#mxBack");
@@ -1101,7 +1241,7 @@ function wire(bento, p, tax) {
   }
 
   sunburst($("#vol", bento), volTree(p), { unit: "评测输入" });
-  if (tax) sunburst($("#clu", bento), cluTree(p, tax), { unit: "问题" });
+  if (tax) sunburst($("#clu", bento), cluTree(p, tax), { unit: "问题", sort: true });
 
   $$(".sankey", bento).forEach((sk) => {
     sk.addEventListener("pointerover", (e) => {

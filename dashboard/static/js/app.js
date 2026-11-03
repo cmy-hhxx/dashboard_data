@@ -3,7 +3,7 @@ import { $, $$, segmented, getJSON, announce } from "./core.js";
 
 const VIEWS = ["data", "system", "samples"];
 const PRODUCTS = ["wencai", "aime"];
-const state = { view: "data", product: "wencai", data: null, index: null, indexP: null };
+const state = { view: "data", product: "wencai", data: null, indexes: {}, indexP: {}, productData: {}, productP: {} };
 const modules = {};
 const loaders = { data: () => import("./data.js"), system: () => import("./system.js"), samples: () => import("./samples.js") };
 
@@ -25,14 +25,32 @@ let viewSeg;
 let productSeg;
 let lastView = null;
 
-async function loadIndex() {
-  if (state.index) return state.index;
-  state.indexP = state.indexP || getJSON("samples.json");
+async function loadProductData(product = state.product) {
+  if (state.productData[product]) return state.data?.products?.[product] || null;
+  const meta = state.data?.products?.[product];
+  if (!meta) return null;
+  state.productP[product] = state.productP[product] || getJSON(`data-${product}.json`);
   try {
-    state.index = await state.indexP;
-    return state.index;
+    const payload = await state.productP[product];
+    state.data.products[product] = payload.products[product];
+    state.productData[product] = true;
+    return state.data.products[product];
   } catch (err) {
-    state.indexP = null;
+    state.productP[product] = null;
+    state.productData[product] = "failed";
+    state.data.products[product] = null;
+    throw err;
+  }
+}
+
+async function loadIndex(product = state.product) {
+  if (state.indexes[product]) return state.indexes[product];
+  state.indexP[product] = state.indexP[product] || getJSON(`samples-${product}.json`);
+  try {
+    state.indexes[product] = await state.indexP[product];
+    return state.indexes[product];
+  } catch (err) {
+    state.indexP[product] = null;
     throw err;
   }
 }
@@ -48,6 +66,13 @@ async function render() {
   const root = $(`.view[data-view="${state.view}"]`);
   try {
     modules[state.view] = modules[state.view] || (await loaders[state.view]());
+    if (state.data) {
+      try {
+        await loadProductData(state.product);
+      } catch (err) {
+        console.error(err);
+      }
+    }
     await modules[state.view].render(root, { ...state, navigate, loadIndex });
   } catch (err) {
     console.error(err);
@@ -80,14 +105,19 @@ async function boot() {
   const dataP = getJSON("data.json").catch(() => ({ products: {}, source: { pairs: 0 } }));
   const moduleP = loaders[state.view]().catch(() => null);
   if (state.view === "samples") {
-    state.indexP = getJSON("samples.json");
-    state.indexP.catch(() => {});
+    state.indexP[state.product] = getJSON(`samples-${state.product}.json`);
+    state.indexP[state.product].catch(() => {});
   }
   state.data = await dataP;
   const mod = await moduleP;
   if (mod) modules[state.view] = mod;
   if (!new URLSearchParams(location.search).get("product")) {
     state.product = PRODUCTS.find((p) => state.data.products[p]) || "wencai";
+  }
+  try {
+    await loadProductData(state.product);
+  } catch (err) {
+    console.error(err);
   }
   render();
 }

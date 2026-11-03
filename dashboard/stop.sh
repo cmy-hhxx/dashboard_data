@@ -24,4 +24,12 @@ for pid in $(ps -eo pid=,args= | awk '$2=="python3" && $3=="server.py" {print $1
   [ "$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)" = "$HERE" ] && terminate "$pid"
 done
 
+if [ -f stats.pid ]; then
+  terminate "$(cat stats.pid)"
+  rm -f stats.pid
+fi
+for pid in $(ps -eo pid=,args= | awk '$2=="python3" && $3=="stats_worker.py" {print $1}'); do
+  [ "$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)" = "$HERE" ] && terminate "$pid"
+done
+
 echo stopped

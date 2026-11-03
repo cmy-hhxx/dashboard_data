@@ -68,7 +68,7 @@ function groupSessions(rows) {
 export async function render(r, c) {
   ctx = c;
   root = r;
-  const index = await c.loadIndex();
+  const index = await c.loadIndex(c.product);
   const prod = index.products[c.product];
   if (S.product !== c.product || !$(".bench", root)) {
     S.product = c.product;
@@ -83,7 +83,7 @@ export async function render(r, c) {
   if (!prod || !S.all.length) {
     const other = c.product === "wencai" ? "aime" : "wencai";
     root.innerHTML = `<div class="bento"><div class="card" style="--span:12"><div class="empty">${c.product === "wencai" ? "问财" : "AIME"} 暂无样本。${
-      index.products[other] ? `<a class="link" href="?view=samples&product=${other}">查看 ${other === "aime" ? "AIME" : "问财"} 样本</a>` : ""
+      index.available?.includes(other) ? `<a class="link" href="?view=samples&product=${other}">查看 ${other === "aime" ? "AIME" : "问财"} 样本</a>` : ""
     }</div></div></div>`;
     S.product = null;
     return;
@@ -307,9 +307,12 @@ function syncFilters() {
         return (!f.stage || s === f.stage) && (!f.mech || m === f.mech) && scenePool.some((r) => r.pt.includes(id));
       })
       .sort((a, b) => {
-        const pa = a.split(".").map((x) => Number(x.slice(1)));
-        const pb = b.split(".").map((x) => Number(x.slice(1)));
-        return pa[0] - pb[0] || pa[1] - pb[1] || pa[2] - pb[2];
+        const pa = a.split(".").map((x) => Number(x.replace(/\D/g, "")) || 0);
+        const pb = b.split(".").map((x) => Number(x.replace(/\D/g, "")) || 0);
+        for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+          if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
+        }
+        return 0;
       });
     const opt = (v, label, on) => `<option value="${esc(v)}"${on ? " selected" : ""}>${esc(label)}</option>`;
     html += `<div class="cascade">

@@ -25,23 +25,31 @@ import argparse
 import csv
 import gzip
 import hashlib
-import json
+import json_compat as json
+import multiprocessing
+import pickle
 import os
+import pickle
 import re
 import shutil
 import sys
-import tempfile
 import time
-from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor
+from collections import Counter, OrderedDict, defaultdict
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import unquote
+
+import build_store as bs
 
 DASHBOARD = Path(__file__).resolve().parent
 REPO = DASHBOARD.parent
 STATIC = DASHBOARD / "static"
 PRODUCTION_DATASETS = Path("/mnt/fin_bench/code_and_clean_data/datasets")
+# Bump when the aggregate payload shape changes (details can stay cached).
+PAYLOAD_VERSION = "2026-11-03.3"
+# Bump when load_clusters() starts emitting fields the cached pickle lacks.
+CLUSTER_INDEX_VERSION = 2
 
 
 def default_datasets():
@@ -189,65 +197,91 @@ def quantile(values, q):
 
 # --------------------------------------------------------------------------- pairing
 
-class LineCache:
-    """Random access to JSONL lines without holding whole files in memory.
+class LineReader:
+    """Line access backed by the persistent file index.
 
-    Evaluation inputs are 0.5–2.4 GB each. Indexing offsets costs one sequential
-    read; fetching a line seeks to its byte range, so the builder only keeps the
-    records it is actively turning into a sample.
+    Output and compact files are small (tens of MB), so they are loaded once and
+    kept in a small LRU.  Input files can be multi-GB: samples are read in one
+    forward pass (``iter_input``) instead of one ceph seek per sample, which is
+    the difference between seconds and tens of minutes on the production mount.
     """
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, store: bs.BuildStore, max_files: int = 12,
+                 max_bytes: int = 512 << 20):
         self.root = root
-        self._offsets: dict[str, list[int]] = {}
-        self._size: dict[str, int] = {}
+        self.store = store
+        self.max_files = max_files
+        self.max_bytes = max_bytes
+        self._lines: OrderedDict[str, list[bytes]] = OrderedDict()
+        self._bytes = 0
+        self._fds: dict[str, int] = {}
 
-    def _load_offsets(self, rel: str) -> list[int]:
-        offsets, pos = [0], 0
-        with open(self.root / rel, "rb", buffering=8 << 20) as fh:
-            for raw in fh:
-                pos += len(raw)
-                offsets.append(pos)
-        if len(offsets) > 1 and offsets[-1] == pos:
-            offsets.pop()
-        self._offsets[rel] = offsets
-        self._size[rel] = pos
-        return offsets
+    def _evict(self):
+        while len(self._lines) > self.max_files or self._bytes > self.max_bytes:
+            _, old = self._lines.popitem(last=False)
+            self._bytes -= sum(len(x) for x in old)
 
-    def iter_lines(self, rel: str):
-        """Stream lines while recording offsets, so ``line()`` stays cheap later."""
-        if rel in self._offsets:
-            for number in range(1, len(self._offsets[rel]) + 1):
-                yield self.line(rel, number)
-            return
-        offsets, pos = [0], 0
-        with open(self.root / rel, "rb", buffering=8 << 20) as fh:
-            for raw in fh:
-                pos += len(raw)
-                offsets.append(pos)
-                yield raw[:-1] if raw.endswith(b"\n") else raw
-        if len(offsets) > 1 and offsets[-1] == pos:
-            offsets.pop()
-        self._offsets[rel] = offsets
-        self._size[rel] = pos
-
-    def count(self, rel: str) -> int:
-        return len(self._offsets.get(rel) or self._load_offsets(rel))
+    def lines(self, rel: str) -> list[bytes]:
+        if rel in self._lines:
+            self._lines.move_to_end(rel)
+            return self._lines[rel]
+        data = (self.root / rel).read_bytes()
+        lines = data.split(b"\n")
+        if lines and lines[-1] == b"":
+            lines.pop()
+        lines = [x[:-1] if x.endswith(b"\r") else x for x in lines]
+        self._lines[rel] = lines
+        self._bytes += len(data)
+        self._evict()
+        return lines
 
     def line(self, rel: str, number: int) -> bytes:
-        offsets = self._offsets.get(rel) or self._load_offsets(rel)
+        return self.lines(rel)[number - 1]
+
+    def raw_line(self, rel: str, number: int, index: dict | None = None) -> bytes:
+        index = index or self.store.get_file(rel)
+        if not index:
+            return self.line(rel, number)
+        offsets = index["offsets"]
         start = offsets[number - 1]
-        end = offsets[number] if number < len(offsets) else self._size[rel]
-        # Unbuffered: buffered readers prefetch far past a single sought line,
-        # which multiplies I/O by the sample count on multi-GB inputs.
-        with open(self.root / rel, "rb", buffering=0) as fh:
-            fh.seek(start)
-            raw = fh.read(end - start)
+        end = offsets[number] if number < len(offsets) else index["committed"]
+        fd = self._fds.get(rel)
+        if fd is None:
+            fd = os.open(self.root / rel, os.O_RDONLY)
+            self._fds[rel] = fd
+        raw = os.pread(fd, end - start, start)
         return raw[:-1] if raw.endswith(b"\n") else raw
 
-    def drop(self, rel: str):
-        self._offsets.pop(rel, None)
-        self._size.pop(rel, None)
+    def iter_input(self, rel: str, numbers, index: dict):
+        """Yield selected input lines in file order (random for very sparse sets)."""
+        numbers = sorted(numbers)
+        if not numbers:
+            return
+        density = len(numbers) / max(1, index["lines"])
+        if density < 0.08:
+            for number in numbers:
+                yield number, self.raw_line(rel, number, index)
+            return
+        wanted = set(numbers)
+        first, last = numbers[0], numbers[-1]
+        offsets = index["offsets"]
+        with open(self.root / rel, "rb", buffering=8 << 20) as fh:
+            fh.seek(offsets[first - 1])
+            number = first
+            for raw in fh:
+                if number > last:
+                    break
+                if number in wanted:
+                    yield number, raw[:-1] if raw.endswith(b"\n") else raw
+                number += 1
+
+    def close(self):
+        for fd in self._fds.values():
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        self._fds.clear()
 
 
 def input_candidates(root: Path, top: str, split: str, model: str, date: str) -> list[str]:
@@ -273,102 +307,154 @@ def input_candidates(root: Path, top: str, split: str, model: str, date: str) ->
     return [p.relative_to(root).as_posix() for p in paths if p.is_file()]
 
 
-def count_records(path: Path) -> int:
-    """Count non-empty JSONL records without decoding them."""
-    lines, last = 0, b""
-    with open(path, "rb", buffering=0) as fh:
-        while chunk := fh.read(8 << 20):
-            lines += chunk.count(b"\n")
-            last = chunk[-1:]
-    if last and last != b"\n":
-        lines += 1
-    return lines
+def input_files(datasets: Path, top: Path, product: str):
+    """Every input file the volume card reads.
 
-
-def load_counts(path: Path):
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-
-
-def save_counts(path: Path, counts: dict):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(counts, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    os.replace(tmp, path)
-
-
-def input_total(datasets: Path, top: Path, product: str, cache: LineCache, counts: dict):
-    """Every input record, including queued days without an attribution output.
-
-    AIME lost-user inputs currently come from ``.archive/1_lost_user_input``; the
-    smaller ``eval_input/1_lost_user_eval`` copy is excluded so days are not
-    counted twice while that evaluation is in flight.
+    AIME lost-user inputs come from the archive; the smaller
+    ``eval_input/1_lost_user_eval`` copy is excluded so days are not counted
+    twice while that evaluation is in flight.  Wencai marks lost users inside
+    the task-eval input with ``meta.lost_user`` instead of a separate directory.
     """
-    files = [f for f in (top / "eval_input").rglob("*.jsonl") if "1_lost_user_eval" not in f.parts]
+    files = [p for p in (top / "eval_input").rglob("*.jsonl") if "1_lost_user_eval" not in p.parts]
     if product == "aime":
         files += list((top / ".archive" / "1_lost_user_input").rglob("*.jsonl"))
-    todo = []
-    total = 0
+    return sorted(files)
+
+
+SIDECAR_SCHEMA = 1
+
+
+def load_stats_sidecar(datasets: Path):
+    """Read the worker-maintained stats.json, if present and valid.
+
+    The sidecar is only an accelerator: every file is still checked against its
+    current ``(size, mtime_ns)`` and falls back to a local scan when stale.
+    """
+    for path in (datasets / "stats.json", DASHBOARD / "cache" / "stats.json"):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and data.get("schema") == SIDECAR_SCHEMA:
+            return data
+    return None
+
+
+def scan_inputs(datasets: Path, top: Path, product: str, store: bs.BuildStore, jobs: int = 0,
+                sidecar_files=None):
+    """Scan changed input files once; unchanged files are served from cache.
+
+    New lines are aggregated for volume/task/lost and their byte offsets, join
+    keys, trace ids and content hashes are stored for pairing and samples.
+    ``sidecar_files`` (path -> meta) lets build skip the scan entirely when the
+    standalone stats worker already aggregated the current bytes.
+    """
+    files = input_files(datasets, top, product)
+    if sidecar_files and not isinstance(sidecar_files, dict):
+        sidecar_files = {item["path"]: item for item in sidecar_files}
+    sidecar_files = sidecar_files or {}
+    metas, todo = [], []
+    from_sidecar = 0
     for path in files:
         rel = path.relative_to(datasets).as_posix()
-        if rel in cache._offsets:  # already streamed while pairing
-            total += cache.count(rel)
-            continue
         try:
             stat = path.stat()
         except OSError:
             continue
-        entry = counts.get(rel)
-        if entry and entry.get("size") == stat.st_size and entry.get("mtime_ns") == stat.st_mtime_ns:
-            total += entry["lines"]
-        else:
-            todo.append((rel, path, stat))
-    if todo:
-        with ThreadPoolExecutor(max_workers=min(8, len(todo))) as pool:
-            results = list(pool.map(lambda item: count_records(item[1]), todo))
-        for (rel, path, stat), lines in zip(todo, results):
-            counts[rel] = {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns, "lines": lines}
-            total += lines
-    live = {path.relative_to(datasets).as_posix() for path in files}
-    for rel in list(counts):
-        if rel not in live:
-            counts.pop(rel)
-    return total
-
-
-def daily_inputs(datasets: Path, top: Path, product: str, cache: LineCache, counts: dict):
-    """Input record counts by (date, model, split), using the same files as input_total."""
-    out = Counter()
-
-    def add(path: Path, split: str):
-        match = DATE_RE.search(path.name)
-        if not match:
-            return
-        rel = path.relative_to(datasets).as_posix()
-        if rel in cache._offsets:
-            n = cache.count(rel)
-        else:
-            entry = counts.get(rel)
-            try:
-                stat = path.stat()
-            except OSError:
-                return
-            if entry and entry.get("size") == stat.st_size and entry.get("mtime_ns") == stat.st_mtime_ns:
-                n = entry["lines"]
-            else:
-                n = count_records(path)
-                counts[rel] = {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns, "lines": n}
-        out[(match.group(1), path.parent.name, split)] += n
-
-    for path in (top / "eval_input").rglob("*.jsonl"):
-        if "1_lost_user_eval" in path.parts:
+        side = sidecar_files.get(rel)
+        if side and side.get("size") == stat.st_size and side.get("mtime_ns") == stat.st_mtime_ns:
+            metas.append(side)
+            from_sidecar += 1
             continue
-        add(path, "daily")
-    if product == "aime":
-        for path in (top / ".archive" / "1_lost_user_input").rglob("*.jsonl"):
-            add(path, "lost")
+        cached = store.file_meta(rel)
+        if cached and cached["size"] == stat.st_size and cached["mtime_ns"] == stat.st_mtime_ns:
+            metas.append(cached)
+            continue
+        prev = store.get_file(rel) if cached else None
+        todo.append((str(datasets), rel, "input", prev, True, product,
+                     bs.split_from_rel(rel), bs.model_from_rel(rel)))
+    if todo:
+        workers = jobs or (min(4, os.cpu_count() or 1) if len(todo) >= 4 else 1)
+        debug(f"scan {product}: {len(todo)}/{len(files)} files, workers={workers}")
+        if workers > 1:
+            with ProcessPoolExecutor(max_workers=workers) as pool:
+                results = list(pool.map(bs.scan_task, todo))
+        else:
+            results = [bs.scan_task(task) for task in todo]
+        for data in results:
+            data["product"] = product
+            store.put_file(data)
+            metas.append({key: data[key] for key in
+                          ("path", "size", "mtime_ns", "lines", "committed", "ends_nl",
+                           "stats", "model", "split")})
+        store.commit()
+    return metas, {"files": len(files), "scanned": len(todo),
+                   "cached": len(files) - len(todo), "sidecar": from_sidecar}
+
+
+def _task_nodes(tasks: dict):
+    out = []
+    for task, node in tasks.items():
+        subs = [{"sub": sub, "n": value["n"], **({"lost": value["lost"]} if value.get("lost") else {})}
+                for sub, value in node.get("sub", {}).items()]
+        subs.sort(key=lambda x: (-x["n"], x["sub"]))
+        item = {"task": task, "n": node["n"]}
+        if node.get("lost"):
+            item["lost"] = node["lost"]
+        if subs:
+            item["sub"] = subs
+        out.append(item)
+    out.sort(key=lambda x: (-x["n"], x["task"]))
+    return out
+
+
+def input_payload(metas):
+    """Volume + task/subtask + lost counts for one product, from cached file stats."""
+    agg = bs.empty_stats()
+    records = 0
+    for meta in metas:
+        records += int(meta.get("lines") or 0)
+        bs.merge_stats(agg, meta.get("stats"))
+
+    models = {}
+    for model, ms in agg["by_model"].items():
+        models[model] = {
+            "label": MODEL_LABEL.get(model, model),
+            "traces": ms["traces"], "tool_calls": ms["tool_calls"],
+            "tokens_in": ms["tokens_in"], "tokens_out": ms["tokens_out"],
+            "cache_read": ms["cache_read"], "lost": sum(t.get("lost", 0) for t in ms["tasks"].values()),
+            "tasks": _task_nodes(ms["tasks"]),
+        }
+
+    top = {}
+    for ms in agg["by_model"].values():
+        for task, node in ms["tasks"].items():
+            dst = top.setdefault(task, {"n": 0, "lost": 0, "sub": {}})
+            dst["n"] += node["n"]
+            dst["lost"] += node.get("lost", 0)
+            for sub, value in node.get("sub", {}).items():
+                sub_dst = dst["sub"].setdefault(sub, {"n": 0, "lost": 0})
+                sub_dst["n"] += value["n"]
+                sub_dst["lost"] += value.get("lost", 0)
+
+    return {
+        "records": records, "traces": agg["traces"], "tool_calls": agg["tool_calls"],
+        "tokens_in": agg["tokens_in"], "tokens_out": agg["tokens_out"],
+        "cache_read": agg["cache_read"],
+        "lost": sum(t.get("lost", 0) for t in top.values()),
+        "tasks": _task_nodes(top), "models": models,
+    }
+
+
+def daily_inputs(metas):
+    """Input record counts by (date, model, split), from the same per-file index."""
+    out = Counter()
+    for meta in metas:
+        match = DATE_RE.search(Path(meta["path"]).name)
+        if not match:
+            continue
+        model = meta.get("model") or Path(meta["path"]).parent.name
+        out[(match.group(1), model, meta.get("split") or "daily")] += int(meta.get("lines") or 0)
     return out
 
 
@@ -403,7 +489,56 @@ def daily_payload(samples, inputs):
     ]
 
 
-def pairs_from_csv(root: Path, cache: LineCache):
+def debug(message):
+    if os.environ.get("EVAL_BUILD_DEBUG"):
+        print(f"[build] {message}", file=sys.stderr, flush=True)
+
+
+def ensure_file(store: bs.BuildStore, root: Path, rel: str, kind: str = "input",
+                product: str = "", need_stats: bool = False):
+    """Return a cached file index, scanning only when ``(size, mtime)`` changed."""
+    path = root / rel
+    stat = path.stat()
+    if store.has_file_stat(rel, stat):
+        return store.get_file(rel)
+    prev = store.get_file(rel)
+    data = bs.scan_file(root, rel, kind, prev, need_stats, product or product_of(rel.split("/")[0]) or "",
+                        bs.split_from_rel(rel), bs.model_from_rel(rel))
+    data["product"] = product
+    store.put_file(data)
+    return data
+
+
+def ensure_input(store, root, rel, product):
+    return ensure_file(store, root, rel, "input", product, True)
+
+
+def ensure_raw(store, root, rel):
+    kind = "output" if ("attribution" in rel or "compact" in rel) else "input"
+    return ensure_file(store, root, rel, kind, "", False)
+
+
+def choose_input(cands, turn_tids):
+    """Pick the duplicate input snapshot that actually covers the attribution turns.
+
+    Candidate trace ids are indexed once while the input file is scanned, so this
+    no longer re-reads a multi-MB input line per attribution row.
+    """
+    need = {t for t in turn_tids if t}
+    if len(cands) < 2 or not need:
+        return cands[0] if cands else None
+    best = None
+    for cand in cands:
+        ids = set(cand[2])
+        cover = len(need & ids)
+        # Prefer full coverage, then the snapshot with the fewest extra traces.
+        score = (cover == len(need), cover, -len(ids) if cover == len(need) else len(ids))
+        if best is None or score > best[0]:
+            best = (score, cand)
+    return best[1] if best else cands[0]
+
+
+def pairs_from_csv(root: Path, store: bs.BuildStore, reader: LineReader):
     path = root / "对应关系.csv"
     with open(path, encoding="utf-8-sig", newline="") as fh:
         rows = list(csv.DictReader(fh))
@@ -430,7 +565,8 @@ def pairs_from_csv(root: Path, cache: LineCache):
             if not ref or not row.get(sha_col):
                 continue
             try:
-                raw = cache.line(*ref)
+                index = ensure_raw(store, root, ref[0])
+                raw = reader.raw_line(ref[0], ref[1], index)
             except (OSError, IndexError):
                 pair[key] = None
                 mismatched += 1
@@ -441,65 +577,9 @@ def pairs_from_csv(root: Path, cache: LineCache):
     return pairs, {"mode": "csv", "rows": len(rows), "sha_mismatch": mismatched}
 
 
-def pair_key(meta: dict) -> tuple:
-    rt = str(meta.get("request_time") or "").replace("T", " ")[:19]
-    return (meta.get("session_id") or meta.get("thread_id") or meta.get("trace_id"), rt)
-
-
-RAW_SID = re.compile(rb'"session_id"\s*:\s*"([^"]*)"')
-RAW_THREAD = re.compile(rb'"thread_id"\s*:\s*"([^"]*)"')
-RAW_TRACE = re.compile(rb'"trace_id"\s*:\s*"([^"]*)"')
-RAW_RT = re.compile(rb'"request_time"\s*:\s*"([^"]*)"')
-
-
-def raw_key(raw: bytes):
-    """Read the join key from the head of a large JSONL record without parsing it."""
-    head = raw[:65536]
-    match = RAW_SID.search(head) or RAW_THREAD.search(head) or RAW_TRACE.search(head)
-    if not match:
-        return None
-    clock = RAW_RT.search(head)
-    rt = clock.group(1).decode("utf-8", "replace").replace("T", " ")[:19] if clock else ""
-    return match.group(1).decode("utf-8", "replace"), rt
-
-
-def debug(message):
-    if os.environ.get("EVAL_BUILD_DEBUG"):
-        print(f"[build] {message}", file=sys.stderr, flush=True)
-
-
-def choose_input(cands, turn_tids, cache):
-    """Pick the duplicate input snapshot that actually covers the attribution turns.
-
-    The same session can be exported twice with the same request time: once with
-    only the first trace and once with every round.  Pairing used to take the
-    first row, so later rounds' ``trace_index`` had no transcript and all their
-    evidence ended up unlocated.
-    """
-    need = {t for t in turn_tids if t}
-    if len(cands) < 2 or not need:
-        return cands[0]
-    best = None
-    for cand in cands:
-        try:
-            record = json.loads(cache.line(*cand))
-        except (OSError, IndexError, ValueError):
-            continue
-        ids = [(t.get("meta") or {}).get("trace_id") for t in record.get("traces") or []]
-        cover = len(need & set(ids))
-        # Prefer full coverage, then the snapshot with the fewest extra traces.
-        score = (cover == len(need), cover, -len(ids) if cover == len(need) else len(ids))
-        if best is None or score > best[0]:
-            best = (score, cand)
-    return best[1] if best else cands[0]
-
-
-def pairs_from_keys(root: Path, cache: LineCache):
-    """Pair by session id + request time inside each model/date file.
-
-    Duplicate inputs for one key are resolved by trace coverage, not file order.
-    """
-    pairs, unmatched = [], Counter()
+def discover_outputs(root: Path):
+    """Attribution files plus a cheap signature of every file pairing depends on."""
+    found = []
     for out in sorted(root.glob("*/eval_output/*/*/*_attribution-*.jsonl")):
         rel = out.relative_to(root).as_posix()
         m = OUTPUT_FILE.match(rel)
@@ -508,57 +588,104 @@ def pairs_from_keys(root: Path, cache: LineCache):
         product, split = product_of(m["product"]), SPLITS.get(m["split"])
         if not product or not split:
             continue
-        model, date = m["model"], m["date"]
-        inp_rels = input_candidates(root, m["product"], split, model, date)
-        debug(f"pair {rel} inputs={len(inp_rels)}")
-        cmp_path = out.parent / "compact" / f"{model}_compact-{date}.jsonl"
-        cmp_rel = cmp_path.relative_to(root).as_posix() if cmp_path.exists() else None
-
-        def index(rels, meta_of):
-            slots = defaultdict(list)
-            for rel_path in rels:
-                for n, raw in enumerate(cache.iter_lines(rel_path), 1):
-                    key = raw_key(raw)
-                    if key is None:
-                        try:
-                            key = pair_key(meta_of(json.loads(raw)))
-                        except (ValueError, TypeError):
-                            continue
-                    slots[key].append((rel_path, n))
-            return slots
-
-        def input_meta(d):
-            meta = dict(d.get("meta") or {})
-            if not meta.get("session_id") and d.get("traces"):
-                meta["session_id"] = (d["traces"][0].get("meta") or {}).get("session_id")
-            meta.setdefault("request_time", d.get("request_time"))
-            return meta
-
-        inputs = index(inp_rels, input_meta)
-        compacts = index([cmp_rel] if cmp_rel else [], lambda d: d.get("session_meta") or {})
-        for n, raw in enumerate(cache.iter_lines(rel), 1):
+        try:
+            stat = out.stat()
+        except OSError:
+            continue
+        inputs = input_candidates(root, m["product"], split, m["model"], m["date"])
+        compact = out.parent / "compact" / f"{m['model']}_compact-{m['date']}.jsonl"
+        compact_rel = compact.relative_to(root).as_posix() if compact.exists() else None
+        parts = [[rel, stat.st_size, stat.st_mtime_ns]]
+        for inp in inputs:
             try:
-                payload = json.loads(raw)
-                key = pair_key(payload.get("session_meta") or {})
-            except ValueError:
-                continue
-            turn_tids = [(t.get("meta") or {}).get("trace_id") for t in payload.get("turns") or []]
-            cands = inputs.get(key) or []
-            inp = choose_input(cands, turn_tids, cache) if cands else None
-            if inp:
+                st = (root / inp).stat()
+                parts.append([inp, st.st_size, st.st_mtime_ns])
+            except OSError:
+                parts.append([inp, -1, -1])
+        if compact_rel:
+            st = compact.stat()
+            parts.append([compact_rel, st.st_size, st.st_mtime_ns])
+        sig = hashlib.sha1(json.dumps(parts, separators=(",", ":")).encode()).hexdigest()
+        found.append({
+            "rel": rel, "product": product, "split": split, "model": m["model"],
+            "date": m["date"], "inputs": inputs, "compact": compact_rel, "sig": sig,
+        })
+    return found
+
+
+def pair_output(root: Path, item: dict, store: bs.BuildStore, reader: LineReader):
+    slots, compacts = defaultdict(list), defaultdict(list)
+    for rel in item["inputs"]:
+        index = ensure_input(store, root, rel, item["product"])
+        for n, (key, tids, hashes) in enumerate(zip(index["keys"], index["tids"], index["hashes"]), 1):
+            if key:
+                slots[key].append((rel, n, tids, hashes))
+    if item["compact"]:
+        index = ensure_raw(store, root, item["compact"])
+        for n, (key, hashes) in enumerate(zip(index["keys"], index["hashes"]), 1):
+            if key:
+                compacts[key].append((item["compact"], n, hashes))
+
+    pairs, unmatched = [], Counter()
+    for n, raw in enumerate(reader.lines(item["rel"]), 1):
+        try:
+            payload = json.loads(raw)
+        except ValueError:
+            continue
+        key = bs.key_from_meta(payload.get("session_meta") or {}) or bs.raw_key(raw)
+        turn_tids = [(t.get("meta") or {}).get("trace_id") for t in payload.get("turns") or []]
+        cands = slots.get(key) or []
+        inp = choose_input(cands, turn_tids)
+        if inp:
+            try:
                 cands.remove(inp)
-            comp = compacts[key].pop(0) if compacts.get(key) else None
-            if inp is None:
-                unmatched["input"] += 1
-            if comp is None:
-                unmatched["compact"] += 1
-            pairs.append({
-                "product": product, "split": split, "model": model, "date": date, "run": "",
-                "input": inp,
-                "output": (rel, n),
-                "compact": comp,
-            })
-    return pairs, {"mode": "key", "rows": len(pairs), "unmatched": dict(unmatched)}
+            except ValueError:
+                pass
+        comp = compacts[key].pop(0) if compacts.get(key) else None
+        if inp is None:
+            unmatched["input"] += 1
+        if comp is None:
+            unmatched["compact"] += 1
+        pairs.append({
+            "product": item["product"], "split": item["split"], "model": item["model"],
+            "date": item["date"], "run": "",
+            "input": (inp[0], inp[1]) if inp else None,
+            "output": (item["rel"], n),
+            "compact": (comp[0], comp[1]) if comp else None,
+            "ih": f"{inp[3]:016x}" if inp else None,
+            "ch": f"{comp[2]:016x}" if comp else None,
+            "oh": hashlib.sha256(raw).hexdigest(),
+        })
+    return pairs, unmatched
+
+
+def pairs_from_keys(root: Path, store: bs.BuildStore, reader: LineReader):
+    """Pair each attribution file by session id + request time.
+
+    Unchanged attribution files are served from the pairing cache; only a new or
+    changed output (including a changed input snapshot) is re-paired.
+    """
+    pairs = []
+    info = Counter()
+    for item in discover_outputs(root):
+        # Detail building reads one output line by offset; make sure that index
+        # exists even when the pairing itself is served from cache.
+        ensure_raw(store, root, item["rel"])
+        cached = store.get_pairs(item["rel"])
+        if cached and cached[0] == item["sig"]:
+            file_pairs = cached[1]
+            info["pair_hits"] += 1
+        else:
+            file_pairs, unmatched = pair_output(root, item, store, reader)
+            store.put_pairs(item["rel"], item["sig"], file_pairs)
+            info["pair_misses"] += 1
+            for key, value in unmatched.items():
+                info[f"unmatched_{key}"] += value
+        pairs.extend(file_pairs)
+        store.commit()
+    info["mode"] = "key"
+    info["rows"] = len(pairs)
+    return pairs, dict(info)
 
 
 # --------------------------------------------------------------------------- clusters
@@ -597,7 +724,7 @@ def load_clusters(root: Path):
                     "id": node["id"], "name": node.get("name"), "mech": node.get("mechanism"),
                     "def": node.get("definition"),
                 })
-            elif level == 3:
+            elif level in (3, 4):
                 taxonomy["patterns"].setdefault(node["id"], {
                     "id": node["id"], "name": node.get("name"), "plain": node.get("plain"),
                     "def": node.get("definition"), "include": node.get("include"),
@@ -1587,117 +1714,663 @@ def slim_detail(detail):
     return detail
 
 
-def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print):
-    started = time.time()
-    cache = LineCache(datasets)
-    if not datasets.is_dir():
-        return empty_payloads("missing"), {}
-    if pairing in ("auto", "csv") and (datasets / "对应关系.csv").exists():
-        pairs, pairing_info = pairs_from_csv(datasets, cache)
-    else:
-        pairs, pairing_info = pairs_from_keys(datasets, cache)
-    if not pairs:
-        return empty_payloads("no-pairs"), {}
-    debug(f"paired {len(pairs)} rows")
+def cluster_signature(root: Path, cache_dir: Path | None = None):
+    """Content fingerprint of the cluster inputs.
 
-    taxonomy, cluster_index = load_clusters(datasets)
+    mtime changes on a regenerated-but-identical item_index would otherwise
+    invalidate every detail file; the content hash keeps the cache stable.
+    A stat-based side cache avoids re-reading the 30 MB of cluster files when
+    their sizes and mtimes did not change at all.
+    """
+    files = sorted(root.glob("*/eval_output/**/cluster/*/cluster_tree.json"))
+    files += sorted(root.glob("*/eval_output/**/cluster/*/item_index.jsonl"))
+    stat_parts = []
+    for path in files:
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        stat_parts.append([path.relative_to(root).as_posix(), st.st_size, st.st_mtime_ns])
+    cache_path = (cache_dir / "cluster-signature.json") if cache_dir else None
+    if cache_path:
+        try:
+            cached = json.loads(cache_path.read_text(encoding="utf-8"))
+            if cached.get("stats") == stat_parts and cached.get("sig"):
+                return cached["sig"]
+        except (OSError, ValueError):
+            pass
+    parts = []
+    for entry in stat_parts:
+        path = root / entry[0]
+        try:
+            with open(path, "rb", buffering=0) as fh:
+                head = fh.read(65536)
+                fh.seek(max(0, entry[1] - 65536))
+                tail = fh.read(65536)
+            digest = hashlib.sha1(head + b"\0" + tail).hexdigest()
+        except OSError:
+            continue
+        parts.append([entry[0], digest])
+    sig = hashlib.sha1(json.dumps(parts, separators=(",", ":")).encode()).hexdigest()
+    if cache_path:
+        try:
+            cache_path.write_text(json.dumps({"stats": stat_parts, "sig": sig},
+                                             separators=(",", ":")), encoding="utf-8")
+        except OSError:
+            pass
+    return sig
+
+
+def load_clusters_cached(root: Path, sig: str, cache_dir: Path):
+    path = cache_dir / f"clusters-v{CLUSTER_INDEX_VERSION}-{sig[:16]}.pkl"
+    try:
+        with open(path, "rb") as fh:
+            return pickle.load(fh)
+    except (OSError, EOFError, pickle.PickleError):
+        pass
+    taxonomy, index = load_clusters(root)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "wb") as fh:
+        pickle.dump((taxonomy, index), fh, protocol=pickle.HIGHEST_PROTOCOL)
+    os.replace(tmp, path)
+    for old in cache_dir.glob("clusters-*.pkl"):
+        if old != path:
+            old.unlink(missing_ok=True)
+    return taxonomy, index
+
+
+def assign_slugs(pairs):
+    """Assign the short detail filename; the raw output hash keeps it stable."""
+    seen = {}
+    for pair in pairs:
+        oh = pair.get("oh")
+        if not oh:
+            continue
+        slug = oh[:10]
+        while slug in seen and seen[slug] != oh:
+            slug = hashlib.sha256(slug.encode()).hexdigest()[:10]
+        seen[slug] = oh
+        pair["_slug"] = slug
+
+
+def sample_fingerprint(pair, cluster_sig=None):
+    """Fingerprint the source rows, not the cluster mapping.
+
+    Cluster content changes are handled by remapping cached summaries (and by
+    the lazy detail builder), so they must not invalidate every sample.
+    """
+    def ref(value):
+        # Cached pairs round-trip through JSON as lists; format both forms alike.
+        return f"{value[0]}:{value[1]}" if value else ""
+    values = [
+        bs.BUILD_VERSION, pair.get("oh") or "", pair.get("ih") or "",
+        pair.get("ch") or "", ref(pair.get("input")), ref(pair.get("compact")),
+    ]
+    return hashlib.sha1("\x1f".join(values).encode()).hexdigest()
+
+
+def _problem_path(brief, problem):
+    turn = problem.get("turn")
+    if turn is None:
+        ids = brief["attribution"].get("session_problems") or []
+        try:
+            return f"session_problem[{ids.index(problem['id'])}]"
+        except ValueError:
+            return ""
+    try:
+        pos = brief["attribution"]["turns"][turn]["problems"].index(problem["id"])
+    except (IndexError, KeyError, ValueError):
+        return ""
+    return f"turns[{turn}].problem[{pos}]"
+
+
+def remap_clusters(brief, row, cluster_index):
+    """Reapply the current cluster mapping to a cached compact summary."""
+    product, model = brief.get("product"), brief.get("model")
+    ids = brief.get("ids") or {}
+    paths, stages, tags = set(), set(), set()
+    for problem in brief["attribution"]["problems"]:
+        path = _problem_path(brief, problem)
+        found = None
+        if path:
+            for ident in (ids.get("session"), ids.get("trace"), ids.get("case")):
+                if ident:
+                    found = cluster_index.get((product, model, ident, path, problem.get("label")))
+                    if found:
+                        break
+        problem["cl"] = ({"path": found["path"], "edge": found["edge"], "tags": found["tags"]}
+                         if found and found.get("path") else None)
+        if problem["cl"]:
+            paths.add(problem["cl"]["path"])
+            stages.add(problem["cl"]["path"].split(".")[0])
+            tags.update(problem["cl"]["tags"] or [])
+    row["st"] = sorted(stages, key=lambda s: STAGE_ORDER.index(s) if s in STAGE_ORDER else 99)
+    row["pt"] = sorted(paths)
+    row["tg"] = sorted(tags)
+    return brief, row
+
+
+def remap_golden(golden, brief):
+    if not golden or not golden.get("case"):
+        return golden
+    by_id = {p["id"]: p for p in brief["attribution"]["problems"]}
+    for problem in golden["case"].get("problems") or []:
+        current = by_id.get(problem.get("id"))
+        problem["path"] = (current["cl"]["path"] if current and current.get("cl") else None)
+    return golden
+
+
+def ensure_detail_gz(path: Path):
+    gz = Path(str(path) + ".gz")
+    try:
+        if gz.stat().st_mtime >= path.stat().st_mtime:
+            return
+    except OSError:
+        pass
+    tmp = Path(str(gz) + ".tmp")
+    tmp.write_bytes(gzip.compress(path.read_bytes(), compresslevel=6, mtime=0))
+    os.replace(tmp, gz)
+
+
+_WORKER = {}
+
+
+def _init_sample_worker(ctx):
+    _WORKER.clear()
+    _WORKER.update(ctx)
+
+
+def _sample_batch(task):
+    """Build one input-file group (or the no-input groups) in a worker process."""
+    rel, pairs = task
+    ctx = _WORKER
+    root = Path(ctx["root"])
+    out_dir = Path(ctx["out_dir"])
+    sample_dir = out_dir / "samples"
+    cluster_index = ctx["cluster_index"]
+    cluster_sig = ctx["cluster_sig"]
+    store = bs.BuildStore(ctx["store"], readonly=True)
+    reader = LineReader(root, store)
+    indexes = {}
+    results = []
+
+    def file_index(name):
+        index = indexes.get(name)
+        if index is None:
+            index = store.get_file(name)
+            indexes[name] = index
+        return index
+
+    def one(pair, inp):
+        slug = pair["_slug"]
+        fp = pair.get("_fp") or sample_fingerprint(pair, cluster_sig)
+        try:
+            out_name, out_line = pair["output"]
+            out_index = file_index(out_name)
+            raw_out = reader.raw_line(out_name, out_line, out_index) if out_index else reader.line(out_name, out_line)
+            attr = json.loads(raw_out)
+        except (OSError, IndexError, ValueError) as exc:
+            return {"error": f"bad output: {exc}", "pair": pair["output"]}
+        comp, bad_compact = None, 0
+        if pair.get("compact"):
+            name, number = pair["compact"]
+            index = file_index(name)
+            if index is None:
+                bad_compact = 1
+            else:
+                try:
+                    comp = json.loads(reader.raw_line(name, number, index))
+                except (OSError, IndexError, ValueError):
+                    bad_compact = 1
+        try:
+            detail, row, facts = build_sample(pair, inp, attr, comp, cluster_index, Counter())
+            detail["slug"] = row["s"] = slug
+            candidate = golden_candidate(detail)
+            golden = {"score": candidate[0], "case": candidate[1]} if candidate else None
+            brief = slim_detail(detail)
+        except Exception as exc:  # noqa: BLE001 - one bad row must not kill the batch
+            return {"error": f"build: {exc}", "pair": pair["output"]}
+        return {
+            "slug": slug, "fp": fp, "oh": pair.get("oh"), "ih": pair.get("ih"), "ch": pair.get("ch"),
+            "product": pair["product"], "model": pair["model"], "date": pair["date"],
+            "split": pair["split"], "output": pair["output"][0], "output_line": pair["output"][1],
+            "row": row, "facts": facts, "brief": brief, "golden": golden,
+            "refs": {"input": pair.get("input"), "compact": pair.get("compact")},
+            "detail_bytes": 0,
+            "missing_input": int(pair.get("input") is not None and inp is None),
+            "missing_compact": int(comp is None and pair.get("compact") is not None),
+            "bad_compact": bad_compact,
+        }
+
+    try:
+        if rel is None:
+            for pair in pairs:
+                results.append(one(pair, None))
+        else:
+            index = store.get_file(rel)
+            if index is None:
+                return [{"error": f"missing input index {rel}", "pair": p["output"]} for p in pairs]
+            line_pairs = defaultdict(list)
+            for pair in pairs:
+                line_pairs[pair["input"][1]].append(pair)
+            for number, raw in reader.iter_input(rel, line_pairs, index):
+                try:
+                    inp = json.loads(raw)
+                except ValueError:
+                    inp = None
+                for pair in line_pairs[number]:
+                    results.append(one(pair, inp))
+    finally:
+        reader.close()
+        store.close()
+    return results
+
+
+SAMPLE_CACHE_VERSION = 1
+
+
+def load_sample_pickle(path: Path):
+    try:
+        with open(path, "rb") as fh:
+            data = pickle.load(fh)
+    except (OSError, EOFError, pickle.PickleError, ValueError):
+        return {}
+    if data.get("version") != SAMPLE_CACHE_VERSION or data.get("build") != bs.BUILD_VERSION:
+        return {}
+    return data.get("rows") or {}
+
+
+def write_sample_pickle(path: Path, rows):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "wb") as fh:
+        pickle.dump({"version": SAMPLE_CACHE_VERSION, "build": bs.BUILD_VERSION, "rows": rows},
+                    fh, protocol=5)
+    os.replace(tmp, path)
+
+
+def build_samples(pairs, root, out_dir, store, reader, cluster_index, cluster_sig, log=print,
+                  jobs: int = 0):
+    """Reuse unchanged details; build misses in parallel across input files."""
     stats = Counter()
+    stats["sample_hits"] = stats["sample_built"] = 0
     samples = defaultdict(list)
-    seen_slugs = set()
     golden_pool = defaultdict(list)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=".samples-", dir=out_dir))
+    sample_dir = out_dir / "samples"
+    sample_dir.mkdir(parents=True, exist_ok=True)
+
+    for pair in pairs:
+        if not pair.get("oh"):
+            raw_out = reader.line(*pair["output"])
+            pair["oh"] = hashlib.sha256(raw_out).hexdigest()
+    assign_slugs(pairs)
+    slugs = [p["_slug"] for p in pairs if p.get("_slug")]
+    # A 16k-brief JSON decode costs 15–35 s.  The pickle is validated against
+    # the light SQLite columns (fp/oh/ih/ch), so a stale file can only cost a
+    # fallback load, never a wrong hit.
+    cache_path = out_dir.parent / "cache" / "samples.pkl"
+    pickled = load_sample_pickle(cache_path)
+    meta = store.sample_meta(slugs)
+    cached, need = {}, []
+    for slug, info in meta.items():
+        entry = pickled.get(slug)
+        if (entry and entry.get("fp") == info["fp"] and entry.get("oh") == info["oh"]
+                and entry.get("ih") == info["ih"] and entry.get("ch") == info["ch"]
+                and entry.get("product") == info["product"] and entry.get("model") == info["model"]
+                and entry.get("date") == info["date"] and entry.get("split") == info["split"]):
+            cached[slug] = entry
+        else:
+            need.append(slug)
+    if need:
+        cached.update(store.load_samples(need))
+    hits, misses = [], []
+    for pair in pairs:
+        fp = sample_fingerprint(pair, cluster_sig)
+        pair["_fp"] = fp
+        hit = cached.get(pair["_slug"])
+        if hit and hit["fp"] == fp and hit["oh"] == pair.get("oh"):
+            hits.append((pair, hit))
+        else:
+            misses.append(pair)
+
     detail_bytes = 0
 
-    # Group by input file so each large input file is read once and released.
-    pairs.sort(key=lambda p: ((p["input"] or ("", 0))[0], (p["input"] or ("", 0))[1]))
-    current = None
-    for pair in pairs:
-        inp_ref = pair["input"]
-        if current and (not inp_ref or inp_ref[0] != current):
-            cache.drop(current)
-        current = inp_ref[0] if inp_ref else current
-        raw_out = cache.line(*pair["output"])
-        attr = json.loads(raw_out)
-        inp = json.loads(cache.line(*inp_ref)) if inp_ref else None
-        comp = json.loads(cache.line(*pair["compact"])) if pair["compact"] else None
-        if inp is None:
-            stats["missing_input"] += 1
-        if comp is None:
-            stats["missing_compact"] += 1
-        slug = hashlib.sha256(raw_out).hexdigest()[:10]
-        while slug in seen_slugs:
-            slug = hashlib.sha256(slug.encode()).hexdigest()[:10]
-        seen_slugs.add(slug)
-        detail, row, facts = build_sample(pair, inp, attr, comp, cluster_index, stats)
-        detail["slug"] = row["s"] = slug
-        candidate = golden_candidate(detail)
-        if candidate:
-            picked = golden_pool[pair["product"]]
-            picked.append(candidate)
-            if len(picked) > GOLDEN_LIMIT * 4:
-                picked.sort(key=lambda x: x[0], reverse=True)
-                del picked[GOLDEN_LIMIT * 4:]
-        detail_bytes += write_json(staging / f"{slug}.json", detail)
-        samples[pair["product"]].append((slug, slim_detail(detail), row, facts))
+    def add_sample(pair, brief, row, facts, golden):
+        nonlocal detail_bytes
+        slug = pair.get("_slug") or pair.get("slug")
+        if golden:
+            golden_pool[pair["product"]].append((golden["score"], golden["case"]))
+        samples[pair["product"]].append((slug, brief, row, facts))
         stats["details"] += 1
-        if len(samples[pair["product"]]) % 500 == 0:
-            debug(f"{pair['product']} samples {len(samples[pair['product']])}")
-    if current:
-        cache.drop(current)
-    stats["details_mb"] = round(detail_bytes / 1e6, 1)
 
-    debug(f"built samples {sum(len(v) for v in samples.values())}")
-    sample_dir = out_dir / "samples"
-    old = None
-    if sample_dir.exists():
-        old = out_dir / f".samples-old-{os.getpid()}"
-        os.replace(sample_dir, old)
-    staging.chmod(0o755)
-    os.replace(staging, sample_dir)
-    if old:
-        shutil.rmtree(old, ignore_errors=True)
-    all_samples = [s for rows in samples.values() for s in rows]
-    used_patterns = {p["cl"]["path"] for _, d, _, _ in all_samples for p in d["attribution"]["problems"] if p["cl"]}
-    products = {}
-    for product in PRODUCTS:
-        if samples.get(product):
-            products[product] = aggregate(product, samples[product], taxonomy)
-    # Input volume (every eval_input line, evaluated or not) and an optional prediction feed.
-    counts = load_counts(out_dir.parent / "cache" / "input_counts.json")
-    for top in sorted(p for p in datasets.glob("*") if p.is_dir()) if datasets.is_dir() else []:
-        product = product_of(top.name)
-        if product not in products:
-            continue
-        products[product]["kpi"]["inputs"] = input_total(datasets, top, product, cache, counts)
-        products[product]["daily"] = daily_payload(samples[product], daily_inputs(datasets, top, product, cache, counts))
-        feed = top / "prediction.json"
-        if feed.is_file():
+    for pair, hit in hits:
+        if not hit.get("refs"):
+            # Older cache rows predate on-demand details; backfill the refs once.
+            hit["refs"] = {"input": pair.get("input"), "compact": pair.get("compact")}
+            store.put_sample({
+                "slug": pair["_slug"], "fp": hit["fp"], "oh": hit["oh"],
+                "ih": hit["ih"], "ch": hit["ch"], "product": pair["product"],
+                "model": pair["model"], "date": pair["date"], "split": pair["split"],
+                "output": pair["output"][0], "output_line": pair["output"][1],
+                "refs": hit["refs"],
+                "row": hit["row"], "facts": hit["facts"], "brief": hit["brief"],
+                "golden": hit["golden"],
+            })
+        brief, row = remap_clusters(hit["brief"], hit["row"], cluster_index)
+        golden = remap_golden(hit["golden"], brief)
+        add_sample(pair, brief, row, hit["facts"], golden)
+        stats["sample_hits"] += 1
+
+    if misses:
+        # A changed sample must not keep serving the previous transcript.
+        for pair in misses:
+            stale = sample_dir / f"{pair['_slug']}.json"
+            stale.unlink(missing_ok=True)
+            Path(str(stale) + ".gz").unlink(missing_ok=True)
+        by_input = defaultdict(list)
+        no_input = []
+        for pair in misses:
+            if pair.get("input"):
+                by_input[pair["input"][0]].append(pair)
+            else:
+                no_input.append(pair)
+        tasks = list(by_input.items())
+        if no_input:
+            tasks.append((None, no_input))
+        workers = jobs or min(4, os.cpu_count() or 1)
+        batches = None
+        if workers > 1 and len(misses) >= 128 and len(tasks) > 1:
+            ctx = {
+                "root": str(root), "out_dir": str(out_dir), "store": str(store.path),
+                "cluster_sig": cluster_sig, "cluster_index": cluster_index,
+            }
+            _WORKER.clear()
+            _WORKER.update(ctx)
             try:
-                products[product]["prediction"] = json.loads(feed.read_text(encoding="utf-8"))
-            except ValueError as exc:
-                log(f"[build] skip {feed}: {exc}")
+                mp = multiprocessing.get_context("fork")
+                with ProcessPoolExecutor(max_workers=workers, mp_context=mp,
+                                         initializer=_init_sample_worker, initargs=(ctx,)) as pool:
+                    batches = list(pool.map(_sample_batch, tasks))
+            except Exception as exc:  # noqa: BLE001 - fall back to the serial path
+                debug(f"sample pool failed, falling back: {exc}")
+                batches = None
+        if batches is None:
+            ctx = {
+                "root": str(root), "out_dir": str(out_dir), "store": str(store.path),
+                "cluster_sig": cluster_sig, "cluster_index": cluster_index,
+            }
+            _WORKER.clear()
+            _WORKER.update(ctx)
+            batches = [_sample_batch(task) for task in tasks]
 
-    generated = iso_now()
-    data = {
-        "schema": 2, "generated_at": generated,
-        "source": {**pairing_info, "pairs": len(pairs), "root": datasets.name},
-        "taxonomy": taxonomy_out(taxonomy, used_patterns) if taxonomy["stages"] else None,
-        "system": system_facts(all_samples, golden_pool),
-        "products": products,
-    }
-    index = {"schema": 2, "generated_at": generated, "products": {}}
-    for product, rows in samples.items():
-        rows_sorted = sorted(rows, key=lambda s: (WORST_KEYS.index(s[2]["w"]), -s[2]["n"], s[2]["d"]))
-        index["products"][product] = {
-            "label": PRODUCTS[product]["label"],
-            "models": [{"id": m["id"], "label": m["label"]} for m in products[product]["models"]],
-            "splits": products[product]["splits"],
-            "rows": [{k: s[2][k] for k in INDEX_FIELDS if k in s[2]} for s in rows_sorted],
+        merged = 0
+        for batch in batches:
+            for item in batch:
+                if item.get("error"):
+                    stats["sample_error"] += 1
+                    debug(f"skip sample {item.get('pair')}: {item['error']}")
+                    continue
+                entry = {
+                    "slug": item["slug"], "fp": item["fp"], "oh": item["oh"],
+                    "ih": item["ih"], "ch": item["ch"], "product": item["product"],
+                    "model": item["model"], "date": item["date"], "split": item["split"],
+                    "output": item["output"], "output_line": item["output_line"],
+                    "row": item["row"], "facts": item["facts"], "brief": item["brief"],
+                    "golden": item["golden"], "refs": item["refs"],
+                }
+                store.put_sample(entry)
+                cached[item["slug"]] = entry
+                add_sample(item, item["brief"], item["row"], item["facts"], item["golden"])
+                stats["sample_built"] += 1
+                stats["missing_input"] += item["missing_input"]
+                stats["missing_compact"] += item["missing_compact"]
+                stats["bad_compact"] += item["bad_compact"]
+                detail_bytes += item["detail_bytes"]
+                merged += 1
+                if merged % 200 == 0:
+                    store.commit()
+                    debug(f"merged {merged} samples")
+
+    try:
+        write_sample_pickle(cache_path, cached)
+    except OSError as exc:
+        debug(f"sample cache write failed: {exc}")
+
+    evidence = Counter()
+    for rows in samples.values():
+        for _, brief, _, _ in rows:
+            for item in brief["evidence"]:
+                evidence["ev_total"] += 1
+                if "o" in item:
+                    evidence["ev_located_brief"] += 1
+    stats.update(evidence)
+    stats["details_mb"] = round(detail_bytes / 1e6, 1)
+    debug(f"built samples {sum(len(v) for v in samples.values())}, "
+          f"hits={stats['sample_hits']} built={stats['sample_built']}")
+    return samples, golden_pool, stats
+
+
+def cleanup_samples(sample_dir: Path, slugs):
+    keep = {f"{slug}.json" for slug in slugs}
+    keep |= {f"{name}.gz" for name in keep}
+    if not sample_dir.exists():
+        return
+    for path in sample_dir.iterdir():
+        if path.name in keep:
+            continue
+        if path.is_file():
+            path.unlink(missing_ok=True)
+        elif path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+
+
+def payload_files_exist(out_dir: Path) -> bool:
+    try:
+        data = json.loads((out_dir / "data.json").read_text(encoding="utf-8"))
+        samples = json.loads((out_dir / "samples.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return (all((out_dir / f"data-{p}.json").exists() for p in (data.get("products") or {}))
+            and all((out_dir / f"samples-{p}.json").exists() for p in (samples.get("products") or {})))
+
+
+def feed_signature(datasets: Path):
+    """Cheap fingerprint of optional prediction feeds, part of the reuse marker."""
+    parts = []
+    for path in sorted(datasets.glob("*/prediction.json")):
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        parts.append([path.relative_to(datasets).as_posix(), stat.st_size, stat.st_mtime_ns])
+    return hashlib.sha1(json.dumps(parts, separators=(",", ":")).encode()).hexdigest()
+
+
+def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs: int = 0):
+    started = time.time()
+    if not datasets.is_dir():
+        return empty_payloads("missing"), {}
+    store = bs.BuildStore(out_dir.parent / "cache" / "build.sqlite3")
+    reader = LineReader(datasets, store)
+    timers, scan_info = {}, {}
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        t0 = time.time()
+        sidecar = load_stats_sidecar(datasets)
+        product_metas = {}
+        for top in sorted(p for p in datasets.glob("*") if p.is_dir()):
+            product = product_of(top.name)
+            if not product:
+                continue
+            side_files = None
+            if sidecar:
+                side_files = (sidecar.get("products") or {}).get(product, {}).get("files")
+            metas, info = scan_inputs(datasets, top, product, store, jobs, side_files)
+            product_metas[product] = metas
+            scan_info[product] = info
+        timers["scan"] = round(time.time() - t0, 1)
+
+        t0 = time.time()
+        if pairing in ("auto", "csv") and (datasets / "对应关系.csv").exists():
+            pairs, pairing_info = pairs_from_csv(datasets, store, reader)
+        else:
+            pairs, pairing_info = pairs_from_keys(datasets, store, reader)
+        timers["pair"] = round(time.time() - t0, 1)
+        if not pairs:
+            return empty_payloads("no-pairs"), {}
+        debug(f"paired {len(pairs)} rows")
+
+        t0 = time.time()
+        cluster_sig = cluster_signature(datasets, out_dir.parent / "cache")
+        pairs_sig = hashlib.sha1("\x1f".join(p.get("oh") or "" for p in pairs).encode()).hexdigest()
+        feed_sig = feed_signature(datasets)
+        scanned = sum(v["scanned"] for v in scan_info.values())
+        marker = store.get_meta("complete")
+        if (pairing_info.get("mode") == "key" and scanned == 0
+                and pairing_info.get("pair_misses", 0) == 0 and marker
+                and marker.get("build") == bs.BUILD_VERSION
+                and marker.get("payload") == PAYLOAD_VERSION
+                and marker.get("pairs_sig") == pairs_sig
+                and marker.get("cluster") == cluster_sig
+                and marker.get("feed") == feed_sig
+                and (out_dir / "data.json").exists() and (out_dir / "samples.json").exists()
+                and (out_dir / "samples").is_dir() and payload_files_exist(out_dir)):
+            timers["cluster"] = round(time.time() - t0, 1)
+            timers["samples"] = 0.0
+            timers["aggregate"] = 0.0
+            timers["write"] = 0.0
+            summary = Counter({
+                "pairs": len(pairs), "pairing": pairing_info.get("mode"), "reused": 1,
+                "scan_files": sum(v["files"] for v in scan_info.values()),
+                "scan_scanned": 0, "scan_cached": sum(v["cached"] for v in scan_info.values()),
+                **{f"t_{k}": v for k, v in timers.items()},
+                "seconds": round(time.time() - started, 1),
+            })
+            return (None, None), summary
+
+        taxonomy, cluster_index = load_clusters_cached(datasets, cluster_sig, out_dir.parent / "cache")
+        timers["cluster"] = round(time.time() - t0, 1)
+
+        t0 = time.time()
+        samples, golden_pool, stats = build_samples(
+            pairs, datasets, out_dir, store, reader, cluster_index, cluster_sig, log, jobs)
+        timers["samples"] = round(time.time() - t0, 1)
+
+        t0 = time.time()
+        all_samples = [s for rows in samples.values() for s in rows]
+        used_patterns = {p["cl"]["path"] for _, d, _, _ in all_samples
+                         for p in d["attribution"]["problems"] if p["cl"]}
+        products = {}
+        for product in PRODUCTS:
+            if samples.get(product):
+                products[product] = aggregate(product, samples[product], taxonomy)
+        for product, metas in product_metas.items():
+            if product not in products:
+                continue
+            payload = input_payload(metas)
+            products[product]["input"] = payload
+            products[product]["kpi"]["inputs"] = payload["records"]
+            products[product]["kpi"]["lost"] = payload["lost"]
+            products[product]["daily"] = daily_payload(samples[product], daily_inputs(metas))
+            top = next((p for p in datasets.glob("*") if product_of(p.name) == product), None)
+            feed = top / "prediction.json" if top else None
+            if feed and feed.is_file():
+                try:
+                    products[product]["prediction"] = json.loads(feed.read_text(encoding="utf-8"))
+                except ValueError as exc:
+                    log(f"[build] skip {feed}: {exc}")
+        timers["aggregate"] = round(time.time() - t0, 1)
+
+        generated = iso_now()
+        shared = {
+            "schema": 2, "generated_at": generated,
+            "source": {
+                **pairing_info, "pairs": len(pairs), "root": datasets.name,
+                "cache": {
+                    "pair_hits": pairing_info.get("pair_hits", 0),
+                    "pair_misses": pairing_info.get("pair_misses", 0),
+                    "sample_hits": stats["sample_hits"], "sample_built": stats["sample_built"],
+                    **{f"input_{k}": v for k, v in scan_info.items()},
+                },
+                "timings": timers,
+            },
+            "taxonomy": taxonomy_out(taxonomy, used_patterns) if taxonomy["stages"] else None,
+            "system": system_facts(all_samples, golden_pool),
+            "products": {product: {"label": PRODUCTS[product]["label"]} for product in products},
         }
-    save_counts(out_dir.parent / "cache" / "input_counts.json", counts)
-    stats["seconds"] = round(time.time() - started, 1)
-    return (data, index), stats
+        available = [product for product in PRODUCTS if product in samples]
+        indexes = {}
+        for product, rows in samples.items():
+            rows_sorted = sorted(rows, key=lambda s: (WORST_KEYS.index(s[2]["w"]), -s[2]["n"], s[2]["d"]))
+            indexes[product] = {
+                "schema": 2, "generated_at": generated, "product": product,
+                "available": available,
+                "products": {product: {
+                    "label": PRODUCTS[product]["label"],
+                    "models": [{"id": m["id"], "label": m["label"]} for m in products[product]["models"]],
+                    "splits": products[product]["splits"],
+                    "rows": [{k: s[2][k] for k in INDEX_FIELDS if k in s[2]} for s in rows_sorted],
+                }},
+            }
+        index = {
+            "schema": 2, "generated_at": generated,
+            "products": {
+                product: {
+                    "label": PRODUCTS[product]["label"],
+                    "rows": len(samples[product]),
+                    "url": f"samples-{product}.json",
+                }
+                for product in available
+            },
+        }
+
+        t0 = time.time()
+        data_bytes = 0
+        for product, payload in products.items():
+            data_bytes += write_json(out_dir / f"data-{product}.json", {
+                "schema": 2, "generated_at": generated, "product": product,
+                "products": {product: payload},
+            })
+        data_bytes += write_json(out_dir / "data.json", shared)
+        for stale in out_dir.glob("data-*.json*"):
+            product = stale.name[len("data-"):].split(".", 1)[0]
+            if product not in products:
+                stale.unlink(missing_ok=True)
+        index_bytes = write_json(out_dir / "samples.json", index)
+        for product, payload in indexes.items():
+            index_bytes += write_json(out_dir / f"samples-{product}.json", payload)
+        for stale in out_dir.glob("samples-*.json*"):
+            product = stale.name[len("samples-"):].split(".", 1)[0]
+            if product not in indexes:
+                stale.unlink(missing_ok=True)
+        timers["write"] = round(time.time() - t0, 1)
+
+        slugs = [s[0] for rows in samples.values() for s in rows]
+        cleanup_samples(out_dir / "samples", slugs)
+        for stale in out_dir.glob(".samples-*"):
+            shutil.rmtree(stale, ignore_errors=True)
+        store.delete_samples_not(slugs)
+        store.set_meta("complete", {
+            "build": bs.BUILD_VERSION, "payload": PAYLOAD_VERSION, "pairs": len(pairs),
+            "pairs_sig": pairs_sig, "cluster": cluster_sig, "feed": feed_sig, "at": generated,
+        })
+        store.commit()
+
+        summary = Counter(stats)
+        summary.update({
+            "pairs": len(pairs), "data_kb": round(data_bytes / 1024),
+            "index_kb": round(index_bytes / 1024),
+            "scan_files": sum(v["files"] for v in scan_info.values()),
+            "scan_scanned": sum(v["scanned"] for v in scan_info.values()),
+            "scan_cached": sum(v["cached"] for v in scan_info.values()),
+            **{f"t_{k}": v for k, v in timers.items()},
+            "seconds": round(time.time() - started, 1),
+        })
+        return (shared, index), summary
+    finally:
+        reader.close()
+        store.close()
 
 
 def main(argv=None):
@@ -1709,11 +2382,16 @@ def main(argv=None):
     ap.add_argument("--keep-on-empty", action="store_true",
                     help="leave the previous payloads in place when the source yields no pairs "
                          "(used by the server's scheduled refresh so a briefly empty mount cannot wipe the board)")
+    ap.add_argument("--jobs", type=int, default=0,
+                    help="parallel input-file scans (default: auto, up to 4; 1 disables)")
     args = ap.parse_args(argv)
     args.datasets = args.datasets or default_datasets()
 
-    (data, index), stats = build(args.datasets.resolve(), args.out, args.pairing)
+    (data, index), stats = build(args.datasets.resolve(), args.out, args.pairing, jobs=args.jobs)
     out = args.out
+    if data is None and index is None:
+        print(json.dumps(stats, ensure_ascii=False))
+        return 0
     if args.keep_on_empty and not stats.get("details"):
         try:
             previous = json.loads((out / "data.json").read_text(encoding="utf-8"))["source"].get("pairs", 0)
@@ -1730,6 +2408,8 @@ def main(argv=None):
         sample_dir.mkdir(parents=True, exist_ok=True)
         for stale in out.glob(".samples-*"):
             shutil.rmtree(stale, ignore_errors=True)
+        for stale in list(out.glob("data-*.json*")) + list(out.glob("samples-*.json*")):
+            stale.unlink(missing_ok=True)
     data_bytes = write_json(out / "data.json", data)
     index_bytes = write_json(out / "samples.json", index)
     summary = {

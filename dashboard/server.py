@@ -21,6 +21,44 @@ REFRESH = int(os.environ.get("REFRESH_SECONDS", "1800"))
 
 _state = {"last_run": 0, "running": False, "error": "", "seconds": 0, "build": None}
 _lock = threading.Lock()
+_builder = None
+_prewarm_lock = threading.Lock()
+_prewarm_running = False
+PREWARM = int(os.environ.get("DETAIL_PREWARM", "30"))
+
+
+def prewarm_details():
+    """Make the first page of each product instant; arbitrary details stay lazy."""
+    global _prewarm_running
+    if not _builder or PREWARM <= 0:
+        return
+    with _prewarm_lock:
+        if _prewarm_running:
+            return
+        _prewarm_running = True
+    try:
+        for product in ("wencai", "aime"):
+            path = os.path.join(STATIC, f"samples-{product}.json")
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    rows = json.load(fh)["products"][product]["rows"]
+            except (OSError, ValueError, KeyError):
+                continue
+            # Index rows are already severity-sorted; add the newest dates too.
+            picks = rows[:PREWARM]
+            picks += sorted(rows, key=lambda r: r.get("d") or "", reverse=True)[:10]
+            seen, slugs = set(), []
+            for row in picks:
+                slug = row.get("s")
+                if slug and slug not in seen:
+                    seen.add(slug)
+                    slugs.append(slug)
+            if slugs:
+                made = _builder.prewarm(slugs)
+                print(f"[serve] prewarmed {made}/{len(slugs)} {product} details", flush=True)
+    finally:
+        with _prewarm_lock:
+            _prewarm_running = False
 
 
 def refresh_once():
@@ -43,6 +81,7 @@ def refresh_once():
             except ValueError:
                 _state["build"] = line[-500:]
             print("[refresh]", line, flush=True)
+            threading.Thread(target=prewarm_details, daemon=True).start()
         else:
             _state["error"] = (proc.stderr or line or "")[-500:]
             print("[refresh] failed:", _state["error"], flush=True)
@@ -158,6 +197,20 @@ class Handler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        path_only = self.path.split("?", 1)[0]
+        if _builder and path_only.startswith("/samples/") and path_only.endswith(".json"):
+            slug = path_only[len("/samples/"):-len(".json")]
+            try:
+                generated = _builder.ensure(slug)
+            except Exception as exc:  # noqa: BLE001 - a detail failure is a 404, not a crash
+                print(f"[serve] detail {slug} failed: {exc}", flush=True)
+                generated = None
+            if generated is None and not os.path.isfile(self.translate_path(path_only)):
+                self.send_response(404)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(b"sample detail unavailable")
+                return
         if "gzip" in self.headers.get("Accept-Encoding", ""):
             path = self.translate_path(self.path)
             if os.path.isdir(path):
@@ -185,8 +238,32 @@ def seed_state():
         pass
 
 
-def main():
+def outputs_ready():
     if not all(os.path.exists(p) for p in OUTPUTS):
+        return False
+    try:
+        with open(OUTPUTS[0], encoding="utf-8") as fh:
+            data = json.load(fh)
+        with open(OUTPUTS[1], encoding="utf-8") as fh:
+            samples = json.load(fh)
+    except (OSError, ValueError):
+        return False
+    return (all(os.path.exists(os.path.join(STATIC, f"data-{p}.json")) for p in (data.get("products") or {}))
+            and all(os.path.exists(os.path.join(STATIC, f"samples-{p}.json")) for p in (samples.get("products") or {})))
+
+
+def main():
+    global _builder
+    try:
+        from build import default_datasets
+        from detail_builder import DetailBuilder
+        _builder = DetailBuilder(
+            default_datasets(), os.path.join(HERE, "cache", "build.sqlite3"),
+            os.path.join(STATIC, "samples"), os.path.join(HERE, "cache"),
+        )
+    except Exception as exc:  # noqa: BLE001 - keep serving pre-generated details
+        print(f"[serve] lazy detail builder disabled: {exc}", flush=True)
+    if not outputs_ready():
         print("[serve] payloads missing, building once before serving", flush=True)
         refresh_once()
     # Rebuild right away on restart, unless a build just ran (start.sh / deploy.sh build first).
@@ -196,6 +273,7 @@ def main():
         age = 0
     seed_state()
     threading.Thread(target=scheduler, args=(REFRESH if age < 120 else 0,), daemon=True).start()
+    threading.Thread(target=prewarm_details, daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"[serve] http://0.0.0.0:{PORT} static={STATIC} refresh={REFRESH}s", flush=True)
     server.serve_forever()

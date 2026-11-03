@@ -1,0 +1,2 @@
+# Optional accelerator; the dashboard falls back to the standard library.
+orjson>=3.13

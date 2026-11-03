@@ -100,7 +100,7 @@ function flowCard(tax) {
   if (tax) {
     const stages = tax.stages.slice().sort(taxoNum);
     const mechs = tax.mechanisms.slice().sort(taxoNum);
-    const pids = Object.keys(tax.patterns);
+    const pids = Object.keys(tax.patterns).filter((id) => id.split(".").length === 3);
     const count = (sid) => pids.filter((id) => id.startsWith(`${sid}.`)).length;
     const first = stages.find((st) => count(st.id)) || stages[0];
     const phases = tax.phases.map((ph) => {
@@ -139,8 +139,9 @@ function patternMatrix(tax, sid) {
   const st = tax.stages.find((x) => x.id === sid);
   if (!st) return "";
   const mechs = tax.mechanisms.slice().sort(taxoNum);
+  // The overview stops at L3; L4 sub-patterns drill in on the data page's cluster matrix.
   const pats = Object.entries(tax.patterns)
-    .filter(([id]) => id.startsWith(`${sid}.`))
+    .filter(([id]) => id.split(".").length === 3 && id.startsWith(`${sid}.`))
     .sort((a, b) => { const pa = patNum(a[0]); const pb = patNum(b[0]); return pa[1] - pb[1] || pa[2] - pb[2]; });
   const known = new Set(mechs.map((m) => m.id));
   const groups = mechs.map((m, i) => [m.id, m.name, mechTint(i, mechs.length)]);

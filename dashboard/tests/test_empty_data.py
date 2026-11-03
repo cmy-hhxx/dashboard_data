@@ -12,6 +12,7 @@ import unittest
 
 DASHBOARD = Path(__file__).resolve().parents[1]
 REPO = DASHBOARD.parent
+sys.path.insert(0, str(DASHBOARD))
 REQ = "2026-11-01 10:00:00"
 ANSWER = "茅台今天收盘价为1500元。"
 
@@ -55,10 +56,20 @@ class BuildTests(unittest.TestCase):
             check=True, capture_output=True, text=True,
         )
         summary = json.loads(proc.stdout.strip().splitlines()[-1])
-        data = json.loads((static / "data.json").read_text())
-        index = json.loads((static / "samples.json").read_text())
-        for name, payload in (("data.json", data), ("samples.json", index)):
-            self.assertEqual(json.loads(gzip.decompress((static / f"{name}.gz").read_bytes())), payload)
+        shared = json.loads((static / "data.json").read_text())
+        data = {**shared, "products": {}}
+        for product, _ in shared["products"].items():
+            payload = json.loads((static / f"data-{product}.json").read_text())
+            self.assertEqual(json.loads(gzip.decompress((static / f"data-{product}.json.gz").read_bytes())), payload)
+            data["products"][product] = payload["products"][product]
+        manifest = json.loads((static / "samples.json").read_text())
+        index = {"products": {}}
+        for product, meta in manifest["products"].items():
+            payload = json.loads((static / f"samples-{product}.json").read_text())
+            self.assertEqual(json.loads(gzip.decompress((static / f"samples-{product}.json.gz").read_bytes())), payload)
+            index["products"][product] = payload["products"][product]
+        self.assertEqual(json.loads(gzip.decompress((static / "samples.json.gz").read_bytes())), manifest)
+        self.assertEqual(json.loads(gzip.decompress((static / "data.json.gz").read_bytes())), shared)
         return summary, data, index
 
     def test_local_root_waits_for_repository_datasets(self):
@@ -84,7 +95,13 @@ class BuildTests(unittest.TestCase):
             self.assertEqual((daily["sessions"], daily["traces"], daily["tokens"], daily["sids"]), (1, 1, 150, ["s1"]))
             row = index["products"]["wencai"]["rows"][0]
             self.assertEqual((row["w"], row["n"], row["m"]), ("P1", 1, "a_fast"))
-            detail = json.loads((static / "samples" / f"{row['s']}.json").read_text())
+            from detail_builder import DetailBuilder
+            builder = DetailBuilder(datasets, static.parent / "cache" / "build.sqlite3",
+                                    static / "samples", static.parent / "cache")
+            detail_path = builder.ensure(row["s"])
+            self.assertIsNotNone(detail_path)
+            detail = json.loads(Path(detail_path).read_text())
+            builder.close()
             ev = detail["evidence"][detail["attribution"]["problems"][0]["ev"][0]]
             self.assertEqual((ev["t"], ev["m"]), (0, 1))
             self.assertIn("o", ev)

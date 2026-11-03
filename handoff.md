@@ -39,20 +39,33 @@ for f in static/js/*.js; do node --check "$f"; done
 ## 2. 数据流
 
 ```text
-datasets/
-  └─ build.py ──> static/data.json(.gz)
-                  static/samples.json(.gz)
-                  static/samples/<slug>.json(.gz)
+datasets/ ──> stats_worker.py ──> datasets/stats.json（每 30 分钟，独立进程）
+   │
+   └─ build.py（cache/build.sqlite3 增量索引）
+        ├─ static/data.json(.gz)              共享 taxonomy/system + 产品元数据
+        ├─ static/data-<product>.json(.gz)    单产品 KPI/会话场/聚类/预测
+        ├─ static/samples.json(.gz)           产品清单
+        └─ static/samples-<product>.json(.gz) 单产品召回索引
                         │
 server.py（标准库 HTTP，:5001，定时 build）──> app.js
+        └─ /samples/<slug>.json 按需生成 ──> detail_builder.py
                                                 ├─ data.js    数据页
                                                 ├─ system.js  评测体系页
                                                 └─ samples.js 样本页
                                                    core.js / sunburst.js / app.css
 ```
 
-- `build.py` 一次扫描输入、归因、compact，按 `对应关系.csv` 配对；输出版本、KPI、
-  会话场、聚类矩阵、预测、体系说明和样本索引。生成物不要手改，重新构建。
+- `build.py` 增量扫描输入、归因、compact，按 `对应关系.csv` 或 session key 配对；只生成变化的
+  样本摘要，**不再全量写逐样本详情**。`cache/build.sqlite3` 保存文件索引、配对、样本摘要和
+  详情生成所需的行号/引用。输出版本、KPI、会话场、聚类矩阵、预测、体系说明和样本索引；
+  生成物不要手改，重新构建。
+- `stats_worker.py` 旁路统计输入侧 records / traces / tools / tokens / task-subtask / lost，
+  写 `<datasets>/stats.json`；`build.py` 只信任 `(size, mtime_ns)` 仍匹配的条目。
+- `detail_builder.py` 在样本页第一次打开 `/samples/<slug>.json` 时，用 SQLite 行号从原始
+  input/output/compact 读取并生成详情，写完 `.json` + `.gz`；之后由 `server.py` 静态服务。
+- 样本摘要按输入/输出/compact 行哈希缓存，**不含 cluster 内容签名**；cluster 变化时只重映射
+  摘要里的 `cl`，不重读全部输入。cluster 的 stat 侧缓存和 head/tail 指纹避免每次重读 30 MB
+  的 `item_index.jsonl`。
 - 同一 `session_id + request_time` 有多个输入快照时，按归因各轮 `trace_id` 覆盖度选
   最完整的那份；不要退回文件顺序，否则后续轮次的 evidence 没有 transcript，页面只能
   显示「未定位」。
@@ -81,6 +94,10 @@ server.py（标准库 HTTP，:5001，定时 build）──> app.js
 | 文件 | 用途 | 通常什么时候改 |
 |---|---|---|
 | `dashboard/build.py` | 数据解析、配对、聚合、生成三类 payload | 口径、字段、聚合、预测接入 |
+| `dashboard/build_store.py` | SQLite 增量索引：逐文件偏移/键/哈希/输入统计、配对与样本缓存 | 缓存结构、扫描口径、增量失效 |
+| `dashboard/stats_worker.py` | 独立输入统计旁路，写 `datasets/stats.json` | 统计字段、刷新间隔 |
+| `dashboard/detail_builder.py` | 样本详情按需生成、cluster 映射重载与磁盘缓存 | 详情格式、懒加载 |
+| `dashboard/json_compat.py` | 可选 `orjson` 快路径，标准库兜底 | JSON 兼容性 |
 | `dashboard/server.py` | 静态服务、gzip、定时构建、`/healthz` | 服务行为、缓存、刷新 |
 | `dashboard/static/js/app.js` | 路由、主题、产品切换、模块懒加载、错误兜底 | 页面级状态 |
 | `dashboard/static/js/core.js` | 共享格式化、数字动画、`segmented`、提示等 | 通用交互 |
@@ -90,24 +107,35 @@ server.py（标准库 HTTP，:5001，定时 build）──> app.js
 | `dashboard/static/js/render.js` | 公共内容渲染：Markdown-lite、JSON 高亮、按偏移保留证据高亮 | 文本 / JSON 呈现 |
 | `dashboard/static/js/sunburst.js` | 原生 SVG 可下钻旭日图 | 数据量 / 聚类环 |
 | `dashboard/static/app.css` | 所有样式与 token | 样式微调、响应式 |
-| `dashboard/tests/test_empty_data.py` | 合成数据端到端构建测试 | 改 build.py 后 |
+| `dashboard/tests/*.py` | 合成数据端到端构建、增量、sidecar、懒详情测试 | 改 build.py 后 |
 | `dashboard/deploy.sh` | 同步、远端构建、预压缩、重启 | 发布 |
 
-先读 `README.md`、`docs/design-principles.md`、`docs/dashboard-deployment.md`、
+先读 `README.md`、`docs/design-principles.md`、`docs/dashboard-deployment.md`、`docs/build-performance.md`、
 `docs/prediction-data.md`。`docs/dashboard-optimization.md` 是早期优化记录；涉及
 ECharts / board.js 的实现段落已不适用，当前是原生 SVG + ES modules。
 
 ## 5. 数据契约
 
-`static/data.json`：
+`static/data.json`（共享壳）：
 
 ```text
-{ schema, generated_at, source, taxonomy, system, products }
+{ schema, generated_at, source, taxonomy, system,
+  products{<product>:{label}} }
+```
+
+`static/data-<product>.json`：
+
+```text
+{ schema, generated_at, product, products{<product>:{ kpi, dates, field, cross, patterns, ... }} }
 products[product] = { kpi, dates, field, cross, patterns, ... }
+products[product].input = { records, traces, tool_calls, tokens_in/out, lost,
+                            tasks[{task,n,lost,sub[{sub,n,lost}]}],
+                            models{<model>:{label,traces,lost,tasks[...]}} }
 system.goldens[product][] = { slug, date, question, model, problems[], messages[], compact, overview, summary }
 ```
 
-`static/samples.json` 的 `products[product].rows[]` 是召回索引，不含完整 trace：
+`static/samples.json` 是产品清单；`static/samples-<product>.json` 的
+`products[product].rows[]` 是召回索引，不含完整 trace：
 
 ```text
 q 问题 · m 模型 · sp daily/lost · d 日期 · w 最严重等级 · n 问题数
@@ -115,7 +143,7 @@ sv 严重度构成 · r 环节 · st 阶段 · pt 模式 · tg 标签 · lb 问�
 tr 轮数 · mc 消息数 · lang · case · s 短 slug
 ```
 
-选中样本后再懒加载 `static/samples/<slug>.json`，主要字段：
+选中样本后再请求 `/samples/<slug>.json`（由 `detail_builder.py` 按需生成并缓存），主要字段：
 `input.traces[]`、`attribution.problems[]`、`compact`、`evidence[]`；证据的
 `t/m/b/o` 分别是 trace、message、block 与偏移。不要把完整 trace 塞回索引。
 
@@ -136,9 +164,12 @@ tr 轮数 · mc 消息数 · lang · case · s 短 slug
    做单条轮播：上一条 / 下一条只换当前 case 的 anatomy，默认直接展示，不在体系页承载全部样本。
 4. **改聚类体系**：`build.py` 的 `taxonomy_out` 提供阶段/环节/机制/模式；
    `system.js` 的 `flowCard` / `patternMatrix` / `wireFx` 负责渲染与阶段联动。
-5. **改样本筛选**：`samples.js` 的 `F()`、`skeleton()`、`syncFilters()` 和列表
-   过滤逻辑；筛选字段来自 `samples.json` 行，保持 URL 可分享。
-6. **改样式**：只改 `app.css`，优先复用现有 token 和类。不用硬边框，用 1%~3% 的
+5. **改构建性能 / 缓存**：`build_store.py` 的 `scan_file`、`BuildStore`；`build.py` 的
+   `scan_inputs`、`pairs_from_keys`、`build_samples`。改 detail 结构时同步 bump
+   `build_store.BUILD_VERSION`，否则旧样本缓存会被误用；改完删 `cache/` 跑一次全量验证。
+6. **改样本筛选**：`samples.js` 的 `F()`、`skeleton()`、`syncFilters()` 和列表
+   过滤逻辑；筛选字段来自 `samples-<product>.json` 行，保持 URL 可分享。
+7. **改样式**：只改 `app.css`，优先复用现有 token 和类。不用硬边框，用 1%~3% 的
    微差灰阶分层、同心圆角、16pt 横向 / 16–24pt 纵向间距、数字 `tabular-nums`。
 
 ## 7. 容易踩的坑
@@ -172,10 +203,17 @@ tr 轮数 · mc 消息数 · lang · case · s 短 slug
   回退；按钮反馈「已复制 / 复制失败」。
 - **数据页只做页内下钻**：聚类矩阵、旭日图、预测页签都不跳样本；只有样本页
   承接 `case` 深链。
-- **生成物不是源码**：`static/data.json`、`static/samples.json`、`static/samples/`
-  由构建产生，不入库；本地刷新/远端部署会自动重建。
+- **生成物不是源码**：`static/data.json`、`static/data-<product>.json`、`static/samples.json`、
+  `static/samples-<product>.json` 由构建产生，`static/samples/` 是详情懒加载缓存，都不入库；
+  本地刷新/远端部署会自动重建。详情缓存可以安全删除，下一次访问按需补。
 - **部署**：`./dashboard/deploy.sh`；完成后看 `logs/build.log` 和 `/healthz` 的
   `ok`、`build.pairs`。构建失败不会自动回滚，服务可能继续使用旧数据。
+- **构建缓存**：`cache/build.sqlite3` 是运行时状态，不入库；删除后全量重建。追加写只从
+  最后一个完整换行继续；没有换行结尾的文件最后一行不会提交，等下一条完整行。
+  cluster 快速签名在 `cache/cluster-signature.json`，映射 pickle 在 `cache/clusters-<sig>.pkl`；
+  `datasets/stats.json` 是 stats worker 的旁路统计，删除后 build 会局部重扫。
+- **流失口径**：AIME 用 `.archive/1_lost_user_input` 目录；问财用输入 `meta.lost_user`。
+  改口径时同时改 `build_store.split_from_rel` / `_aggregate_line` 和前端 `volTree`。
 - **服务没有守护进程**：容器/环境重启后需要手动 `start.sh`；端口和刷新间隔可用
   `PORT` / `REFRESH_SECONDS` 覆盖（`start.sh` 里写死了默认 `PORT=5001`）。
 

@@ -25,11 +25,19 @@ const tint = (i, n) => `color-mix(in oklab, var(--accent) ${Math.round(n > 1 ? 9
 function prep(node, parent) {
   node.parent = parent;
   let kids = (node.children || []).filter((c) => c.n > 0);
+  const childLost = kids.reduce((s, c) => s + (c.lost || 0), 0);
+  node.lost = Math.max(0, Math.min(node.n || 0, node.lost != null ? node.lost : childLost));
+  const sumSev = (list) => list.reduce((a, c) => ({ P0: a.P0 + ((c.sev && c.sev.P0) || 0), P1: a.P1 + ((c.sev && c.sev.P1) || 0) }), { P0: 0, P1: 0 });
+  if (!node.sev) {
+    const sev = sumSev(kids);
+    if (sev.P0 || sev.P1) node.sev = sev;
+  }
   if (kids.length > KEEP + 1) {
     const small = new Set([...kids].sort((a, b) => b.n - a.n).slice(KEEP));
     const rest = kids.filter((c) => small.has(c));
     kids = kids.filter((c) => !small.has(c));
-    kids.push({ id: `${node.id}/~`, name: "其他", n: rest.reduce((s, c) => s + c.n, 0), other: true });
+    kids.push({ id: `${node.id}/~`, name: "其他", n: rest.reduce((s, c) => s + c.n, 0),
+      lost: rest.reduce((s, c) => s + (c.lost || 0), 0), sev: sumSev(rest), other: true });
   }
   node.children = kids.length ? kids : null;
   if (node.children) node.children.forEach((c) => prep(c, node));
@@ -37,7 +45,18 @@ function prep(node, parent) {
 }
 const biggest = (n) => (n.children || []).filter((c) => !c.other).reduce((a, b) => (!a || b.n > a.n ? b : a), null);
 
-export function sunburst(host, tree, { unit = "" } = {}) {
+/* Outer thin marks: 流失 for 数据量, P0/P1 for 聚类体系 — same little ring, one or two tones. */
+const marks = (node) =>
+  node.sev
+    ? [
+        { n: node.sev.P0 || 0, label: "P0", c: "var(--sev-0)" },
+        { n: node.sev.P1 || 0, label: "P1", c: "var(--sev-1)" },
+      ].filter((m) => m.n > 0)
+    : node.lost ? [{ n: node.lost, label: "流失", c: "var(--sev-1)" }] : [];
+const markTotal = (node) => marks(node).reduce((s, m) => s + m.n, 0);
+const byVolume = (a, b) => b.n - a.n || String(a.name).localeCompare(String(b.name));
+
+export function sunburst(host, tree, { unit = "", sort = false } = {}) {
   const root = prep(tree, null);
   let focus = root;
   let open = biggest(root);
@@ -51,13 +70,31 @@ export function sunburst(host, tree, { unit = "" } = {}) {
 
   function layout() {
     const out = [];
+    const push = (node, ring, g, fill) => {
+      out.push({ node, ring, g, fill });
+      const list = marks(node);
+      const total = list.reduce((s, m) => s + m.n, 0);
+      if (total > 0 && node.n > 0) {
+        const end = g.a0 + (g.a1 - g.a0) * Math.min(1, total / node.n);
+        let a = g.a0;
+        list.forEach((m, i) => {
+          const a1 = i === list.length - 1 ? end : a + ((end - g.a0) * m.n) / total;
+          if (a1 - a > 1e-4) {
+            out.push({ node, ring, mark: i, label: m.label, n: m.n,
+              g: { a0: a, a1, r0: g.r1 + 1.2, r1: g.r1 + 4.2 }, fill: m.c });
+          }
+          a = a1;
+        });
+      }
+    };
     const kids = focus.children || [];
     const total = kids.reduce((s, c) => s + c.n, 0) || 1;
     let a = 0;
     let span = null;
     kids.forEach((c) => {
       const a1 = a + (TAU * c.n) / total;
-      out.push({ node: c, ring: "in", g: { a0: a, a1, r0: IN[0], r1: IN[1] }, fill: c === open ? "var(--accent)" : c.other ? "var(--t3)" : "var(--t2)" });
+      push(c, "in", { a0: a, a1, r0: IN[0], r1: IN[1] },
+        c === open ? "var(--accent)" : c.other ? "var(--t3)" : "var(--t2)");
       if (c === open) span = [a, a1];
       a = a1;
     });
@@ -66,7 +103,8 @@ export function sunburst(host, tree, { unit = "" } = {}) {
       let b = span[0];
       open.children.forEach((c, i) => {
         const b1 = b + ((span[1] - span[0]) * c.n) / t;
-        out.push({ node: c, ring: "out", g: { a0: b, a1: b1, r0: OUT[0], r1: OUT[1] }, fill: c.other ? "var(--t4)" : tint(i, open.children.length) });
+        push(c, "out", { a0: b, a1: b1, r0: OUT[0], r1: OUT[1] },
+          c.other ? "var(--t4)" : tint(i, open.children.length));
         b = b1;
       });
     }
@@ -77,14 +115,23 @@ export function sunburst(host, tree, { unit = "" } = {}) {
     const up = focus.parent;
     center.disabled = !up;
     center.setAttribute("aria-label", up ? `返回 ${up.name}` : focus.name);
-    center.innerHTML = `${up ? `<i>‹ ${esc(up.name)}</i>` : ""}<b class="num">${fmt(focus.n)}</b><small>${esc(up ? focus.name : unit)}</small>`;
-    const fill = new Map(target.map((t) => [t.node, t.fill]));
-    const row = (n, cls) =>
-      `<button type="button" class="li sb-r ${cls}" data-k="${esc(n.id)}"><i style="--c:${fill.get(n)}"></i><span>${esc(n.name)}</span><b class="num">${fmt(n.n)}</b><em class="num">${pct(n.n, n.parent.n)}</em></button>`;
-    // Keep sibling categories visible while expanding the selected branch.
-    list.innerHTML = (focus.children || []).map((n) =>
+    center.innerHTML = `${up ? `<i>‹ ${esc(up.name)}</i>` : ""}<b class="num">${fmt(focus.n)}</b><small>${esc(up ? focus.name : unit)}</small>${
+      focus.lost ? `<small class="sb-lostc">流失 ${fmt(focus.lost)}</small>` : ""}`;
+    const fill = new Map(target.filter((t) => t.mark == null).map((t) => [t.node, t.fill]));
+    const row = (n, cls) => {
+      const total = markTotal(n);
+      const tip = n.sev
+        ? [["P0", n.sev.P0 || 0], ["P1", n.sev.P1 || 0]].filter((x) => x[1]).map(([k, v]) => `${k} ${fmt(v)}`).join(" · ")
+        : n.lost ? `流失 ${fmt(n.lost)}` : "";
+      return `<button type="button" class="li sb-r ${cls}" data-k="${esc(n.id)}" data-n="${esc(n.id)}"><i style="--c:${fill.get(n)}"></i><span>${esc(n.name)}</span><small class="sb-markn num"${tip ? ` title="${esc(`${tip} · 占 ${pct(total, n.n, 1)}`)}"` : ""}>${total ? fmt(total) : ""}</small><b class="num">${fmt(n.n)}</b><em class="num">${pct(n.n, n.parent.n)}</em></button>`;
+    };
+    // Keep sibling categories visible while expanding the selected branch. 聚类体系 ranks by volume;
+    // the arcs keep taxonomy order, the dots tie each row back to its arc.
+    const kids = focus.children || [];
+    const order = sort ? [...kids].sort(byVolume) : kids;
+    list.innerHTML = order.map((n) =>
       row(n, n === open ? "head" : "") +
-      (n === open && n.children ? n.children.map((c) => row(c, "sub")).join("") : "")
+      (n === open && n.children ? (sort ? [...n.children].sort(byVolume) : n.children).map((c) => row(c, "sub")).join("") : "")
     ).join("");
   }
 
@@ -93,22 +140,26 @@ export function sunburst(host, tree, { unit = "" } = {}) {
     const seen = new Set();
     const jobs = [];
     target.forEach((t) => {
-      seen.add(t.node.id);
-      let el = els.get(t.node.id);
+      const key = t.mark == null ? t.node.id : `${t.node.id}#m${t.mark}`;
+      seen.add(key);
+      let el = els.get(key);
       let from = el && el._g;
       if (!el) {
         el = document.createElementNS(NS, "path");
-        el.dataset.k = t.node.id;
+        el.dataset.k = key;
+        el.dataset.n = t.node.id;
         el.style.opacity = "0";
-        els.set(t.node.id, el);
+        els.set(key, el);
         from = { ...t.g, r1: t.g.r0 };
         el._g = from;
       }
       svg.appendChild(el);
       el._t = t;
-      el.setAttribute("class", `sb-a${t.node === open ? " on" : ""}`);
+      el.setAttribute("class", `sb-a${t.mark == null ? "" : " sb-mark"}${t.node === open && t.mark == null ? " on" : ""}`);
       el.style.fill = t.fill;
-      el.dataset.tip = `${t.node.name}|${fmt(t.node.n)} · ${pct(t.node.n, t.node.parent.n)}`;
+      el.dataset.tip = t.mark == null
+        ? `${t.node.name}${t.node.sev && (t.node.sev.P0 || t.node.sev.P1) ? ` · P0 ${fmt(t.node.sev.P0 || 0)} · P1 ${fmt(t.node.sev.P1 || 0)}` : ""}|${fmt(t.node.n)} · ${pct(t.node.n, t.node.parent.n)}`
+        : `${t.node.name} · ${t.label}|${fmt(t.n)} · ${pct(t.n, t.node.n)}`;
       jobs.push({ el, from, to: t.g, o0: Number(el.style.opacity || 1), o1: 1 });
     });
     els.forEach((el, id) => {
@@ -174,14 +225,14 @@ export function sunburst(host, tree, { unit = "" } = {}) {
     focus = focus.parent;
     draw(true);
   });
-  const hl = (k) => {
-    host.classList.toggle("hovering", !!k);
+  const hl = (id) => {
+    host.classList.toggle("hovering", !!id);
     host.querySelectorAll(".hl").forEach((x) => x.classList.remove("hl"));
-    if (k) host.querySelectorAll(`[data-k="${CSS.escape(k)}"]`).forEach((x) => x.classList.add("hl"));
+    if (id) host.querySelectorAll(`[data-n="${CSS.escape(id)}"]`).forEach((x) => x.classList.add("hl"));
   };
   host.addEventListener("pointerover", (e) => {
-    const k = e.target.closest("[data-k]");
-    hl(k && (k.tagName !== "path" || k._t) ? k.dataset.k : null);
+    const el = e.target.closest("[data-n]");
+    hl(el && (el.tagName !== "path" || el._t) ? el.dataset.n : null);
   });
   host.addEventListener("pointerleave", () => hl(null));
   draw(true);

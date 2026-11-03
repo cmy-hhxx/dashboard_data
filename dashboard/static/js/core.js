@@ -119,7 +119,7 @@ export function bindTips(root, resolve) {
       const [a, b] = t.dataset.tip.split("|");
       const label = SEV_NAME[a] || a;
       showTip(`<div class="t-row">${esc(label)}<b class="num" style="margin-left:auto">${esc(b)}</b></div>`, e.clientX, e.clientY);
-    }
+    } else hideTip();
   });
   root.addEventListener("pointerleave", hideTip);
 }

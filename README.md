@@ -14,6 +14,7 @@ docs/aime-input-packaging.md    # 打包流程与参数说明
 docs/aime-data-inventory.md     # 2026-10-30 那份数据的解压体量与目录拆解
 docs/design-principles.md       # 界面设计原则：层级、字重、数字与动效
 docs/dashboard-deployment.md    # 看板部署、端口、启动与运维手册
+docs/build-performance.md       # 构建基线、增量索引、实测耗时与后续加速点
 ```
 
 ## 快速开始
@@ -45,7 +46,7 @@ ssh eval_data 'chmod +x /tmp/pack_aime_input.sh && /tmp/pack_aime_input.sh <目�
 
 ## 数据看板
 
-`dashboard/` 是问财 / AIME 评测看板：原生 ES modules + SVG + Python 标准库起服务，无第三方运行时依赖。
+`dashboard/` 是问财 / AIME 评测看板：原生 ES modules + SVG + Python 起服务；除可选的 `orjson` 外不依赖第三方运行时。
 本地读取仓库根目录的 `datasets/`，生产读取 `/mnt/fin_bench/code_and_clean_data/datasets`；
 可通过 `EVAL_DATASETS` 显式指定数据根目录（评测输入、输出、cluster_tree、item_index）。
 没有数据时显示待接入空态。将数据放入 `datasets/` 后运行 `./dashboard/local_dev/refresh.sh` 重建；
@@ -63,14 +64,27 @@ ssh eval_data 'chmod +x /tmp/pack_aime_input.sh && /tmp/pack_aime_input.sh <目�
 汇总里给出未评测数量；评测输出按现有 `daily` 口径（归因文件日期）统计。
 
 ```bash
-./dashboard/deploy.sh                                    # 同步、生成 data.json/samples.json、重启
+./dashboard/deploy.sh                                    # 同步、增量构建、预压缩、重启
 ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
 ```
 
-服务监听容器 `:5001`，对外地址由部署环境决定。服务每 30 分钟重扫数据集；
-样本默认每 6 小时重算（`SAMPLES_REFRESH_SECONDS`），`samples.json` 或 `samples/` 缺失时启动即生成。
-部署时预压缩 JS/CSS/HTML/SVG，`data.json`、`samples.json` 与逐样本详情由生成脚本同时产出 `.gz`；
-这些 JSON 使用 `no-cache`，重复访问以 304 重验证，仅 `/healthz` 为 `no-store`。
+服务监听容器 `:5001`，对外地址由部署环境决定。服务每 30 分钟运行一次
+`build.py --keep-on-empty`；构建是增量的：输入文件按 `(size, mtime_ns)` 只扫描变化部分，
+配对和样本摘要写入 `cache/build.sqlite3`。逐样本详情不再在构建时全量生成，而是在样本页
+第一次打开时由 `detail_builder.py` 从 SQLite 行号 + 输入/输出/compact 原始行生成并缓存。
+无数据变化时构建直接复用上一份 payload（约 1 秒）；新增一天/一个模型通常只扫新文件、
+只配对变化文件、只生成新摘要。2026-11-03 实测（44 GB 输入、约 1.6 万样本）：
+连续增量 **27–40 秒**，首次全量样本摘要（同日部署）225–267 秒，冷全量预计 4–5 分钟；
+首屏约 30 条样本在服务启动/每轮构建后后台预热，首访走静态缓存（实测约 2 ms）；
+其余样本首次打开约 0.6–4 秒，之后走静态缓存。删除 `cache/` 可强制全量重建。
+
+`stats_worker.py` 作为独立进程常驻，每 30 分钟把输入侧的 records / traces / tools /
+tokens / task-subtask / lost 统计写到 `<datasets>/stats.json`；`build.py` 只接受
+`(size, mtime_ns)` 仍匹配的条目，因此旁路统计只是加速器，不会成为正确性依赖。
+
+部署时预压缩 JS/CSS/HTML/SVG；数据侧按产品拆成 `data-<product>.json`、
+`samples-<product>.json` 和逐样本 `samples/<slug>.json`，均带 `.gz`。这些 JSON 使用
+`no-cache`，重复访问以 304 重验证，仅 `/healthz` 为 `no-store`。
 端口映射、部署流程、验证方式和部署最佳实践见
 [docs/dashboard-deployment.md](docs/dashboard-deployment.md)。
 
@@ -79,7 +93,7 @@ ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
 **1. 数据板块**：顶部是会话场，中间是 2+3 Bento（数据量 / 评测量，归因 / 聚类 / 预测），底部是聚类矩阵。
 问财与 AIME 共用同一套卡片。
 
-- 数据量与聚类：共用 `sunburst.js` 下钻旭日图。数据量的层级是版本 → task → subtask（问财用场景），圆心是评测记录数；聚类固定在左图右列表，层级是阶段 → 环节 → 机制 → 模式。默认展开最大的分支：内圈是一整圈，外圈是其中一段。点击内圈展开或下钻，点击外圈下钻，点击圆心返回上一级。数据量底部统计与聚类右侧列表都限制在固定卡片高度内，内容过高时内部滚动。
+- 数据量与聚类：共用 `sunburst.js` 下钻旭日图。数据量的层级是模型 → task → subtask（问财的 task 来自输入侧 meta，缺失时记「未标注」），圆心是评测输入轨迹数；聚类固定在左图右列表，层级是阶段 → 环节 → 机制 → 模式。默认展开最大的分支：内圈是一整圈，外圈是其中一段。点击内圈展开或下钻，点击外圈下钻，点击圆心返回上一级。数据量底部统计与聚类右侧列表都限制在固定卡片高度内，内容过高时内部滚动。流失用户与 task/subtask 合在同一张图：每个扇区外侧的细环表示该分支的流失轨迹占比，列表里的红色数字是流失轨迹数；AIME 从 `.archive/1_lost_user_input` 识别流失，问财从输入 `meta.lost_user` 识别。会话场卡片里的「流失会话」是已产出的流失 split 样本数，和数据量的「流失轨迹」不是同一口径，标签已区分。
 - 评测量：按天展示「评测输入 / 已完成」双色柱，支持近 7 天 / 近 30 天 / 全部与全部 / 单模型筛选；全部区间最多聚合 12 段，柱顶数字用 `k` 缩写，精确值在 tooltip。底部固定展示完成 Session、完成 Trace 与评测 Tokens（`K / M / B`）。严重度已在会话场表达，这里不再重复。卡片右上角「详情」进入按日期倒序的每日输入 / 输出 / 完成率明细。
 - 归因体系：两列桑基图 `版本 → 归因环节`，悬停版本或环节会高亮对应连线，不显示严重度。
 - 预测体系：一个卡片内三张页签——题量（已揭晓 / 待揭晓 / 其他题）、能力（各版本准确率与正确 / 错误构成）、归因（模型 → 错因的小型桑基图）。`prediction.json` 接入前显示标着「示例数据」的 mock，数据协议见 [预测卡片数据接口](docs/prediction-data.md)。
@@ -118,13 +132,15 @@ ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
 - 归因/体系页通过 `?view=samples&product=…&case=…` 深链进入；
   搜索、严重度、模型、阶段 / 机制 / 模式与头部轮次同步到 URL。问财暂无样本时保持问财选中并给出 AIME 入口，
   不再自动改写 `product` 路由。
-- 详情按样本懒加载：`samples.json` 只含召回索引与筛选面，选中后取
-  `samples/<slug>.json(.gz)`；首屏不再携带全部 trace。
+- 详情按样本懒加载：当前产品的 `samples-<product>.json` 只含召回索引与筛选面，
+  选中后由 `/samples/<slug>.json` 按需生成/读取；首屏不再携带全部 trace，构建也不再预写全部详情。
 
 | 文件 | 作用 |
 |---|---|
-| `build.py` | 一次扫描 `datasets/`：输入、归因、compact 按 `对应关系.csv` 配对 → `static/data.json`、`static/samples.json`、`static/samples/<slug>.json`（均带 `.gz`）；`--keep-on-empty` 在数据源为空时保留上一份 |
-| `server.py` | `ThreadingHTTPServer` + 定时执行 `build.py --keep-on-empty`；`/healthz` 返回最近一次构建摘要 |
+| `build.py` | 增量扫描 `datasets/`：输入、归因、compact 按 `对应关系.csv` 或 session key 配对 → `static/data.json` + `data-<product>.json`、`static/samples.json` + `samples-<product>.json`（均带 `.gz`）；`cache/build.sqlite3` 保存文件索引、配对与样本摘要；`--jobs` 控制样本构建/输入扫描并发；`--keep-on-empty` 在数据源为空时保留上一份 |
+| `stats_worker.py` | 独立进程，每 30 分钟刷新 `<datasets>/stats.json` 输入统计旁路 |
+| `detail_builder.py` | 样本页首次请求时按 SQLite 行号生成 `samples/<slug>.json(.gz)` |
+| `server.py` | `ThreadingHTTPServer` + 定时执行 `build.py --keep-on-empty`；`/samples/<slug>.json` 按需生成详情；`/healthz` 返回最近一次构建摘要 |
 | `static/` | 三页入口、ES modules、`app.css`；无第三方运行时依赖 |
 | `static/js/` | `app.js` 路由/主题/数据加载，`data.js` 数据页，`sunburst.js` 可下钻旭日图，`system.js` 评测体系页，`samples.js` 样本页（含 compact 流程图），`core.js` 共享格式化/提示/数字动效 |
 | `precompress.sh` | 部署时预压缩 JS/CSS/HTML |
@@ -137,7 +153,7 @@ AIME 日常输出以 `1_aime/eval_output/0_daily_eval/<model>/<model>_attributio
 `0_wencai/eval_input/<model>/<date>.jsonl`。
 `cluster_tree` 仍按现有 `eval_output/**/cluster/` 快照读取，没有聚类的样本在聚类卡片中计为未聚类。
 
-口径：输入 = 数据集中的 `*_input.jsonl`，以及 AIME / 问财新布局的 `<date>.jsonl`；已评测 = 输出侧回答记录数（问财四个版本 answer 合计，
+口径：输入 = 数据集中的 `*_input.jsonl`，以及 AIME / 问财新布局的 `<date>.jsonl`；输入侧同时统计 records / traces / tool_calls / tokens、按 `meta.task` / `meta.subtask` 的分布，以及流失轨迹（AIME `1_lost_user_input` 目录、问财 `meta.lost_user`）。已评测 = 输出侧回答记录数（问财四个版本 answer 合计，
 不含 comparison / compact 汇总记录；AIME 统计 `*_attribution-YYYY-MM-DD.jsonl`）；待评测 = 输入 − 已评测。
 问财 / AIME 都按 `meta.task` 展示任务分布：问财不展示「其他/其它」，AIME 把「其它」并进「其他」。
 样本 = demo_data 的 attribution + compact 按 session_id 配对；输入按 trace_id/session_id 回接，不补造缺失内容。
