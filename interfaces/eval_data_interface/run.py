@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""对话分析查询接口 v1.0 —— 本地/远端入口。
+"""对话分析查询接口 v2.0 —— 本地/远端入口。
 
     python3 run.py build     # 只建索引（部署前预检）
     python3 run.py serve     # 建索引后启动 HTTP 服务（默认 0.0.0.0:5003）
@@ -46,7 +46,7 @@ def command_status(args):
             "traces": len(snap.traces),
             "data_updated_at": snap.data_updated_at,
             "intent_version": snap.intent.version if snap.intent else None,
-            "error_trees": {app: tree.version for app, tree in snap.errors.items()},
+            "problem_trees": {app: tree.version for app, tree in snap.problem_trees.items()},
             "app_versions": sorted({t.app_version for t in snap.traces}),
             "sources": sorted({t.source for t in snap.traces}),
             "days": sorted({t.day for t in snap.traces}),
@@ -74,7 +74,7 @@ def command_serve(args):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="对话分析查询接口 v1.0")
+    parser = argparse.ArgumentParser(description="对话分析查询接口 v2.0")
     sub = parser.add_subparsers(dest="command", required=True)
 
     build = sub.add_parser("build", help="只构建索引")

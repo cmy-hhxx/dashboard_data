@@ -10,17 +10,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
 from . import config, cursors, errors, snapshot, store, timeutil
-from .taxonomy import load_cluster, load_intent
+from .taxonomy import load_cluster, load_intent, severity_tree
 
-MULTI_PARAMS = {"source", "intent", "error", "app_version", "user_ids", "group_by", "trace_ids"}
+MULTI_PARAMS = {"source", "intent", "problem", "severity", "app_version", "user_ids", "group_by", "trace_ids"}
 KNOWN_PARAMS = {
     "dataset",
     "source",
     "start_day",
     "end_day",
     "intent",
-    "error",
-    "has_error",
+    "problem",
+    "severity",
     "app_version",
     "user_ids",
     "taxonomy_version",
@@ -85,24 +85,26 @@ class App:
     @staticmethod
     def _trees(log):
         intent_tree = load_intent(config.INTENT_TAXONOMY_FILE)
-        error_trees = {}
+        problem_trees = {}
         for model_dir, (tree_path, _) in store.cluster_files(config.datasets_root() / config.AIME_DIR).items():
             suffix = config.MODEL_SUFFIX.get(model_dir, model_dir)
             try:
-                error_trees[f"__{suffix}"] = load_cluster(tree_path, model_dir)
+                problem_trees[f"__{suffix}"] = load_cluster(tree_path, model_dir)
             except Exception as exc:  # noqa: BLE001
                 log(f"[warn] 问题树 {tree_path} 加载失败：{exc}")
-        return intent_tree, error_trees
+        return intent_tree, problem_trees
 
     def load_existing(self, log=print):
         """重启时先用磁盘上的索引对外服务；增量重建在后台跑完后再替换快照。"""
         if not self.db_path.exists():
             return
         try:
-            intent_tree, error_trees = self._trees(log)
+            intent_tree, problem_trees = self._trees(log)
             conn = store.connect(self.db_path)
             try:
-                snap = snapshot.load(conn, intent_tree, error_trees)
+                if store.schema_version(conn) != store.SCHEMA_VERSION:
+                    raise RuntimeError("索引结构版本不一致，等待首轮重建")
+                snap = snapshot.load(conn, intent_tree, problem_trees)
             finally:
                 conn.close()
             self._fix_app_versions(snap)
@@ -120,11 +122,11 @@ class App:
         self.building = True
         started = time.time()
         try:
-            intent_tree, error_trees = self._trees(log)
+            intent_tree, problem_trees = self._trees(log)
             summary = store.build(log=log)
             conn = store.connect(self.db_path)
             try:
-                snap = snapshot.load(conn, intent_tree, error_trees, summary)
+                snap = snapshot.load(conn, intent_tree, problem_trees, summary)
             finally:
                 conn.close()
             self._fix_app_versions(snap)
@@ -156,7 +158,7 @@ class App:
 
     def _fix_app_versions(self, snap):
         """把问题树按 trace 的 app_version 对齐。"""
-        by_suffix = dict(snap.errors)
+        by_suffix = dict(snap.problem_trees)
         resolved = {}
         for trace in snap.traces:
             suffix = trace.app_version.rsplit("_", 1)[-1]
@@ -167,7 +169,7 @@ class App:
             if app_version.startswith("__"):
                 continue
             resolved.setdefault(app_version, tree)
-        snap.errors = resolved
+        snap.problem_trees = resolved
 
     def refresh_loop(self, log=print):
         while True:
@@ -203,7 +205,7 @@ def _request_id():
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "eval-data-analysis/1.0"
+    server_version = "eval-data-analysis/2.0"
     protocol_version = "HTTP/1.1"
 
     # -- 基础设施 -----------------------------------------------------
@@ -305,6 +307,8 @@ class Handler(BaseHTTPRequestHandler):
             self._taxonomy(params)
         elif tail == "/summary":
             self._summary(params)
+        elif tail == "/severity":
+            self._severity(params)
         elif tail == "/traces":
             self._traces(params)
         elif tail == "/traces/batch":
@@ -327,6 +331,7 @@ class Handler(BaseHTTPRequestHandler):
                 "built_at": snap.built_at if snap else None,
                 "data_updated_at": snap.data_updated_at if snap else None,
                 "traces": len(snap.traces) if snap else 0,
+                "problems": sum(t.problem_count for t in snap.traces) if snap else 0,
                 "building": APP.building,
                 "build": build,
                 "state_dir": str(config.STATE_DIR),
@@ -336,30 +341,30 @@ class Handler(BaseHTTPRequestHandler):
     def _taxonomy(self, params):
         snap = self._snapshot()
         kind = params.get("kind") or ""
-        if kind not in ("intent", "error"):
-            raise errors.unknown_value("kind", kind, ["intent", "error"])
+        if kind not in ("intent", "problem", "severity"):
+            raise errors.unknown_value("kind", kind, ["intent", "problem", "severity"])
         version = params.get("version") or params.get("taxonomy_version") or ""
         app_version = params.get("app_version") or ""
         if isinstance(app_version, list):
             app_version = app_version[0] if app_version else ""
 
-        if kind == "intent":
+        if kind == "severity":
+            tree = severity_tree()
+        elif kind == "intent":
             if snap.intent is None:
                 raise errors.unavailable("意图分类树尚未加载")
             tree = snap.intent
-            if version and version != tree.version:
-                raise errors.not_found(f"分类版本 {version} 不存在", taxonomy_version=version)
         else:
-            if not snap.errors:
+            if not snap.problem_trees:
                 raise errors.unavailable("问题分类树尚未加载")
             if app_version:
-                tree = snap.errors.get(app_version)
+                tree = snap.problem_trees.get(app_version)
                 if tree is None:
-                    raise errors.unknown_value("app_version", app_version, sorted(snap.errors))
+                    raise errors.unknown_value("app_version", app_version, sorted(snap.problem_trees))
             else:
-                tree = snap.errors[sorted(snap.errors)[0]]
-            if version and version != tree.version:
-                raise errors.not_found(f"分类版本 {version} 不存在", taxonomy_version=version)
+                tree = snap.problem_trees[sorted(snap.problem_trees)[0]]
+        if version and version != tree.version:
+            raise errors.not_found(f"分类版本 {version} 不存在", taxonomy_version=version)
 
         data = tree.as_payload()
         _json_response(
@@ -383,6 +388,24 @@ class Handler(BaseHTTPRequestHandler):
             snap,
             filters,
             group_by,
+            level=level,
+            sort=sort,
+            limit=limit,
+            cursor=(params.get("cursor") or None),
+        )
+        _json_response(self, 200, self._envelope(data, filters.echo, snap))
+
+    def _severity(self, params):
+        snap = self._snapshot()
+        filters = snapshot.parse_filters(params, snap)
+        group_by = params.get("group_by") or []
+        level = params.get("level") or "top"
+        sort = params.get("sort") or None
+        limit = _int_param(params, "limit", 100)
+        data = snapshot.severity(
+            snap,
+            filters,
+            group_by=group_by,
             level=level,
             sort=sort,
             limit=limit,

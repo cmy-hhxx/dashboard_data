@@ -105,7 +105,8 @@ def _problem(label, severity):
     }
 
 
-def _session(session_id, trace_id, timestamp, task, subtask, user, model, problems, question="问句", source="ths_ainvest_backtestarticle"):
+def _session(session_id, trace_id, timestamp, task, subtask, user, model, problems, question="问句",
+             source="ths_ainvest_backtestarticle", is_correct=None, session_problems=()):
     return {
         "session_meta": {
             "request_time": timestamp,
@@ -134,12 +135,11 @@ def _session(session_id, trace_id, timestamp, task, subtask, user, model, proble
                 },
                 "summary": "轮次摘要",
                 "problem": problems,
-                "is_correct": None,
-                "correct_reason": None,
+                "is_correct": is_correct,
             }
         ],
         "session_summary": {"summary": "会话摘要"},
-        "session_problem": [],
+        "session_problem": list(session_problems),
     }
 
 
@@ -201,12 +201,17 @@ def build(root: Path) -> Path:
         _session(
             "thread_b", "trace_beta", "2026-10-20T03:00:00.000Z", "数据查询类", "时点行情查询", "u2", "AIME-Atlas",
             [],
-            question="AAPL 最新价",
+            question="AAPL 最新价", is_correct=True,
         ),
         _session(
             "thread_c", "trace_gamma", "2026-10-20T04:00:00.000Z", "交易建议", "入场与加仓时机建议", "u1", "AIME-Atlas",
-            [_problem("旧数据当当前值", "P1"), _problem("空查询参数重试", "P3")],
-            question="现在适合加仓吗",
+            [
+                _problem("旧数据当当前值", "P1"),
+                _problem("空查询参数重试", "P3"),
+                # 未聚类的问题：仍然有严重度，进 problems / P0 计数，只是 code 为 null
+                _problem("结论方向相反", "P0"),
+            ],
+            question="现在适合加仓吗", is_correct=False,
         ),
         # 同一 trace 的重跑：行号更大的一行生效，前一行进 history
         _session(
@@ -214,10 +219,10 @@ def build(root: Path) -> Path:
             [_problem("空查询参数重试", "P3")],
             question="英伟达今天为什么跌",
         ),
-        # 未聚类问题：已知语义是"不计入 error_codes / has_error"
+        # 未聚类问题：有严重度、计入 problems，只是没有聚类编码
         _session(
             "thread_d", "trace_delta", "2026-10-20T05:00:00.000Z", "投教问答", "金融术语与指标释义", "u3", "AIME-Atlas",
-            [_problem("自由文本问题", "P2")],
+            [_problem("自由文本问题", "P2"), _problem("提示级问题", "P4")],
             question="什么是市盈率",
         ),
     ]
@@ -229,6 +234,7 @@ def build(root: Path) -> Path:
             "thread_lost", "trace_lost", "2026-09-18T02:00:00.000Z", "投教问答", "金融术语与指标释义", "u9", "aime-fast-new",
             [_problem("召回为空", "P2")],
             question="lost user question",
+            session_problems=[_problem("会话级问题", "P2")],
         )
     ]
     _write_jsonl(out / "1_lost_user_eval" / "aime_fast" / f"aime_fast_attribution-{LOST_DAY}.jsonl", lost)

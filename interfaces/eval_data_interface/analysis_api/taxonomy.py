@@ -16,7 +16,6 @@ class Node:
     level: int
     order: int
     definition: str | None
-    counts_as_error: bool | None
 
 
 class Tree:
@@ -115,7 +114,6 @@ class Tree:
                     "level": n.level,
                     "order": n.order,
                     "definition": n.definition,
-                    "counts_as_error": n.counts_as_error,
                 }
                 for n in self.nodes.values()
             ],
@@ -132,7 +130,6 @@ def load_intent(path):
             level=int(item.get("level", 1)),
             order=int(item.get("order", 0)),
             definition=item.get("definition"),
-            counts_as_error=item.get("counts_as_error"),
         )
         for item in doc["nodes"]
     ]
@@ -158,7 +155,6 @@ def _walk_cluster(node, out, level, order):
             level=level,
             order=order,
             definition=node.get("definition") or node.get("plain"),
-            counts_as_error=True,
         )
     )
     for idx, child in enumerate(node.get("children") or []):
@@ -192,14 +188,13 @@ def load_cluster(path, model):
             level=n.level,
             order=n.order,
             definition=n.definition,
-            counts_as_error=True,
         )
         for n in flat
     ]
     version = str(meta.get("pipeline_version") or meta.get("version") or "unknown")
     released_at = meta.get("generated_at")
     tree = Tree(
-        kind="error",
+        kind="problem",
         version=version,
         status="current",
         released_at=released_at,
@@ -208,3 +203,39 @@ def load_cluster(path, model):
         model=model,
     )
     return tree
+
+
+# 严重度定级：P0 最重 → P4 最轻，按对用户的影响。
+# 有确认剩余影响的为 P0–P3（P0 最重、P3 最轻）；过程缺陷已恢复、未进入交付的记 P4。
+SEVERITY_LEVELS = (
+    ("P0", 0, "确认有剩余影响，程度最重"),
+    ("P1", 1, "确认有剩余影响"),
+    ("P2", 2, "确认有剩余影响"),
+    ("P3", 3, "确认有剩余影响，程度最轻"),
+    ("P4", 4, "过程缺陷已恢复，未进入交付"),
+)
+
+
+def severity_tree():
+    """P0–P4 的静态定义树。数据里只有编码，定义随接口一起给出。"""
+    from . import config
+
+    nodes = [
+        Node(
+            code=code,
+            label=code,
+            parent=None,
+            level=1,
+            order=order,
+            definition=definition,
+        )
+        for code, order, definition in SEVERITY_LEVELS
+    ]
+    return Tree(
+        kind="severity",
+        version=config.SEVERITY_VERSION,
+        status="current",
+        released_at=None,
+        nodes=nodes,
+        versions=[{"version": config.SEVERITY_VERSION, "status": "current", "released_at": None}],
+    )

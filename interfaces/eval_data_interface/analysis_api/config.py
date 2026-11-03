@@ -39,7 +39,11 @@ MAX_Q_CHARS = 200
 QUERY_PREVIEW_CHARS = 160
 
 API_PREFIX = "/api/v1/analysis"
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "2.0"
+
+# 问题严重度：P0 最重 → P4 最轻；定义见 taxonomy.severity_tree
+SEVERITIES = ("P0", "P1", "P2", "P3", "P4")
+SEVERITY_VERSION = "2026-11"
 
 DATASET = "aime_eval"
 DATASET_ALIASES = {"aime_eval"}

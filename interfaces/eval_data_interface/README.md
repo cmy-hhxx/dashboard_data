@@ -1,11 +1,15 @@
-# eval_data_interface — 对话分析查询接口 v1.0
+# eval_data_interface — 对话分析查询接口 v2.0
 
 RSI 看板「对话分析」查询接口的服务端实现。只读、零第三方依赖（Python 3.12 标准库），
 独立进程，不与仓库内任何其他代码耦合。
 
-- 协议：`docs/对话分析查询接口协议 v1.0.md`
-- 落地差异与协议第 11 节的答复：[docs/协议落地说明.md](docs/协议落地说明.md)
-- 给看板侧的接入说明：[docs/接入说明.md](docs/接入说明.md)
+v2 不再输出 `is_error` / `has_error` 这类对错判定（数据里没有标准答案），改为直接返回
+trace 的 `problems` 问题数组与 P0–P4 严重度，并新增 `GET /severity` 统计接口。
+
+- 接入说明：[docs/接入说明.md](docs/接入说明.md)
+- v1 → v2 变更（逐字段）：[docs/v2-变更说明.md](docs/v2-变更说明.md)
+- v1 协议与落地差异：[docs/对话分析查询接口协议 v1.0.md](docs/对话分析查询接口协议%20v1.0.md)、
+  [docs/协议落地说明.md](docs/协议落地说明.md)
 
 ## 地址
 
@@ -44,17 +48,18 @@ RSI 看板「对话分析」查询接口的服务端实现。只读、零第三�
 | `day` | `YYYY-MM-DD`（Asia/Shanghai） | `turns[].meta.timestamp` |
 | trace | 一条**单轮**对话 | `turns[]` 的一项，id = `turns[].meta.trace_id` |
 | `intent` | `T01` / `T01.S02` | `turns[].meta.task` / `subtask` |
-| `error` | `S9` / `S9.M5` / `S9.M5.1` | cluster 树的节点 id |
+| `problem` | `S9` / `S9.M5` / `S9.M5.1` | cluster 树的节点 id；未聚类问题 `code=null` |
+| `severity` | `P0`–`P4` | `turns[].problem[].severity`（P0 最重） |
 
 ## 分类体系
 
 - **意图**：`taxonomy/intent_2026-10.json`，27 个顶层任务 + 169 个子任务，编码 `T01` → `T01.S02`，
   label 保留中文原值。版本 `2026-10`。
 - **问题**：直接来自数据的 `cluster_tree.json`，按模型两份：
-  `aime_expert` 196 节点 / `aime_fast` 142 节点（不含根），层级为 环节 `S*` → 机制 `S*.M*` → 模式 `S*.M*.x`
-  （个别还有第 4 层变体）。版本 `4.1.3`。
-  `/taxonomy?kind=error` 用 `app_version` 选树。
-- `counts_as_error`：P0–P4 全部为 `true`（P4 也计入错误）。
+  `aime_expert` / `aime_fast`，层级为 环节 `S*` → 机制 `S*.M*` → 模式 `S*.M*.x`
+  （个别还有第 4 层变体）。`/taxonomy?kind=problem` 用 `app_version` 选树。
+- **严重度**：`/taxonomy?kind=severity` 返回固定的 P0–P4 定义；P4 是「过程缺陷已恢复、未进入交付」，
+  v2 不做“是否算错误”的判定，全部按严重度原样统计。
 
 ## 口径与取舍
 
@@ -62,13 +67,15 @@ RSI 看板「对话分析」查询接口的服务端实现。只读、零第三�
 2. **每条 trace 只取最新一版**：同一文件里同一 `trace_id` 出现多行时取行号最大的，更早的行进
    `analysis.history`。数据里没有 `analysis_id` / `analyzed_at` 字段，
    `analysis_id` 用 `文件 + 行号` 的 SHA-1 前 16 位，`analyzed_at` 取文件 mtime。
-3. **只有被聚类的问题才计错误**：attribution 全量 10578 轮 / 28647 个问题条目，
-   cluster 覆盖 8504 轮 / 25538 条（约 80%，聚类流水线只跑了部分日期/模型）。
-   未聚类的问题不进 `error_codes`、也不让 `has_error` 变真——这部分 trace 会显示成“没有问题”。
-4. **一条 trace 可命中多个问题**：按 `error` 分组时在各问题组各计一次；按大类分组时同一大类只计一次。
+3. **问题数组是真相**：`problems` 全量来自 attribution 的 `turns[].problem[]`；聚类只决定
+   `code` 有没有，不影响问题数、严重度与 P0–P4 统计。未聚类问题 `code=null`，
+   在按 `problem` 编码分组时进 `null` 组。
+4. **一条 trace 可命中多个问题**：按 `problem` 分组时在各编码组各计一次；按大类分组时同一大类只计一次；
+   `problems` 是条目数，`problem_traces` 是至少一条问题的 trace 数（同一等级同理，
+   见 `/severity` 的 `severity.Pn.problems` / `.traces`）。
 5. **意图互斥**：`subtask` 存在时用子类编码，否则回退到 `task` 编码；都没有则 `intent_code=null`。
-6. **`analyzed` 分母**：去掉 `error` / `has_error` 两个筛选项、并忽略分组键里的 `error` 维度后，
-   同一范围的 trace 数（协议 §4）。
+6. **`analyzed` 分母**：去掉 `problem` / `severity` 两个筛选项、并忽略分组键里的 `problem` 维度后，
+   同一范围的 trace 数。
 7. **`intent` 编码不在数据里**：`task`/`subtask` 是中文自由文本，编码由本仓库的
    `taxonomy/intent_2026-10.json` 固定；出现表外的新 label 时该 trace 的 `intent_code` 为 `null`。
 
@@ -76,11 +83,12 @@ RSI 看板「对话分析」查询接口的服务端实现。只读、零第三�
 
 | 接口 | 说明 |
 |---|---|
-| `GET /taxonomy?kind=intent\|error[&app_version=…]` | 分类树 |
-| `GET\|POST /summary` | 聚合，`group_by` 支持 1–2 个维度 |
-| `GET\|POST /traces` | trace 列表，固定 `(asked_at DESC, trace_id DESC)`，cursor 翻页 |
+| `GET /taxonomy?kind=intent\|problem\|severity[&app_version=…]` | 分类树 / 严重度定义 |
+| `GET\|POST /summary` | 聚合，`group_by` 支持 1–2 个维度（`intent`、`problem`、`day`、`user`、`app_version`、`source`） |
+| `GET\|POST /severity` | P0–P4 统计：问题条目数 + trace 数，可分组；`group_by` 可省略 |
+| `GET\|POST /traces` | trace 列表，固定 `(asked_at DESC, trace_id DESC)`，cursor 翻页；`severity` 筛选 |
 | `POST /traces/batch` | 按一批 trace_id 取摘要（≤1000） |
-| `GET /traces/{trace_id}?dataset=…&day=…` | 单条 trace：`eval_input` 整行 + trace 对象 + 分析结果 + 历史版本 |
+| `GET /traces/{trace_id}?dataset=…&day=…` | 单条 trace：`eval_input` 整行 + trace 对象 + 完整问题条目 + 历史版本 |
 
 所有 200 响应统一为 `{request_id, schema_version, data, meta}`；错误为
 `{request_id, error:{code, message, details}}`，错误码见协议 §10。
@@ -119,7 +127,8 @@ curl -s http://117.50.195.94:3335/healthz
 几秒内即 `ok:true`，增量重建在后台跑完后替换快照；`eval_input` 只是追加时从上次最后一个完整换行续扫。
 周期重建只有一个循环（`REFRESH_SECONDS`），上一轮未结束时下一轮跳过。
 
-`/healthz` 字段：`ok`、`building`、`traces`、`data_updated_at`、`build`（最近一次构建摘要与耗时）。
+`/healthz` 字段：`ok`、`building`、`traces`、`problems`、`data_updated_at`、`built_at`、
+`build`（最近一次构建摘要与耗时，含 `severity` 各等级条目数）。
 
 验收：
 
@@ -129,21 +138,24 @@ python3 tests/test_store.py                            # store 层：脏字段�
 python3 tests/test_acceptance.py --real --base-url http://127.0.0.1:5003   # 真实数据
 ```
 
-## 验证结果（2026-11-02，部署在 `interactive-i6piqwvlnsr5`）
+## 验证结果（2026-11-03，v2.0 部署在 `interactive-i6piqwvlnsr5`）
 
-- 首次索引 341 秒，9854 条 trace / 724 条历史版本 / 28,647 个问题条目；重启增量重建 1.4 秒。
-- `tests/test_acceptance.py`：fixture 14 条全过；真实数据 13 条全过（含分组/明细一致、分母规则、
-  多问题计数、大类展开、导出、5000 个 user_ids、详情）。
-- 外网实测：`/summary` 0.33s、`/traces` 0.31s、`/traces/{id}` 0.6s。
+- v1 → v2 首次迁移：清归因派生行后全量重扫 44 个 attribution 文件，151 秒；之后重启/增量重建 3–4 秒。
+- 索引快照（部署后 14:48，数据仍在增长）：18,574 条 trace / 724 条历史版本 / 51,190 个问题条目；
+  严重度 P0 225、P1 3,154、P2 12,235、P3 6,901、P4 28,675（各等级 `traces` 见 `/severity`）。
+- `tests/test_acceptance.py`：fixture 18 条全过；真实数据 17 条全过（含问题数组一致性、P0–P4 总量与
+  分组、`/summary` 与 `/traces` 一致、分母规则、多问题计数、大类展开、导出、5000 个 user_ids、详情）。
+- 容器内实测：`/summary` 0.05s、`/severity` 0.06s（`group_by=problem&level=leaf` 0.15s）、
+  `/traces` 0.004s（`severity=P0` 0.02s）、`/traces/{id}` 约 0.6s。
 
 ## 目录
 
 ```
 analysis_api/
-  config.py     环境变量、路径、常量
-  taxonomy.py   分类树（意图 JSON / 聚类树）
-  store.py      SQLite 增量索引（attribution、input 偏移、问题编码、历史版本）
-  snapshot.py   内存快照、筛选、/summary 与 /traces 语义、详情拼装
+  config.py     环境变量、路径、常量、严重度等级
+  taxonomy.py   分类树（意图 JSON / 聚类树 / P0–P4 定义）
+  store.py      SQLite 增量索引（attribution、问题条目与严重度、input 偏移、历史版本）
+  snapshot.py   内存快照、筛选、/summary、/severity 与 /traces 语义、详情拼装
   cursors.py    无状态签名 cursor
   server.py     HTTP 路由与后台重建
 run.py          CLI：build / serve / status

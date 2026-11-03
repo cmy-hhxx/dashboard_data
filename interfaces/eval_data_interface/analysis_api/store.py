@@ -40,8 +40,11 @@ CREATE TABLE IF NOT EXISTS traces(
     intent_code TEXT,
     task TEXT,
     subtask TEXT,
-    error_codes TEXT,
-    has_error INTEGER,
+    problem_codes TEXT,
+    problem_count INTEGER,
+    problems TEXT,
+    severity TEXT,
+    is_correct INTEGER,
     analysis_id TEXT,
     analyzed_at TEXT,
     file TEXT,
@@ -61,7 +64,7 @@ CREATE TABLE IF NOT EXISTS history(
     line INTEGER,
     offset INTEGER,
     intent_code TEXT,
-    error_codes TEXT
+    problem_codes TEXT
 );
 CREATE INDEX IF NOT EXISTS history_file ON history(file);
 CREATE TABLE IF NOT EXISTS input_index(
@@ -86,10 +89,26 @@ CREATE TABLE IF NOT EXISTS problem_codes(
 CREATE INDEX IF NOT EXISTS problem_codes_file ON problem_codes(file);
 CREATE INDEX IF NOT EXISTS problem_codes_trace ON problem_codes(trace_id, day, app_version);
 CREATE INDEX IF NOT EXISTS history_trace ON history(trace_id, day, app_version);
+CREATE TABLE IF NOT EXISTS meta(
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
 """
+
+# 结构版本：落库字段的语义变了就 +1；旧库直接清掉归因派生行重扫，input_index 保留
+SCHEMA_VERSION = 2
 
 # 旧库没有的列：input 续扫需要上次提交到的字节、行数和文件头指纹
 FILE_COLUMNS = {"committed": "INTEGER", "lines": "INTEGER", "prefix": "TEXT"}
+# v1 只索引了 error_codes / has_error；v2 改为 problem_codes + 问题数组 + 严重度
+TRACE_COLUMNS = {
+    "problem_codes": "TEXT",
+    "problem_count": "INTEGER",
+    "problems": "TEXT",
+    "severity": "TEXT",
+    "is_correct": "INTEGER",
+}
+HISTORY_COLUMNS = {"problem_codes": "TEXT"}
 PREFIX_BYTES = 65536
 
 TRACE_ID_RE = re.compile(rb'"trace_id"\s*:\s*"([^"\s]{4,80})"')
@@ -109,9 +128,42 @@ def connect(path):
     for name, kind in FILE_COLUMNS.items():
         if name not in have:
             conn.execute(f"ALTER TABLE files ADD COLUMN {name} {kind}")
+    for table, columns in (("traces", TRACE_COLUMNS), ("history", HISTORY_COLUMNS)):
+        have = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for name, kind in columns.items():
+            if name not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     return conn
+
+
+def schema_version(conn) -> int:
+    row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+    try:
+        return int(row[0]) if row else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def ensure_schema(conn, log=None) -> bool:
+    """旧结构就地升级：只清归因派生行，input_index 保留，避免重扫 GB 级输入。"""
+    if schema_version(conn) == SCHEMA_VERSION:
+        return False
+    (log or (lambda message: None))(
+        f"[index] 索引结构升级 {schema_version(conn)} -> {SCHEMA_VERSION}，归因数据重建"
+    )
+    conn.execute("DELETE FROM traces")
+    conn.execute("DELETE FROM history")
+    conn.execute("DELETE FROM problem_codes")
+    conn.execute("DELETE FROM files WHERE kind = 'attribution'")
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES ('schema_version', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (str(SCHEMA_VERSION),),
+    )
+    conn.commit()
+    return True
 
 
 # ceph-fuse 上小块读的往返代价很高；与看板 build_store 一样用 8 MB 缓冲
@@ -167,6 +219,25 @@ def _text(value):
 def _clean(value):
     text = _text(value)
     return (text or "").strip() or None
+
+
+def _severity(value):
+    """问题条目上的严重度，只认 P0–P4；缺失或表外值返回 None。"""
+    text = (value or "").strip().upper() if isinstance(value, str) else ""
+    return text if text in config.SEVERITIES else None
+
+
+def _tri_state(value):
+    """is_correct 三态：True/False 存 1/0，数据里没填时存 NULL。"""
+    if isinstance(value, bool):
+        return 1 if value else 0
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in ("true", "1", "yes"):
+            return 1
+        if text in ("false", "0", "no"):
+            return 0
+    return None
 
 
 class ItemCodes:
@@ -356,6 +427,8 @@ def ingest_attribution(conn, aime: Path, item_codes_by_model, intent_tree, log):
 
                 found = []
                 code_rows = []
+                compact = []
+                severity = {}
                 for problem_index, problem in enumerate(problems):
                     is_session = session_level and problem_index >= len(turn_problems)
                     local_index = problem_index - len(turn_problems) if is_session else problem_index
@@ -367,13 +440,25 @@ def ingest_attribution(conn, aime: Path, item_codes_by_model, intent_tree, log):
                         problem.get("label"),
                         session_level=is_session,
                     )
+                    level = _severity(problem.get("severity"))
+                    compact.append(
+                        {
+                            "code": code,
+                            "label": problem.get("label"),
+                            "severity": level,
+                            "component": problem.get("component_family") or problem.get("component"),
+                            "session_level": is_session,
+                        }
+                    )
                     stats["problems"] += 1
+                    if level:
+                        severity[level] = severity.get(level, 0) + 1
                     if code:
                         found.append(code)
                         code_rows.append(("session" if is_session else "turn", local_index, code))
                     else:
                         stats["unclustered"] += 1
-                error_codes = sorted(set(found))
+                problem_codes = sorted(set(found))
 
                 entry = {
                     "trace_id": trace_id,
@@ -387,8 +472,11 @@ def ingest_attribution(conn, aime: Path, item_codes_by_model, intent_tree, log):
                     "intent_code": intent_code,
                     "task": task,
                     "subtask": subtask,
-                    "error_codes": error_codes,
-                    "has_error": 1 if error_codes else 0,
+                    "problem_codes": problem_codes,
+                    "problem_count": len(compact),
+                    "problems": compact,
+                    "severity": severity,
+                    "is_correct": _tri_state(turn.get("is_correct")),
                     "analysis_id": _analysis_id(basename, line_no),
                     "analyzed_at": analyzed_at,
                     "file": str(path),
@@ -399,7 +487,7 @@ def ingest_attribution(conn, aime: Path, item_codes_by_model, intent_tree, log):
                 if trace_id in kept:
                     old = kept[trace_id]
                     conn.execute(
-                        "INSERT INTO history(trace_id, day, app_version, analysis_id, analyzed_at, file, line, offset, intent_code, error_codes) "
+                        "INSERT INTO history(trace_id, day, app_version, analysis_id, analyzed_at, file, line, offset, intent_code, problem_codes) "
                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             old["trace_id"],
@@ -411,7 +499,7 @@ def ingest_attribution(conn, aime: Path, item_codes_by_model, intent_tree, log):
                             old["line"],
                             old["offset"],
                             old["intent_code"],
-                            json.dumps(old["error_codes"], ensure_ascii=False),
+                            json.dumps(old["problem_codes"], ensure_ascii=False),
                         ),
                     )
                     stats["history"] += 1
@@ -420,11 +508,18 @@ def ingest_attribution(conn, aime: Path, item_codes_by_model, intent_tree, log):
                 kept[trace_id] = entry
         conn.executemany(
             "INSERT OR REPLACE INTO traces(trace_id, day, app_version, asked_at, source, user_id, question, session_id, "
-            "intent_code, task, subtask, error_codes, has_error, analysis_id, analyzed_at, file, line, offset) "
+            "intent_code, task, subtask, problem_codes, problem_count, problems, severity, is_correct, "
+            "analysis_id, analyzed_at, file, line, offset) "
             "VALUES (:trace_id, :day, :app_version, :asked_at, :source, :user_id, :question, :session_id, "
-            ":intent_code, :task, :subtask, :error_codes, :has_error, :analysis_id, :analyzed_at, :file, :line, :offset)",
+            ":intent_code, :task, :subtask, :problem_codes, :problem_count, :problems, :severity, :is_correct, "
+            ":analysis_id, :analyzed_at, :file, :line, :offset)",
             [
-                {**kept[tid], "error_codes": json.dumps(kept[tid]["error_codes"], ensure_ascii=False)}
+                {
+                    **kept[tid],
+                    "problem_codes": json.dumps(kept[tid]["problem_codes"], ensure_ascii=False),
+                    "problems": json.dumps(kept[tid]["problems"], ensure_ascii=False),
+                    "severity": json.dumps(kept[tid]["severity"], ensure_ascii=False, sort_keys=True),
+                }
                 for tid in order
             ],
         )
@@ -543,6 +638,7 @@ def build(root: Path | None = None, log=None) -> dict:
     config.STATE_DIR.mkdir(parents=True, exist_ok=True)
     conn = connect(config.db_path())
     try:
+        ensure_schema(conn, log)
         intent_tree = None
         try:
             from .taxonomy import load_intent
@@ -566,6 +662,19 @@ def build(root: Path | None = None, log=None) -> dict:
         history = conn.execute("SELECT COUNT(*) FROM history").fetchone()[0]
         inputs_total = conn.execute("SELECT COUNT(*) FROM input_index").fetchone()[0]
         newest = conn.execute("SELECT MAX(analyzed_at) FROM traces").fetchone()[0]
+        # 汇总以库里全量为准（增量构建时 stats 只覆盖本轮重扫的文件）
+        severity = {level: 0 for level in config.SEVERITIES}
+        problems_total = 0
+        for row in conn.execute("SELECT problem_count, severity FROM traces"):
+            problems_total += row[0] or 0
+            try:
+                parsed = json.loads(row[1] or "{}")
+            except ValueError:
+                parsed = {}
+            for level, count in parsed.items():
+                if level in severity:
+                    severity[level] += int(count or 0)
+        clustered = conn.execute("SELECT COUNT(*) FROM problem_codes").fetchone()[0]
         return {
             "ok": True,
             "seconds": round(time.time() - started, 1),
@@ -578,8 +687,9 @@ def build(root: Path | None = None, log=None) -> dict:
             "attribution_files": attribution["files"],
             "skipped_attribution": attribution["skipped"],
             "skipped_input": inputs["skipped"],
-            "problems": attribution["problems"],
-            "unclustered": attribution["unclustered"],
+            "problems": problems_total,
+            "unclustered": max(0, problems_total - clustered),
+            "severity": severity,
             "pruned": removed,
             "data_updated_at": newest,
             "state_dir": str(config.STATE_DIR),

@@ -98,7 +98,7 @@ class StoreTest(unittest.TestCase):
         third = store.build(self.root)
         self.assertEqual(third["attribution_files"], 1)
         with self._db() as db:
-            codes = db.execute("SELECT error_codes FROM traces WHERE trace_id = 'trace_delta'").fetchone()[0]
+            codes = db.execute("SELECT problem_codes FROM traces WHERE trace_id = 'trace_delta'").fetchone()[0]
         self.assertEqual(json.loads(codes), ["S9.M5.1"])
 
     def test_rewritten_input_rescans(self):
@@ -114,6 +114,48 @@ class StoreTest(unittest.TestCase):
                               (str(self.input),)).fetchall()
         for trace_id, offset, line in rows:
             self.assertEqual((offset, line), self._locate(trace_id))
+
+    def test_problem_columns_indexed(self):
+        store.build(self.root)
+        with self._db() as db:
+            row = db.execute(
+                "SELECT problem_codes, problem_count, problems, severity, is_correct "
+                "FROM traces WHERE trace_id = 'trace_gamma'"
+            ).fetchone()
+        codes, count, problems, severity, is_correct = row
+        self.assertEqual(json.loads(codes), ["S1.M1.1", "S9.M5.1"])
+        self.assertEqual(count, 3)
+        problems = json.loads(problems)
+        self.assertEqual({p["severity"] for p in problems}, {"P0", "P1", "P3"})
+        self.assertEqual([p["code"] for p in problems].count(None), 1)  # 未聚类问题保留
+        self.assertEqual(json.loads(severity), {"P0": 1, "P1": 1, "P3": 1})
+        self.assertEqual(is_correct, 0)
+
+        with self._db() as db:
+            session_row = db.execute(
+                "SELECT problem_count, severity FROM traces WHERE trace_id = 'trace_lost'"
+            ).fetchone()
+            survey_row = db.execute(
+                "SELECT problem_count, severity FROM traces WHERE trace_id = 'trace_beta'"
+            ).fetchone()
+        self.assertEqual(session_row[0], 2)  # turn 问题 + session_problem
+        self.assertEqual(json.loads(session_row[1]), {"P2": 2})
+        self.assertEqual(survey_row[0], 0)
+        self.assertEqual(json.loads(survey_row[1]), {})
+
+    def test_schema_upgrade_rescans_attribution(self):
+        store.build(self.root)
+        with self._db() as db:
+            db.execute("UPDATE meta SET value = '1' WHERE key = 'schema_version'")
+            db.commit()
+        summary = store.build(self.root)
+        self.assertTrue(summary["ok"])
+        self.assertGreater(summary["attribution_files"], 0)
+        with self._db() as db:
+            version = db.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0]
+            count = db.execute("SELECT COUNT(*) FROM traces").fetchone()[0]
+        self.assertEqual(version, "2")
+        self.assertEqual(count, 5)
 
     def _locate(self, trace_id):
         offset = 0

@@ -1,4 +1,4 @@
-"""内存快照、筛选与查询语义（/summary、/traces、/traces/batch、/traces/{id}）。"""
+"""内存快照、筛选与查询语义（/summary、/severity、/traces、/traces/batch、/traces/{id}）。"""
 
 import json
 import sqlite3
@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from . import config, cursors, errors, timeutil
 from .taxonomy import Tree
 
-GROUP_DIMS = ("intent", "error", "day", "user", "app_version", "source")
+GROUP_DIMS = ("intent", "problem", "day", "user", "app_version", "source")
 LEVELS = ("top", "leaf", "children")
 SORTS = ("traces", "users", "rate")
 
@@ -28,8 +28,11 @@ class Trace:
     intent_code: str | None
     task: str | None
     subtask: str | None
-    error_codes: tuple
-    has_error: bool
+    problem_codes: tuple
+    problem_count: int
+    problems: tuple
+    severity: dict
+    is_correct: bool | None
     analysis_id: str
     analyzed_at: str | None
     file: str
@@ -42,10 +45,10 @@ def _trace_order(trace):
 
 
 class Snapshot:
-    def __init__(self, traces, intent_tree, error_trees, data_updated_at, build_summary=None):
+    def __init__(self, traces, intent_tree, problem_trees, data_updated_at, build_summary=None):
         self.traces: list[Trace] = traces
         self.intent: Tree | None = intent_tree
-        self.errors: dict[str, Tree] = error_trees
+        self.problem_trees: dict[str, Tree] = problem_trees
         self.data_updated_at = data_updated_at
         self.build_summary = build_summary or {}
         self.built_at = timeutil.utc_rfc3339(datetime.now(timezone.utc))
@@ -57,7 +60,7 @@ class Snapshot:
 
     # -- 版本 ---------------------------------------------------------
     def taxonomy_version(self) -> str:
-        versions = {tree.version for tree in self.errors.values()}
+        versions = {tree.version for tree in self.problem_trees.values()}
         if len(versions) == 1:
             return versions.pop()
         return "unknown"
@@ -65,24 +68,29 @@ class Snapshot:
     def taxonomy_versions(self) -> dict:
         return {
             "intent": self.intent.version if self.intent else None,
-            "error": {app: tree.version for app, tree in self.errors.items()},
+            "problem": {app: tree.version for app, tree in self.problem_trees.items()},
+            "severity": config.SEVERITY_VERSION,
         }
 
     def tree_for(self, trace) -> Tree | None:
-        return self.errors.get(trace.app_version)
+        return self.problem_trees.get(trace.app_version)
 
 
-def load(conn, intent_tree, error_trees, build_summary=None) -> Snapshot:
+def _json_value(raw, fallback):
+    try:
+        return json.loads(raw) if raw else fallback
+    except ValueError:
+        return fallback
+
+
+def load(conn, intent_tree, problem_trees, build_summary=None) -> Snapshot:
     rows = conn.execute(
         "SELECT trace_id, day, app_version, asked_at, source, user_id, question, session_id, intent_code, "
-        "task, subtask, error_codes, has_error, analysis_id, analyzed_at, file, line, offset FROM traces"
+        "task, subtask, problem_codes, problem_count, problems, severity, is_correct, "
+        "analysis_id, analyzed_at, file, line, offset FROM traces"
     ).fetchall()
     traces = []
     for row in rows:
-        try:
-            codes = tuple(json.loads(row[11] or "[]"))
-        except ValueError:
-            codes = ()
         traces.append(
             Trace(
                 trace_id=row[0],
@@ -96,31 +104,23 @@ def load(conn, intent_tree, error_trees, build_summary=None) -> Snapshot:
                 intent_code=row[8],
                 task=row[9],
                 subtask=row[10],
-                error_codes=codes,
-                has_error=bool(row[12]),
-                analysis_id=row[13],
-                analyzed_at=row[14],
-                file=row[15],
-                line=row[16],
-                offset=row[17] or 0,
+                problem_codes=tuple(_json_value(row[11], [])),
+                problem_count=row[12] or 0,
+                problems=tuple(_json_value(row[13], [])),
+                severity=dict(_json_value(row[14], {})),
+                is_correct=None if row[15] is None else bool(row[15]),
+                analysis_id=row[16],
+                analyzed_at=row[17],
+                file=row[18],
+                line=row[19],
+                offset=row[20] or 0,
             )
         )
     newest = max((t.analyzed_at for t in traces if t.analyzed_at), default=None)
-    return Snapshot(traces, intent_tree, error_trees, newest, build_summary)
+    return Snapshot(traces, intent_tree, problem_trees, newest, build_summary)
 
 
 # --------------------------------------------------------------------------- 筛选
-
-def _as_bool(value, param):
-    if isinstance(value, bool):
-        return value
-    text = str(value).strip().lower()
-    if text in ("true", "1", "yes"):
-        return True
-    if text in ("false", "0", "no"):
-        return False
-    raise errors.invalid(f"{param} 必须是 true 或 false", param)
-
 
 @dataclass
 class Filters:
@@ -129,8 +129,8 @@ class Filters:
     start_day: str | None = None
     end_day: str | None = None
     intent: tuple = ()
-    error: tuple = ()
-    has_error: bool | None = None
+    problem: tuple = ()
+    severity: tuple = ()
     app_version: tuple = ()
     user_ids: frozenset | None = None
     taxonomy_version: str | None = None
@@ -144,8 +144,8 @@ class Filters:
             "start_day": self.start_day,
             "end_day": self.end_day,
             "intent": list(self.intent),
-            "error": list(self.error),
-            "has_error": self.has_error,
+            "problem": list(self.problem),
+            "severity": list(self.severity),
             "app_version": list(self.app_version),
             "user_ids": sorted(self.user_ids) if self.user_ids else None,
             "taxonomy_version": self.taxonomy_version,
@@ -186,20 +186,22 @@ def parse_filters(params: dict, snap: Snapshot) -> Filters:
         if unknown:
             raise errors.unknown_codes("intent", unknown, snap.intent.version)
 
-    error_codes = tuple(params.get("error") or ())
-    if error_codes:
+    problem_codes = tuple(params.get("problem") or ())
+    if problem_codes:
         known = set()
-        for tree in snap.errors.values():
+        for tree in snap.problem_trees.values():
             known.update(tree.nodes)
-        unknown = [code for code in error_codes if code not in known]
+        unknown = [code for code in problem_codes if code not in known]
         if unknown:
-            raise errors.unknown_codes("error", unknown, snap.taxonomy_version())
+            raise errors.unknown_codes("problem", unknown, snap.taxonomy_version())
 
-    has_error = params.get("has_error")
-    has_error = _as_bool(has_error, "has_error") if has_error is not None and has_error != "" else None
+    severities = tuple(params.get("severity") or ())
+    for value in severities:
+        if value not in config.SEVERITIES:
+            raise errors.unknown_value("severity", value, list(config.SEVERITIES))
 
     app_versions = tuple(params.get("app_version") or ())
-    known_versions = set(snap.errors)
+    known_versions = set(snap.problem_trees)
     for value in app_versions:
         if value not in known_versions:
             raise errors.unknown_value("app_version", value, sorted(known_versions))
@@ -212,7 +214,7 @@ def parse_filters(params: dict, snap: Snapshot) -> Filters:
     taxonomy_version = (params.get("taxonomy_version") or "").strip() or None
     if taxonomy_version:
         known = {snap.intent.version} if snap.intent else set()
-        known.update({tree.version for tree in snap.errors.values()})
+        known.update({tree.version for tree in snap.problem_trees.values()})
         if taxonomy_version not in known:
             raise errors.not_found(f"分类版本 {taxonomy_version} 不存在", taxonomy_version=taxonomy_version)
 
@@ -232,10 +234,10 @@ def parse_filters(params: dict, snap: Snapshot) -> Filters:
         echo["end_day"] = end_day
     if intent_codes:
         echo["intent"] = list(intent_codes)
-    if error_codes:
-        echo["error"] = list(error_codes)
-    if has_error is not None:
-        echo["has_error"] = has_error
+    if problem_codes:
+        echo["problem"] = list(problem_codes)
+    if severities:
+        echo["severity"] = list(severities)
     if app_versions:
         echo["app_version"] = list(app_versions)
     if user_set is not None:
@@ -251,8 +253,8 @@ def parse_filters(params: dict, snap: Snapshot) -> Filters:
         start_day=start_day,
         end_day=end_day,
         intent=intent_codes,
-        error=error_codes,
-        has_error=has_error,
+        problem=problem_codes,
+        severity=severities,
         app_version=app_versions,
         user_ids=user_set,
         taxonomy_version=taxonomy_version,
@@ -275,21 +277,22 @@ class Matcher:
                 expanded |= snap.intent.descendants(code)
             self.intent_codes = expanded
 
-        self.error_codes: dict[str, set] | None = None
-        if filters.error:
+        self.problem_codes: dict[str, set] | None = None
+        if filters.problem:
             per_version: dict[str, set] = {}
-            for code in filters.error:
-                for app_version, tree in snap.errors.items():
+            for code in filters.problem:
+                for app_version, tree in snap.problem_trees.items():
                     if code in tree:
                         per_version.setdefault(app_version, set()).update(tree.descendants(code))
-            self.error_codes = per_version
+            self.problem_codes = per_version
+        self.severities = set(filters.severity) if filters.severity else None
 
         self.app_versions = set(filters.app_version) if filters.app_version else None
         self.sources = set(filters.source) if filters.source else None
         self.user_ids = filters.user_ids
         self.q = filters.q.lower() if filters.q else None
 
-    def match(self, trace: Trace, with_error: bool = True) -> bool:
+    def match(self, trace: Trace, with_problem: bool = True) -> bool:
         f = self.filters
         if f.start_day and (trace.day or "") < f.start_day:
             return False
@@ -306,13 +309,13 @@ class Matcher:
                 return False
         if self.q and self.q not in (trace.question or "").lower():
             return False
-        if not with_error:
+        if not with_problem:
             return True
-        if f.has_error is not None and trace.has_error != f.has_error:
+        if self.severities is not None and not any(trace.severity.get(level) for level in self.severities):
             return False
-        if self.error_codes is not None:
-            allowed = self.error_codes.get(trace.app_version)
-            if not allowed or not any(code in allowed for code in trace.error_codes):
+        if self.problem_codes is not None:
+            allowed = self.problem_codes.get(trace.app_version)
+            if not allowed or not any(code in allowed for code in trace.problem_codes):
                 return False
         return True
 
@@ -323,13 +326,36 @@ def _sort_token(value):
     return "\x00" if value is None else str(value)
 
 
-def _group_keys(snap: Snapshot, trace: Trace, dims, level, filters: Filters, with_error=True):
-    """返回该 trace 在给定维度上的全部分组键组合（error 维度可能多值，做笛卡尔积）。"""
+def _problem_group_value(snap: Snapshot, trace: Trace, problem, level, filters):
+    """问题条目在 problem 维度上的分组值：top 归到环节、children 归到筛选值的下一层、leaf 用原编码。"""
+    code = problem.get("code")
+    tree = snap.tree_for(trace)
+    if not code or tree is None:
+        return None
+    if level == "top":
+        return tree.l1(code)
+    if level == "children":
+        return tree.child_below(filters.problem[0], code)
+    return code
+
+
+def _group_keys(snap: Snapshot, trace: Trace, dims, level, filters: Filters, with_problem=True):
+    """返回该 trace 在给定维度上的 (分组键组合, 该组合对应的问题条目)。
+
+    ``problem`` 维度按问题条目分组：同一条 trace 的不同条目会进不同组，
+    没有问题的 trace 不进入任何 problem 分组。没有 problem 维度时条目为 None。
+    """
     per_dim = []
     for dim in dims:
-        if dim == "error" and not with_error:
+        if dim == "problem" and not with_problem:
             continue
-        values = []
+        if dim == "problem":
+            mapping: dict = {}
+            for problem in trace.problems:
+                value = _problem_group_value(snap, trace, problem, level, filters)
+                mapping.setdefault(value, []).append(problem)
+            per_dim.append((dim, list(mapping), mapping))
+            continue
         if dim == "intent":
             code = trace.intent_code
             if code is None:
@@ -340,24 +366,6 @@ def _group_keys(snap: Snapshot, trace: Trace, dims, level, filters: Filters, wit
                 values = [snap.intent.child_below(filters.intent[0], code) if snap.intent else None]
             else:
                 values = [code]
-        elif dim == "error":
-            codes = list(trace.error_codes)
-            tree = snap.tree_for(trace)
-            if level == "top":
-                mapped = []
-                for code in codes:
-                    top = tree.l1(code) if tree else None
-                    if top and top not in mapped:
-                        mapped.append(top)
-                codes = mapped
-            elif level == "children":
-                mapped = []
-                for code in codes:
-                    child = tree.child_below(filters.error[0], code) if tree else None
-                    if child and child not in mapped:
-                        mapped.append(child)
-                codes = mapped
-            values = codes or [None]
         elif dim == "day":
             values = [trace.day]
         elif dim == "user":
@@ -366,16 +374,24 @@ def _group_keys(snap: Snapshot, trace: Trace, dims, level, filters: Filters, wit
             values = [trace.app_version]
         elif dim == "source":
             values = [trace.source]
-        per_dim.append((dim, values))
+        else:
+            values = [None]
+        per_dim.append((dim, values, None))
 
-    combos = [()]
-    for dim, values in per_dim:
-        combos = [combo + ((dim, value),) for combo in combos for value in values]
+    combos = [((), None)]
+    for dim, values, mapping in per_dim:
+        expanded = []
+        for combo, entries in combos:
+            for value in values:
+                expanded.append((combo + ((dim, value),), mapping[value] if mapping is not None else entries))
+        combos = expanded
     return combos
 
 
-def _validate_group(group_by, level, filters):
+def _validate_group(group_by, level, filters, allow_empty=False):
     if not group_by:
+        if allow_empty:
+            return
         raise errors.invalid("group_by 不能为空", "group_by")
     if len(group_by) > 2:
         raise errors.invalid("group_by 最多两个维度", "group_by")
@@ -388,22 +404,23 @@ def _validate_group(group_by, level, filters):
         raise errors.unknown_value("level", level, list(LEVELS))
     if level == "children":
         for dim in group_by:
-            if dim not in ("intent", "error"):
-                raise errors.invalid("level=children 只作用于 intent / error 维度", "level")
-            values = filters.intent if dim == "intent" else filters.error
+            if dim not in ("intent", "problem"):
+                raise errors.invalid("level=children 只作用于 intent / problem 维度", "level")
+            values = filters.intent if dim == "intent" else filters.problem
             if len(values) != 1:
                 raise errors.invalid(
                     f"level=children 要求 {dim} 恰好筛一个编码", "level", dimension=dim
                 )
 
 
-def _group_row(keys, count, users, error_traces, analyzed):
+def _group_row(keys, count, users, problem_traces, problems, analyzed):
     return {
         "keys": dict(keys),
         "analyzed": analyzed,
         "traces": count,
         "users": users,
-        "error_traces": error_traces,
+        "problem_traces": problem_traces,
+        "problems": problems,
     }
 
 
@@ -411,6 +428,44 @@ def _rate(row):
     if not row["analyzed"]:
         return None
     return row["traces"] / row["analyzed"]
+
+
+def _sort_key_factory(group_by, sort):
+    def sort_key(row):
+        key_token = "|".join(f"{dim}={_sort_token(row['keys'].get(dim))}" for dim in group_by)
+        if "day" in group_by:
+            day = row["keys"].get("day")
+            return (0 if day is None else 1, _sort_token(day), -row["traces"], key_token)
+        if sort == "users":
+            primary = -row["users"]
+        elif sort == "problems":
+            primary = -row["problems"]
+        elif sort == "rate":
+            rate = _rate(row)
+            primary = -(rate if rate is not None else -1.0)
+        else:
+            primary = -row["traces"]
+        return (primary, -row["traces"], key_token)
+
+    return sort_key
+
+
+def _page_rows(rows, group_by, level, sort, limit, cursor, kind, filter_key):
+    sort_key = _sort_key_factory(group_by, sort)
+    rows.sort(key=sort_key)
+    if cursor:
+        try:
+            body = cursors.decode(cursor, kind, filter_key)
+        except cursors.CursorError as exc:
+            raise errors.cursor_expired(str(exc)) if exc.expired else errors.invalid(str(exc), "cursor")
+        last = tuple(body.get("c") or ())
+        rows = [row for row in rows if tuple(sort_key(row)) > last]
+    page = rows[:limit]
+    has_more = len(rows) > len(page)
+    next_cursor = None
+    if has_more and page:
+        next_cursor = cursors.encode(kind, filter_key, limit, list(sort_key(page[-1])))
+    return page, next_cursor, has_more
 
 
 # --------------------------------------------------------------------------- /summary
@@ -425,69 +480,143 @@ def summary(snap: Snapshot, filters: Filters, group_by, level="top", sort=None, 
         raise errors.unknown_value("sort", sort, list(SORTS))
 
     matcher = Matcher(snap, filters)
-    base = [t for t in snap.traces if matcher.match(t, with_error=False)]
-    selected = [t for t in base if matcher.match(t, with_error=True)]
+    base = [t for t in snap.traces if matcher.match(t, with_problem=False)]
+    selected = [t for t in base if matcher.match(t, with_problem=True)]
 
     total = {
         "analyzed": len(base),
         "traces": len(selected),
         "users": len({t.user_id for t in selected if t.user_id}),
-        "error_traces": sum(1 for t in selected if t.has_error),
+        "problem_traces": sum(1 for t in selected if t.problem_count),
+        "problems": sum(t.problem_count for t in selected),
     }
 
     stats: dict[tuple, dict] = {}
     for trace in selected:
-        for combo in _group_keys(snap, trace, group_by, level, filters, with_error=True):
-            bucket = stats.setdefault(combo, {"count": 0, "users": set(), "error": 0})
+        for combo, entries in _group_keys(snap, trace, group_by, level, filters, with_problem=True):
+            bucket = stats.setdefault(combo, {"count": 0, "users": set(), "problem_traces": 0, "problems": 0})
             bucket["count"] += 1
             if trace.user_id:
                 bucket["users"].add(trace.user_id)
-            if trace.has_error:
-                bucket["error"] += 1
+            if entries is None:
+                bucket["problems"] += trace.problem_count
+                if trace.problem_count:
+                    bucket["problem_traces"] += 1
+            else:
+                bucket["problems"] += len(entries)
+                if entries:
+                    bucket["problem_traces"] += 1
 
-    # 分母：去掉 error / has_error 后，其余筛选与分组键（不含 error 维度）不变
+    # 分母：去掉 problem / severity 筛选后，其余筛选与分组键（不含 problem 维度）不变
     analyzed_map: dict[tuple, int] = {}
     for trace in base:
-        for combo in _group_keys(snap, trace, group_by, level, filters, with_error=False):
+        for combo, _entries in _group_keys(snap, trace, group_by, level, filters, with_problem=False):
             analyzed_map[combo] = analyzed_map.get(combo, 0) + 1
 
     rows = []
     for combo, bucket in stats.items():
-        analyzed_key = tuple(pair for pair in combo if pair[0] != "error")
+        analyzed_key = tuple(pair for pair in combo if pair[0] != "problem")
         analyzed = analyzed_map.get(analyzed_key, 0)
-        rows.append(_group_row(combo, bucket["count"], len(bucket["users"]), bucket["error"], analyzed))
-
-    def sort_key(row):
-        key_token = "|".join(f"{dim}={_sort_token(row['keys'].get(dim))}" for dim in group_by)
-        if "day" in group_by:
-            day = row["keys"].get("day")
-            return (0 if day is None else 1, _sort_token(day), -row["traces"], key_token)
-        if sort == "users":
-            primary = -row["users"]
-        elif sort == "rate":
-            rate = _rate(row)
-            primary = -(rate if rate is not None else -1.0)
-        else:
-            primary = -row["traces"]
-        return (primary, -row["traces"], key_token)
-
-    rows.sort(key=sort_key)
+        rows.append(
+            _group_row(
+                combo,
+                bucket["count"],
+                len(bucket["users"]),
+                bucket["problem_traces"],
+                bucket["problems"],
+                analyzed,
+            )
+        )
 
     filter_key = filters.cache_key() + "|" + ",".join(group_by) + "|" + level + "|" + sort
-    if cursor:
-        try:
-            body = cursors.decode(cursor, "summary", filter_key)
-        except cursors.CursorError as exc:
-            raise errors.cursor_expired(str(exc)) if exc.expired else errors.invalid(str(exc), "cursor")
-        last = tuple(body.get("c") or ())
-        rows = [row for row in rows if tuple(sort_key(row)) > last]
+    page, next_cursor, has_more = _page_rows(
+        rows, group_by, level, sort, limit, cursor, "summary", filter_key
+    )
+    return {
+        "total": total,
+        "groups": page,
+        "next_cursor": next_cursor,
+        "has_more": has_more,
+    }
 
-    page = rows[:limit]
-    has_more = len(rows) > len(page)
-    next_cursor = None
-    if has_more and page:
-        next_cursor = cursors.encode("summary", filter_key, limit, list(sort_key(page[-1])))
 
+# --------------------------------------------------------------------------- /severity
+
+def _severity_counts(entries_per_trace):
+    """按问题条目统计 P0–P4：条目数，以及至少含一条该等级的 trace 数。"""
+    problems = {level: 0 for level in config.SEVERITIES}
+    traces_by_level = {level: 0 for level in config.SEVERITIES}
+    unlabeled = 0
+    for entries in entries_per_trace:
+        levels_in_trace = set()
+        for problem in entries:
+            level = problem.get("severity")
+            if level in problems:
+                problems[level] += 1
+                levels_in_trace.add(level)
+            else:
+                unlabeled += 1
+        for level in levels_in_trace:
+            traces_by_level[level] += 1
+    return {
+        "severity": {
+            level: {"problems": problems[level], "traces": traces_by_level[level]}
+            for level in config.SEVERITIES
+        },
+        "unlabeled": unlabeled,
+    }
+
+
+def severity(snap: Snapshot, filters: Filters, group_by=(), level="top", sort=None, limit=100, cursor=None):
+    _validate_group(list(group_by), level, filters, allow_empty=True)
+    if limit < 1 or limit > 1000:
+        raise errors.invalid("limit 必须在 1..1000 之间", "limit")
+    severity_sorts = ("traces", "problems", "rate")
+    if sort is None:
+        sort = "day" if "day" in group_by else "traces"
+    elif sort not in severity_sorts:
+        raise errors.unknown_value("sort", sort, list(severity_sorts))
+
+    matcher = Matcher(snap, filters)
+    base = [t for t in snap.traces if matcher.match(t, with_problem=False)]
+    selected = [t for t in base if matcher.match(t, with_problem=True)]
+
+    total = {
+        "analyzed": len(base),
+        "traces": len(selected),
+        "problems": sum(t.problem_count for t in selected),
+        **_severity_counts(t.problems for t in selected),
+    }
+    if not group_by:
+        return {"total": total, "groups": [], "next_cursor": None, "has_more": False}
+
+    stats: dict[tuple, list] = {}
+    for trace in selected:
+        for combo, entries in _group_keys(snap, trace, group_by, level, filters, with_problem=True):
+            stats.setdefault(combo, []).append(trace.problems if entries is None else entries)
+
+    analyzed_map: dict[tuple, int] = {}
+    for trace in base:
+        for combo, _entries in _group_keys(snap, trace, group_by, level, filters, with_problem=False):
+            analyzed_map[combo] = analyzed_map.get(combo, 0) + 1
+
+    rows = []
+    for combo, entries_per_trace in stats.items():
+        analyzed_key = tuple(pair for pair in combo if pair[0] != "problem")
+        rows.append(
+            {
+                "keys": dict(combo),
+                "analyzed": analyzed_map.get(analyzed_key, 0),
+                "traces": len(entries_per_trace),
+                "problems": sum(len(entries) for entries in entries_per_trace),
+                **_severity_counts(entries_per_trace),
+            }
+        )
+
+    filter_key = filters.cache_key() + "|" + ",".join(group_by) + "|" + level + "|" + sort
+    page, next_cursor, has_more = _page_rows(
+        rows, group_by, level, sort, limit, cursor, "severity", filter_key
+    )
     return {
         "total": total,
         "groups": page,
@@ -508,11 +637,14 @@ def _item(trace: Trace):
         "asked_at": trace.asked_at,
         "source": trace.source,
         "user_id": trace.user_id,
+        "session_id": trace.session_id,
         "app_version": trace.app_version,
         "query_preview": preview,
         "intent_code": trace.intent_code,
-        "error_codes": list(trace.error_codes),
-        "has_error": trace.has_error,
+        "is_correct": trace.is_correct,
+        "problem_count": trace.problem_count,
+        "problem_codes": list(trace.problem_codes),
+        "problems": list(trace.problems),
         "analysis_id": trace.analysis_id,
         "analyzed_at": trace.analyzed_at,
     }
@@ -521,7 +653,7 @@ def _item(trace: Trace):
 def traces(snap: Snapshot, filters: Filters, page_size=20, cursor=None, ids_only=False):
     matcher = Matcher(snap, filters)
     # snap.traces 已按 (asked_at, trace_id) 倒序
-    selected = [t for t in snap.traces if matcher.match(t, with_error=True)]
+    selected = [t for t in snap.traces if matcher.match(t, with_problem=True)]
     total = len(selected)
 
     upper = 5000 if ids_only else 100
@@ -571,11 +703,14 @@ def batch(snap: Snapshot, trace_ids, filters: Filters):
                     "asked_at": None,
                     "source": None,
                     "user_id": None,
+                    "session_id": None,
                     "app_version": None,
                     "query_preview": None,
                     "intent_code": None,
-                    "error_codes": [],
-                    "has_error": None,
+                    "is_correct": None,
+                    "problem_count": 0,
+                    "problem_codes": [],
+                    "problems": [],
                     "analysis_id": None,
                     "analyzed_at": None,
                 }
@@ -672,7 +807,7 @@ def detail(snap: Snapshot, db_path, dataset: str, trace_id: str, day: str | None
     else:
         problems = [
             {"code": code, "label": code, "severity": None, "evidence": [], "session_level": False}
-            for code in trace.error_codes
+            for code in trace.problem_codes
         ]
 
     input_row = _read_offset_line(*input_ref) if input_ref else None
@@ -683,10 +818,13 @@ def detail(snap: Snapshot, db_path, dataset: str, trace_id: str, day: str | None
         "asked_at": trace.asked_at,
         "source": trace.source,
         "user_id": trace.user_id,
+        "session_id": trace.session_id,
         "app_version": trace.app_version,
         "intent_code": trace.intent_code,
-        "error_codes": list(trace.error_codes),
-        "has_error": trace.has_error,
+        "is_correct": trace.is_correct,
+        "problem_count": trace.problem_count,
+        "problem_codes": list(trace.problem_codes),
+        "problems": list(trace.problems),
         "analysis_id": trace.analysis_id,
         "analyzed_at": trace.analyzed_at,
         "taxonomy_version": snap.taxonomy_version(),
@@ -695,8 +833,7 @@ def detail(snap: Snapshot, db_path, dataset: str, trace_id: str, day: str | None
         "analysis": {
             "intent": {"task": trace.task, "subtask": trace.subtask, "code": trace.intent_code},
             "summary": (turn or {}).get("summary"),
-            "is_correct": (turn or {}).get("is_correct"),
-            "correct_reason": (turn or {}).get("correct_reason"),
+            "is_correct": trace.is_correct,
             "problems": problems,
             "history": history,
         },
@@ -746,7 +883,7 @@ def _input_ref(conn, trace_id, day):
 
 def _history(conn, trace_id, day, app_version):
     rows = conn.execute(
-        "SELECT analysis_id, analyzed_at, intent_code, error_codes, file, line FROM history "
+        "SELECT analysis_id, analyzed_at, intent_code, problem_codes, file, line FROM history "
         "WHERE trace_id = ? AND day = ? AND app_version = ? ORDER BY analyzed_at DESC, line DESC",
         (trace_id, day, app_version),
     ).fetchall()
@@ -761,7 +898,7 @@ def _history(conn, trace_id, day, app_version):
                 "analysis_id": analysis_id,
                 "analyzed_at": analyzed_at,
                 "intent_code": intent_code,
-                "error_codes": parsed,
+                "problem_codes": parsed,
                 "file": file.rsplit("/", 1)[-1],
                 "line": line,
             }

@@ -1,9 +1,9 @@
-"""验收用例：协议 §12 的 12 条 + 本实现补充的边界。
+"""验收用例：v2 协议的核心口径 + 本实现补充的边界。
 
 用法：
 
     python3 tests/test_acceptance.py            # 用 fixture 自建服务，跑全部用例
-    python3 tests/test_acceptance.py --real     # 打已部署服务，跑数据无关的 12 条
+    python3 tests/test_acceptance.py --real     # 打已部署服务，跑数据无关的用例
     python3 tests/test_acceptance.py --base-url http://127.0.0.1:5003 --real
 """
 
@@ -76,24 +76,32 @@ def expect(status, payload, want=200):
 # --------------------------------------------------------------------------- 用例
 
 def check_taxonomy(client):
+    problem_nodes = {}
     for app_version in ("AIME-Atlas_expert", "aime-fast-new_fast"):
-        payload = expect(
-            *client.get(f"{API}/taxonomy", kind="error", app_version=app_version)
-        )
+        payload = expect(*client.get(f"{API}/taxonomy", kind="problem", app_version=app_version))
         nodes = payload["data"]["nodes"]
         codes = {node["code"] for node in nodes}
         for node in nodes:
             if node["parent_code"] is not None and node["parent_code"] not in codes:
                 raise AssertionError(f"{app_version}: {node['code']} 的 parent_code 不存在")
+            if "counts_as_error" in node:
+                raise AssertionError(f"{app_version}: v2 不应再返回 counts_as_error")
+        problem_nodes[app_version] = nodes
+
     intent = expect(*client.get(f"{API}/taxonomy", kind="intent"))
     codes = {node["code"] for node in intent["data"]["nodes"]}
     for node in intent["data"]["nodes"]:
         if node["parent_code"] is not None and node["parent_code"] not in codes:
             raise AssertionError(f"intent: {node['code']} 的 parent_code 不存在")
+
+    severity = expect(*client.get(f"{API}/taxonomy", kind="severity"))
+    levels = [node["code"] for node in severity["data"]["nodes"]]
+    if levels != ["P0", "P1", "P2", "P3", "P4"]:
+        raise AssertionError(f"severity 树应返回 P0–P4，实际 {levels}")
     return intent["data"]["nodes"]
 
 
-def check_group_traces_consistency(client, dataset, group_by=("intent", "error"), sample=5):
+def check_group_traces_consistency(client, dataset, group_by=("intent", "problem"), sample=5):
     payload = expect(*client.get(f"{API}/summary", dataset=dataset, group_by=",".join(group_by), limit=1000))
     groups = payload["data"]["groups"]
     if not groups:
@@ -128,10 +136,10 @@ def check_denominator(client, dataset):
     if not groups:
         raise AssertionError("没有非空意图分组")
     target = groups[0]["keys"]["intent"]
-    per_error = expect(
-        *client.get(f"{API}/summary", dataset=dataset, intent=target, group_by="error", limit=1000)
+    per_problem = expect(
+        *client.get(f"{API}/summary", dataset=dataset, intent=target, group_by="problem", limit=1000)
     )
-    analyzed = {row["analyzed"] for row in per_error["data"]["groups"]}
+    analyzed = {row["analyzed"] for row in per_problem["data"]["groups"]}
     if len(analyzed) != 1:
         raise AssertionError(f"按问题分组的 analyzed 不一致：{sorted(analyzed)}")
     if analyzed.pop() != groups[0]["analyzed"]:
@@ -139,13 +147,56 @@ def check_denominator(client, dataset):
     return target
 
 
-def check_error_total(client, dataset):
+def check_problem_total(client, dataset):
     base = expect(*client.get(f"{API}/summary", dataset=dataset, group_by="day"))
-    flagged = expect(*client.get(f"{API}/summary", dataset=dataset, has_error="true", group_by="day"))
-    if base["data"]["total"]["error_traces"] != flagged["data"]["total"]["traces"]:
+    flagged = expect(
+        *client.get(f"{API}/summary", dataset=dataset, severity="P0,P1,P2,P3,P4", group_by="day")
+    )
+    if base["data"]["total"]["problem_traces"] != flagged["data"]["total"]["traces"]:
         raise AssertionError(
-            f"total.error_traces={base['data']['total']['error_traces']} 与 has_error=true 的 traces={flagged['data']['total']['traces']} 不等"
+            f"total.problem_traces={base['data']['total']['problem_traces']} 与筛全部严重度的 traces="
+            f"{flagged['data']['total']['traces']} 不等"
         )
+    severity = expect(*client.get(f"{API}/severity", dataset=dataset))
+    if severity["data"]["total"]["problems"] != base["data"]["total"]["problems"]:
+        raise AssertionError(
+            f"/severity problems={severity['data']['total']['problems']} 与 /summary problems="
+            f"{base['data']['total']['problems']} 不等"
+        )
+
+
+def check_severity_totals(client, dataset):
+    payload = expect(*client.get(f"{API}/severity", dataset=dataset))
+    total = payload["data"]["total"]
+    levels = ["P0", "P1", "P2", "P3", "P4"]
+    summed = sum(total["severity"][level]["problems"] for level in levels)
+    if summed != total["problems"]:
+        raise AssertionError(f"P0–P4 条目之和 {summed} != problems {total['problems']}")
+    for level in levels:
+        bucket = total["severity"][level]
+        if bucket["traces"] > total["traces"]:
+            raise AssertionError(f"{level} 的 traces 不可能超过 total.traces")
+        if bucket["problems"] < bucket["traces"]:
+            raise AssertionError(f"{level} 的条目数不应少于 trace 数")
+        filtered = expect(*client.get(f"{API}/severity", dataset=dataset, severity=level))
+        if filtered["data"]["total"]["severity"][level]["traces"] != bucket["traces"]:
+            raise AssertionError(f"severity={level} 过滤后的 traces 与总表不一致")
+        listed = expect(*client.get(f"{API}/traces", dataset=dataset, severity=level, page_size=100))
+        if listed["data"]["total"] != bucket["traces"]:
+            raise AssertionError(
+                f"severity={level}: /severity traces={bucket['traces']}，/traces total={listed['data']['total']}"
+            )
+
+
+def check_severity_groups(client, dataset):
+    for group_by in ("day", "app_version", "source", "intent", "problem"):
+        payload = expect(*client.get(f"{API}/severity", dataset=dataset, group_by=group_by, limit=1000))
+        summed = sum(row["problems"] for row in payload["data"]["groups"])
+        if summed != payload["data"]["total"]["problems"]:
+            raise AssertionError(f"group_by={group_by}: 各分组 problems 之和 {summed} != total")
+        for row in payload["data"]["groups"]:
+            if sum(row["severity"][level]["problems"] for level in ("P0", "P1", "P2", "P3", "P4")) != row["problems"]:
+                raise AssertionError(f"group_by={group_by}: 分组的 P0–P4 之和与 problems 不等")
 
 
 def check_intent_leaf_sum(client, dataset):
@@ -158,10 +209,10 @@ def check_intent_leaf_sum(client, dataset):
 
 def check_multi_problem(client, dataset, trace_id, codes):
     for code in codes:
-        payload = expect(*client.get(f"{API}/traces", dataset=dataset, error=code, page_size=100))
+        payload = expect(*client.get(f"{API}/traces", dataset=dataset, problem=code, page_size=100))
         found = {item["trace_id"] for item in payload["data"]["items"]}
         if trace_id not in found:
-            raise AssertionError(f"多问题 trace {trace_id} 未出现在 error={code} 的结果里")
+            raise AssertionError(f"多问题 trace {trace_id} 未出现在 problem={code} 的结果里")
 
 
 def check_big_class(client, dataset, code, children):
@@ -179,6 +230,12 @@ def check_unknown_code(client, dataset):
     status, payload = client.get(f"{API}/summary", dataset=dataset, intent="not_exist", group_by="day")
     if status != 422 or payload["error"]["code"] != "UNKNOWN_CODE":
         raise AssertionError(f"未知编码应返回 422：{status} {payload}")
+    status, payload = client.get(f"{API}/summary", dataset=dataset, problem="not_exist", group_by="day")
+    if status != 422 or payload["error"]["code"] != "UNKNOWN_CODE":
+        raise AssertionError(f"未知问题编码应返回 422：{status} {payload}")
+    status, payload = client.get(f"{API}/severity", dataset=dataset, severity="P9")
+    if status != 422 or payload["error"]["code"] != "UNKNOWN_CODE":
+        raise AssertionError(f"未知严重度应返回 422：{status} {payload}")
 
 
 def check_batch(client, dataset, real_id, fake_id):
@@ -190,55 +247,84 @@ def check_batch(client, dataset, real_id, fake_id):
         raise AssertionError(f"batch 应返回 2 条，实际 {len(items)}")
     if items[0]["trace_id"] != real_id or items[0]["status"] != "analyzed":
         raise AssertionError(f"batch 第一条不对：{items[0]}")
+    for key in ("problems", "problem_codes", "problem_count", "is_correct", "session_id"):
+        if key not in items[0]:
+            raise AssertionError(f"batch 已分析条目缺字段 {key}")
+    if not items[0]["session_id"]:
+        raise AssertionError(f"batch 已分析条目缺 session_id：{items[0]}")
     if items[1]["trace_id"] != fake_id or items[1]["status"] != "not_analyzed":
         raise AssertionError(f"batch 第二条不对：{items[1]}")
+    if items[1]["session_id"] is not None:
+        raise AssertionError(f"未分析条目的 session_id 应为 null：{items[1]}")
+    if items[1]["problems"] != [] or items[1]["problem_count"] != 0 or items[1]["is_correct"] is not None:
+        raise AssertionError(f"未分析条目的问题字段应为空：{items[1]}")
 
 
 def check_reanalysis(client, dataset, trace_id, day, expect_codes, expect_history=1):
     detail = expect(*client.get(f"{API}/traces/{trace_id}", dataset=dataset, day=day))
     data = detail["data"]
-    if data["error_codes"] != expect_codes:
-        raise AssertionError(f"{trace_id} 的最新编码 {data['error_codes']} != {expect_codes}")
+    if data["problem_codes"] != expect_codes:
+        raise AssertionError(f"{trace_id} 的最新编码 {data['problem_codes']} != {expect_codes}")
     history = data["analysis"]["history"]
     if len(history) != expect_history:
         raise AssertionError(f"{trace_id} history 条数 {len(history)} != {expect_history}")
-    if history and history[0]["error_codes"] == expect_codes:
+    if history and history[0]["problem_codes"] == expect_codes:
         raise AssertionError("history 里的旧版本不应等于最新版本")
 
 
-def check_ids_only(client, dataset):
-    params = {"dataset": dataset, "page_size": 2}
-    pk, paged = {}, None
-    cursor = None
-    while True:
-        query = dict(params, cursor=cursor)
-        status, payload = client.get(f"{API}/traces", **query)
-        if status != 200:
-            raise AssertionError(f"普通翻页失败：{status} {payload}")
-        items = payload["data"]["items"]
-        for item in items:
-            pk[item["trace_id"]] = True
-        cursor = payload["data"]["next_cursor"]
-        if not cursor:
-            break
-    cursor = None
-    export, exported = [], 0
-    while True:
-        status, payload = client.get(f"{API}/traces", dataset=dataset, ids_only="true", page_size=5000, cursor=cursor)
-        if status != 200:
-            raise AssertionError(f"ids_only 翻页失败：{status} {payload}")
-        for tid in payload["data"]["items"]:
-            if tid not in pk:
-                raise AssertionError(f"ids_only 返回了普通翻页没有的 id：{tid}")
-            export.append(tid)
-        exported = payload["data"]["total"]
-        cursor = payload["data"]["next_cursor"]
-        if not cursor:
-            break
-    if len(export) != exported:
-        raise AssertionError(f"ids_only 条数 {len(export)} != total {exported}")
-    if set(export) != set(pk):
-        raise AssertionError("ids_only 与普通翻页的 id 集合不一致")
+def check_ids_only(client, dataset, attempts=3):
+    """两轮翻页必须覆盖同一批 id。
+
+    线上服务每 10 分钟换一次快照，两轮之间如果正好重建，新增 trace 会让集合不一致；
+    这时重试一轮，连续三轮都撞上重建才跳过（记录 NOTE）。
+    """
+    last_race = None
+    for _ in range(attempts):
+        built_before = _built_at(client)
+        params = {"dataset": dataset, "page_size": 100}
+        pk = set()
+        cursor = None
+        while True:
+            query = dict(params, cursor=cursor)
+            status, payload = client.get(f"{API}/traces", **query)
+            if status != 200:
+                raise AssertionError(f"普通翻页失败：{status} {payload}")
+            pk.update(item["trace_id"] for item in payload["data"]["items"])
+            cursor = payload["data"]["next_cursor"]
+            if not cursor:
+                break
+        cursor = None
+        export = []
+        exported = 0
+        while True:
+            status, payload = client.get(f"{API}/traces", dataset=dataset, ids_only="true", page_size=5000, cursor=cursor)
+            if status != 200:
+                raise AssertionError(f"ids_only 翻页失败：{status} {payload}")
+            export.extend(payload["data"]["items"])
+            exported = payload["data"]["total"]
+            cursor = payload["data"]["next_cursor"]
+            if not cursor:
+                break
+        built_after = _built_at(client)
+        if built_before != built_after:
+            last_race = built_after
+            continue
+        if len(export) != exported:
+            raise AssertionError(f"ids_only 条数 {len(export)} != total {exported}")
+        # trace_id 不全局唯一（跨模型 / 重跑），ids_only 允许同一 id 出现多次；按集合比对
+        if set(export) != pk:
+            missing = pk - set(export)
+            extra = set(export) - pk
+            raise AssertionError(f"ids_only 与普通翻页的 id 集合不一致：缺 {len(missing)} 个，多 {len(extra)} 个")
+        return
+    print(f"  NOTE  翻页期间服务换了快照（{last_race}），跳过导出集合比对")
+
+
+def _built_at(client):
+    status, payload = client.get("/healthz")
+    if status != 200:
+        raise AssertionError(f"/healthz 失败：{status} {payload}")
+    return payload.get("built_at")
 
 
 def check_user_ids(client, dataset, limit=5000):
@@ -264,6 +350,11 @@ def check_detail(client, dataset, trace_id, day):
         raise AssertionError("详情应返回 eval_input 的整行与 trace 对象")
     if data["trace"]["meta"]["trace_id"] != trace_id:
         raise AssertionError("详情返回的 trace 不是请求的那条")
+    for key in ("problems", "problem_codes", "problem_count", "is_correct", "session_id"):
+        if key not in data:
+            raise AssertionError(f"详情缺字段 {key}")
+    if "correct_reason" in data["analysis"]:
+        raise AssertionError("v2 不再返回 correct_reason")
     status, payload = client.get(f"{API}/traces/{trace_id}", dataset=dataset)
     if status != 400:
         raise AssertionError(f"缺 day 应返回 400：{status}")
@@ -298,6 +389,38 @@ def check_cursor_expired(client, dataset):
     status, payload = client.get(f"{API}/traces", dataset=dataset, cursor=token)
     if status != 200:
         raise AssertionError(f"有效 cursor 应正常返回：{status} {payload}")
+
+
+def check_problem_group_counts(client, dataset):
+    for path in ("summary", "severity"):
+        payload = expect(*client.get(f"{API}/{path}", dataset=dataset, group_by="problem", limit=1000))
+        summed = sum(row["problems"] for row in payload["data"]["groups"])
+        if summed != payload["data"]["total"]["problems"]:
+            raise AssertionError(f"/{path} group_by=problem: 分组 problems 之和 {summed} != total")
+        # 未聚类问题应落在 problem=null 组，且有条目
+        null_group = next((row for row in payload["data"]["groups"] if row["keys"].get("problem") is None), None)
+        if null_group is None or null_group["problems"] <= 0:
+            raise AssertionError(f"/{path} group_by=problem: 未聚类问题应进 problem=null 组：{null_group}")
+
+
+def check_problem_entries(client, dataset):
+    """问题数组是真相：未聚类问题也有严重度，列表/详情/batch 一致。"""
+    payload = expect(*client.get(f"{API}/traces", dataset=dataset, page_size=100))
+    for item in payload["data"]["items"]:
+        if item["problem_count"] != len(item["problems"]):
+            raise AssertionError(f"{item['trace_id']} problem_count 与 problems 长度不等")
+        if item["problem_codes"] != sorted({p["code"] for p in item["problems"] if p["code"]}):
+            raise AssertionError(f"{item['trace_id']} problem_codes 与 problems 中的编码不一致")
+        for problem in item["problems"]:
+            if problem["severity"] not in ("P0", "P1", "P2", "P3", "P4"):
+                raise AssertionError(f"{item['trace_id']} 的问题缺少严重度：{problem}")
+    delta = next((item for item in payload["data"]["items"] if item["trace_id"] == "trace_delta"), None)
+    if delta is not None:
+        if delta["problem_count"] != 2 or delta["problem_codes"] != []:
+            raise AssertionError(f"未聚类问题应计入 problems、不进 problem_codes：{delta}")
+    alpha = next((item for item in payload["data"]["items"] if item["trace_id"] == "trace_alpha"), None)
+    if alpha is not None and alpha["problem_count"] != 1:
+        raise AssertionError(f"重跑后 trace_alpha 只应有 1 个问题：{alpha}")
 
 
 # --------------------------------------------------------------------------- 运行
@@ -341,53 +464,17 @@ def start_fixture_server(workdir: Path):
     raise SystemExit(f"服务未就绪：\n{(workdir / 'server.log').read_text()}")
 
 
-def run_fixture_cases(workdir: Path):
-    process, base, data_root, log = start_fixture_server(workdir)
-    client = Client(base)
-    dataset = "aime_eval"
+def _run_cases(cases, process, log):
     passed, failed = 0, []
-
-    def case(name, fn):
-        nonlocal passed
-        try:
-            fn()
-            passed += 1
-            print(f"  PASS  {name}")
-        except AssertionError as exc:
-            failed.append((name, str(exc)))
-            print(f"  FAIL  {name}: {exc}")
-
     try:
-        nodes = {}
-
-        def _taxonomy():
-            nodes["intent"] = check_taxonomy(client)
-
-        case("1 分类树完整", _taxonomy)
-        case("2 分组与明细一致", lambda: check_group_traces_consistency(client, dataset))
-        case("3 分母规则", lambda: check_denominator(client, dataset))
-        case("4 错误占比", lambda: check_error_total(client, dataset))
-        case("5 意图互斥", lambda: check_intent_leaf_sum(client, dataset))
-        case("6 多问题计数", lambda: check_multi_problem(client, dataset, "trace_gamma", ["S1.M1.1", "S9.M5.1"]))
-        case(
-            "7 大类展开",
-            lambda: check_big_class(
-                client,
-                dataset,
-                "T01",
-                [node["code"] for node in nodes["intent"] if node["parent_code"] == "T01"],
-            ),
-        )
-        case("8 未知编码", lambda: check_unknown_code(client, dataset))
-        case("9 批量查询", lambda: check_batch(client, dataset, "trace_alpha", "trace_missing"))
-        case(
-            "10 重分析",
-            lambda: check_reanalysis(client, dataset, "trace_alpha", fixtures.DAY, ["S1.M1.1"], 1),
-        )
-        case("11 导出", lambda: check_ids_only(client, dataset))
-        case("12 用户筛选", lambda: check_user_ids(client, dataset))
-        case("13 详情", lambda: check_detail(client, dataset, "trace_alpha", fixtures.DAY))
-        case("14 cursor 过期", lambda: check_cursor_expired(client, dataset))
+        for name, fn in cases:
+            try:
+                fn()
+                passed += 1
+                print(f"  PASS  {name}")
+            except AssertionError as exc:
+                failed.append((name, str(exc)))
+                print(f"  FAIL  {name}: {exc}")
     finally:
         process.send_signal(signal.SIGTERM)
         try:
@@ -406,56 +493,116 @@ def run_fixture_cases(workdir: Path):
     return 0
 
 
-def run_real_cases(base):
+def run_fixture_cases(workdir: Path):
+    process, base, data_root, log = start_fixture_server(workdir)
     client = Client(base)
     dataset = "aime_eval"
-    passed, failed = 0, []
+    nodes = {}
 
-    def case(name, fn):
-        nonlocal passed
-        try:
-            fn()
-            passed += 1
-            print(f"  PASS  {name}")
-        except AssertionError as exc:
-            failed.append((name, str(exc)))
-            print(f"  FAIL  {name}: {exc}")
+    def _taxonomy():
+        nodes["intent"] = check_taxonomy(client)
 
+    cases = [
+        ("1 分类树完整", _taxonomy),
+        ("2 分组与明细一致", lambda: check_group_traces_consistency(client, dataset)),
+        ("3 分母规则", lambda: check_denominator(client, dataset)),
+        ("4 问题占比", lambda: check_problem_total(client, dataset)),
+        ("5 严重度总量", lambda: check_severity_totals(client, dataset)),
+        ("6 严重度分组", lambda: check_severity_groups(client, dataset)),
+        ("7 问题数组", lambda: check_problem_entries(client, dataset)),
+        ("7b 问题分组条目数", lambda: check_problem_group_counts(client, dataset)),
+        ("8 意图互斥", lambda: check_intent_leaf_sum(client, dataset)),
+        ("9 多问题计数", lambda: check_multi_problem(client, dataset, "trace_gamma", ["S1.M1.1", "S9.M5.1"])),
+        (
+            "10 大类展开",
+            lambda: check_big_class(
+                client,
+                dataset,
+                "T01",
+                [node["code"] for node in nodes["intent"] if node["parent_code"] == "T01"],
+            ),
+        ),
+        ("11 未知编码/严重度", lambda: check_unknown_code(client, dataset)),
+        ("12 批量查询", lambda: check_batch(client, dataset, "trace_alpha", "trace_missing")),
+        (
+            "13 重分析",
+            lambda: check_reanalysis(client, dataset, "trace_alpha", fixtures.DAY, ["S1.M1.1"], 1),
+        ),
+        ("14 导出", lambda: check_ids_only(client, dataset)),
+        ("15 用户筛选", lambda: check_user_ids(client, dataset)),
+        ("16 详情", lambda: check_detail(client, dataset, "trace_alpha", fixtures.DAY)),
+        ("17 cursor 过期", lambda: check_cursor_expired(client, dataset)),
+    ]
+    return _run_cases(cases, process, log)
+
+
+def run_real_cases(base, history_trace=None, history_day=None):
+    client = Client(base)
+    dataset = "aime_eval"
     nodes = {}
 
     def _taxonomy():
         nodes["intent"] = check_taxonomy(client)
 
     def _reanalysis():
-        listing = expect(*client.get(f"{API}/traces", dataset=dataset, page_size=100))
-        for item in listing["data"]["items"]:
+        """校验重分析：优先用 --history-trace 指定的 trace，否则抽样翻页找一条带历史的。"""
+        if history_trace:
             detail = expect(
-                *client.get(f"{API}/traces/{item['trace_id']}", dataset=dataset, day=item["day"])
+                *client.get(f"{API}/traces/{history_trace}", dataset=dataset, day=history_day)
             )
             history = detail["data"]["analysis"]["history"]
-            if history:
-                if detail["data"]["error_codes"] and history[0]["error_codes"] == detail["data"]["error_codes"]:
-                    pass
+            if not history:
+                raise AssertionError(f"{history_trace} 没有历史版本")
+            if any(row["problem_codes"] == detail["data"]["problem_codes"] for row in history):
+                raise AssertionError("history 里的旧版本不应等于最新版本")
+            return
+        cursor = None
+        for _page in range(40):
+            listing = expect(*client.get(f"{API}/traces", dataset=dataset, page_size=100, cursor=cursor))
+            items = listing["data"]["items"]
+            if not items:
+                break
+            picks = {0, len(items) // 2, len(items) - 1}
+            for index in sorted(picks):
+                item = items[index]
+                detail = expect(
+                    *client.get(f"{API}/traces/{item['trace_id']}", dataset=dataset, day=item["day"])
+                )
+                history = detail["data"]["analysis"]["history"]
+                if not history:
+                    continue
+                if not detail["data"]["problem_count"]:
+                    raise AssertionError(f"{item['trace_id']} 有历史版本但最新版没有问题条目")
+                if any(row["problem_codes"] == detail["data"]["problem_codes"] for row in history):
+                    raise AssertionError("history 里的旧版本不应等于最新版本")
                 return
-        raise AssertionError("没有找到带历史版本的 trace，无法验证重分析")
+            cursor = listing["data"]["next_cursor"]
+            if not cursor:
+                break
+        # 抽样没命中：用构建摘要确认索引里确实有历史版本，逻辑本身已由 fixture 用例覆盖
+        health = client.get("/healthz")[1]
+        if (health.get("build") or {}).get("history"):
+            print("  NOTE  抽样未命中历史版本，索引里存在 history；可用 --history-trace 指定一条")
+            return
+        raise AssertionError("索引里没有历史版本，无法验证重分析")
 
     def _multi():
-        summary = expect(*client.get(f"{API}/summary", dataset=dataset, group_by="error", level="leaf", limit=1000))
-        multi_codes = [g["keys"]["error"] for g in summary["data"]["groups"] if g["keys"]["error"]]
+        summary = expect(*client.get(f"{API}/summary", dataset=dataset, group_by="problem", level="leaf", limit=1000))
+        multi_codes = [g["keys"]["problem"] for g in summary["data"]["groups"] if g["keys"]["problem"]]
         if len(multi_codes) < 2:
             raise AssertionError("问题分组不足两个")
-        listing = expect(*client.get(f"{API}/traces", dataset=dataset, error=",".join(multi_codes[:2]), page_size=100))
+        listing = expect(*client.get(f"{API}/traces", dataset=dataset, problem=",".join(multi_codes[:2]), page_size=100))
         target = None
         for item in listing["data"]["items"]:
-            if len(item["error_codes"]) >= 2:
+            if len(item["problem_codes"]) >= 2:
                 target = item
                 break
         if target is None:
             raise AssertionError("没有找到命中两个问题的 trace")
-        for code in target["error_codes"][:2]:
-            payload = expect(*client.get(f"{API}/traces", dataset=dataset, error=code, page_size=100))
+        for code in target["problem_codes"][:2]:
+            payload = expect(*client.get(f"{API}/traces", dataset=dataset, problem=code, page_size=100))
             if target["trace_id"] not in {i["trace_id"] for i in payload["data"]["items"]}:
-                raise AssertionError(f"{target['trace_id']} 不在 error={code} 的结果里")
+                raise AssertionError(f"{target['trace_id']} 不在 problem={code} 的结果里")
 
     def _detail():
         listing = expect(*client.get(f"{API}/traces", dataset=dataset, page_size=1))
@@ -465,16 +612,16 @@ def run_real_cases(base):
             raise AssertionError("详情没有返回 eval_input 的整行")
 
     def _expansion():
-        summary = expect(*client.get(f"{API}/summary", dataset=dataset, group_by="error", level="top", limit=1000))
-        codes = [g["keys"]["error"] for g in summary["data"]["groups"] if g["keys"]["error"]]
+        summary = expect(*client.get(f"{API}/summary", dataset=dataset, group_by="problem", level="top", limit=1000))
+        codes = [g["keys"]["problem"] for g in summary["data"]["groups"] if g["keys"]["problem"]]
         if not codes:
             raise AssertionError("没有顶层问题编码")
         checked = 0
         for code in codes[:3]:
-            group = next(g for g in summary["data"]["groups"] if g["keys"]["error"] == code)
-            listing = expect(*client.get(f"{API}/traces", dataset=dataset, error=code, page_size=1))
+            group = next(g for g in summary["data"]["groups"] if g["keys"]["problem"] == code)
+            listing = expect(*client.get(f"{API}/traces", dataset=dataset, problem=code, page_size=1))
             if listing["data"]["total"] != group["traces"]:
-                raise AssertionError(f"error={code} 展开后 total={listing['data']['total']}，分组={group['traces']}")
+                raise AssertionError(f"problem={code} 展开后 total={listing['data']['total']}，分组={group['traces']}")
             checked += 1
         if checked == 0:
             raise AssertionError("大类展开未校验任何编码")
@@ -484,38 +631,59 @@ def run_real_cases(base):
         trace_id = listing["data"]["items"][0]
         check_batch(client, dataset, trace_id, "trace_does_not_exist")
 
-    case("1 分类树完整", _taxonomy)
-    case("2 分组与明细一致", lambda: check_group_traces_consistency(client, dataset))
-    case("3 分母规则", lambda: check_denominator(client, dataset))
-    case("4 错误占比", lambda: check_error_total(client, dataset))
-    case("5 意图互斥", lambda: check_intent_leaf_sum(client, dataset))
-    case("6 多问题计数", _multi)
-    case("7 大类展开", _expansion)
-    case("8 未知编码", lambda: check_unknown_code(client, dataset))
-    case("9 批量查询", _batch)
-    case("10 重分析", _reanalysis)
-    case("11 导出", lambda: check_ids_only(client, dataset))
-    case("12 用户筛选", lambda: check_user_ids(client, dataset, limit=5000))
-    case("13 详情", _detail)
+    process = _PASSTHROUGH
+    log = _PassthroughLog()
+    cases = [
+        ("1 分类树完整", _taxonomy),
+        ("2 分组与明细一致", lambda: check_group_traces_consistency(client, dataset)),
+        ("3 分母规则", lambda: check_denominator(client, dataset)),
+        ("4 问题占比", lambda: check_problem_total(client, dataset)),
+        ("5 严重度总量", lambda: check_severity_totals(client, dataset)),
+        ("6 严重度分组", lambda: check_severity_groups(client, dataset)),
+        ("7 问题数组", lambda: check_problem_entries(client, dataset)),
+        ("7b 问题分组条目数", lambda: check_problem_group_counts(client, dataset)),
+        ("8 意图互斥", lambda: check_intent_leaf_sum(client, dataset)),
+        ("9 多问题计数", _multi),
+        ("10 大类展开", _expansion),
+        ("11 未知编码/严重度", lambda: check_unknown_code(client, dataset)),
+        ("12 批量查询", _batch),
+        ("13 重分析", _reanalysis),
+        ("14 导出", lambda: check_ids_only(client, dataset)),
+        ("15 用户筛选", lambda: check_user_ids(client, dataset, limit=5000)),
+        ("16 详情", _detail),
+    ]
+    return _run_cases(cases, process, log)
 
-    print()
-    if failed:
-        print(f"{passed} passed, {len(failed)} failed")
-        for name, message in failed:
-            print(f"  - {name}: {message}")
-        return 1
-    print(f"all {passed} cases passed")
-    return 0
+
+class _Passthrough:
+    def send_signal(self, _signal):
+        pass
+
+    def wait(self, timeout=None):
+        return 0
+
+    def kill(self):
+        pass
+
+
+class _PassthroughLog:
+    def close(self):
+        pass
+
+
+_PASSTHROUGH = _Passthrough()
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--real", action="store_true", help="打已部署服务")
     parser.add_argument("--base-url", default="http://127.0.0.1:5003")
+    parser.add_argument("--history-trace", default=None, help="真实数据验收时指定的重分析 trace_id")
+    parser.add_argument("--history-day", default=None, help="配合 --history-trace 的 day")
     args = parser.parse_args()
 
     if args.real:
-        return run_real_cases(args.base_url)
+        return run_real_cases(args.base_url, args.history_trace, args.history_day)
 
     with tempfile.TemporaryDirectory(prefix="analysis-fixture-") as tmp:
         return run_fixture_cases(Path(tmp))

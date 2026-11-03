@@ -36,6 +36,8 @@ ssh "$HOST_ALIAS" "set -e
   curl -fsS 'http://127.0.0.1:${PORT}/api/v1/analysis/taxonomy?kind=intent' | python3 -c 'import json,sys; d=json.load(sys.stdin); print(\"intent nodes\", len(d[\"data\"][\"nodes\"]))'
   curl -fsS 'http://127.0.0.1:${PORT}/api/v1/analysis/summary?dataset=aime_eval&group_by=intent' | python3 -c 'import json,sys; d=json.load(sys.stdin); print(\"summary total\", d[\"data\"][\"total\"])'
   curl -fsS 'http://127.0.0.1:${PORT}/api/v1/analysis/traces?dataset=aime_eval&page_size=1' | python3 -c 'import json,sys; d=json.load(sys.stdin); print(\"traces total\", d[\"data\"][\"total\"])'
+  curl -fsS 'http://127.0.0.1:${PORT}/api/v1/analysis/severity?dataset=aime_eval' | python3 -c 'import json,sys; d=json.load(sys.stdin); print(\"severity total\", d[\"data\"][\"total\"])'
+  curl -fsS 'http://127.0.0.1:${PORT}/api/v1/analysis/taxonomy?kind=severity' | python3 -c 'import json,sys; d=json.load(sys.stdin); print(\"severity nodes\", [n[\"code\"] for n in d[\"data\"][\"nodes\"]])'
 "
 
 echo "==> done: http://${HOST_ALIAS}:${PORT}/api/v1/analysis"
