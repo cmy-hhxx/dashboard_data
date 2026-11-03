@@ -1057,38 +1057,44 @@ function matrixTable(view) {
   return `<div class="matrix" style="--cols:${cols.length}">${html}</div>`;
 }
 
-/* Swap one matrix for the next without the layout jump: the old table stays in place while the
-   card height eases to the new one, the new table settles in on top, then the old one goes. */
+/* Swap one matrix for the next: the old table leaves first, then the new one fades in while the block
+   eases from the old height to the new one. The two tables are never painted together - cross-fading
+   them stacked the old and new column sets (different widths) on top of each other. */
 function swapMatrix(shell, html, animate) {
   clearTimeout(shell._swap);
+  clearTimeout(shell._settle);
+  const busy = shell.classList.contains("is-swapping");
+  const prev = shell.querySelector(".matrix");
   shell.classList.remove("is-swapping");
   shell.style.height = "";
-  shell.querySelectorAll(".matrix.is-out").forEach((el) => el.remove());
-  const prev = shell.querySelector(".matrix");
-  if (!animate || REDUCED || !prev) {
+  if (!animate || REDUCED || !prev || busy) {
     shell.innerHTML = html;
     return;
   }
-  prev.classList.remove("is-in", "is-on");
-  const from = shell.offsetHeight;
-  shell.insertAdjacentHTML("beforeend", html);
-  const next = shell.lastElementChild;
-  const to = next.offsetHeight;
+  prev.classList.remove("is-out", "is-in", "is-on");
+  const from = prev.offsetHeight;
   shell.style.height = `${from}px`;
   shell.classList.add("is-swapping");
   prev.classList.add("is-out");
-  next.classList.add("is-in");
-  void next.offsetWidth;
-  requestAnimationFrame(() => {
-    shell.style.height = `${to}px`;
-    setTimeout(() => next.classList.add("is-on"), 40);
-  });
   shell._swap = setTimeout(() => {
     prev.remove();
-    next.classList.remove("is-in", "is-on");
-    shell.classList.remove("is-swapping");
-    shell.style.height = "";
-  }, 520);
+    shell.insertAdjacentHTML("beforeend", html);
+    const next = shell.querySelector(".matrix");
+    if (!next) {
+      shell.classList.remove("is-swapping");
+      shell.style.height = "";
+      return;
+    }
+    next.classList.add("is-in");
+    shell.style.height = `${next.offsetHeight}px`;
+    void next.offsetWidth;
+    requestAnimationFrame(() => next.classList.add("is-on"));
+    shell._settle = setTimeout(() => {
+      next.classList.remove("is-in", "is-on");
+      shell.classList.remove("is-swapping");
+      shell.style.height = "";
+    }, 300);
+  }, 110);
 }
 
 function crumbPath(path, axis) {
@@ -1594,10 +1600,11 @@ function wire(bento, p, tax, u) {
       const back = $("#mxBack", bento);
       if (back) back.hidden = rowPath.length === 1 && colPath.length === 1;
     };
+    const activeMatrix = () => shell.querySelector(".matrix:not(.is-out)");
     const clearHover = () => {
       if (!mxKey) return;
       mxKey = "";
-      const m = shell.querySelector(".matrix");
+      const m = activeMatrix();
       if (!m) return;
       m.classList.remove("is-hover");
       $$(".is-hl, .is-cur", m).forEach((x) => x.classList.remove("is-hl", "is-cur"));
@@ -1606,7 +1613,7 @@ function wire(bento, p, tax, u) {
       const key = `${ri}:${ci}`;
       if (key === mxKey) return;
       mxKey = key;
-      const m = shell.querySelector(".matrix");
+      const m = activeMatrix();
       if (!m) return;
       m.classList.add("is-hover");
       $$(".cell", m).forEach((c) => {
@@ -1619,8 +1626,12 @@ function wire(bento, p, tax, u) {
       $$(".rowtot", m).forEach((h, i) => h.classList.toggle("is-hl", i === ri));
     };
     shell.addEventListener("pointerover", (e) => {
+      // The table under the pointer is being replaced: its cells belong to the old view.
+      if (shell.classList.contains("is-swapping")) return;
       const cell = e.target.closest(".cell[data-mx]");
       if (cell) {
+        // An empty cell is a gap in the heat map, not a row/column to read.
+        if (cell.classList.contains("is-empty")) return clearHover();
         const [ri, ci] = cell.dataset.mx.split(":").map(Number);
         return hover(ri, ci);
       }

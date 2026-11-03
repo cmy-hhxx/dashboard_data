@@ -703,27 +703,29 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 /* ------------------------------------------------------------------ 聚类矩阵 (neutral heat) */
 .matrix { display: grid; grid-template-columns: minmax(112px, 150px) repeat(var(--cols), minmax(0, 1fr)) 120px; gap: 4px; align-items: center; }
 #mxShell { position: relative; }
-/* The matrix follows the sunburst's rules: the block eases its height while the new table settles
-   onto the old one. The old table stays fully opaque underneath until the new one covers it, so no
-   frame shows only the card behind (that pale flash). */
-#mxShell.is-swapping { overflow: hidden; transition: height 420ms cubic-bezier(0.16, 1, 0.3, 1); }
+/* A drill replaces the whole table - other rows, other columns, other height - so the two tables are
+   never painted together: the old one leaves, then the new one arrives while the block eases to its
+   height. Cross-fading them stacked the old and new column sets (different widths) on top of each
+   other, which read as a single broken table. */
+#mxShell.is-swapping { overflow: hidden; transition: height 280ms cubic-bezier(0.2, 0.7, 0.2, 1); }
 #mxShell.is-swapping .matrix { position: absolute; left: 0; right: 0; top: 0; }
-.matrix.is-out { opacity: 0; transform: translateY(-4px); transition: opacity 150ms cubic-bezier(0.2, 0, 0, 1) 260ms, transform 420ms cubic-bezier(0.16, 1, 0.3, 1); }
-.matrix.is-in { opacity: 0; transform: translateY(8px); }
-.matrix.is-on { opacity: 1; transform: none; transition: opacity 260ms cubic-bezier(0.16, 1, 0.3, 1) 40ms, transform 420ms cubic-bezier(0.16, 1, 0.3, 1); }
-.matrix.is-hover .cell:not(.is-hl) { opacity: 0.45; }
-.matrix.is-hover .rh:not(.is-hl), .matrix.is-hover .mh:not(.is-hl) { color: var(--faint); }
-.matrix.is-hover .rowtot:not(.is-hl) { opacity: 0.45; }
+.matrix.is-out { opacity: 0; transition: opacity 110ms cubic-bezier(0.4, 0, 1, 1); }
+.matrix.is-in { opacity: 0; transform: translateY(4px); }
+.matrix.is-on { opacity: 1; transform: none; transition: opacity 170ms cubic-bezier(0.2, 0.7, 0.2, 1) 20ms, transform 220ms cubic-bezier(0.16, 1, 0.3, 1) 20ms; }
+/* Hover reads the row and column under the pointer; everything else only steps back a little. */
+.matrix.is-hover .cell:not(.is-hl) { opacity: 0.66; }
+.matrix.is-hover .rh:not(.is-hl), .matrix.is-hover .mh:not(.is-hl), .matrix.is-hover .rowtot:not(.is-hl) { opacity: 0.5; }
 .matrix .cell.is-cur { outline: 1.5px solid var(--faint); outline-offset: 1px; }
 .matrix .mh {
   display: flex; align-items: center; justify-content: center; gap: 4px; min-width: 0;
   padding-bottom: 6px; font-size: 12px; color: var(--muted); white-space: nowrap;
+  transition: opacity 180ms cubic-bezier(0.2, 0.7, 0.2, 1), color var(--snap);
 }
 .matrix .mh .mx-lab { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.35; }
 .matrix .rh {
   display: flex; align-items: center; gap: 8px; min-width: 0; height: 30px; padding: 0 8px; margin-left: -8px;
   border-radius: 6px; font-size: 13px; color: var(--ink-2); text-align: left; white-space: nowrap;
-  transition: background var(--snap), color var(--snap);
+  transition: background var(--snap), color var(--snap), opacity 180ms cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 .matrix .mx-lab { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .matrix .mx-caret {
@@ -737,13 +739,13 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .matrix .cell {
   display: grid; place-items: center; height: 30px; border-radius: 6px; font-size: 12px; color: var(--ink-2);
   background: color-mix(in oklab, var(--ink) calc(var(--v) * 100%), transparent);
-  transition: opacity var(--snap), transform var(--spring);
+  transition: opacity 180ms cubic-bezier(0.2, 0.7, 0.2, 1), transform 160ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 .matrix .cell:not(.is-empty) { cursor: pointer; }
-.matrix .cell:not(.is-empty):active { transform: scale(0.94); transition: transform var(--snap); }
+.matrix .cell:not(.is-empty):active { transform: scale(0.97); }
 .matrix .cell.is-empty { background: none; }
 .matrix .cell.hot { color: var(--card); }
-.matrix .rowtot { transition: opacity var(--snap); display: flex; align-items: center; gap: 8px; padding-left: 12px; font-size: 12px; color: var(--muted); }
+.matrix .rowtot { transition: opacity 180ms cubic-bezier(0.2, 0.7, 0.2, 1); display: flex; align-items: center; gap: 8px; padding-left: 12px; font-size: 12px; color: var(--muted); }
 .matrix .rowtot i { height: 4px; border-radius: 2px; background: var(--t2); }
 .matrix .rowtot-head { padding: 0 0 6px 12px; font-size: 12px; color: var(--muted); white-space: nowrap; }
 
