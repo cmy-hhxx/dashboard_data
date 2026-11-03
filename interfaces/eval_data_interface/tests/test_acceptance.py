@@ -324,18 +324,20 @@ def start_fixture_server(workdir: Path):
         stderr=subprocess.STDOUT,
     )
     base = f"http://127.0.0.1:{port}"
+    opener = Client(base).opener  # 同样绕开容器里的 http_proxy
     deadline = time.time() + 120
     while time.time() < deadline:
         if process.poll() is not None:
             raise SystemExit(f"服务进程退出：\n{(workdir / 'server.log').read_text()}")
         try:
-            with urllib.request.urlopen(base + "/healthz", timeout=2) as response:
+            with opener.open(base + "/healthz", timeout=2) as response:
                 payload = json.loads(response.read())
             if payload.get("ok"):
                 return process, base, data_root, log
         except Exception:  # noqa: BLE001
             pass
         time.sleep(0.3)
+    process.kill()  # 不留孤儿服务进程
     raise SystemExit(f"服务未就绪：\n{(workdir / 'server.log').read_text()}")
 
 
