@@ -1,0 +1,38 @@
+/* Standalone shell: keep only the right-hand pane of the dashboard sample page.
+   app.css is a snapshot of dashboard/static/app.css and carries every style
+   inside the pane; this file only reshapes the page around it. */
+html, body { min-height: 100%; }
+
+main#main { max-width: 1480px; padding: 8px var(--gutter) 12px; }
+
+#root { min-height: calc(100vh - 20px); }
+
+#root .bench {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  height: calc(100vh - 20px);
+  min-height: 560px;
+}
+#root .bench > aside { display: none; }
+#root .bench > .pane { height: 100%; }
+#root .bench .pane-sticky { top: 0; height: 100%; max-height: none; }
+#root .pager { display: none; }
+
+/* usage / error copy shown instead of a sample */
+.usage { max-width: 780px; margin: 12vh auto 0; padding: 0 8px 48px; }
+.usage h1 { font-size: 22px; font-weight: var(--w-title); letter-spacing: 0.01em; margin-bottom: 14px; }
+.usage p { color: var(--ink-2); line-height: 1.85; margin-bottom: 10px; }
+.usage p.faint { color: var(--muted); }
+.usage pre {
+  margin: 14px 0; padding: 16px 18px; overflow-x: auto;
+  background: var(--card); border-radius: var(--r-card); box-shadow: var(--shadow);
+  color: var(--ink-2); line-height: 1.9;
+}
+.usage code { font-family: var(--mono); font-size: 13px; }
+.usage a { color: var(--accent); }
+
+@media (max-width: 900px) {
+  main#main { padding: 8px 8px 12px; }
+  #root .bench { height: auto; min-height: 0; }
+  #root .bench .pane-sticky { position: static; height: auto; max-height: none; }
+}
