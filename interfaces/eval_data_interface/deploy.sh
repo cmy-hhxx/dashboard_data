@@ -8,9 +8,15 @@ HOST_ALIAS="${EVAL_DEPLOY_HOST:-eval_data}"
 REMOTE="${EVAL_DEPLOY_REMOTE:-/opt/eval_analysis}"
 PORT="${PORT:-5003}"
 
+# 与 dashboard/deploy.sh 一致：端口与密钥可用环境变量覆盖，否则交给 ~/.ssh/config
+SSH_OPTS=(-o ConnectTimeout=20)
+if [ -n "${EVAL_DEPLOY_PORT:-}" ]; then SSH_OPTS+=(-p "$EVAL_DEPLOY_PORT"); fi
+if [ -n "${EVAL_DEPLOY_KEY:-}" ]; then SSH_OPTS+=(-i "$EVAL_DEPLOY_KEY"); fi
+ssh() { command ssh "${SSH_OPTS[@]}" "$@"; }
+
 echo "==> rsync -> ${HOST_ALIAS}:${REMOTE}"
 ssh "$HOST_ALIAS" "mkdir -p '${REMOTE}'"
-rsync -az --delete \
+rsync -az --delete -e "ssh ${SSH_OPTS[*]}" \
   --exclude '.git' \
   --exclude 'state' \
   --exclude 'logs' \

@@ -73,6 +73,8 @@ def normalize(params):
 class App:
     def __init__(self):
         self.lock = threading.Lock()
+        # 同一时刻只跑一轮重建：两轮并发写同一个 SQLite 会撞 database is locked
+        self.build_lock = threading.Lock()
         self.snapshot = None
         self.last_build = {}
         self.building = False
@@ -80,18 +82,45 @@ class App:
         self.db_path = config.db_path()
 
     # -- 构建 ---------------------------------------------------------
+    @staticmethod
+    def _trees(log):
+        intent_tree = load_intent(config.INTENT_TAXONOMY_FILE)
+        error_trees = {}
+        for model_dir, (tree_path, _) in store.cluster_files(config.datasets_root() / config.AIME_DIR).items():
+            suffix = config.MODEL_SUFFIX.get(model_dir, model_dir)
+            try:
+                error_trees[f"__{suffix}"] = load_cluster(tree_path, model_dir)
+            except Exception as exc:  # noqa: BLE001
+                log(f"[warn] 问题树 {tree_path} 加载失败：{exc}")
+        return intent_tree, error_trees
+
+    def load_existing(self, log=print):
+        """重启时先用磁盘上的索引对外服务；增量重建在后台跑完后再替换快照。"""
+        if not self.db_path.exists():
+            return
+        try:
+            intent_tree, error_trees = self._trees(log)
+            conn = store.connect(self.db_path)
+            try:
+                snap = snapshot.load(conn, intent_tree, error_trees)
+            finally:
+                conn.close()
+            self._fix_app_versions(snap)
+            with self.lock:
+                if self.snapshot is None:
+                    self.snapshot = snap
+            log(f"[serve] 先用已有索引：traces={len(snap.traces)}")
+        except Exception as exc:  # noqa: BLE001 - 读不了就等首轮重建
+            log(f"[serve] 已有索引不可用：{exc}")
+
     def rebuild(self, log=print):
+        if not self.build_lock.acquire(blocking=False):
+            log("[build] 上一轮还在进行，跳过")
+            return
         self.building = True
         started = time.time()
         try:
-            intent_tree = load_intent(config.INTENT_TAXONOMY_FILE)
-            error_trees = {}
-            for model_dir, (tree_path, _) in store.cluster_files(config.datasets_root() / config.AIME_DIR).items():
-                suffix = config.MODEL_SUFFIX.get(model_dir, model_dir)
-                try:
-                    error_trees[f"__{suffix}"] = load_cluster(tree_path, model_dir)
-                except Exception as exc:  # noqa: BLE001
-                    log(f"[warn] 问题树 {tree_path} 加载失败：{exc}")
+            intent_tree, error_trees = self._trees(log)
             summary = store.build(log=log)
             conn = store.connect(self.db_path)
             try:
@@ -123,6 +152,7 @@ class App:
                 }
         finally:
             self.building = False
+            self.build_lock.release()
 
     def _fix_app_versions(self, snap):
         """把问题树按 trace 的 app_version 对齐。"""

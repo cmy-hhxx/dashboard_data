@@ -59,13 +59,11 @@ def command_status(args):
 
 
 def _background_build():
-    """先同步建一次索引，之后按 REFRESH_SECONDS 周期重建。"""
+    """启动后先建一次索引；之后的周期重建由 server.serve 的 refresh_loop 负责。"""
     started = time.time()
+    server.APP.load_existing(log=_log)
     server.APP.rebuild(log=_log)
     _log(f"[serve] 索引就绪，用时 {round(time.time() - started, 1)}s")
-    while True:
-        time.sleep(config.REFRESH_SECONDS)
-        server.APP.rebuild(log=_log)
 
 
 def command_serve(args):

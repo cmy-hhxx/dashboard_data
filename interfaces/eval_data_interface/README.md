@@ -108,14 +108,16 @@ python3 run.py status
 ## 部署与运维
 
 ```bash
-./deploy.sh                     # rsync 到 /opt/eval_analysis + 重启 + 冒烟
+./deploy.sh                     # rsync 到 /opt/eval_analysis + 重启 + 冒烟（EVAL_DEPLOY_HOST/PORT/KEY 可覆盖 ssh 别名）
 ssh eval_data 'cd /opt/eval_analysis && ./start.sh'
 ssh eval_data 'cd /opt/eval_analysis && ./stop.sh'
 curl -s http://117.50.195.94:3335/healthz
 ```
 
 `start.sh` 会等到 `/healthz` 返回 `ok:true`（首次构建实测 341 秒（扫 11.4 GB 输入）；
-之后按 `(size, mtime)` 增量，未变文件直接跳过）。
+之后按 `(size, mtime)` 增量，未变文件直接跳过）。重启时先用 `state/index.sqlite` 里已有的索引对外服务，
+几秒内即 `ok:true`，增量重建在后台跑完后替换快照；`eval_input` 只是追加时从上次最后一个完整换行续扫。
+周期重建只有一个循环（`REFRESH_SECONDS`），上一轮未结束时下一轮跳过。
 
 `/healthz` 字段：`ok`、`building`、`traces`、`data_updated_at`、`build`（最近一次构建摘要与耗时）。
 
@@ -123,6 +125,7 @@ curl -s http://117.50.195.94:3335/healthz
 
 ```bash
 python3 tests/test_acceptance.py                       # fixture，14 条
+python3 tests/test_store.py                            # store 层：脏字段入库、输入追加续扫
 python3 tests/test_acceptance.py --real --base-url http://127.0.0.1:5003   # 真实数据
 ```
 

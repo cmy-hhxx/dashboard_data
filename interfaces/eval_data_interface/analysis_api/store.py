@@ -7,6 +7,7 @@
 3. history：同一 trace 更早的分析记录（同一文件里被后一行覆盖的那些）。
 
 每个文件按 (size, mtime, 依赖文件签名) 判断是否需要重扫，未变直接跳过。
+eval_input 是 GB 级、持续追加的文件：头部未变且只是变长时，从上次最后一个完整换行续扫。
 """
 
 import hashlib
@@ -16,6 +17,7 @@ import sqlite3
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import unquote
 
 from . import config, timeutil
 
@@ -82,7 +84,13 @@ CREATE TABLE IF NOT EXISTS problem_codes(
     file TEXT
 );
 CREATE INDEX IF NOT EXISTS problem_codes_file ON problem_codes(file);
+CREATE INDEX IF NOT EXISTS problem_codes_trace ON problem_codes(trace_id, day, app_version);
+CREATE INDEX IF NOT EXISTS history_trace ON history(trace_id, day, app_version);
 """
+
+# 旧库没有的列：input 续扫需要上次提交到的字节、行数和文件头指纹
+FILE_COLUMNS = {"committed": "INTEGER", "lines": "INTEGER", "prefix": "TEXT"}
+PREFIX_BYTES = 65536
 
 TRACE_ID_RE = re.compile(rb'"trace_id"\s*:\s*"([^"\s]{4,80})"')
 ATTR_RE = re.compile(r"^(?P<model>.+)_attribution-(?P<day>\d{4}-\d{2}-\d{2})\.jsonl$")
@@ -97,9 +105,19 @@ def connect(path):
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path))
     conn.executescript(SCHEMA)
+    have = {row[1] for row in conn.execute("PRAGMA table_info(files)")}
+    for name, kind in FILE_COLUMNS.items():
+        if name not in have:
+            conn.execute(f"ALTER TABLE files ADD COLUMN {name} {kind}")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     return conn
+
+
+def _lines(path: Path):
+    """逐行读，读完即关文件（直接迭代 path.open() 要等 GC 才释放句柄）。"""
+    with path.open("rb") as handle:
+        yield from handle
 
 
 def _file_sig(path: Path):
@@ -113,16 +131,38 @@ def _analysis_id(rel_path: str, line: int) -> str:
 
 
 def _decoded(value):
-    if not isinstance(value, str):
-        return value
-    if "%" in value:
-        from urllib.parse import unquote
-
+    """问句转成可入库、可搜索的文本；URL 编码的解码。"""
+    value = _text(value)
+    if value and "%" in value:
         try:
             return unquote(value)
         except Exception:  # noqa: BLE001 - 解不开就保留原文
             return value
     return value
+
+
+def _text(value):
+    """数据里偶尔不是字符串：问卷式问句是 [{header, selected}]，ID 可能是数字。"""
+    if value is None or isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            if isinstance(item, dict) and ("header" in item or "selected" in item):
+                picked = item.get("selected")
+                picked = "、".join(map(str, picked)) if isinstance(picked, list) else _text(picked) or ""
+                parts.append(f"{item.get('header') or ''}：{picked}".strip("："))
+            else:
+                parts.append(_text(item) or "")
+        return "；".join(part for part in parts if part) or None
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _clean(value):
+    text = _text(value)
+    return (text or "").strip() or None
 
 
 class ItemCodes:
@@ -150,7 +190,7 @@ def load_item_codes(path: Path, log=None) -> tuple[ItemCodes, str]:
     if not path.exists():
         return codes, ""
     sig = _file_sig(path)
-    for raw in path.open("rb"):
+    for raw in _lines(path):
         try:
             item = json.loads(raw)
         except ValueError:
@@ -214,12 +254,19 @@ def _cached_sig(conn, path: Path):
     return row[0] if row else None
 
 
-def _store_sig(conn, path: Path, sig: str, kind: str):
+def _store_sig(conn, path: Path, sig: str, kind: str, committed=None, lines=None, prefix=None):
     conn.execute(
-        "INSERT INTO files(path, sig, kind, scanned_at) VALUES (?, ?, ?, ?) "
-        "ON CONFLICT(path) DO UPDATE SET sig=excluded.sig, kind=excluded.kind, scanned_at=excluded.scanned_at",
-        (str(path), sig, kind, timeutil.utc_rfc3339(datetime.now(timezone.utc))),
+        "INSERT INTO files(path, sig, kind, scanned_at, committed, lines, prefix) VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(path) DO UPDATE SET sig=excluded.sig, kind=excluded.kind, scanned_at=excluded.scanned_at, "
+        "committed=excluded.committed, lines=excluded.lines, prefix=excluded.prefix",
+        (str(path), sig, kind, timeutil.utc_rfc3339(datetime.now(timezone.utc)), committed, lines, prefix),
     )
+
+
+def _prefix(path: Path, size: int) -> str:
+    """文件头指纹：只取已提交的前 size 字节（至多 64 KB），小文件追加也能续扫。"""
+    with path.open("rb") as handle:
+        return hashlib.sha1(handle.read(min(size, PREFIX_BYTES))).hexdigest()
 
 
 def _intent_lookup(intent_tree):
@@ -260,7 +307,7 @@ def ingest_attribution(conn, aime: Path, item_codes_by_model, intent_tree, log):
         kept: dict[str, dict] = {}
         order: list[str] = []
         line_offset = 0
-        for line_no, raw in enumerate(path.open("rb"), 1):
+        for line_no, raw in enumerate(_lines(path), 1):
             current_offset = line_offset
             line_offset += len(raw)
             try:
@@ -269,19 +316,19 @@ def ingest_attribution(conn, aime: Path, item_codes_by_model, intent_tree, log):
                 log(f"[warn] {basename}:{line_no} 不是合法 JSON，已跳过")
                 continue
             smeta = record.get("session_meta") or {}
-            session_id = smeta.get("session_id") or smeta.get("thread_id")
+            session_id = _text(smeta.get("session_id") or smeta.get("thread_id"))
             question = _decoded(smeta.get("question"))
             session_problems = record.get("session_problem") or []
             turns = record.get("turns") or []
             for turn_index, turn in enumerate(turns):
                 meta = turn.get("meta") or {}
-                trace_id = meta.get("trace_id")
+                trace_id = _text(meta.get("trace_id"))
                 if not trace_id:
                     continue
                 stamp = timeutil.parse_iso(meta.get("timestamp")) or timeutil.parse_iso(smeta.get("request_time"))
                 day = timeutil.cn_day(stamp) or default_day
-                task = (meta.get("task") or "").strip() or None
-                subtask = (meta.get("subtask") or "").strip() or None
+                task = _clean(meta.get("task"))
+                subtask = _clean(meta.get("subtask"))
                 intent_code = lookup.get((2, subtask)) if subtask else None
                 if intent_code is None and task:
                     intent_code = lookup.get((1, task))
@@ -320,7 +367,7 @@ def ingest_attribution(conn, aime: Path, item_codes_by_model, intent_tree, log):
                     "app_version": f"{meta.get('model') or model_dir}_{suffix}",
                     "asked_at": timeutil.utc_rfc3339(stamp),
                     "source": source,
-                    "user_id": meta.get("user_id"),
+                    "user_id": _text(meta.get("user_id")),
                     "question": question,
                     "session_id": session_id,
                     "intent_code": intent_code,
@@ -384,34 +431,53 @@ def ingest_attribution(conn, aime: Path, item_codes_by_model, intent_tree, log):
 
 
 def ingest_inputs(conn, aime: Path, log):
-    """扫描 eval_input 的行号，建立 trace_id → (文件, 偏移) 索引。"""
-    stats = {"files": 0, "skipped": 0, "traces": 0}
+    """扫描 eval_input 的行号，建立 trace_id → (文件, 偏移) 索引。
+
+    文件头 64 KB 没变、只是变长时，从上次最后一个完整换行处续扫，已有的行不动；
+    其余情况（新文件、被截短或重写）整份重扫。未写完的末行照常建索引，
+    但不计入续扫起点，下次连同写完的部分重新读一遍。
+    """
+    stats = {"files": 0, "skipped": 0, "traces": 0, "resumed": 0}
     for path, model_dir, split in _input_files(aime):
         sig = _file_sig(path)
-        if _cached_sig(conn, path) == sig:
+        prev = conn.execute(
+            "SELECT sig, committed, lines, prefix FROM files WHERE path = ?", (str(path),)
+        ).fetchone()
+        if prev and prev[0] == sig:
             stats["skipped"] += 1
             continue
         suffix = config.MODEL_SUFFIX.get(model_dir, model_dir)
         match = INPUT_DAY_RE.search(path.name)
         file_day = match.group("day") if match else None
-        conn.execute("DELETE FROM input_index WHERE path = ?", (str(path),))
+        start, line_no = 0, 0
+        if (prev and prev[1] is not None and path.stat().st_size >= prev[1]
+                and prev[3] == _prefix(path, prev[1])):
+            start, line_no = prev[1], prev[2] or 0
+            stats["resumed"] += 1
+        else:
+            conn.execute("DELETE FROM input_index WHERE path = ?", (str(path),))
         rows = []
-        offset = 0
+        offset = committed = start
+        lines = line_no
         with path.open("rb") as handle:
-            for line_no, raw in enumerate(handle, 1):
+            handle.seek(start)
+            for raw in handle:
+                line_no += 1
                 for trace_id in TRACE_ID_RE.findall(raw):
                     tid = trace_id.decode("utf-8", "replace")
                     rows.append((tid, file_day, suffix, str(path), offset, line_no))
                 offset += len(raw)
+                if raw.endswith(b"\n"):
+                    committed, lines = offset, line_no
         conn.executemany(
             "INSERT OR IGNORE INTO input_index(trace_id, day, app_version, path, offset, line) VALUES (?, ?, ?, ?, ?, ?)",
             rows,
         )
-        _store_sig(conn, path, sig, "input")
+        _store_sig(conn, path, sig, "input", committed, lines, _prefix(path, committed))
         conn.commit()
         stats["files"] += 1
         stats["traces"] += len(rows)
-        log(f"[index] input {path.name}: {len(rows)} traces")
+        log(f"[index] input {path.name}: {'+' if start else ''}{len(rows)} traces")
     return stats
 
 
@@ -494,6 +560,7 @@ def build(root: Path | None = None, log=None) -> dict:
             "history": history,
             "input_traces": inputs_total,
             "input_files": inputs["files"],
+            "resumed_input": inputs["resumed"],
             "attribution_files": attribution["files"],
             "skipped_attribution": attribution["skipped"],
             "skipped_input": inputs["skipped"],

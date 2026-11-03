@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+import threading
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -36,6 +37,10 @@ class Trace:
     offset: int
 
 
+def _trace_order(trace):
+    return (trace.asked_at or "", trace.trace_id)
+
+
 class Snapshot:
     def __init__(self, traces, intent_tree, error_trees, data_updated_at, build_summary=None):
         self.traces: list[Trace] = traces
@@ -44,6 +49,8 @@ class Snapshot:
         self.data_updated_at = data_updated_at
         self.build_summary = build_summary or {}
         self.built_at = timeutil.utc_rfc3339(datetime.now(timezone.utc))
+        # /traces 的固定顺序 (asked_at DESC, trace_id DESC)，排一次，筛选后保持
+        traces.sort(key=_trace_order, reverse=True)
         self.by_id: dict[str, list[Trace]] = {}
         for trace in traces:
             self.by_id.setdefault(trace.trace_id, []).append(trace)
@@ -513,9 +520,9 @@ def _item(trace: Trace):
 
 def traces(snap: Snapshot, filters: Filters, page_size=20, cursor=None, ids_only=False):
     matcher = Matcher(snap, filters)
+    # snap.traces 已按 (asked_at, trace_id) 倒序
     selected = [t for t in snap.traces if matcher.match(t, with_error=True)]
     total = len(selected)
-    selected.sort(key=lambda t: (t.asked_at or "", t.trace_id), reverse=True)
 
     upper = 5000 if ids_only else 100
     if page_size < 1 or page_size > upper:
@@ -585,15 +592,18 @@ def batch(snap: Snapshot, trace_ids, filters: Filters):
 
 _LINE_CACHE: "OrderedDict[tuple, dict]" = OrderedDict()
 _LINE_CACHE_MAX = 32
+# ThreadingHTTPServer 的请求线程共用这份 LRU
+_LINE_LOCK = threading.Lock()
 
 
 def _read_offset_line(path: str, offset: int):
     """按偏移读一行 JSON；详情默认按行读，重复访问命中 LRU。"""
     key = (path, offset)
-    cached = _LINE_CACHE.get(key)
-    if cached is not None:
-        _LINE_CACHE.move_to_end(key)
-        return cached
+    with _LINE_LOCK:
+        cached = _LINE_CACHE.get(key)
+        if cached is not None:
+            _LINE_CACHE.move_to_end(key)
+            return cached
     try:
         with open(path, "rb") as handle:
             handle.seek(offset)
@@ -604,9 +614,10 @@ def _read_offset_line(path: str, offset: int):
         parsed = json.loads(raw)
     except ValueError:
         return None
-    _LINE_CACHE[key] = parsed
-    while len(_LINE_CACHE) > _LINE_CACHE_MAX:
-        _LINE_CACHE.popitem(last=False)
+    with _LINE_LOCK:
+        _LINE_CACHE[key] = parsed
+        while len(_LINE_CACHE) > _LINE_CACHE_MAX:
+            _LINE_CACHE.popitem(last=False)
     return parsed
 
 
@@ -636,7 +647,22 @@ def detail(snap: Snapshot, db_path, dataset: str, trace_id: str, day: str | None
     attribution = _read_offset_line(trace.file, trace.offset)
     turn = _pick_turn(attribution, trace_id) if attribution else None
 
-    codes = _problem_codes(db_path, trace_id, day, trace.app_version)
+    # 编码、原始输入位置、历史版本：一个只读连接查完
+    codes, input_ref, history = {}, None, []
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        conn = None
+    if conn is not None:
+        try:
+            codes = _problem_codes(conn, trace_id, day, trace.app_version)
+            input_ref = _input_ref(conn, trace_id, day)
+            history = _history(conn, trace_id, day, trace.app_version)
+        except sqlite3.Error:
+            pass
+        finally:
+            conn.close()
+
     problems = []
     if turn:
         for idx, problem in enumerate(turn.get("problem") or []):
@@ -649,8 +675,7 @@ def detail(snap: Snapshot, db_path, dataset: str, trace_id: str, day: str | None
             for code in trace.error_codes
         ]
 
-    input_row = _input_record(db_path, trace_id, day)
-    history = _history(db_path, trace_id, day, trace.app_version)
+    input_row = _read_offset_line(*input_ref) if input_ref else None
 
     return {
         "trace_id": trace.trace_id,
@@ -678,18 +703,11 @@ def detail(snap: Snapshot, db_path, dataset: str, trace_id: str, day: str | None
     }
 
 
-def _problem_codes(db_path, trace_id, day, app_version):
-    try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    except sqlite3.Error:
-        return {}
-    try:
-        rows = conn.execute(
-            "SELECT scope, idx, code FROM problem_codes WHERE trace_id = ? AND day = ? AND app_version = ?",
-            (trace_id, day, app_version),
-        ).fetchall()
-    finally:
-        conn.close()
+def _problem_codes(conn, trace_id, day, app_version):
+    rows = conn.execute(
+        "SELECT scope, idx, code FROM problem_codes WHERE trace_id = ? AND day = ? AND app_version = ?",
+        (trace_id, day, app_version),
+    ).fetchall()
     return {(scope, idx): code for scope, idx, code in rows}
 
 
@@ -715,39 +733,23 @@ def _find_trace_object(record, trace_id):
     return None
 
 
-def _input_record(db_path, trace_id, day):
-    try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    except sqlite3.Error:
-        return None
-    try:
-        row = conn.execute(
-            "SELECT path, offset FROM input_index WHERE trace_id = ? AND day = ?", (trace_id, day)
-        ).fetchone()
-        if not row:
-            row = conn.execute(
-                "SELECT path, offset FROM input_index WHERE trace_id = ? LIMIT 1", (trace_id,)
-            ).fetchone()
-    finally:
-        conn.close()
+def _input_ref(conn, trace_id, day):
+    row = conn.execute(
+        "SELECT path, offset FROM input_index WHERE trace_id = ? AND day = ?", (trace_id, day)
+    ).fetchone()
     if not row:
-        return None
-    return _read_offset_line(row[0], row[1])
+        row = conn.execute(
+            "SELECT path, offset FROM input_index WHERE trace_id = ? LIMIT 1", (trace_id,)
+        ).fetchone()
+    return tuple(row) if row else None
 
 
-def _history(db_path, trace_id, day, app_version):
-    try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    except sqlite3.Error:
-        return []
-    try:
-        rows = conn.execute(
-            "SELECT analysis_id, analyzed_at, intent_code, error_codes, file, line FROM history "
-            "WHERE trace_id = ? AND day = ? AND app_version = ? ORDER BY analyzed_at DESC, line DESC",
-            (trace_id, day, app_version),
-        ).fetchall()
-    finally:
-        conn.close()
+def _history(conn, trace_id, day, app_version):
+    rows = conn.execute(
+        "SELECT analysis_id, analyzed_at, intent_code, error_codes, file, line FROM history "
+        "WHERE trace_id = ? AND day = ? AND app_version = ? ORDER BY analyzed_at DESC, line DESC",
+        (trace_id, day, app_version),
+    ).fetchall()
     out = []
     for analysis_id, analyzed_at, intent_code, codes, file, line in rows:
         try:
