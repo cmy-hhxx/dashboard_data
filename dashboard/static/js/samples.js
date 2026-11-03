@@ -98,6 +98,8 @@ export async function render(r, c) {
   }
   syncFilters();
   renderList();
+  S.traceMiss = null;
+  const focusTrace = params().get("trace") || "";
   const wanted = params().get("case");
   let session = wanted
     ? S.all.find((x) => x.key === wanted) || S.all.find((x) => x.rows.some((r) => r.s === wanted))
@@ -107,8 +109,9 @@ export async function render(r, c) {
   const focusSlug = wanted && wanted !== key ? wanted : null;
   if (wanted !== key) c.navigate({ case: key }, { replace: true });
   revealPage(key);
-  if (key !== S.sessionKey || !S.D) await loadSession(session, focusSlug);
+  if (key !== S.sessionKey || !S.D) await loadSession(session, focusSlug, focusTrace);
   else if (focusSlug) selectSlugRound(focusSlug);
+  else if (focusTrace) selectTraceRound(focusTrace);
   markCurrent();
   const p = params().get("p");
   if (p != null && S.D) {
@@ -119,6 +122,7 @@ export async function render(r, c) {
     }
     requestAnimationFrame(() => flash($(`#pc-${pid}`, root)));
   }
+  return { trace: focusTrace || null, traceMiss: S.traceMiss };
 }
 
 /* ---------------------------------------------------------------- skeleton & filters */
@@ -443,6 +447,7 @@ function withRounds(part) {
     trace: Math.min(i, lastTrace),
     turn: i,
     compact: i,
+    tid: d.attribution?.turns?.[i]?.trace_id || "",
   }));
   return d;
 }
@@ -508,6 +513,7 @@ function mergeSessionDetails(parts, session) {
         slug: part.slug, trace: startTrace + i,
         turn: D.attribution.turns.length - 1,
         compact: D.compact.turns.length - 1,
+        tid: turn?.trace_id || "",
       });
     }
 
@@ -535,7 +541,7 @@ function mergeSessionDetails(parts, session) {
   return D;
 }
 
-async function loadSession(session, focusSlug) {
+async function loadSession(session, focusSlug, focusTrace) {
   S.slug = session.key;
   S.sessionKey = session.key;
   S.session = session;
@@ -567,6 +573,12 @@ async function loadSession(session, focusSlug) {
   if (focusSlug && kept.length > 1) {
     const at = D.rounds.findIndex((r) => r.slug === focusSlug);
     if (at >= 0) S.round = at;
+  }
+  S.traceMiss = null;
+  if (focusTrace) {
+    const at = D.rounds.findIndex((r) => r.tid === focusTrace);
+    if (at >= 0) S.round = at;
+    else S.traceMiss = focusTrace;
   }
   const init = D.rounds[S.round];
   S.trace = init?.trace ?? 0;
@@ -605,6 +617,12 @@ function selectRound(i, { scroll = true } = {}) {
   renderTrace();
   renderOut();
   if (scroll) scrollRound(round);
+}
+
+function selectTraceRound(trace) {
+  const at = (S.D?.rounds || []).findIndex((r) => r.tid && r.tid === trace);
+  if (at >= 0) selectRound(at, { scroll: false });
+  return at;
 }
 
 function selectSlugRound(slug) {
@@ -879,6 +897,7 @@ function onInputClick(e) {
   const tab = e.target.closest("#ttabs [data-t]");
   if (tab) {
     selectRound(tab.dataset.t === "session" ? "session" : Number(tab.dataset.t));
+    if (params().get("trace")) ctx.navigate({ trace: null }, { replace: true });
     return;
   }
   const copy = e.target.closest("[data-copy]");

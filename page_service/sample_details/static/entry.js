@@ -12,6 +12,7 @@ const params = new URLSearchParams(location.search);
 const product = params.get("product") || "";
 const caseKey = params.get("case") || "";
 const slug = params.get("slug") || "";
+const focusTrace = params.get("trace") || "";
 
 const esc = (value) =>
   String(value == null ? "" : value).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
@@ -26,7 +27,8 @@ function usage() {
     <p>这个地址单独展示一个样本的评测输入与输出：轨迹、对话与归因，和看板「具体数据」页右侧的详情一致。</p>
     <p>在地址后面带上参数之一：</p>
     <pre><code>?product=wencai&amp;case=daily%7Cb_fast%7Cthread_…   一个会话（多轮自动合并）
-?product=wencai&amp;slug=4941606c59                 一条评测输出</code></pre>
+?product=wencai&amp;slug=4941606c59                 一条评测输出
+&amp;trace=&lt;trace_id&gt;                            直接定位到会话里的某一轮</code></pre>
     <p class="faint">完整链接向数据负责人索取；不带参数的地址就是本说明页。</p>
   </div>`;
 }
@@ -39,6 +41,7 @@ async function boot() {
   if (product) query.set("product", product);
   if (caseKey) query.set("case", caseKey);
   if (slug) query.set("slug", slug);
+  if (focusTrace) query.set("trace", focusTrace);
 
   let response;
   try {
@@ -69,7 +72,10 @@ async function boot() {
     },
   };
 
-  await render(root, ctx);
+  const result = await render(root, ctx);
+  if (result && result.traceMiss) {
+    return message("没有找到这条 trace", `链接里的 trace（${result.traceMiss}）不在这个会话里；可能是链接过期，或它属于别的会话。去掉 trace 参数可查看会话默认轮。`);
+  }
   const headline = root.querySelector("#shead h2");
   if (headline && headline.textContent) document.title = `${headline.textContent} · 样本详情`;
 }

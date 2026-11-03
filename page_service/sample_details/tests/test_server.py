@@ -156,6 +156,15 @@ class SampleDetailsTest(unittest.TestCase):
         self.assertEqual([r["s"] for r in payload["index"]["products"]["wencai"]["rows"]],
                          ["aaaaaaaaaa", "bbbbbbbbbb"])
 
+    def test_context_echoes_trace(self):
+        status, _, body = fetch(self.base + "/api/context?product=wencai&case=daily%7Cb_fast%7Cthread_1"
+                                "&trace=20003020179337992707500000000286")
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["trace"], "20003020179337992707500000000286")
+        _, _, body = fetch(self.base + "/api/context?product=wencai&case=daily%7Cb_fast%7Cthread_1")
+        self.assertIsNone(json.loads(body)["trace"])
+
     def test_context_misses(self):
         for query, expected in (("?product=wencai&case=daily%7Cb_fast%7Cthread_404", 404),
                                 ("?product=wencai", 400),

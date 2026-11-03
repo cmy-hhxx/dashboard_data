@@ -17,15 +17,16 @@ http://<看板主机>:2833/?product=&case=  ──> /api/context（迷你索引�
 
 | 路径 | 说明 |
 |---|---|
-| `/`、`/detail` | 页面。带 `?product=wencai&case=daily%7Cb_fast%7Cthread_…`（一个会话，多轮自动合并）或 `?product=wencai&slug=<10位hex>`（一条评测输出）；不带参数时是使用说明页 |
-| `/api/context?…` | 页面用：只返回这个会话的那几行召回索引 + taxonomy（AIME 全量索引 8.1 MB，不下发浏览器） |
+| `/`、`/detail` | 页面。带 `?product=wencai&case=daily%7Cb_fast%7Cthread_…`（一个会话，多轮自动合并）或 `?product=wencai&slug=<10位hex>`（一条评测输出）；再加 `&trace=<trace_id>` 可直接定位到会话里的某一轮；不带参数时是使用说明页 |
+| `/api/context?…` | 页面用：只返回这个会话的那几行召回索引 + taxonomy（AIME 全量索引 8.1 MB，不下发浏览器）；带 `trace` 时原样回显（定位在前端做，详情里才有每轮 trace_id） |
 | `/samples/<slug>.json` | 原样透传单条详情（与看板同路径，首次请求会触发看板懒生成，0.5–4 s） |
 | `/samples-<product>.json` | 原样透传召回索引（给同事的系统对接用） |
 | `/healthz` | 存活 + 上游探活 |
 
 页面链接的用法：在看板里选中一个样本，复制地址栏的
 `?view=samples&product=…&case=…`，把 `<看板主机>:2768` 换成 `<看板主机>:2833` 即可
-（`view` 参数会被忽略）；也可以直接用 `slug`。
+（`view` 参数会被忽略）；也可以直接用 `slug`。要定位到某一轮，再带上 `&trace=<trace_id>`
+（5003 `/traces` 的 trace_id）；找不到时页面会明确报错，不会静默换轮。
 
 ## 前端快照
 

@@ -83,7 +83,7 @@ server.py（标准库 HTTP，:5001，定时 build）──> app.js
 |---|---|---|
 | `?view=data&product=wencai\|aime` | `data.js` | 会话场、数据量、评测量、归因、聚类、预测、聚类矩阵；所有下钻都在页内 |
 | `?view=system&product=…` | `system.js` | 评测体系机制图（输入 → 压缩 → 归因 → 聚类）、证据闭环 |
-| `?view=samples&product=…&case=…` | `samples.js` | 具体数据两栏：问句列表 | 同卡上方轨迹概览 + 三列（轨迹 / 对话 / 归因）；证据连线在对话与归因之间 |
+| `?view=samples&product=…&case=…&trace=…` | `samples.js` | 具体数据两栏：问句列表 | 同卡上方轨迹概览 + 三列（轨迹 / 对话 / 归因）；证据连线在对话与归因之间；`trace` 定位到会话里的某一轮 |
 | `?view=data&detail=eval&ed=…&em=…` | `data.js` | 评测量详情：日期 → 模型 → session 三层表格；最后一层进入具体数据的完整输入/输出 |
 
 顶部右侧是全局产品切换（问财 / AIME），也是数据源指示；不要在每个卡片里重复放切换。
@@ -224,7 +224,7 @@ tr 轮数 · mc 消息数 · lang · case · s 短 slug
   `PORT` / `REFRESH_SECONDS` / `STATS_WORKER` 覆盖（`deploy.sh` 会把本地设置的这三个变量带到远端）。
   预发：`EVAL_DEPLOY_REMOTE=/opt/eval_dashboard_2 PORT=5004 STATS_WORKER=0 ./dashboard/deploy.sh`。
   **端口角色固定**：`5001` 展示（看板生产）、`5002` 页面接口、`5003` 供数（数据接口，当前是对话分析
-  查询接口）、`5004` 开发调试、`5005` 备用；开发调试用 `5004`，不要占用 `5001` / `5002` / `5003`。
+  查询接口 v2）、`5004` 开发调试、`5005` 备用；开发调试用 `5004`，不要占用 `5001` / `5002` / `5003`。
   两台服务器映射见 `servers.conf` 与 `docs/dashboard-deployment.md`。
 - **推拉布局**：`data.js` 的 `pushPull` 管两行（`bento[data-top]` / `bento[data-bottom]`）。旭日图到最里层（焦点的子节点都是叶子，
   或在非根焦点下选中叶子）时自动展开，评测量 / 归因 / 预测由点击触发；同一行其它卡加 `.is-compact` 只留 `.compact` 关键数字。

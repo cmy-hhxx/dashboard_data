@@ -131,7 +131,8 @@ tokens / task-subtask / lost 统计写到 `<datasets>/stats.json`；`build.py` �
   meta 两行展示角色/组件与完整聚类 path（不省略，按需换行），证据按钮在 details 里按需展开。紧凑轨迹列展示会话概览、规划、执行、工具错误、反思与关键数据。
 - 右栏三列共用一次滚动；归因视图在问题卡片与命中消息之间画证据连线，悬停问题聚焦相关消息与连线。
 - User / Session / Trace ID 不在页面展示，只提供复制按钮；样本 URL 使用短 slug。
-- 归因/体系页通过 `?view=samples&product=…&case=…` 深链进入；
+- 归因/体系页通过 `?view=samples&product=…&case=…` 深链进入，加 `&trace=<trace_id>`
+  可定位到会话里的某一轮（`trace` = 5003 `/traces` 的 trace_id）；
   搜索、严重度、模型、阶段 / 机制 / 模式与头部轮次同步到 URL。问财暂无样本时保持问财选中并给出 AIME 入口，
   不再自动改写 `product` 路由。
 - 详情按样本懒加载：当前产品的 `samples-<product>.json` 只含召回索引与筛选面，

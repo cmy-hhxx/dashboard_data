@@ -24,6 +24,17 @@ https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail/?product=aime&slug=ba6ba
 `case` 是 `split|model|session_id`，也可以直接传 10 位小写 slug。AIME 一个会话的多轮评测会合并成一页，
 默认停在最后一轮。
 
+**定位到会话里的某一轮**：加 `&trace=<trace_id>`（5003 `/traces` 的 `trace_id`，也就是详情里
+`attribution.turns[].trace_id` 的那套 ID）：
+
+```text
+https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail/?product=aime&case=daily%7Caime_fast%7Cthread_19de…&trace=20003020179337992707500000000286
+```
+
+- 找到 → 选中并滚动到该轮，归因区显示该轮的问题；URL 保留 `trace`，刷新仍定位同一轮。
+- 找不到 → 页面明确提示“trace 不在这个会话里”，不会静默停在别的轮。
+- `trace` 必须和 `case`（或 `slug`）一起用；单独给 `trace` 无法定位会话。
+
 ## 2. 接口
 
 > 下面示例里的 `$BASE` = `https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail`；
@@ -45,6 +56,7 @@ https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail/?product=aime&slug=ba6ba
 | `product` | 否 | `wencai` / `aime`；省略时两个产品都会尝试 |
 | `case` | 二选一 | `split\|model\|session_id`（即索引行的 `sp\|m\|sid`），需 URL 编码 |
 | `slug` | 二选一 | 10 位小写十六进制 |
+| `trace` | 否 | trace_id；仅回显，用于页面定位。轮次匹配在前端按详情 `attribution.turns[].trace_id` 做 |
 
 ```bash
 curl -sG "$BASE/api/context" \
@@ -52,7 +64,8 @@ curl -sG "$BASE/api/context" \
   --data-urlencode 'case=daily|aime_expert|thread_1f9a49fdcdf041b39e84f12e6a3b147e'
 ```
 
-响应结构 `{product, index:{rows, models, splits, …}, taxonomy}`；`rows[0].s` 就是详情接口的 slug。
+响应结构 `{product, index:{rows, models, splits, …}, taxonomy, trace}`；`rows[0].s` 就是详情接口的 slug，
+`trace` 是请求里带的 trace_id（未带为 `null`）。
 
 | 字段 | 含义 |
 |---|---|
@@ -99,6 +112,7 @@ curl -s --compressed "$BASE/samples-wencai.json" -o index.json
 - 首次打开慢：详情按需生成，未访问过的样本约 0.5–4 秒，之后走磁盘缓存；AIME 多轮会话首次更久
 - `/api/context` 索引有 120 秒进程内缓存，看板刚重建完最多约 2 分钟后才跟上
 - 无鉴权，仅内部使用；只读，避免高频批量拉取；建议先 `/api/context` 定位会话，再取详情
+- 想看某一轮：`?case=…&trace=<trace_id>`；轮次位置在详情 `attribution.turns[].trace_id` 里自行匹配
 - 不支持列表搜索、批量导出
 
 ## 4. 部署与端口（维护者）

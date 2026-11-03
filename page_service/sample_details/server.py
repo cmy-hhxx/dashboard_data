@@ -239,6 +239,7 @@ class Handler(SimpleHTTPRequestHandler):
         product = (query.get("product") or [""])[0].strip()
         case = (query.get("case") or [""])[0].strip()
         slug = (query.get("slug") or [""])[0].strip()
+        trace = (query.get("trace") or [""])[0].strip()
         if product and product not in PRODUCTS:
             return self._error(400, "bad product")
         if slug and not SLUG_RE.match(slug):
@@ -247,9 +248,13 @@ class Handler(SimpleHTTPRequestHandler):
             return self._error(400, "case or slug required")
         if len(case) > 400:
             return self._error(400, "bad case")
+        if len(trace) > 120:
+            return self._error(400, "bad trace")
         context = resolve(product, case, slug)
         if context is None:
             return self._error(404, "sample not found", product=product or None, case=case or None, slug=slug or None)
+        # trace 只回显；轮次定位在前端做（详情里才有每轮 trace_id），见 README
+        context["trace"] = trace or None
         return self._json(200, context)
 
     def _detail(self, slug):
