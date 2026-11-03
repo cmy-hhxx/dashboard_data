@@ -709,7 +709,7 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
    other, which read as a single broken table. */
 #mxShell.is-swapping { overflow: hidden; transition: height 280ms cubic-bezier(0.2, 0.7, 0.2, 1); }
 #mxShell.is-swapping .matrix { position: absolute; left: 0; right: 0; top: 0; }
-.matrix.is-out { opacity: 0; transition: opacity 110ms cubic-bezier(0.4, 0, 1, 1); }
+.matrix.is-out { opacity: 0; pointer-events: none; transition: opacity 110ms cubic-bezier(0.4, 0, 1, 1); }
 .matrix.is-in { opacity: 0; transform: translateY(4px); }
 .matrix.is-on { opacity: 1; transform: none; transition: opacity 170ms cubic-bezier(0.2, 0.7, 0.2, 1) 20ms, transform 220ms cubic-bezier(0.16, 1, 0.3, 1) 20ms; }
 /* Hover reads the row and column under the pointer; everything else only steps back a little. */
