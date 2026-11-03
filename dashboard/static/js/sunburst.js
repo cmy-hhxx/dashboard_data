@@ -139,7 +139,7 @@ export function sunburst(host, tree, { unit = "", sort = false, state = null, an
       const tip = n.sev
         ? [["P0", n.sev.P0 || 0], ["P1", n.sev.P1 || 0]].filter((x) => x[1]).map(([k, v]) => `${k} ${fmt(v)}`).join(" · ")
         : n.lost ? `流失 ${fmt(n.lost)}` : "";
-      return `<button type="button" class="li sb-r ${cls}" data-k="${esc(n.id)}" data-n="${esc(n.id)}"><i style="--c:${fill.get(n)}"></i><span>${esc(n.name)}</span><small class="sb-markn num"${tip ? ` title="${esc(`${tip} · 占 ${pct(total, n.n, 1)}`)}"` : ""}>${total ? fmt(total) : ""}</small><b class="num">${fmt(n.n)}</b><em class="num">${pct(n.n, n.parent.n)}</em></button>`;
+      return `<button type="button" class="li sb-r ${cls}" data-k="${esc(n.id)}" data-n="${esc(n.id)}"><i style="--c:${fill.get(n)}"></i><span title="${esc(n.name)}">${esc(n.name)}</span><small class="sb-markn num"${tip ? ` title="${esc(`${tip} · 占 ${pct(total, n.n, 1)}`)}"` : ""}>${total ? fmt(total) : ""}</small><b class="num">${fmt(n.n)}</b><em class="num">${pct(n.n, n.parent.n)}</em></button>`;
     };
     // Keep sibling categories visible while expanding the selected branch. 聚类体系 ranks by volume;
     // the arcs keep taxonomy order, the dots tie each row back to its arc.

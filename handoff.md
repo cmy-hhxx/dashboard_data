@@ -161,6 +161,10 @@ tr 轮数 · mc 消息数 · lang · case · s 短 slug
    `card(span, …)` 的 12 列 Bento 布局，一卡一主视觉，下钻留在页内。
    评测量详情走 `evalDetailState` / `evalDetailPage` / `wireEvalDetail`，日期 → 模型 → session 用
    `ed` / `em` / `edp` / `ep` 同步 URL；最后一层跳具体数据，不重复实现输入/输出详情。
+   卡片状态只有三态：默认 / 展开（`is-deep`，卡头 `[data-collapse]` 收起）/ 折叠（`is-compact`，
+   点卡片或确认键恢复本行）；`miniView` 是折叠态的唯一内容入口，每种卡给它自己的小图
+   （环 / 竖条 / 严重度条 / 折线），不要退回纯数字。无数据可下钻的卡由 `pushPull` 的 `openable`
+   拦下，不进入展开/折叠；完全没数据的卡用 `is-mini` 直接以折叠态渲染（预测体系即此）。
 3. **改证据闭环**：`build.py` 的 `system_facts` 产出 `system.goldens[product][]`
    （每个产品 10 个候选）；`system.js` 的 `goldenCard` / `wireGoldens`
    做单条轮播：上一条 / 下一条只换当前 case 的 anatomy，默认直接展示，不在体系页承载全部样本。

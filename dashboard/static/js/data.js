@@ -56,12 +56,49 @@ export async function render(root, c) {
   }
 }
 
-const card = (span, title, body, end = "", key = "") =>
-  `<article class="card" style="--span:${span}"${key ? ` data-card="${key}"` : ""}><header class="card-head"><h2>${title}</h2>${end}</header>${body}</article>`;
-/* Push-pull slots: the star map an opened card shows, and the key numbers a folded card keeps. */
+const ICON_COLLAPSE = `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 15l6-6 6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+/* Every push-pull card carries the way back to its default state in the head, so one card's
+   transition reads the same as the next instead of hiding inside the star map. */
+const stateBtn = `<button type="button" class="icon-btn card-state" data-collapse hidden aria-label="收起卡片" title="收起">${ICON_COLLAPSE}</button>`;
+const card = (span, title, body, end = "", key = "", cls = "") =>
+  `<article class="card${cls ? ` ${cls}` : ""}" style="--span:${span}"${key ? ` data-card="${key}"` : ""}><header class="card-head"><h2>${title}</h2>${end}${key ? stateBtn : ""}</header>${body}</article>`;
+/* Push-pull slots: the star map an opened card shows, and the mini view a folded card keeps. */
 const GX = `<div class="gx" data-own-tip hidden></div>`;
-const compactBody = (items) =>
-  `<div class="compact" aria-hidden="true">${items.filter(Boolean).map(([v, l], i) => `<div${i ? "" : ' class="lead"'}><b class="num">${v}</b><small>${esc(l)}</small></div>`).join("")}</div>`;
+/* Folded cards keep their identity: each card's compact state draws its own little graphic —
+   a ring, day columns, a severity strip or an accuracy line — beside its key numbers. */
+const miniRing = (segs) => {
+  const total = sum(segs.map((s) => s.n)) || 1;
+  let acc = 0;
+  const arcs = segs
+    .filter((s) => s.n > 0)
+    .map((s) => {
+      const len = (100 * s.n) / total;
+      const dash = Math.max(0.9, len - 1);
+      const at = acc;
+      acc += len;
+      return `<circle class="cxr-a" cx="24" cy="24" r="18" pathLength="100" style="stroke:${s.c};stroke-dasharray:${dash} ${100 - dash};stroke-dashoffset:${-at}"/>`;
+    })
+    .join("");
+  return `<svg class="cxr" viewBox="0 0 48 48" aria-hidden="true"><circle class="cxr-t" cx="24" cy="24" r="18"/>${arcs}</svg>`;
+};
+const miniStrip = (parts) =>
+  `<span class="cxs" aria-hidden="true">${parts.filter((p) => p.n > 0).map((p) => `<i style="flex:${p.n} 1 0;background:${p.c}"></i>`).join("")}</span>`;
+const miniCols = (bars) => {
+  const max = Math.max(1, ...bars.map((b) => b.all || 0));
+  return `<span class="cxcols" aria-hidden="true">${bars.map((b) => `<i style="height:${Math.max(8, (100 * (b.all || 0)) / max)}%"><b style="height:${b.all ? Math.min(100, (100 * (b.done || 0)) / b.all) : 0}%"></b></i>`).join("")}</span>`;
+};
+const miniLine = (vals) => {
+  if (vals.length < 2) return `<span class="cxvoid" aria-hidden="true"></span>`;
+  const W = 48, H = 34, pad = 4;
+  const xs = vals.map((_, i) => pad + (i * (W - pad * 2)) / (vals.length - 1));
+  const ys = vals.map((v) => H - pad - (Math.max(0, Math.min(100, v)) / 100) * (H - pad * 2));
+  return `<svg class="cxline" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><polyline points="${xs.map((x, i) => `${x.toFixed(1)},${ys[i].toFixed(1)}`).join(" ")}"/></svg>`;
+};
+const miniView = (viz, items, hint = "") =>
+  `<div class="compact" aria-hidden="true"><div class="cx">${viz}</div><div class="cn">${items
+    .filter(Boolean)
+    .map(([v, l], i) => `<div${i ? "" : ' class="lead"'}><b class="num">${v}</b><small>${esc(l)}</small></div>`)
+    .join("")}</div>${hint ? `<small class="cxhint">${esc(hint)}</small>` : ""}</div>`;
 const modelName = (p, id) => (p.models.find((m) => m.id === id) || { label: id }).label;
 const groupName = (p, g) => (p.unified || p.splits.length <= 1 ? "" : `${SPLIT_SHORT[g.split] || g.split} · `) + modelName(p, g.model);
 const stats = (items, cols = 4) => `<div class="stats${cols === 5 ? " stats-5" : ""}">${items.map(([l, v]) => `<div><b class="num">${v}</b><small>${l}</small></div>`).join("")}</div>`;
@@ -201,7 +238,7 @@ function volumeCard(p) {
     ["Tokens 输入/输出", tokens],
   ];
   const note = lost ? `<div class="sb-keys"><span class="sb-key" title="外圈细环是该分支里流失用户 trace 的占比，列表红字是流失 trace 数"><i></i>流失</span></div>` : "";
-  const folded = compactBody([
+  const folded = miniView(miniRing(volMiniSegs(p)), [
     [fmt(input.traces ?? k.traces), "评测输入轨迹"], [fmt(input.records ?? k.inputs), "记录"],
     lost != null ? [fmt(lost), "流失轨迹"] : null, tin != null ? [tokenNum(tin), "输入 Tokens"] : null,
   ]);
@@ -239,6 +276,18 @@ function volTree(p) {
     };
   }
   return { id: "v", name: "全部", n: p.kpi.inputs || 0, lost: 0, children: [] };
+}
+/* The folded card mirrors the ring's innermost split: models first, then the top-level tasks. */
+function volMiniSegs(p) {
+  const input = p.input || {};
+  if (input.models && Object.keys(input.models).length) {
+    const order = new Map((p.models || []).map((m, i) => [m.id, i]));
+    const list = Object.entries(input.models).sort(([a], [b]) => (order.get(a) ?? 99) - (order.get(b) ?? 99));
+    const n = Math.max(list.length, (p.models || []).length, 1);
+    return list.map(([id, m], i) => ({ n: m.traces || 0, c: shade(order.has(id) ? order.get(id) : i, n) }));
+  }
+  const tasks = input.tasks || [];
+  return tasks.slice(0, 6).map((t, i) => ({ n: t.n || 0, c: shade(i, Math.max(tasks.length, 1)) }));
 }
 
 /* ---------------------------------------------------------------- 评测量: inputs vs completed per day */
@@ -347,7 +396,7 @@ function evalChart(p) {
         const height = Math.max(3, (barH * total) / max);
         const done = x.evaluated ? Math.min(100, (100 * x.evaluated) / Math.max(x.inputs, x.evaluated)) : 0;
         const tip = `${x.tip || x.d}|输入 ${fmt(x.inputs)} · 已完成 ${fmt(x.evaluated)} · ${pct(x.evaluated, x.inputs, 1)}`;
-        return `<div class="evday" data-d0="${x.d0 || x.d}" data-d1="${x.d1 || x.d}"><div class="evnums"><b class="num">${barNum(x.evaluated)}</b><small class="num">${barNum(x.inputs)}</small></div>
+        return `<div class="evday${x.evaluated ? " is-live" : ""}" data-d0="${x.d0 || x.d}" data-d1="${x.d1 || x.d}"><div class="evnums"><b class="num">${barNum(x.evaluated)}</b><small class="num">${barNum(x.inputs)}</small></div>
           <div class="evbar" style="height:${height}px" data-tip="${esc(tip)}"><i style="height:${done}%"></i></div>
           <small class="evdate num">${esc(x.label)}</small></div>`;
       })
@@ -389,7 +438,9 @@ function evalCard(p) {
 }
 function evalCompact(p) {
   const w = evalWindow(p);
-  return compactBody([[fmt(w.totalSessions), "完成 Session"], [pct(w.totalEval, w.totalInputs, 1), "完成率"], [fmt(w.totalTraces), "完成 Trace"]]);
+  const days = evalBuckets(w.days).slice(-12);
+  const viz = miniCols(days.map((x) => ({ done: x.evaluated || 0, all: Math.max(x.inputs || 0, x.evaluated || 0) })));
+  return miniView(viz, [[fmt(w.totalSessions), "完成 Session"], [pct(w.totalEval, w.totalInputs, 1), "完成率"], [fmt(w.totalTraces), "完成 Trace"]]);
 }
 
 /* ---------------------------------------------------------------- 评测量详情: day → model → session */
@@ -541,7 +592,7 @@ function evalDetailPage(p, state, index) {
     pager = edPager(spage, sPages, groups.length, "个 session", "ep");
   }
 
-  return `<div class="bento"><article class="card" style="--span:12">
+  return `<div class="bento"><article class="card card-detail" style="--span:12">
     <header class="card-head"><h2>评测数据详情</h2>
       <button type="button" class="link ed-back" id="edBack">${backLabel}</button>
       <div class="mx-crumbs" id="edCrumbs">${day ? `<span class="mx-crumb-group">${rootCrumb}${dayCrumb}${modelCrumb}</span>` : ""}</div>
@@ -669,8 +720,9 @@ function attrCard(p) {
     .filter((g) => g.n);
   const right = p.roles.filter((r) => r.problems).map((r) => ({ key: r.id, name: r.label, n: r.problems }));
   const top = right.reduce((a, b) => (!a || b.n > a.n ? b : a), null);
+  const sevParts = WORST.map((w, i) => ({ n: p.severity[w] || 0, c: sevColor(i) }));
   return card(4, "归因体系", `<div class="hero"><b class="big">${counter(p.kpi.problems)}</b><small>个问题</small></div>
-    ${sankeySVG(left, right, (l, r) => l.roles[r.key] || 0, { id: "ska", x0: 128, x1: 322 })}${GX}${compactBody([
+    ${sankeySVG(left, right, (l, r) => l.roles[r.key] || 0, { id: "ska", x0: 128, x1: 322 })}${GX}${miniView(miniStrip(sevParts), [
       [fmt(p.kpi.problems), "问题"], top ? [pct(top.n, p.kpi.problems), `${top.name}占比`] : null,
     ])}`, "", "attr");
 }
@@ -682,7 +734,9 @@ function clusterCard(p, tax) {
     ? `<span class="sb-key is-note" title="归因没有匹配到聚类模式的问题：计入问题总数，不进矩阵"><i></i>未聚类 ${fmt(p.kpi.unclustered)}</span>`
     : "";
   return card(4, "聚类体系", `<div class="duo sm" id="clu"></div>
-    <div class="sb-keys"><span class="sb-key" title="外圈细环是该分支里 P0·P1 问题的占比，列表红字是 P0+P1 数"><i></i>P0·P1</span>${note}</div>${GX}${compactBody([
+    <div class="sb-keys"><span class="sb-key" title="外圈细环是该分支里 P0·P1 问题的占比，列表红字是 P0+P1 数"><i></i>P0·P1</span>${note}</div>${GX}${miniView(miniRing([
+      { n: p.kpi.clustered || 0, c: "var(--accent)" }, { n: p.kpi.unclustered || 0, c: "var(--t4)" },
+    ]), [
       [fmt(p.kpi.problems), "问题"], [pct(p.kpi.clustered, p.kpi.problems), "已聚类"],
     ])}`, "", "clu");
 }
@@ -791,11 +845,21 @@ const PRED_TABS = `<div class="seg pred-tabs" id="predTab"><span class="seg-knob
       <button type="button" data-value="acc">能力</button>
       <button type="button" data-value="cause">归因</button></div>`;
 
+/* Folded forecast card: the accuracy history as one quiet line. */
+function predSeries(pr) {
+  return (pr.accuracy || [])
+    .map((a) => ({ t: when(a.at) ?? 0, v: a.total > 0 ? (100 * (a.correct || 0)) / a.total : Number(a.accuracy) * 100 }))
+    .filter((x) => Number.isFinite(x.v))
+    .sort((a, b) => a.t - b.t)
+    .slice(-12)
+    .map((x) => x.v);
+}
+
 function predictCard(p) {
   const pr = p.prediction;
   if (!pr) {
-    const panes = ["vol", "acc", "cause"].map((k, i) => `<div class="pred-pane${i ? "" : " is-on"}" data-pane="${k}"><div class="empty">暂无预测数据</div></div>`);
-    return card(4, "预测体系", `<div class="pred-panes">${panes.join("")}</div>${compactBody([["—", "预测题"]])}`, PRED_TABS, "pred");
+    // No feed: the card rests in its folded state — one ghost line and one number, nothing to open.
+    return card(4, "预测体系", miniView(`<span class="cxvoid" aria-hidden="true"></span>`, [["—", "预测题"]], "暂无预测数据"), "", "pred", "is-mini");
   }
   // The export's own bank (questions it scanned) when given, else this product's distinct questions.
   const allQ = Number.isFinite(pr.bank) ? pr.bank : new Set(p.field.flatMap((g) => g.cells.map((c) => c[3]))).size;
@@ -861,7 +925,7 @@ function predictCard(p) {
       ${causes.length ? predSankey(p, predModels, causes, at.flows || {}) : `<div class="empty">暂无预测归因</div>`}
     </div>`;
   const cover = predCover(pr.dates);
-  const folded = compactBody([[fmt(forecast), "预测题"], pooledN ? [`${fmt((100 * right) / pooledN, 1)}%`, "准确率"] : null]);
+  const folded = miniView(miniLine(predSeries(pr)), [[fmt(forecast), "预测题"], pooledN ? [`${fmt((100 * right) / pooledN, 1)}%`, "准确率"] : null]);
   return card(4, `预测体系${cover ? ` <span class="status">${esc(cover)}</span>` : ""}`, `<div class="pred-panes">${panes}</div>${GX}${folded}`, PRED_TABS, "pred");
 }
 
@@ -993,8 +1057,8 @@ function matrixTable(view) {
   return `<div class="matrix" style="--cols:${cols.length}">${html}</div>`;
 }
 
-/* Swap one matrix for the next without the layout jump: the old table fades out where it stands,
-   the card height eases to the new table, and the new one fades up into place. */
+/* Swap one matrix for the next without the layout jump: the old table stays in place while the
+   card height eases to the new one, the new table settles in on top, then the old one goes. */
 function swapMatrix(shell, html, animate) {
   clearTimeout(shell._swap);
   shell.classList.remove("is-swapping");
@@ -1017,14 +1081,14 @@ function swapMatrix(shell, html, animate) {
   void next.offsetWidth;
   requestAnimationFrame(() => {
     shell.style.height = `${to}px`;
-    setTimeout(() => next.classList.add("is-on"), 70);
+    setTimeout(() => next.classList.add("is-on"), 40);
   });
   shell._swap = setTimeout(() => {
     prev.remove();
     next.classList.remove("is-in", "is-on");
     shell.classList.remove("is-swapping");
     shell.style.height = "";
-  }, 460);
+  }, 520);
 }
 
 function crumbPath(path, axis) {
@@ -1083,7 +1147,6 @@ function groupCases(rows, keyOf, nameOf = (k) => k) {
   });
   return [...by.values()];
 }
-const ICON_CLOSE = `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
 
 function pushPull(bento, p, tax, u) {
   u.deep = u.deep || { top: null, bottom: null };
@@ -1095,6 +1158,15 @@ function pushPull(bento, p, tax, u) {
   const versionName = (k) => {
     const [sp, m] = p.unified ? ["", k] : k.split("|");
     return groupName(p, { split: sp, model: m });
+  };
+  /* A card only has a deep state while there is something behind it to open: empty cards keep
+     their default size instead of pushing a row mate into a star map with no stars. */
+  const openable = {
+    vol: () => (p.field || []).some((g) => (g.cells || []).length),
+    eval: () => evalRows(p).some((r) => (r.evaluated || 0) > 0),
+    attr: () => (p.roles || []).some((r) => r.problems),
+    clu: () => !!(tax && (p.kpi.clustered || 0) > 0),
+    pred: () => !!p.prediction && ((p.prediction.items || []).length > 0),
   };
 
   function relayout(mutate) {
@@ -1123,8 +1195,22 @@ function pushPull(bento, p, tax, u) {
       keys.forEach((k) => {
         const c = cardOf(k);
         if (!c) return;
-        c.classList.toggle("is-deep", !!spec && spec.card === k);
-        c.classList.toggle("is-compact", !!spec && spec.card !== k);
+        const deep = !!spec && spec.card === k;
+        const compact = !!spec && !deep;
+        c.classList.toggle("is-deep", deep);
+        c.classList.toggle("is-compact", compact);
+        // The head button is the one visible way back for every card; folded mates stay clickable.
+        const btn = $(".card-state", c);
+        if (btn) btn.hidden = !deep;
+        if (compact) {
+          c.tabIndex = 0;
+          c.setAttribute("role", "button");
+          c.setAttribute("aria-label", "恢复本行卡片");
+        } else {
+          c.removeAttribute("tabindex");
+          c.removeAttribute("role");
+          c.removeAttribute("aria-label");
+        }
       });
     });
     keys.forEach((k) => {
@@ -1144,6 +1230,7 @@ function pushPull(bento, p, tax, u) {
   }
 
   function open(spec) {
+    if (!openable[spec.card] || !openable[spec.card]()) return;
     const row = ROW[spec.card];
     const cur = u.deep[row];
     // A ring that is still at its innermost level would disagree with a sibling taking the row.
@@ -1172,7 +1259,7 @@ function pushPull(bento, p, tax, u) {
     const row = ROW[card];
     const spec = card === "vol" ? volSpec(focus, opened) : cluSpec(focus, opened);
     const cur = u.deep[row];
-    if (spec) {
+    if (spec && openable[card] && openable[card]()) {
       // Same spec on a live board: only the highlight moved. While booting the DOM is new, so apply.
       if (cur && cur.id === spec.id && !booting) {
         cur.focus = spec.focus;
@@ -1181,6 +1268,8 @@ function pushPull(bento, p, tax, u) {
       }
       u.deep[row] = spec;
       apply(row);
+    } else if (spec) {
+      return; // nothing behind the drill: leave the row as it is
     } else if (cur && cur.card === card) {
       u.deep[row] = null;
       apply(row);
@@ -1281,9 +1370,8 @@ function pushPull(bento, p, tax, u) {
       console.error(err);
     }
     if (gx._token !== token || gx.hidden) return;
-    const close = `<button type="button" class="icon-btn gx-close" aria-label="收起">${ICON_CLOSE}</button>`;
     if (!groups.some((g) => g.items.length)) {
-      gx.innerHTML = `<div class="empty">暂无已评测的 case</div>${close}`;
+      gx.innerHTML = `<div class="empty">暂无已评测的 case</div>`;
       return;
     }
     const pred = spec.card === "pred";
@@ -1293,7 +1381,6 @@ function pushPull(bento, p, tax, u) {
       colorOf: pred ? predColor : null,
       onPick: pred ? null : (it) => openSamples({ case: it.s }),
     });
-    gx.insertAdjacentHTML("beforeend", close);
     maps[k] = { id: spec.id, map };
   }
 
@@ -1311,7 +1398,7 @@ function pushPull(bento, p, tax, u) {
   }
 
   bento.addEventListener("click", (e) => {
-    const shut = e.target.closest(".gx-close");
+    const shut = e.target.closest("[data-collapse]");
     if (shut) {
       close(ROW[shut.closest(".card").dataset.card]);
       return;
@@ -1349,6 +1436,14 @@ function pushPull(bento, p, tax, u) {
       return;
     }
     if (e.target.closest('[data-card="pred"] [data-pane="vol"] .comp')) toggle({ card: "pred", id: "pred|all", kind: "all", key: null });
+  });
+  // A folded mate is a real button for the keyboard too: Enter / Space brings the row back.
+  bento.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const folded = e.target.closest(".card.is-compact");
+    if (!folded) return;
+    e.preventDefault();
+    close(ROW[folded.dataset.card]);
   });
 
   return {

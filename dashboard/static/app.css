@@ -178,7 +178,10 @@ h1, h2, h3, h4, p { margin: 0; }
 main { padding: 8px var(--gutter) 48px; max-width: 1480px; margin: 0 auto; }
 html[data-view="samples"] main { max-width: none; padding-bottom: 16px; }
 .view { display: none; }
-.view.is-active { display: block; animation: rise 360ms cubic-bezier(0.16, 1, 0.3, 1); }
+/* A view settles into place instead of fading up from the page background, so switching pages
+   (e.g. from the cluster matrix into 具体数据) never flashes pale. */
+.view.is-active { display: block; animation: view-in 320ms cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes view-in { from { transform: translateY(6px); } }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
 
 /* ------------------------------------------------------------------ bento */
@@ -192,6 +195,12 @@ html[data-view="samples"] main { max-width: none; padding-bottom: 16px; }
 .card-head h2 { font-size: 15px; font-weight: var(--w-title); letter-spacing: 0.01em; }
 .card-head .meta { color: var(--muted); font-size: 12px; }
 .card-head .end { margin-left: auto; }
+/* One state control on every push-pull card head: it is the way back from an opened row. */
+.card-head .card-state { margin-left: auto; width: 28px; height: 28px; align-self: center; color: var(--ink-2); }
+.card-head .end + .card-state { margin-left: 4px; }
+.card-head .card-state:hover { color: var(--ink); }
+.card-state[hidden] { display: none; }
+.card-state svg { width: 16px; height: 16px; }
 .big { font-size: 46px; line-height: 1; font-weight: var(--w-light); letter-spacing: -0.025em; }
 .mid { font-size: 28px; line-height: 1.05; font-weight: var(--w-light); letter-spacing: -0.02em; }
 .unit { color: var(--muted); font-size: 13px; margin-left: 4px; }
@@ -291,7 +300,10 @@ button.cell[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px 
 
 .echo { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--gap); height: clamp(540px, calc(100vh - 320px), 640px); align-items: stretch; }
 .echo-main { display: grid; grid-template-rows: minmax(0, 1fr); min-width: 0; min-height: 0; }
-#anatomyBody { min-height: 0; overflow: auto; padding-right: 2px; }
+/* The evidence loop scrolls inside a fixed-height card; keep the wheel, drop the rail (as the
+   sunburst ledgers do) so the anatomy reads as one clean sheet. */
+#anatomyBody { min-height: 0; overflow: auto; padding-right: 2px; scrollbar-width: none; -ms-overflow-style: none; }
+#anatomyBody::-webkit-scrollbar { display: none; }
 
 .kind { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); white-space: nowrap; }
 .kind::before { content: ""; width: 6px; height: 6px; border-radius: 2px; background: var(--kc, var(--faint)); }
@@ -321,10 +333,11 @@ button.cell[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px 
 .ov-grid > .cmap { margin: 0; min-width: 0; }
 .ov-grid > .sp-box { margin: 0; padding-bottom: 1px; }
 .ov-box { display: grid; gap: 6px; min-width: 0; }
-.ov-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 6px; align-items: stretch; }
+.ov-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 6px; align-items: stretch; }
 .ov-item { display: block; padding: 6px 8px; border-radius: 8px; background: var(--well); height: 100%; }
-.ov-n { width: 18px; height: 17px; display: inline-grid; place-items: center; border-radius: 5px; background: var(--well-2); color: var(--muted); font: var(--w-medium) 9px/1 var(--mono); margin-right: 7px; text-indent: 0; vertical-align: -3px; }
-.ov-item p { margin: 0; padding-left: 25px; text-indent: -25px; font-size: 11.5px; line-height: 1.55; color: var(--ink-2); overflow-wrap: anywhere; }
+.ov-n { flex: none; width: 18px; height: 17px; display: inline-grid; place-items: center; border-radius: 5px; background: var(--well-2); color: var(--muted); font: var(--w-medium) 9px/1 var(--mono); margin-top: 1px; }
+.ov-item p { margin: 0; display: flex; align-items: flex-start; gap: 7px; font-size: 11.5px; line-height: 1.55; color: var(--ink-2); overflow-wrap: anywhere; }
+.ov-t { min-width: 0; }
 .pane { background: var(--card); border-radius: var(--r-card); box-shadow: var(--shadow); min-width: 0; }
 .pane-sticky { position: sticky; top: 72px; max-height: calc(100vh - 88px); display: flex; flex-direction: column; overflow: hidden; }
 .pane-head { padding: var(--py) var(--px) 12px; display: grid; gap: 10px; }
@@ -360,18 +373,19 @@ button.cell[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px 
 .pane-sticky > .pane-scroll { flex: 1 1 auto; min-height: 0; }
 .pager {
   flex: none; display: flex; align-items: center; justify-content: space-between; gap: 4px;
-  padding: 8px 12px 12px; border-top: 1px solid var(--well-2);
+  min-width: 0; padding: 8px 12px 12px; border-top: 1px solid var(--well-2);
 }
 .pager[hidden] { display: none; }
 .pager button {
-  height: 26px; padding: 0 8px; border-radius: var(--r-chip); background: var(--well);
+  flex: none; height: 26px; padding: 0 8px; border-radius: var(--r-chip); background: var(--well);
   color: var(--ink-2); font-size: 11.5px; white-space: nowrap;
   transition: background var(--snap), color var(--snap), transform var(--spring);
 }
 .pager button:hover:not(:disabled) { background: var(--well-2); color: var(--ink); }
 .pager button:active:not(:disabled) { transform: scale(0.95); }
 .pager button:disabled { opacity: 0.35; cursor: default; }
-.pager-info { color: var(--muted); font-size: 11px; white-space: nowrap; }
+/* The info may shrink before the buttons do, so a long page count never clips the last arrow. */
+.pager-info { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 11px; white-space: nowrap; }
 .pager-info b { color: var(--ink-2); font-weight: var(--w-medium); }
 .srow {
   display: grid; grid-template-columns: 4px 1fr; gap: 10px; width: 100%; text-align: left; padding: 10px; border-radius: var(--r-well);
@@ -383,7 +397,9 @@ button.cell[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px 
 .srow .q { font-size: 13px; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .srow .m { font-size: 11.5px; color: var(--muted); margin-top: 3px; display: flex; gap: 8px; }
 
-.sample-head { padding: var(--py-lg) calc(var(--px) + 8px) var(--py); display: grid; gap: 12px; }
+/* One explicit column: a nowrap title or a wide date range can no longer widen the track past
+   the pane and push the head / Overview off the right edge on phones. */
+.sample-head { padding: var(--py-lg) calc(var(--px) + 8px) var(--py); display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .sample-head h2 { font-size: 18px; font-weight: var(--w-title); line-height: 1.45; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .headline { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .headline h2 { flex: 1 1 auto; min-width: 0; }
@@ -622,11 +638,16 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .sb-c:not(:disabled):active { transform: scale(0.96); }
 .sb-c i { font-style: normal; font-size: 11px; color: var(--accent); max-width: 92px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sb-c b { font-size: 28px; line-height: 1; font-weight: var(--w-light); letter-spacing: -0.02em; }
-.sb-c small { font-size: 11.5px; color: var(--muted); max-width: 92px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sb-list { justify-self: center; width: 100%; align-content: center; }
-.sb-r { width: 100%; margin: 0; min-height: 28px; grid-template-columns: 8px minmax(0, 1fr) 30px auto 44px; }
-.sb-r.head span { color: var(--ink); font-weight: var(--w-medium); overflow: visible; text-overflow: clip; white-space: normal; line-height: 1.35; }
-.sb-r.sub { padding-left: 24px; }
+.sb-c small { font-size: 11.5px; color: var(--muted); max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The focus name under the count gets two lines inside the hole before it is cut. */
+.sb-c small:not(.sb-lostc) { max-width: 104px; font-size: 10.5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: normal; line-height: 1.25; overflow-wrap: anywhere; }
+.sb-list { justify-self: center; width: 100%; align-content: center; scrollbar-width: none; -ms-overflow-style: none; }
+.sb-list::-webkit-scrollbar { display: none; }
+.sb-r { width: 100%; margin: 0; min-height: 28px; padding-top: 3px; padding-bottom: 3px; grid-template-columns: 8px minmax(0, 1fr) 30px auto 44px; }
+/* Long task / cluster names wrap to a second line instead of leaving a bare "…" in the ledger. */
+.sb-r span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: normal; overflow-wrap: anywhere; line-height: 1.35; }
+.sb-r.head span { color: var(--ink); font-weight: var(--w-medium); }
+.sb-r.sub { padding-left: 20px; }
 .sb-r.hl { background: var(--hover); }
 .sb-r .sb-markn { font-size: 11px; color: var(--sev-1); text-align: right; }
 .sb-c .sb-lostc { color: var(--sev-1); font-size: 10.5px; }
@@ -651,6 +672,11 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .ev-tools .seg-knob { top: 2px; bottom: 2px; }
 .eval-content { container-type: inline-size; }
 .eval-content .stats { margin-top: var(--py); grid-template-columns: repeat(4, minmax(0, 1fr)); }
+/* A narrow eval card cannot fit one date under each of 15 bars: keep every third label so the
+   row stays readable instead of the labels running into each other (or past the card edge). */
+@container (max-width: 480px) {
+  #evChart .evday:not(:nth-child(3n + 1)):not(:last-child) .evdate { visibility: hidden; }
+}
 /* Paired desktop cards share chart columns and a bottom-aligned stats row. */
 @media (min-width: 861px) {
   .card:has(> #vol), .card:has(> .eval-content) { display: flex; flex-direction: column; height: 456px; overflow: hidden; }
@@ -677,11 +703,14 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 /* ------------------------------------------------------------------ 聚类矩阵 (neutral heat) */
 .matrix { display: grid; grid-template-columns: minmax(112px, 150px) repeat(var(--cols), minmax(0, 1fr)) 120px; gap: 4px; align-items: center; }
 #mxShell { position: relative; }
-#mxShell.is-swapping { overflow: hidden; transition: height 320ms var(--ease-out); }
+/* The matrix follows the sunburst's rules: the block eases its height while the new table settles
+   onto the old one. The old table stays fully opaque underneath until the new one covers it, so no
+   frame shows only the card behind (that pale flash). */
+#mxShell.is-swapping { overflow: hidden; transition: height 420ms cubic-bezier(0.16, 1, 0.3, 1); }
 #mxShell.is-swapping .matrix { position: absolute; left: 0; right: 0; top: 0; }
-.matrix.is-out { opacity: 0; transition: opacity 110ms var(--snap); }
-.matrix.is-in { opacity: 0; transform: translateY(4px); }
-.matrix.is-on { opacity: 1; transform: none; transition: opacity 220ms var(--snap), transform 300ms var(--ease-out); }
+.matrix.is-out { opacity: 0; transform: translateY(-4px); transition: opacity 150ms cubic-bezier(0.2, 0, 0, 1) 260ms, transform 420ms cubic-bezier(0.16, 1, 0.3, 1); }
+.matrix.is-in { opacity: 0; transform: translateY(8px); }
+.matrix.is-on { opacity: 1; transform: none; transition: opacity 260ms cubic-bezier(0.16, 1, 0.3, 1) 40ms, transform 420ms cubic-bezier(0.16, 1, 0.3, 1); }
 .matrix.is-hover .cell:not(.is-hl) { opacity: 0.45; }
 .matrix.is-hover .rh:not(.is-hl), .matrix.is-hover .mh:not(.is-hl) { color: var(--faint); }
 .matrix.is-hover .rowtot:not(.is-hl) { opacity: 0.45; }
@@ -898,9 +927,10 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
   .card-head #edCrumbs { order: 3; flex-basis: 100%; margin-left: 0; }
 }
 .ed-table { margin-top: 2px; }
-.ed-table table { min-width: 720px; font-size: 12.5px; }
-.ed-table th { padding: 0 12px 9px; vertical-align: bottom; }
-.ed-table td { padding: 9px 12px; vertical-align: middle; }
+/* Dense comparison table: one line per day / model / session, 6–7px of air per cell. */
+.ed-table table { min-width: 680px; font-size: 12px; }
+.ed-table th { padding: 0 10px 6px; vertical-align: bottom; }
+.ed-table td { padding: 5px 10px; vertical-align: middle; line-height: 1.5; }
 .ed-table th:first-child, .ed-table td:first-child { padding-left: 0; }
 .ed-table th:last-child, .ed-table td:last-child { padding-right: 0; }
 .ed-table thead th { border-bottom: 1px solid var(--well-2); }
@@ -910,14 +940,15 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .ed-table td.st { white-space: nowrap; }
 .ed-table .ok { font-size: 12px; line-height: 1; }
 .ed-table.is-day table, .ed-table.is-model table { table-layout: fixed; }
-.ed-table.is-day th:nth-child(1), .ed-table.is-model th:nth-child(1) { width: 140px; }
-.ed-table.is-day th:nth-child(2), .ed-table.is-model th:nth-child(2) { width: 76px; }
+.ed-table.is-day th:nth-child(1), .ed-table.is-model th:nth-child(1) { width: 122px; }
+.ed-table.is-day th:nth-child(2), .ed-table.is-model th:nth-child(2) { width: 66px; }
 .ed-table.is-session table { min-width: 0; table-layout: fixed; }
-.ed-table.is-session th:nth-child(2) { width: 180px; }
-.ed-table.is-session th:nth-child(3) { width: 64px; }
-.ed-table.is-session th:nth-child(4) { width: 64px; }
+.ed-table.is-session th:nth-child(2) { width: 172px; }
+.ed-table.is-session th:nth-child(3) { width: 56px; }
+.ed-table.is-session th:nth-child(4) { width: 56px; }
 .ed-table.is-session td.st .sev { margin-left: 8px; }
 .ed-table.is-session .link { white-space: nowrap; }
+.card-detail { padding-top: var(--py); }
 .card > .pager { justify-content: center; gap: 8px; padding: 12px 0 0; }
 .card > .pager .pager-info { margin: 0 8px; }
 
@@ -1252,8 +1283,6 @@ mark.cx { background: color-mix(in oklab, var(--accent) 18%, transparent); color
 .gx[hidden], .compact { display: none; }
 .gx canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .gx .empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 0; }
-.gx-close { position: absolute; top: -6px; right: -6px; z-index: 2; width: 28px; height: 28px; border-radius: 6px; color: var(--muted); }
-.gx-close svg { width: 16px; height: 16px; }
 .gx-wait {
   position: absolute; inset: 12% 18%; border-radius: 50%;
   background: radial-gradient(closest-side, color-mix(in oklab, var(--accent) 14%, transparent), transparent);
@@ -1263,10 +1292,11 @@ mark.cx { background: color-mix(in oklab, var(--accent) 18%, transparent); color
 .card.is-deep > .gx { animation: gx-in 420ms cubic-bezier(0.16, 1, 0.3, 1) 140ms both; }
 @keyframes gx-in { from { opacity: 0; } }
 
-/* What opens a card: a day's bar, a sankey node or flow, a forecast version, the forecast bar. */
-[data-card="eval"] .evday, [data-card="attr"] .sk-node, [data-card="attr"] .sk-f,
+/* What opens a card: a day's bar, a sankey node or flow, a forecast version, the forecast bar.
+   A day with nothing evaluated yet stays inert — there is no star map behind it to open. */
+[data-card="attr"] .sk-node, [data-card="attr"] .sk-f,
 [data-card="pred"] .pred-sk .sk-node, [data-card="pred"] .pred-sk .sk-f, [data-card="pred"] [data-pm],
-[data-card="pred"] [data-pane="vol"] .comp { cursor: pointer; }
+[data-card="pred"] [data-pane="vol"] .comp, [data-card="eval"] .evday.is-live { cursor: pointer; }
 [data-card="eval"] .evday.is-on .evbar { box-shadow: 0 0 0 1.5px var(--card), 0 0 0 3px var(--accent); }
 [data-card="eval"] .evday.is-on .evdate { color: var(--accent); }
 .sankey.is-picked .sk-f:not(.is-pick) { opacity: 0.16; }
@@ -1274,24 +1304,58 @@ mark.cx { background: color-mix(in oklab, var(--accent) 18%, transparent); color
 .vrow.is-pick > span:first-child { color: var(--accent); }
 
 @media (min-width: 1181px) {
+  /* The volume ledger takes one more column than the eval chart: long task names get the room
+     to wrap before their numbers, instead of both cards splitting the row down the middle. */
+  .bento > [data-card="vol"] { grid-column: span 7; }
+  .bento > [data-card="eval"] { grid-column: span 5; }
   .bento[data-top] > [data-card="vol"], .bento[data-top] > [data-card="eval"] { grid-column: span 4; }
   .bento[data-top="vol"] > [data-card="vol"], .bento[data-top="eval"] > [data-card="eval"] { grid-column: span 8; }
   .bento[data-bottom] > [data-card="attr"], .bento[data-bottom] > [data-card="clu"], .bento[data-bottom] > [data-card="pred"] { grid-column: span 2; }
   .bento[data-bottom="attr"] > [data-card="attr"], .bento[data-bottom="clu"] > [data-card="clu"], .bento[data-bottom="pred"] > [data-card="pred"] { grid-column: span 8; }
+  /* No forecast feed: the card rests folded, so 聚类 gets the freed columns (归因 keeps its sankey).
+     Without cluster data there is no 聚类 card to grow, so 归因 takes the freed columns instead —
+     either way the row still adds up to 12. Scoped away from an opened row, where the spans above take over. */
+  .bento:not([data-bottom]):has(> [data-card="pred"].is-mini) > [data-card="clu"] { grid-column: span 6; }
+  .bento:not([data-bottom]):has(> [data-card="pred"].is-mini):not(:has(> [data-card="clu"])) > [data-card="attr"] { grid-column: span 6; }
+  .bento:not([data-bottom]):has(> [data-card="pred"].is-mini) > [data-card="pred"] { grid-column: span 2; }
 
-  /* Folded: title plus the card's key numbers, the whole card is the way back. */
+  /* Folded: title plus a mini view of the same data; the whole card is the way back. */
   .card.is-compact { cursor: pointer; display: flex !important; flex-direction: column; transition: box-shadow var(--snap); }
   .card.is-compact:hover { box-shadow: var(--shadow-pop); }
   .card.is-compact:active { transform: scale(0.985); transition: transform var(--snap); }
   .card.is-compact > :not(.card-head):not(.compact) { display: none !important; }
   .card.is-compact .card-head > :not(h2), .card.is-compact .card-head h2 .status { display: none; }
-  .card.is-compact > .compact { display: grid; flex: 1; align-content: center; gap: var(--py); animation: rise 360ms cubic-bezier(0.16, 1, 0.3, 1) 160ms both; }
-  .compact > div { display: grid; gap: 4px; min-width: 0; }
-  .compact b { font-size: 22px; line-height: 1.1; font-weight: var(--w-light); letter-spacing: -0.01em; white-space: nowrap; }
-  .compact .lead b { font-size: 34px; letter-spacing: -0.02em; }
-  .compact small { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 }
+/* A folded card keeps a small drawing of its chart, so the state still reads as 数据量 / 预测体系
+   instead of four naked numbers. Folded mates and cards with no data to open share the same view. */
+.card.is-mini { display: flex; flex-direction: column; }
+.card.is-mini > :not(.card-head):not(.compact) { display: none !important; }
+.card.is-mini .card-head { margin-bottom: 0; }
+.card.is-compact > .compact, .card.is-mini > .compact {
+  display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: center;
+  column-gap: 16px; row-gap: 10px; flex: 1; align-content: center;
+  animation: rise 360ms cubic-bezier(0.16, 1, 0.3, 1) 160ms both;
+}
+.compact .cx { display: grid; place-items: center; width: 52px; height: 52px; color: var(--muted); }
+.compact .cn { display: grid; grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)); gap: 10px 16px; min-width: 0; }
+.compact .cn > div { display: grid; gap: 2px; min-width: 0; }
+.compact b { font-size: 20px; line-height: 1.1; font-weight: var(--w-light); letter-spacing: -0.01em; white-space: nowrap; }
+.compact .lead b { font-size: 30px; letter-spacing: -0.02em; }
+.compact small { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compact .cxhint { grid-column: 1 / -1; width: 100%; font-size: 11.5px; color: var(--faint); }
+.cxr { width: 52px; height: 52px; }
+.cxr circle { fill: none; stroke-width: 7; }
+.cxr-t { stroke: var(--well-2); }
+.cxr-a { transform: rotate(-90deg); transform-origin: 24px 24px; }
+.cxs { display: flex; width: 52px; height: 9px; gap: 2px; border-radius: 3px; overflow: hidden; }
+.cxs i { border-radius: 2px; }
+.cxcols { display: flex; align-items: flex-end; gap: 2px; width: 52px; height: 52px; }
+.cxcols i { flex: 1 1 0; min-height: 4px; position: relative; overflow: hidden; border-radius: 2px 2px 1px 1px; background: var(--well-2); }
+.cxcols i b { position: absolute; left: 0; right: 0; bottom: 0; border-radius: 2px 2px 0 0; background: var(--accent); }
+.cxline { width: 52px; height: 36px; }
+.cxline polyline { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.cxvoid { width: 40px; height: 40px; border-radius: 50%; border: 1.5px dashed var(--well-2); }
 /* Opened (≥ 861px): head across, the chart that opened it on the left, the star map on the right. */
 @media (min-width: 861px) {
   .card.is-deep { display: grid !important; column-gap: var(--py-lg); }
@@ -1331,6 +1395,7 @@ mark.cx { background: color-mix(in oklab, var(--accent) 18%, transparent); color
 @media (min-width: 861px) and (max-width: 1180px) {
   .bento > [data-card="attr"], .bento > [data-card="clu"] { grid-column: span 6; }
   .bento > [data-card="pred"], .bento > .card.is-deep { grid-column: 1 / -1; }
+  .bento > [data-card="pred"].is-mini { grid-column: span 6; }
   [data-card="attr"] > .sankey { max-height: 184px; }
 }
 /* Phones: the map sits under the chart. */

@@ -381,8 +381,10 @@ function renderPager(pages) {
     return;
   }
   const btn = (key, label, off) => `<button type="button" data-page="${key}"${off ? " disabled" : ""}>${label}</button>`;
+  // The total count already sits in the list meta above; repeating it here pushed the last
+  // button past the 300px pane, so the pager only carries the page it is on.
   el.innerHTML = `${btn("first", "«", S.page === 1)}${btn("prev", "上一页", S.page === 1)}
-    <span class="pager-info">第 <b class="num">${S.page}</b> / ${pages} 页 · ${fmt(S.rows.length)} 个会话</span>
+    <span class="pager-info">第 <b class="num">${S.page}</b> / ${pages} 页</span>
     ${btn("next", "下一页", S.page === pages)}${btn("last", "»", S.page === pages)}`;
 }
 
@@ -655,7 +657,7 @@ function renderOverviewItems() {
   const items = overviewItems(S.D);
   box.innerHTML = items.length
     ? `<span class="sp-k">Overview</span><div class="ov-list">${items
-        .map((x, i) => `<div class="ov-item" title="${esc(x)}"><p><span class="ov-n">${String(i + 1).padStart(2, "0")}</span>${esc(x)}</p></div>`)
+        .map((x, i) => `<div class="ov-item" title="${esc(x)}"><p><span class="ov-n" aria-hidden="true">${String(i + 1).padStart(2, "0")}</span><span class="ov-t">${esc(x)}</span></p></div>`)
         .join("")}</div>`
     : "";
 }
