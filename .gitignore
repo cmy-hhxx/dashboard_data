@@ -41,4 +41,8 @@ dashboard/static/samples/
 .taste-skill/
 # 本地数据与服务状态（不入库）
 dashboard/local_dev/server.pid
+dashboard/*.pid
 /datasets/
+
+# 本地 Claude worktree 与会话产物（不入库）
+.claude/
