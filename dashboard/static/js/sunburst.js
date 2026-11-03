@@ -256,11 +256,18 @@ export function sunburst(host, tree, { unit = "", sort = false, state = null, an
   draw(animate);
   save();
   return {
-    /* Step back to the root ring (used when a pushed card is folded away). */
-    reset() {
-      if (focus === root) return;
-      focus = root;
-      open = biggest(root);
+    /* One ring out, as the centre does; a folded push-pull card uses it to leave the innermost level. */
+    up() {
+      if (!focus.parent) {
+        if (open && !open.children) {
+          open = null;
+          draw(true);
+          save();
+        }
+        return;
+      }
+      open = focus;
+      focus = focus.parent;
       draw(true);
       save();
     },

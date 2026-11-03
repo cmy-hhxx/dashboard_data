@@ -50,7 +50,7 @@ REPO = DASHBOARD.parent
 STATIC = DASHBOARD / "static"
 PRODUCTION_DATASETS = Path("/mnt/fin_bench/code_and_clean_data/datasets")
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-03.5"
+PAYLOAD_VERSION = "2026-11-03.6"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 2
 
@@ -67,7 +67,7 @@ WORST_KEYS = SEVERITIES + ["none"]
 # Only fields the recall list and its filters/search actually read. Keeping the
 # index lean matters more than the full aggregate row: it is fetched by every
 # 具体数据 view and can be several MB.
-INDEX_FIELDS = ("s", "q", "m", "sp", "d", "sid", "tid", "w", "n", "tr", "pt", "st", "lb", "case", "task", "sub", "skill", "sc")
+INDEX_FIELDS = ("s", "q", "m", "sp", "d", "sid", "tid", "w", "n", "tr", "r", "pt", "st", "lb", "case", "task", "sub", "skill", "sc")
 
 PRODUCTS = {
     "wencai": {"label": "问财", "models": ["a_fast", "a_expert", "b_fast", "b_expert"]},
@@ -2230,7 +2230,7 @@ def prediction_feed_path(datasets: Path, product: str):
     return legacy if legacy and legacy.is_file() else None
 
 
-def prediction_payload(feed: dict) -> dict:
+def prediction_payload(feed: dict, items=None) -> dict:
     """Only what the 预测体系 card reads.
 
     The forecast export carries its own question bank in ``summary``: the
@@ -2264,13 +2264,42 @@ def prediction_payload(feed: dict) -> dict:
     dates = feed.get("dates") or sorted(summary.get("by_batch") or {})
     if dates:
         out["dates"] = [str(d) for d in dates]
+    if items:
+        out["items"] = items
+    return out
+
+
+def prediction_items(path: Path):
+    """Judged answers for the card's star map: one per (forecast question, version).
+
+    Only revealed / pending questions are kept (the unverifiable ones are a count in 题量),
+    with the question clipped, so a month of forecasts stays a small payload.
+    """
+    out = []
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    item = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(item, dict) or item.get("status") not in ("revealed", "pending"):
+                    continue
+                row = {"q": clip(decode_question(item.get("question")), 60), "v": item.get("version"),
+                       "r": item.get("result") or item.get("status"),
+                       "t": item.get("forecast_type_label") or item.get("forecast_type") or "其他"}
+                if item.get("error_cause_label"):
+                    row["e"] = item["error_cause_label"]
+                out.append(row)
+    except OSError:
+        return []
     return out
 
 
 def feed_signature(datasets: Path):
     """Cheap fingerprint of optional prediction feeds, part of the reuse marker."""
     parts = []
-    feeds = list(datasets.glob("*/prediction.json")) + list(datasets.glob(f"{FORECAST_DIR}/*/prediction.json"))
+    feeds = list(datasets.glob("*/prediction.json")) + list(datasets.glob(f"{FORECAST_DIR}/*/prediction*.json*"))
     for path in sorted(feeds):
         try:
             stat = path.stat()
@@ -2374,7 +2403,8 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
                     log(f"[build] skip {feed}: {exc}")
                 else:
                     if isinstance(data, dict):
-                        products[product]["prediction"] = prediction_payload(data)
+                        items = prediction_items(feed.parent / "prediction_items.jsonl")
+                        products[product]["prediction"] = prediction_payload(data, items)
         timers["aggregate"] = round(time.time() - t0, 1)
 
         generated = iso_now()

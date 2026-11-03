@@ -528,7 +528,7 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .stats b { font-size: 22px; line-height: 1.1; font-weight: var(--w-light); letter-spacing: -0.01em; }
 .stats b, .stats small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stats small, .hero small { font-size: 12px; color: var(--muted); }
-.stat-of { font-size: 12px; color: var(--faint); font-weight: var(--w-regular); margin-left: 2px; }
+.stat-of { font-size: 12px; color: var(--faint); font-weight: var(--w-body); margin-left: 2px; letter-spacing: 0; }
 .stat-pending { color: var(--faint); font-weight: var(--w-light); }
 .hero { display: flex; align-items: baseline; gap: 8px; margin-bottom: var(--py); }
 .hero .big { font-size: 40px; }
@@ -538,12 +538,21 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .keys { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 10px; font-size: 12px; color: var(--muted); }
 .keys span { display: inline-flex; align-items: center; gap: 6px; }
 .keys b { color: var(--ink-2); font-weight: var(--w-medium); }
-.sankey { display: block; width: 100%; height: auto; overflow: visible; }
+.sankey { display: block; width: 100%; height: auto; overflow: visible; font-variant-numeric: tabular-nums; }
 .sk-f { transition: opacity var(--snap); }
 .sankey.hl .sk-f:not(.on) { opacity: 0.14; }
-.sk-node rect { transition: opacity var(--snap); }
+.sk-node rect { transition: opacity var(--snap); transform-box: fill-box; transform-origin: center; animation: sk-node 520ms cubic-bezier(0.3, 1.4, 0.5, 1) both; }
+.sk-node[data-r] rect { fill: var(--t1); }
+.sk-node.is-top[data-r] rect { fill: var(--ink-2); }
 .sk-t { font-size: 12px; fill: var(--ink-2); dominant-baseline: middle; }
-.sk-n { fill: var(--faint); }
+.sk-n { fill: var(--muted); }
+.sk-p { fill: var(--faint); font-size: 10.5px; }
+.sk-node.is-top .sk-t { fill: var(--ink); font-weight: var(--w-medium); }
+.sk-node.is-top .sk-n { fill: var(--ink-2); }
+/* Flows sweep in from the version column; node bars settle with a small bounce. */
+.sk-reveal { transform-box: fill-box; transform-origin: left; animation: sk-reveal 900ms cubic-bezier(0.16, 1, 0.3, 1) 80ms both; }
+@keyframes sk-reveal { from { transform: scaleX(0); } }
+@keyframes sk-node { from { transform: scaleY(0.2); opacity: 0; } }
 .status { font-size: 12px; color: var(--muted); }
 .card-head h2 .status { margin-left: 6px; font-weight: var(--w-body); letter-spacing: 0; }
 .card-head .seg { align-self: center; }
@@ -597,11 +606,12 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .sb-a { stroke: var(--card); stroke-width: 1.5; stroke-linejoin: round; cursor: pointer; transition: fill 360ms var(--ease, ease), fill-opacity var(--snap); }
 .sb-a.sb-mark { stroke-width: 0.75; opacity: 0.88; }
 .sbx.hovering .sb-a:not(.hl) { fill-opacity: 0.42; }
-.sb-key { display: flex; align-items: center; gap: 6px; margin-top: 8px; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
-.sb-key i { flex: none; width: 7px; height: 7px; border-radius: 2px; background: var(--sev-1); }
-.sb-key span { min-width: 0; }
-.sb-key.is-note { margin-top: 4px; color: var(--faint); }
-.sb-key.is-note i { background: var(--t3); }
+/* Ring legends are a single quiet line of keys; what a key means lives in its tooltip. */
+.sb-keys { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; margin-top: 8px; }
+.sb-key { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11.5px; line-height: 1.45; cursor: help; }
+.sb-key i { flex: none; width: 10px; height: 3px; border-radius: 2px; background: var(--sev-1); }
+.sb-key.is-note { color: var(--faint); font-variant-numeric: tabular-nums; }
+.sb-key.is-note i { width: 7px; height: 7px; background: var(--t3); }
 .sb-c {
   position: absolute; inset: 22.5%; display: grid; place-content: center; justify-items: center; gap: 3px;
   border-radius: 50%; text-align: center; cursor: default; transition: background var(--snap), transform var(--spring);
@@ -1229,3 +1239,98 @@ mark.cx { background: color-mix(in oklab, var(--accent) 18%, transparent); color
 .fx-in.is-on, .fx-out.is-on { transform: none; }
 /* stage rows spread so their first/last rows line up with M1/M7 */
 .fx-phs { align-content: space-between; }
+
+/* ------------------------------------------------------------------ push-pull + 星图
+   ≥ 1181px: a row's opened card takes 8 of 12 columns, its mates fold to the key numbers
+   (top 8 | 4, bottom 8 | 2 | 2) and the star map sits beside the chart that opened it.
+   Narrower, nothing folds: the opened card takes its row (phones: the map goes under it). */
+.gx { position: relative; min-width: 0; min-height: 0; }
+.gx[hidden], .compact { display: none; }
+.gx canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.gx .empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 0; }
+.gx-close { position: absolute; top: -6px; right: -6px; z-index: 2; width: 28px; height: 28px; border-radius: 6px; color: var(--muted); }
+.gx-close svg { width: 16px; height: 16px; }
+.gx-wait {
+  position: absolute; inset: 12% 18%; border-radius: 50%;
+  background: radial-gradient(closest-side, color-mix(in oklab, var(--accent) 14%, transparent), transparent);
+  animation: gx-wait 1.1s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+}
+@keyframes gx-wait { from { opacity: 0.35; transform: scale(0.92); } }
+.card.is-deep > .gx { animation: gx-in 420ms cubic-bezier(0.16, 1, 0.3, 1) 140ms both; }
+@keyframes gx-in { from { opacity: 0; } }
+
+/* What opens a card: a day's bar, a sankey node or flow, a forecast version, the forecast bar. */
+[data-card="eval"] .evday, [data-card="attr"] .sk-node, [data-card="attr"] .sk-f,
+[data-card="pred"] .pred-sk .sk-node, [data-card="pred"] .pred-sk .sk-f, [data-card="pred"] [data-pm],
+[data-card="pred"] [data-pane="vol"] .comp { cursor: pointer; }
+[data-card="eval"] .evday.is-on .evbar { box-shadow: 0 0 0 1.5px var(--card), 0 0 0 3px var(--accent); }
+[data-card="eval"] .evday.is-on .evdate { color: var(--accent); }
+.sankey.is-picked .sk-f:not(.is-pick) { opacity: 0.16; }
+.sk-node.is-pick .sk-t { fill: var(--accent); }
+.vrow.is-pick > span:first-child { color: var(--accent); }
+
+@media (min-width: 1181px) {
+  .bento[data-top] > [data-card="vol"], .bento[data-top] > [data-card="eval"] { grid-column: span 4; }
+  .bento[data-top="vol"] > [data-card="vol"], .bento[data-top="eval"] > [data-card="eval"] { grid-column: span 8; }
+  .bento[data-bottom] > [data-card="attr"], .bento[data-bottom] > [data-card="clu"], .bento[data-bottom] > [data-card="pred"] { grid-column: span 2; }
+  .bento[data-bottom="attr"] > [data-card="attr"], .bento[data-bottom="clu"] > [data-card="clu"], .bento[data-bottom="pred"] > [data-card="pred"] { grid-column: span 8; }
+
+  /* Folded: title plus the card's key numbers, the whole card is the way back. */
+  .card.is-compact { cursor: pointer; display: flex !important; flex-direction: column; transition: box-shadow var(--snap); }
+  .card.is-compact:hover { box-shadow: var(--shadow-pop); }
+  .card.is-compact:active { transform: scale(0.985); transition: transform var(--snap); }
+  .card.is-compact > :not(.card-head):not(.compact) { display: none !important; }
+  .card.is-compact .card-head > :not(h2), .card.is-compact .card-head h2 .status { display: none; }
+  .card.is-compact > .compact { display: grid; flex: 1; align-content: center; gap: var(--py); animation: rise 360ms cubic-bezier(0.16, 1, 0.3, 1) 160ms both; }
+  .compact > div { display: grid; gap: 4px; min-width: 0; }
+  .compact b { font-size: 22px; line-height: 1.1; font-weight: var(--w-light); letter-spacing: -0.01em; white-space: nowrap; }
+  .compact .lead b { font-size: 34px; letter-spacing: -0.02em; }
+  .compact small { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+}
+/* Opened (≥ 861px): head across, the chart that opened it on the left, the star map on the right. */
+@media (min-width: 861px) {
+  .card.is-deep { display: grid !important; column-gap: var(--py-lg); }
+  .card.is-deep > .card-head { grid-column: 1 / -1; }
+  .card.is-deep > .gx { grid-column: 2; }
+  [data-card="vol"].is-deep { grid-template-columns: 220px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto auto; }
+  [data-card="vol"].is-deep > #vol { grid-column: 1; grid-row: 2; }
+  [data-card="vol"].is-deep > .sb-keys { grid-column: 1; grid-row: 3; }
+  [data-card="vol"].is-deep > .stats { grid-column: 1 / -1; grid-row: 4; }
+  [data-card="vol"].is-deep > .gx { grid-row: 2 / 4; }
+  [data-card="vol"].is-deep #vol .sb-view { grid-template-columns: minmax(0, 1fr); }
+  [data-card="vol"].is-deep #vol .sb-list { display: none; }
+  [data-card="eval"].is-deep { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  /* Half-width bars keep every third date and only the completed count. */
+  [data-card="eval"].is-deep .evday:not(:nth-child(3n + 1)):not(:last-child) .evdate { visibility: hidden; }
+  [data-card="eval"].is-deep .evnums small { display: none; }
+  [data-card="eval"].is-deep .evnums { min-height: 16px; }
+  [data-card="eval"].is-deep > .eval-content { grid-column: 1; grid-row: 2; }
+  [data-card="eval"].is-deep > .gx { grid-row: 2; }
+  [data-card="attr"].is-deep, [data-card="pred"].is-deep { grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr); }
+  [data-card="attr"].is-deep { grid-template-rows: auto auto minmax(0, 1fr); }
+  [data-card="attr"].is-deep > .hero { grid-column: 1; grid-row: 2; }
+  [data-card="attr"].is-deep > .sankey { grid-column: 1; grid-row: 3; align-self: start; }
+  [data-card="attr"].is-deep > .gx { grid-row: 2 / 4; }
+  [data-card="clu"].is-deep { grid-template-columns: minmax(0, 220px) minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
+  [data-card="clu"].is-deep > #clu { grid-column: 1; grid-row: 2; }
+  [data-card="clu"].is-deep > .sb-keys { grid-column: 1; grid-row: 3; }
+  [data-card="clu"].is-deep > .gx { grid-row: 2 / 4; }
+  [data-card="clu"].is-deep #clu .sb-view { grid-template-columns: minmax(0, 1fr); }
+  [data-card="clu"].is-deep #clu .sb-list { display: none; }
+  [data-card="pred"].is-deep { grid-template-rows: auto minmax(0, 1fr); }
+  [data-card="pred"].is-deep > .pred-panes { grid-column: 1; grid-row: 2; }
+  [data-card="pred"].is-deep > .gx { grid-row: 2; }
+}
+/* 861–1180px: the analysis cards go two-up (the third takes the row) and an opened card takes the
+   whole row, so nothing needs folding. */
+@media (min-width: 861px) and (max-width: 1180px) {
+  .bento > [data-card="attr"], .bento > [data-card="clu"] { grid-column: span 6; }
+  .bento > [data-card="pred"], .bento > .card.is-deep { grid-column: 1 / -1; }
+  [data-card="attr"] > .sankey { max-height: 184px; }
+}
+/* Phones: the map sits under the chart. */
+@media (max-width: 860px) {
+  .card.is-deep { padding-bottom: calc(var(--py) + 316px); }
+  .card.is-deep > .gx { position: absolute; left: var(--px); right: var(--px); bottom: var(--py); height: 300px; }
+}

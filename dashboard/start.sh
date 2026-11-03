@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
-# Serve the dashboard on 5001. Public mapping is configured by the deployment environment.
+# Serve the dashboard on $PORT (default 5001). Public mapping is configured by the deployment
+# environment. A second copy (staging) sets PORT and STATS_WORKER=0 so only one stats sidecar runs.
 set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p logs
+PORT="${PORT:-5001}"
 
 # The stats sidecar is independent of the HTTP server and keeps
 # <datasets>/stats.json fresh for the next build.  Start it even when the
 # dashboard is already serving.
-if [ -f stats.pid ] && kill -0 "$(cat stats.pid 2>/dev/null)" 2>/dev/null; then
+if [ "${STATS_WORKER:-1}" = "0" ]; then
+  :
+elif [ -f stats.pid ] && kill -0 "$(cat stats.pid 2>/dev/null)" 2>/dev/null; then
   :
 else
   rm -f stats.pid
@@ -15,14 +19,14 @@ else
   echo $! > stats.pid
 fi
 
-if curl -s -m 2 -o /dev/null http://127.0.0.1:5001/healthz; then
-  echo "already serving on :5001"
+if curl -s -m 2 -o /dev/null "http://127.0.0.1:${PORT}/healthz"; then
+  echo "already serving on :${PORT}"
   exit 0
 fi
 
 rm -f server.pid
-PORT=5001 nohup python3 server.py >> logs/server.log 2>&1 &
+PORT="$PORT" nohup python3 server.py >> logs/server.log 2>&1 &
 echo $! > server.pid
 sleep 1
-curl -s -m 3 -o /dev/null -w ":5001 health %{http_code}\n" http://127.0.0.1:5001/healthz || true
+curl -s -m 3 -o /dev/null -w ":${PORT} health %{http_code}\n" "http://127.0.0.1:${PORT}/healthz" || true
 cat server.pid

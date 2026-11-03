@@ -69,6 +69,8 @@ export function hideTip() {
 }
 export function bindTips(root, resolve) {
   root.addEventListener("pointermove", (e) => {
+    // Canvases (星图) hit-test and place their own tooltip.
+    if (e.target.closest("[data-own-tip]")) return;
     const t = e.target.closest("[data-tip],[data-cell],[data-mx]");
     if (!t || !root.contains(t)) return hideTip();
     const html = resolve ? resolve(t) : null;
