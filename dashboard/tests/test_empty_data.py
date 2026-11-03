@@ -92,7 +92,7 @@ class BuildTests(unittest.TestCase):
             self.assertEqual(kpi["problems"], 1)
             self.assertEqual((kpi["unique_sessions"], kpi["traces"], kpi["tokens"]), (1, 1, 150))
             daily = data["products"]["wencai"]["daily"][0]
-            self.assertEqual((daily["sessions"], daily["traces"], daily["tokens"], daily["sids"]), (1, 1, 150, ["s1"]))
+            self.assertEqual((daily["sessions"], daily["traces"], daily["tokens"], daily["sids"]), (1, 1, 150, [0]))
             row = index["products"]["wencai"]["rows"][0]
             self.assertEqual((row["w"], row["n"], row["m"]), ("P1", 1, "a_fast"))
             from detail_builder import DetailBuilder

@@ -112,18 +112,19 @@ class Handler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=STATIC, **kwargs)
 
     def end_headers(self):
-        path = self.path.split("?", 1)[0]
-        if path in ("/data.json", "/samples.json"):
-            # Revalidate on every load; a 304 still saves the full JSON body.
-            policy = "no-cache"
-        elif path == "/healthz":
-            policy = "no-store"
-        elif path in ("/", "/index.html"):
-            policy = "no-cache"
-        else:
-            policy = "no-cache"
+        # Everything revalidates (a 304 still saves the body); healthz is never cached.
+        policy = "no-store" if self.path.startswith("/healthz") else "no-cache"
         self.send_header("Cache-Control", policy)
         super().end_headers()
+
+    def _send_body(self, status, body, ctype):
+        # HTTP/1.1 keep-alive: without Content-Length the client waits for a body
+        # that never ends, which is how a failed detail used to hang the page.
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _gzip_matches_source(self, path, gz):
         """Reject a .gz that was not built from the current source file.
@@ -178,7 +179,6 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         with open(gz, "rb") as fh:
             shutil.copyfileobj(fh, self.wfile)
-        self.log_request(200)
         return True
 
     def do_GET(self):
@@ -191,11 +191,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "error": _state["error"],
                 "build": _state["build"],
             }).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self._send_body(200, body, "application/json")
             return
         path_only = self.path.split("?", 1)[0]
         if _builder and path_only.startswith("/samples/") and path_only.endswith(".json"):
@@ -206,10 +202,7 @@ class Handler(SimpleHTTPRequestHandler):
                 print(f"[serve] detail {slug} failed: {exc}", flush=True)
                 generated = None
             if generated is None and not os.path.isfile(self.translate_path(path_only)):
-                self.send_response(404)
-                self.send_header("Content-Type", "text/plain; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(b"sample detail unavailable")
+                self._send_body(404, b"sample detail unavailable", "text/plain; charset=utf-8")
                 return
         if "gzip" in self.headers.get("Accept-Encoding", ""):
             path = self.translate_path(self.path)

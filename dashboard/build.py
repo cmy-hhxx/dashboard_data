@@ -9,15 +9,19 @@ Layout read under the datasets root (repo ``datasets/`` locally, ``EVAL_DATASETS
     <n>_<product>/eval_output/<split>/<model>/compact/<model>_compact-<date>.jsonl
     <n>_<product>/eval_output/**/cluster/<model>/{cluster_tree.json,item_index.jsonl}
 
+    4_forecast/<product>/prediction.json            optional 预测体系 feed (docs/prediction-data.md)
+
 The CSV pins each attribution line to its input and compact line (verified by SHA-256).
-Without it, triples are paired inside one model/date file by session id + request time,
-falling back to file order for duplicates.
+Without it, triples are paired inside one model/date file by session id + request time;
+duplicate input snapshots are resolved by which one covers the attribution's trace ids.
 
 Outputs, each with a ``.gz`` twin::
 
-    static/data.json              aggregates for the 数据 and 评测体系 views
-    static/samples.json           the recall index for the 样本 view
-    static/samples/<slug>.json    one sample: trimmed input, attribution and compact
+    static/data.json                shared shell: taxonomy, 评测体系 facts, product list
+    static/data-<product>.json      one product's aggregates for the 数据 view
+    static/samples.json             product list for the 样本 view
+    static/samples-<product>.json   one product's recall index
+    static/samples/<slug>.json      one sample, generated on first request (detail_builder.py)
 """
 from __future__ import annotations
 
@@ -27,7 +31,6 @@ import gzip
 import hashlib
 import json_compat as json
 import multiprocessing
-import pickle
 import os
 import pickle
 import re
@@ -47,7 +50,7 @@ REPO = DASHBOARD.parent
 STATIC = DASHBOARD / "static"
 PRODUCTION_DATASETS = Path("/mnt/fin_bench/code_and_clean_data/datasets")
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-03.3"
+PAYLOAD_VERSION = "2026-11-03.4"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 2
 
@@ -127,6 +130,17 @@ def iso_now() -> str:
 
 
 def decode_question(text) -> str:
+    if isinstance(text, list):
+        # Survey-style questions arrive as [{"header": ..., "selected": [...]}, ...].
+        parts = []
+        for item in text:
+            if isinstance(item, dict):
+                picked = item.get("selected")
+                picked = "、".join(map(str, picked)) if isinstance(picked, list) else str(picked or "")
+                parts.append(f"{item.get('header') or ''}：{picked}".strip("："))
+            elif isinstance(item, str):
+                parts.append(item)
+        text = "；".join(p for p in parts if p)
     q = (text or "").strip() if isinstance(text, str) else ""
     if re.search(r"%[0-9A-Fa-f]{2}", q) and q.count(" ") <= 1:
         try:
@@ -239,12 +253,15 @@ class LineReader:
         return self.lines(rel)[number - 1]
 
     def raw_line(self, rel: str, number: int, index: dict | None = None) -> bytes:
-        index = index or self.store.get_file(rel)
-        if not index:
-            return self.line(rel, number)
+        if index is None:
+            span = self.store.line_span(rel, number)
+            return self.read_span(rel, *span) if span else self.line(rel, number)
         offsets = index["offsets"]
         start = offsets[number - 1]
         end = offsets[number] if number < len(offsets) else index["committed"]
+        return self.read_span(rel, start, end)
+
+    def read_span(self, rel: str, start: int, end: int) -> bytes:
         fd = self._fds.get(rel)
         if fd is None:
             fd = os.open(self.root / rel, os.O_RDONLY)
@@ -462,18 +479,21 @@ def daily_payload(samples, inputs):
     """Per-day input volume plus the evaluated session/trace/token totals.
 
     ``sids`` is carried alongside the count so the eval card can union sessions
-    across a selected window instead of adding per-day distinct counts.
+    across a selected window instead of adding per-day distinct counts.  Only
+    identity matters there, so sessions are small per-product integers rather
+    than 40-character ids (about 400 KB of the AIME payload).
     """
     evaluated = Counter()
     traces = Counter()
     tokens = Counter()
     sids = defaultdict(set)
+    number = {}
     for slug, _, row, facts in samples:
         key = (row["d"], row["m"], row["sp"])
         evaluated[key] += 1
         traces[key] += row["tr"]
         tokens[key] += facts["tokens"]
-        sids[key].add(row["sid"] or slug)
+        sids[key].add(number.setdefault(row["sid"] or slug, len(number)))
     keys = set(inputs) | set(evaluated)
     return [
         {
@@ -495,12 +515,16 @@ def debug(message):
 
 
 def ensure_file(store: bs.BuildStore, root: Path, rel: str, kind: str = "input",
-                product: str = "", need_stats: bool = False):
-    """Return a cached file index, scanning only when ``(size, mtime)`` changed."""
+                product: str = "", need_stats: bool = False, load: bool = True):
+    """Return a cached file index, scanning only when ``(size, mtime)`` changed.
+
+    ``load=False`` only brings the index up to date; an unchanged file is then
+    not decoded at all.
+    """
     path = root / rel
     stat = path.stat()
     if store.has_file_stat(rel, stat):
-        return store.get_file(rel)
+        return store.get_file(rel) if load else None
     prev = store.get_file(rel)
     data = bs.scan_file(root, rel, kind, prev, need_stats, product or product_of(rel.split("/")[0]) or "",
                         bs.split_from_rel(rel), bs.model_from_rel(rel))
@@ -513,9 +537,9 @@ def ensure_input(store, root, rel, product):
     return ensure_file(store, root, rel, "input", product, True)
 
 
-def ensure_raw(store, root, rel):
+def ensure_raw(store, root, rel, load=True):
     kind = "output" if ("attribution" in rel or "compact" in rel) else "input"
-    return ensure_file(store, root, rel, kind, "", False)
+    return ensure_file(store, root, rel, kind, "", False, load)
 
 
 def choose_input(cands, turn_tids):
@@ -543,6 +567,7 @@ def pairs_from_csv(root: Path, store: bs.BuildStore, reader: LineReader):
     with open(path, encoding="utf-8-sig", newline="") as fh:
         rows = list(csv.DictReader(fh))
     pairs, mismatched = [], 0
+    indexed = set()
     for row in rows:
         m = OUTPUT_FILE.match(row["output_file"])
         if not m:
@@ -565,8 +590,11 @@ def pairs_from_csv(root: Path, store: bs.BuildStore, reader: LineReader):
             if not ref or not row.get(sha_col):
                 continue
             try:
-                index = ensure_raw(store, root, ref[0])
-                raw = reader.raw_line(ref[0], ref[1], index)
+                # Stat each file once per build; the line itself comes from its offsets.
+                if ref[0] not in indexed:
+                    ensure_raw(store, root, ref[0], load=False)
+                    indexed.add(ref[0])
+                raw = reader.raw_line(ref[0], ref[1])
             except (OSError, IndexError):
                 pair[key] = None
                 mismatched += 1
@@ -613,7 +641,7 @@ def discover_outputs(root: Path):
     return found
 
 
-def pair_output(root: Path, item: dict, store: bs.BuildStore, reader: LineReader):
+def pair_output(root: Path, item: dict, store: bs.BuildStore):
     slots, compacts = defaultdict(list), defaultdict(list)
     for rel in item["inputs"]:
         index = ensure_input(store, root, rel, item["product"])
@@ -626,14 +654,22 @@ def pair_output(root: Path, item: dict, store: bs.BuildStore, reader: LineReader
             if key:
                 compacts[key].append((item["compact"], n, hashes))
 
+    # The output index already holds each line's key, turn trace ids and SHA-256,
+    # so a grown attribution file is never re-read in full here.
+    out = ensure_raw(store, root, item["rel"])
+    digests = out.get("digests") or b""
+    if len(digests) != 32 * out["lines"]:
+        out = bs.scan_file(root, item["rel"], "output", None, False, "",
+                           bs.split_from_rel(item["rel"]), bs.model_from_rel(item["rel"]))
+        out["product"] = ""
+        store.put_file(out)
+        digests = out["digests"]
+
     pairs, unmatched = [], Counter()
-    for n, raw in enumerate(reader.lines(item["rel"]), 1):
-        try:
-            payload = json.loads(raw)
-        except ValueError:
+    for n, (key, turn_tids) in enumerate(zip(out["keys"], out["tids"]), 1):
+        digest = digests[32 * (n - 1):32 * n]
+        if digest == bs.NO_DIGEST:
             continue
-        key = bs.key_from_meta(payload.get("session_meta") or {}) or bs.raw_key(raw)
-        turn_tids = [(t.get("meta") or {}).get("trace_id") for t in payload.get("turns") or []]
         cands = slots.get(key) or []
         inp = choose_input(cands, turn_tids)
         if inp:
@@ -654,12 +690,12 @@ def pair_output(root: Path, item: dict, store: bs.BuildStore, reader: LineReader
             "compact": (comp[0], comp[1]) if comp else None,
             "ih": f"{inp[3]:016x}" if inp else None,
             "ch": f"{comp[2]:016x}" if comp else None,
-            "oh": hashlib.sha256(raw).hexdigest(),
+            "oh": digest.hex(),
         })
     return pairs, unmatched
 
 
-def pairs_from_keys(root: Path, store: bs.BuildStore, reader: LineReader):
+def pairs_from_keys(root: Path, store: bs.BuildStore):
     """Pair each attribution file by session id + request time.
 
     Unchanged attribution files are served from the pairing cache; only a new or
@@ -670,13 +706,13 @@ def pairs_from_keys(root: Path, store: bs.BuildStore, reader: LineReader):
     for item in discover_outputs(root):
         # Detail building reads one output line by offset; make sure that index
         # exists even when the pairing itself is served from cache.
-        ensure_raw(store, root, item["rel"])
+        ensure_raw(store, root, item["rel"], load=False)
         cached = store.get_pairs(item["rel"])
         if cached and cached[0] == item["sig"]:
             file_pairs = cached[1]
             info["pair_hits"] += 1
         else:
-            file_pairs, unmatched = pair_output(root, item, store, reader)
+            file_pairs, unmatched = pair_output(root, item, store)
             store.put_pairs(item["rel"], item["sig"], file_pairs)
             info["pair_misses"] += 1
             for key, value in unmatched.items():
@@ -2175,10 +2211,61 @@ def payload_files_exist(out_dir: Path) -> bool:
             and all((out_dir / f"samples-{p}.json").exists() for p in (samples.get("products") or {})))
 
 
+FORECAST_DIR = "4_forecast"
+
+
+def prediction_feed_path(datasets: Path, product: str):
+    """``4_forecast/<product>/prediction.json``, else the older ``<n>_<product>/prediction.json``."""
+    path = datasets / FORECAST_DIR / product / "prediction.json"
+    if path.is_file():
+        return path
+    top = next((p for p in datasets.glob("*") if product_of(p.name) == product), None)
+    legacy = top / "prediction.json" if top else None
+    return legacy if legacy and legacy.is_file() else None
+
+
+def prediction_payload(feed: dict) -> dict:
+    """Only what the 预测体系 card reads.
+
+    The forecast export carries its own question bank in ``summary``: the
+    questions it scanned, the forecast questions it could not verify yet and
+    the batch dates covered.  The card counts against that bank, because the
+    forecast batches need not be the dates the attribution side has evaluated.
+    Explicit ``bank`` / ``unverifiable`` / ``dates`` fields win over ``summary``.
+    """
+    out = {}
+    if feed.get("as_of") is not None:
+        out["as_of"] = feed["as_of"]
+    if isinstance(feed.get("questions"), list):
+        out["questions"] = [{"id": q.get("id"), "answer_at": q.get("answer_at")}
+                            for q in feed["questions"] if isinstance(q, dict)]
+    if isinstance(feed.get("accuracy"), list):
+        out["accuracy"] = feed["accuracy"]
+    attribution = feed.get("attribution")
+    if isinstance(attribution, dict):
+        out["attribution"] = {k: attribution[k] for k in ("models", "errors", "flows") if k in attribution}
+    summary = feed.get("summary") if isinstance(feed.get("summary"), dict) else {}
+    by_status = summary.get("by_status") or {}
+    bank = feed.get("bank", summary.get("extracted_questions"))
+    if isinstance(bank, int):
+        out["bank"] = bank
+    unverifiable = feed.get("unverifiable")
+    if unverifiable is None and by_status:
+        # 回填未完成 is neither revealed nor pending: it waits with the unverifiable ones.
+        unverifiable = int(by_status.get("unverifiable") or 0) + int(by_status.get("unresolved") or 0)
+    if isinstance(unverifiable, int):
+        out["unverifiable"] = unverifiable
+    dates = feed.get("dates") or sorted(summary.get("by_batch") or {})
+    if dates:
+        out["dates"] = [str(d) for d in dates]
+    return out
+
+
 def feed_signature(datasets: Path):
     """Cheap fingerprint of optional prediction feeds, part of the reuse marker."""
     parts = []
-    for path in sorted(datasets.glob("*/prediction.json")):
+    feeds = list(datasets.glob("*/prediction.json")) + list(datasets.glob(f"{FORECAST_DIR}/*/prediction.json"))
+    for path in sorted(feeds):
         try:
             stat = path.stat()
         except OSError:
@@ -2215,7 +2302,7 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
         if pairing in ("auto", "csv") and (datasets / "对应关系.csv").exists():
             pairs, pairing_info = pairs_from_csv(datasets, store, reader)
         else:
-            pairs, pairing_info = pairs_from_keys(datasets, store, reader)
+            pairs, pairing_info = pairs_from_keys(datasets, store)
         timers["pair"] = round(time.time() - t0, 1)
         if not pairs:
             return empty_payloads("no-pairs"), {}
@@ -2273,13 +2360,15 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
             products[product]["kpi"]["inputs"] = payload["records"]
             products[product]["kpi"]["lost"] = payload["lost"]
             products[product]["daily"] = daily_payload(samples[product], daily_inputs(metas))
-            top = next((p for p in datasets.glob("*") if product_of(p.name) == product), None)
-            feed = top / "prediction.json" if top else None
-            if feed and feed.is_file():
+            feed = prediction_feed_path(datasets, product)
+            if feed:
                 try:
-                    products[product]["prediction"] = json.loads(feed.read_text(encoding="utf-8"))
-                except ValueError as exc:
+                    data = json.loads(feed.read_text(encoding="utf-8"))
+                except (OSError, ValueError) as exc:
                     log(f"[build] skip {feed}: {exc}")
+                else:
+                    if isinstance(data, dict):
+                        products[product]["prediction"] = prediction_payload(data)
         timers["aggregate"] = round(time.time() - t0, 1)
 
         generated = iso_now()
@@ -2410,13 +2499,10 @@ def main(argv=None):
             shutil.rmtree(stale, ignore_errors=True)
         for stale in list(out.glob("data-*.json*")) + list(out.glob("samples-*.json*")):
             stale.unlink(missing_ok=True)
-    data_bytes = write_json(out / "data.json", data)
-    index_bytes = write_json(out / "samples.json", index)
-    summary = {
-        "pairs": data["source"].get("pairs", 0), "pairing": data["source"].get("mode"),
-        "data_kb": round(data_bytes / 1024), "index_kb": round(index_bytes / 1024),
-        **stats,
-    }
+        # build() writes every payload itself; only the empty shell is left to write.
+        stats = {**stats, "data_kb": round(write_json(out / "data.json", data) / 1024),
+                 "index_kb": round(write_json(out / "samples.json", index) / 1024)}
+    summary = {"pairs": data["source"].get("pairs", 0), "pairing": data["source"].get("mode"), **stats}
     print(json.dumps(summary, ensure_ascii=False))
     return 0
 

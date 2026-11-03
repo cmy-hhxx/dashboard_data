@@ -126,7 +126,7 @@ ssh eval_data 'cd /opt/eval_dashboard && ./stop.sh'
 6. **强制刷新数据**：重启服务，或在远端执行 `python3 build.py --keep-on-empty`。
 7. **改端口要三处同步**：`server.py` / `start.sh` 的监听端口、容器平台端口映射、
    本地 `servers.conf` 的 `dashboard_port_1`。对外端口按部署环境配置，不要把 `5001` 直接暴露。
-8. **预测数据放在产品目录**：`datasets/<产品>/prediction.json` 在下一轮构建时生效，格式见
+8. **预测数据放在 `4_forecast/`**：`datasets/4_forecast/<产品>/prediction.json` 在下一轮构建时生效，格式见
    `docs/prediction-data.md`。
 9. **没有进程守护**：服务由 `nohup` 启动（父进程已是容器 init），目前没有 cron / systemd
    自启动配置；容器或环境重启后需要手动执行 `start.sh`。若要自动恢复，需在容器平台的启动命令里

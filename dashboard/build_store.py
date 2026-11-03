@@ -38,6 +38,9 @@ RAW_SID = re.compile(rb'"session_id"\s*:\s*"([^"]*)"')
 RAW_THREAD = re.compile(rb'"thread_id"\s*:\s*"([^"]*)"')
 RAW_TRACE = re.compile(rb'"trace_id"\s*:\s*"([^"]*)"')
 RAW_RT = re.compile(rb'"request_time"\s*:\s*"([^"]*)"')
+# Output lines carry their SHA-256 (the sample slug) in the index; an invalid
+# line gets this marker so pairing can skip it without re-reading the file.
+NO_DIGEST = bytes(32)
 
 
 # --------------------------------------------------------------------------- helpers
@@ -181,20 +184,24 @@ def scan_file(root: Path | str, rel: str, kind: str = "input", prev: dict | None
     path = root / rel
     st = path.stat()
     split = split or split_from_rel(rel)
-    ph = prefix_hash(path)
     if prev and st.st_size == prev.get("size") and st.st_mtime_ns == prev.get("mtime_ns"):
         return prev
+    ph = prefix_hash(path)
+    output = kind != "input"
     tail = bool(prev and prev.get("ends_nl") and st.st_size > int(prev.get("committed") or 0)
-                and ph == prev.get("prefix"))
+                and ph == prev.get("prefix")
+                # Rows indexed before digests existed are rescanned once to backfill them.
+                and (not output or len(prev.get("digests") or b"") == 32 * int(prev.get("lines") or 0)))
     if tail:
         offsets = array("q", prev.get("offsets") or [0])
         keys = list(prev.get("keys") or [])
         tids = list(prev.get("tids") or [])
         hashes = array("Q", prev.get("hashes") or [])
+        digests = bytearray(prev.get("digests") or b"")
         stats = copy.deepcopy(prev.get("stats") or empty_stats())
         start = int(prev.get("committed") or 0)
     else:
-        offsets, keys, tids, hashes = array("q", [0]), [], [], array("Q")
+        offsets, keys, tids, hashes, digests = array("q", [0]), [], [], array("Q"), bytearray()
         stats = empty_stats()
         start = 0
 
@@ -234,23 +241,30 @@ def scan_file(root: Path | str, rel: str, kind: str = "input", prev: dict | None
                            for t in payload.get("traces") or [] if isinstance(t, dict)]
                     if not any(ids):
                         ids = [payload.get("trace_id") or (payload.get("meta") or {}).get("trace_id")]
-                    tids.append([str(x) for x in ids if x])
                 else:
-                    tids.append([])
+                    # Attribution turns: pairing picks the input snapshot covering them.
+                    ids = [(t.get("meta") or {}).get("trace_id")
+                           for t in payload.get("turns") or [] if isinstance(t, dict)]
+                tids.append([str(x) for x in ids if x])
                 keys.append(key or raw_key(body))
                 if need_stats and kind == "input":
                     _aggregate_line(stats, payload, product, split, default_model)
+                if output:
+                    digests += hashlib.sha256(body).digest()
             else:
                 # A truncated / invalid JSONL line must never enter the pairing
                 # index: it would later crash the sample builder with a JSON error.
                 keys.append("")
                 tids.append([])
+                if output:
+                    digests += NO_DIGEST
             hashes.append(line_hash(body))
 
     return {
         "path": rel, "size": st.st_size, "mtime_ns": st.st_mtime_ns, "prefix": ph,
         "lines": len(offsets) - 1, "committed": pos, "ends_nl": ends_nl,
         "offsets": offsets, "keys": keys, "tids": tids, "hashes": hashes,
+        "digests": bytes(digests) if output else None,
         "stats": stats, "scanned_at": time.time(), "model": default_model, "split": split,
     }
 
@@ -269,8 +283,11 @@ class BuildStore:
         self.path = path
         self.readonly = readonly
         if readonly:
-            # Sample workers only read file indexes, pair payloads and samples.
-            self.db = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True, timeout=30)
+            # Sample workers only read file indexes, pair payloads and samples.  The
+            # server's detail builder shares one connection across request threads
+            # behind its own lock, so the per-thread check would only get in the way.
+            self.db = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True, timeout=30,
+                                      check_same_thread=False)
             self.db.execute("PRAGMA query_only=ON")
             self.db.execute("PRAGMA temp_store=MEMORY")
             return
@@ -308,6 +325,9 @@ class BuildStore:
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(samples)")}
         if "refs" not in columns:
             self.db.execute("ALTER TABLE samples ADD COLUMN refs TEXT")
+        columns = {row[1] for row in self.db.execute("PRAGMA table_info(files)")}
+        if "digests" not in columns:
+            self.db.execute("ALTER TABLE files ADD COLUMN digests BLOB")
         row = self.db.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
         if row and int(row[0]) != SCHEMA_VERSION:
             # A format change invalidates byte offsets and cached payloads.
@@ -347,7 +367,7 @@ class BuildStore:
     def get_file(self, rel: str) -> dict | None:
         row = self.db.execute(
             "SELECT path,size,mtime_ns,prefix,lines,committed,ends_nl,offsets,keys,tids,hashes,"
-            "stats,product,model,split FROM files WHERE path=?", (rel,)).fetchone()
+            "stats,product,model,split,digests FROM files WHERE path=?", (rel,)).fetchone()
         if not row:
             return None
         return {
@@ -356,13 +376,14 @@ class BuildStore:
             "offsets": list(array("q", row[7])), "keys": json.loads(row[8]),
             "tids": json.loads(row[9]), "hashes": list(array("Q", row[10])),
             "stats": json.loads(row[11]), "product": row[12], "model": row[13], "split": row[14],
+            "digests": row[15],
         }
 
     def put_file(self, data: dict) -> None:
         self.db.execute(
             "INSERT OR REPLACE INTO files(path,size,mtime_ns,prefix,lines,committed,ends_nl,"
-            "offsets,keys,tids,hashes,stats,product,model,split,scanned_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "offsets,keys,tids,hashes,stats,product,model,split,scanned_at,digests) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 data["path"], data["size"], data["mtime_ns"], data["prefix"], data["lines"],
                 data["committed"], int(bool(data["ends_nl"])),
@@ -372,9 +393,25 @@ class BuildStore:
                 array("Q", data["hashes"]).tobytes(),
                 json.dumps(data["stats"], ensure_ascii=False),
                 data.get("product", ""), data.get("model", ""), data.get("split", ""),
-                data.get("scanned_at", time.time()),
+                data.get("scanned_at", time.time()), data.get("digests"),
             ),
         )
+
+    def line_span(self, rel: str, number: int) -> tuple[int, int] | None:
+        """Byte range of one 1-based line, read from the offsets blob only.
+
+        ``get_file`` decodes every offset, key and trace id of the file; a detail
+        request needs two of those integers.  ``None`` = file not indexed.
+        """
+        row = self.db.execute(
+            "SELECT substr(offsets, ?, 16), lines FROM files WHERE path=?",
+            ((number - 1) * 8 + 1, rel)).fetchone()
+        if not row:
+            return None
+        if not 1 <= number <= row[1] or len(row[0]) != 16:
+            raise IndexError(f"{rel}: line {number} outside the {row[1]} indexed lines")
+        start, end = array("q", row[0])
+        return start, end
 
     def has_file_stat(self, rel: str, st: os.stat_result) -> bool:
         row = self.db.execute("SELECT size,mtime_ns FROM files WHERE path=?", (rel,)).fetchone()

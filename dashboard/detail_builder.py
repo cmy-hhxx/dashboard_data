@@ -26,9 +26,11 @@ class DetailBuilder:
         self.sample_dir = Path(sample_dir)
         self.cache_dir = Path(cache_dir)
         self.sample_dir.mkdir(parents=True, exist_ok=True)
+        # One lock serialises every use of the shared read-only connection.
         self._lock = threading.Lock()
         self._store = None
         self._cluster_index = None
+        self._cluster_loaded = None
 
     def _open(self):
         if self._store is None:
@@ -42,41 +44,44 @@ class DetailBuilder:
         return self._open()
 
     @staticmethod
-    def _read(store, reader, ref):
+    def _read(reader, ref):
         name, number = ref
-        index = store.get_file(name)
-        if index is not None:
-            return reader.raw_line(name, number, index)
-        return reader.line(name, number)
+        return reader.raw_line(name, number)
 
     def _cluster_stamp(self):
         files = list(self.cache_dir.glob("clusters-*.pkl"))
         return max((p.stat().st_mtime for p in files), default=0)
 
-    def _clusters(self):
-        if self._cluster_index is None:
+    def _clusters(self, stamp):
+        # A rebuilt mapping (new pickle) must reach the details regenerated for it;
+        # caching the first index forever would bake the old cluster paths back in.
+        if self._cluster_index is None or stamp != self._cluster_loaded:
             sig = build.cluster_signature(self.datasets, self.cache_dir)
             _, index = build.load_clusters_cached(self.datasets, sig, self.cache_dir)
             self._cluster_index = index
+            self._cluster_loaded = stamp
         return self._cluster_index
+
+    @staticmethod
+    def _fresh(path, stamp):
+        try:
+            if path.stat().st_mtime >= stamp:
+                build.ensure_detail_gz(path)
+                return True
+        except OSError:
+            pass
+        return False
 
     def ensure(self, slug: str):
         if not SLUG.match(slug):
             return None
         path = self.sample_dir / f"{slug}.json"
-        try:
-            if path.exists() and path.stat().st_mtime >= self._cluster_stamp():
-                build.ensure_detail_gz(path)
-                return path
-        except OSError:
-            pass
+        stamp = self._cluster_stamp()
+        if self._fresh(path, stamp):
+            return path
         with self._lock:
-            try:
-                if path.exists() and path.stat().st_mtime >= self._cluster_stamp():
-                    build.ensure_detail_gz(path)
-                    return path
-            except OSError:
-                pass
+            if self._fresh(path, stamp):
+                return path
             store = self._open()
             row = store.sample_row(slug)
             if not row:
@@ -97,25 +102,25 @@ class DetailBuilder:
             reader = build.LineReader(self.datasets, store)
             try:
                 try:
-                    attr = json.loads(self._read(store, reader, [output, output_line]))
+                    attr = json.loads(self._read(reader, [output, output_line]))
                 except (OSError, IndexError, ValueError) as exc:
                     build.debug(f"detail {slug}: bad output: {exc}")
                     return None
                 inp = None
                 if pair["input"]:
                     try:
-                        inp = json.loads(self._read(store, reader, pair["input"]))
+                        inp = json.loads(self._read(reader, pair["input"]))
                     except (OSError, IndexError, ValueError) as exc:
                         build.debug(f"detail {slug}: bad input: {exc}")
                 comp = None
                 if pair["compact"]:
                     try:
-                        comp = json.loads(self._read(store, reader, pair["compact"]))
+                        comp = json.loads(self._read(reader, pair["compact"]))
                     except (OSError, IndexError, ValueError) as exc:
                         build.debug(f"detail {slug}: bad compact: {exc}")
                 try:
                     detail, _, _ = build.build_sample(
-                        pair, inp, attr, comp, self._clusters(), Counter())
+                        pair, inp, attr, comp, self._clusters(stamp), Counter())
                 except Exception as exc:  # noqa: BLE001 - one sample must not break the server
                     build.debug(f"detail {slug}: build failed: {exc}")
                     return None

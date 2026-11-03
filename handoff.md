@@ -147,8 +147,8 @@ tr 轮数 · mc 消息数 · lang · case · s 短 slug
 `input.traces[]`、`attribution.problems[]`、`compact`、`evidence[]`；证据的
 `t/m/b/o` 分别是 trace、message、block 与偏移。不要把完整 trace 塞回索引。
 
-预测卡在 `datasets/<product>/prediction.json` 缺失时使用带「示例数据」标记的 mock；
-真实接口格式见 `docs/prediction-data.md`。
+预测卡读 `datasets/4_forecast/<product>/prediction.json`（旧位置 `datasets/<n>_<product>/prediction.json` 兜底），
+缺失时显示「暂无预测数据」；接口格式见 `docs/prediction-data.md`。
 
 ## 6. 常见改动怎么下手
 

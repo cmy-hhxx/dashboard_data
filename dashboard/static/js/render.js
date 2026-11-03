@@ -1,19 +1,12 @@
 /* Shared rendering for message content: plain text, Markdown and JSON.
  *
  * One entry point keeps every pane consistent, and evidence marks survive it:
- *   1. segment the text at evidence offsets (caller-supplied), wrapping each
- *      covered range in private-use sentinels so sizes never affect offsets;
- *   2. format the whole string (Markdown / JSON pretty-print);
- *   3. swap the sentinels for real <mark> elements.
- * Offsets are therefore absolute inside the original text, and formatting only
- * adds decoration around them — never moves the characters that get marked.
+ * a block with evidence ranges is cut at those offsets and each covered run is
+ * wrapped by the caller's mark(), with inline styles only; blocks without
+ * evidence get the full Markdown / JSON formatting.  Offsets therefore stay
+ * absolute inside the original text — formatting never moves marked characters.
  */
 import { esc } from "./core.js";
-
-const O = "";
-const C = "";
-const RANGE = /(\d+)([\s\S]*?)(\d+)/g;
-const TOKEN = /(\d+)/g;
 
 /* ---------------------------------------------------------------- segmentation */
 

@@ -718,7 +718,7 @@ function cluTree(p, tax) {
   return { id: "c", name: "全部", n: p.kpi.problems, sev: toSev(sevPair(p.severity)), children: phases };
 }
 
-/* ---------------------------------------------------------------- 预测体系 (docs/prediction-data.md; labelled mock until the file lands) */
+/* ---------------------------------------------------------------- 预测体系 (docs/prediction-data.md) */
 function when(v) {
   if (v == null || v === "") return null;
   if (typeof v === "number") return v;
@@ -727,30 +727,16 @@ function when(v) {
   const t = /([zZ]|[+-]\d{2}:?\d{2})$/.test(s) ? Date.parse(s) : Date.parse(`${s.replace(" ", "T")}+08:00`);
   return Number.isFinite(t) ? t : null;
 }
-const MOCK_ACC = [0.541, 0.618, 0.472, 0.583];
-const MOCK_CAUSE = [["信息滞后", 0.31], ["趋势外推", 0.24], ["事件遗漏", 0.19], ["逻辑跳跃", 0.14], ["数据缺失", 0.12]];
-function mockPrediction(p, allQ) {
-  const now = when(ctx.data.generated_at) || Date.now();
-  const n = Math.round(allQ * 0.14);
-  const questions = Array.from({ length: n }, (_, i) => ({ id: `mock-${i}`, answer_at: now + (i < n * 0.7 ? -1 : 1) * 864e5 * (1 + (i % 9)) }));
-  const total = questions.filter((q) => q.answer_at <= now).length;
-  const accuracy = p.models.map((m, i) => ({ model: m.id, at: now, correct: Math.round(total * MOCK_ACC[i % MOCK_ACC.length]), total }));
-  const flows = {};
-  accuracy.forEach((a) => {
-    let left = a.total - a.correct;
-    const wrong = left;
-    flows[a.model] = MOCK_CAUSE.map(([, f], i) => {
-      const k = i === MOCK_CAUSE.length - 1 ? left : Math.round(wrong * f);
-      left -= k;
-      return k;
-    });
-  });
-  return { as_of: now, questions, accuracy, attribution: { models: p.models.map((m) => m.id), errors: MOCK_CAUSE.map(([e]) => e), flows } };
+/* Batch dates the forecast export covers, as the header note: 10-23 or 10-01～10-27. */
+function predCover(dates) {
+  const ds = (dates || []).map((d) => String(d).slice(5, 10)).filter(Boolean);
+  if (!ds.length) return "";
+  return `覆盖 ${ds[0]}${ds.length > 1 ? `～${ds[ds.length - 1]}` : ""}`;
 }
 
 function predSankey(p, models, causes, flows) {
   const left = models
-    .map((m, i) => ({ m, name: modelName(p, m), n: sum(causes.map((_, j) => ((flows[m] || [])[j] || 0))), c: shade(i, models.length) }))
+    .map((m, i) => ({ m, name: modelName(p, m), n: sum(causes.map((c) => (flows[m] || [])[c.i] || 0)), c: shade(i, models.length) }))
     .filter((x) => x.n);
   if (!left.length || !causes.length) return "";
   const total = sum(left.map((x) => x.n)) || 1;
@@ -772,7 +758,7 @@ function predSankey(p, models, causes, flows) {
   let paths = "";
   L.forEach((l, li) =>
     R.forEach((r, ri) => {
-      const n = (flows[l.x.m] || [])[ri] || 0;
+      const n = (flows[l.x.m] || [])[r.x.i] || 0;
       if (!n) return;
       const a0 = l.y + l.off, a1 = a0 + n * kL, b0 = r.y + r.off, b1 = b0 + n * kR;
       l.off += n * kL;
@@ -796,9 +782,19 @@ function predSankey(p, models, causes, flows) {
   return `<svg class="sankey pred-sk" viewBox="0 0 ${W} ${H}"><defs>${defs}</defs>${paths}${lnode}${rnode}</svg>`;
 }
 
+const PRED_TABS = `<div class="seg pred-tabs" id="predTab"><span class="seg-knob" aria-hidden="true"></span>
+      <button type="button" data-value="vol" aria-pressed="true">题量</button>
+      <button type="button" data-value="acc">能力</button>
+      <button type="button" data-value="cause">归因</button></div>`;
+
 function predictCard(p) {
-  const allQ = new Set(p.field.flatMap((g) => g.cells.map((c) => c[3]))).size;
-  const pr = p.prediction || mockPrediction(p, allQ);
+  const pr = p.prediction;
+  if (!pr) {
+    const panes = ["vol", "acc", "cause"].map((k, i) => `<div class="pred-pane${i ? "" : " is-on"}" data-pane="${k}"><div class="empty">暂无预测数据</div></div>`);
+    return card(4, "预测体系", `<div class="pred-panes">${panes.join("")}</div>`, PRED_TABS);
+  }
+  // The export's own bank (questions it scanned) when given, else this product's distinct questions.
+  const allQ = Number.isFinite(pr.bank) ? pr.bank : new Set(p.field.flatMap((g) => g.cells.map((c) => c[3]))).size;
   const asOf = when(pr.as_of) ?? when(ctx.data.generated_at);
   const qs = Array.isArray(pr.questions) ? pr.questions : [];
   const open = qs.filter((q) => {
@@ -821,7 +817,8 @@ function predictCard(p) {
   const pooledN = sum(acc.map((x) => x.n));
   const at = pr.attribution || {};
   const predModels = at.models && at.models.length ? at.models : Object.keys(at.flows || {});
-  const causes = (at.errors || []).map((l, i) => ({ l, n: sum(predModels.map((m) => ((at.flows || {})[m] || [])[i] || 0)) })).filter((x) => x.n);
+  // `i` keeps the position in `errors`: flows are indexed by it, not by the filtered list.
+  const causes = (at.errors || []).map((l, i) => ({ l, i, n: sum(predModels.map((m) => ((at.flows || {})[m] || [])[i] || 0)) })).filter((x) => x.n);
   const bar = (items) =>
     `<div class="comp">${items.map((x) => `<span style="flex:${x.n} 1 0;--c:${x.c}" data-tip="${esc(x.l)}|${fmt(x.n)}"></span>`).join("")}</div>
     <div class="keys">${items.map((x) => `<span>${dot(x.c)}${esc(x.l)}<b class="num">${fmt(x.n)}</b></span>`).join("")}</div>`;
@@ -830,15 +827,20 @@ function predictCard(p) {
     .join("");
   const right = sum(acc.map((x) => x.c));
   const causeTotal = sum(causes.map((x) => x.n));
+  // Forecast questions = revealed + pending (questions[]) + those the export could not verify yet.
+  const unver = Number.isFinite(pr.unverifiable) ? pr.unverifiable : 0;
+  const forecast = qs.length + unver;
+  const rest = Math.max(0, allQ - forecast);
   const panes = `<div class="pred-pane is-on" data-pane="vol">
-      <div class="pred-top"><div class="hero"><b class="big">${counter(qs.length)}</b><small>预测题</small></div>
-        <div class="hero"><b class="big num">${pct(qs.length, allQ, 1)}</b><small>占题库</small></div></div>
+      <div class="pred-top"><div class="hero"><b class="big">${counter(forecast)}</b><small>预测题</small></div>
+        <div class="hero"><b class="big num">${pct(forecast, allQ, 1)}</b><small>占题库</small></div></div>
       ${bar([
         { n: open, c: "var(--accent)", l: "已揭晓" },
         { n: qs.length - open, c: "color-mix(in oklab, var(--accent) 38%, var(--card))", l: "待揭晓" },
-        { n: Math.max(0, allQ - qs.length), c: "var(--t4)", l: "其他题" },
+        { n: unver, c: "var(--t3)", l: "不可核验" },
+        { n: rest, c: "var(--t4)", l: "其他题" },
       ].filter((x) => x.n))}
-      ${stats([["题库", counter(allQ)], ["已揭晓", counter(open)], ["待揭晓", counter(qs.length - open)], ["其他题", counter(Math.max(0, allQ - qs.length))]])}
+      ${stats([["题库", counter(allQ)], ["已揭晓", counter(open)], ["待揭晓", counter(qs.length - open)], ["其他题", counter(rest)]])}
     </div>
     <div class="pred-pane" data-pane="acc">
       <div class="pred-top"><div class="hero"><b class="big num">${pooledN ? `${fmt((100 * right) / pooledN, 1)}%` : "—"}</b><small>准确率</small></div>
@@ -854,15 +856,8 @@ function predictCard(p) {
         <div class="hero"><b class="big num">${causes.length}</b><small>类别</small></div></div>
       ${causes.length ? predSankey(p, predModels, causes, at.flows || {}) : `<div class="empty">暂无预测归因</div>`}
     </div>`;
-  return card(
-    4,
-    `预测体系${p.prediction ? "" : ` <span class="status">示例数据</span>`}`,
-    `<div class="pred-panes">${panes}</div>`,
-    `<div class="seg pred-tabs" id="predTab"><span class="seg-knob" aria-hidden="true"></span>
-      <button type="button" data-value="vol" aria-pressed="true">题量</button>
-      <button type="button" data-value="acc">能力</button>
-      <button type="button" data-value="cause">归因</button></div>`,
-  );
+  const cover = predCover(pr.dates);
+  return card(4, `预测体系${cover ? ` <span class="status">${esc(cover)}</span>` : ""}`, `<div class="pred-panes">${panes}</div>`, PRED_TABS);
 }
 
 /* ---------------------------------------------------------------- 聚类矩阵: 场景 × 问题聚类, two-axis drill in place */

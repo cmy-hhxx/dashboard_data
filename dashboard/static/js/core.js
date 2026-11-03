@@ -51,48 +51,6 @@ export function runCounters(root) {
   });
 }
 
-export function stack(counts, { tall = false, title = "" } = {}) {
-  const total = sum(counts);
-  if (!total) return `<div class="stack${tall ? " tall" : ""}"><span style="--c:var(--sev-none);flex:1"></span></div>`;
-  return (
-    `<div class="stack${tall ? " tall" : ""}" role="img" aria-label="${esc(title)}">` +
-    counts
-      .map((n, i) => (n ? `<span style="--c:${sevColor(i)};flex:${n} 1 0" data-tip="${WORST[i]}|${n}"></span>` : ""))
-      .join("") +
-    "</div>"
-  );
-}
-
-export function hist(h, label) {
-  if (!h) return "";
-  const max = Math.max(...h.counts, 1);
-  const bars = h.counts
-    .map((c, i) => {
-      const lo = h.edges[i];
-      const hi = h.edges[i + 1];
-      const range = hi != null ? `${compact(lo)}–${compact(hi - (Number.isInteger(hi) ? 1 : 0))}` : `≥ ${compact(lo)}`;
-      return `<span style="height:${Math.max(3, (100 * c) / max)}%;animation-delay:${i * 40}ms" data-tip="${esc(label)} ${range}|${c}"></span>`;
-    })
-    .join("");
-  return `<div class="hist">${bars}</div><div class="hist-axis num"><span>${compact(h.edges[0])}</span><span>${compact(h.edges[h.edges.length - 1])}+</span></div>`;
-}
-
-export function barRows(items, { max, fmtVal = fmt } = {}) {
-  const top = max || Math.max(...items.map((x) => x.n), 1);
-  return (
-    `<div class="bars">` +
-    items
-      .map(
-        (x, i) =>
-          `<div class="bar-row"><span class="lbl" title="${esc(x.label || x.id)}">${esc(x.label || x.id)}</span>` +
-          `<span class="track"><i style="width:${(100 * x.n) / top}%;animation-delay:${i * 35}ms"></i></span>` +
-          `<span class="val num">${fmtVal(x.n)}</span></div>`,
-      )
-      .join("") +
-    `</div>`
-  );
-}
-
 /* Tooltip: one floating node; any [data-tip="title|value"] or element.tipHTML gets it. */
 const tipEl = () => document.getElementById("tip");
 export function showTip(html, x, y) {
