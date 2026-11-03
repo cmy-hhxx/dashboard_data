@@ -172,6 +172,12 @@ class ItemCodes:
         self.by_turn: dict[tuple, str] = {}
         self.by_label: dict[tuple, str] = {}
         self.by_session: dict[tuple, str] = {}
+        # 每个归因文件各自的映射指纹：聚类流水线每次追加 item_index，只让涉及的文件重扫
+        self.digests: dict[str, "hashlib._Hash"] = {}
+
+    def sig_for(self, basename) -> str:
+        digest = self.digests.get(basename)
+        return digest.hexdigest() if digest else ""
 
     def code_for(self, basename, line, turn_index, problem_index, label, session_level=False):
         if session_level:
@@ -206,6 +212,11 @@ def load_item_codes(path: Path, log=None) -> tuple[ItemCodes, str]:
         problem_index = item.get("problem_index") or 0
         turn_index = item.get("turn_index")
         json_path = item.get("json_path") or ""
+        # 按文件顺序累计（by_label 取第一条，顺序变了也算映射变了）
+        digest = codes.digests.get(basename)
+        if digest is None:
+            digest = codes.digests[basename] = hashlib.blake2b(digest_size=12)
+        digest.update(json.dumps([line, turn_index, problem_index, json_path, code, label], ensure_ascii=False).encode("utf-8"))
         if json_path.startswith("session_problem"):
             codes.by_session[(basename, int(line), int(problem_index))] = code
         elif turn_index is not None:
@@ -282,19 +293,18 @@ def ingest_attribution(conn, aime: Path, item_codes_by_model, intent_tree, log):
     """把一个 attribution 文件读进 traces / history；同一 trace 保留行号最大的一行。"""
     lookup = _intent_lookup(intent_tree)
     stats = {"files": 0, "skipped": 0, "traces": 0, "history": 0, "problems": 0, "unclustered": 0}
-    item_sig_by_model = {k: v for k, (_, v) in item_codes_by_model.items()}
     codes_by_model = {k: c for k, (c, _) in item_codes_by_model.items()}
 
     for path, split, model_dir in _attribution_files(aime):
         source = config.SPLIT_TO_SOURCE[split]
         suffix = config.MODEL_SUFFIX.get(model_dir, model_dir)
-        dep_sig = item_sig_by_model.get(model_dir, "")
-        sig = f"{_file_sig(path)}|{dep_sig}"
+        codes = codes_by_model.get(model_dir) or ItemCodes()
+        # 依赖签名只取 item_index 里属于本文件的行，别的文件新增聚类不会让它重扫
+        sig = f"{_file_sig(path)}|{codes.sig_for(path.name)}"
         if _cached_sig(conn, path) == sig:
             stats["skipped"] += 1
             continue
 
-        codes = codes_by_model.get(model_dir) or ItemCodes()
         basename = path.name
         analyzed_at = timeutil.utc_rfc3339(datetime.fromtimestamp(path.stat().st_mtime, timezone.utc))
         default_day = ATTR_RE.match(basename)

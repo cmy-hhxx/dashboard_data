@@ -84,6 +84,23 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(sorted(rows), sorted(before + [("trace_epsilon",) + self._locate("trace_epsilon"),
                                                         ("trace_zeta",) + self._locate("trace_zeta")]))
 
+    def test_cluster_append_only_rescans_affected_files(self):
+        first = store.build(self.root)
+        self.assertGreater(first["attribution_files"], 0)
+        index = self.aime / "eval_output" / "cluster" / "aime_expert" / "item_index.jsonl"
+        # A new cluster for a file this index never mentioned: nothing already indexed moves.
+        _append(index, {"file": "/remote/src/aime_expert_attribution-2026-10-21.jsonl", "line": 1, "turn_index": 0,
+                        "problem_index": 0, "json_path": "turns[0].problem[0]", "path": "S1.M1.1", "label": "x"})
+        self.assertEqual(store.build(self.root)["attribution_files"], 0)
+        # A new cluster for the indexed daily file: that one file is re-read.
+        _append(index, {"file": f"/remote/src/aime_expert_attribution-{fixtures.DAY}.jsonl", "line": 5, "turn_index": 0,
+                        "problem_index": 0, "json_path": "turns[0].problem[0]", "path": "S9.M5.1", "label": "自由文本问题"})
+        third = store.build(self.root)
+        self.assertEqual(third["attribution_files"], 1)
+        with self._db() as db:
+            codes = db.execute("SELECT error_codes FROM traces WHERE trace_id = 'trace_delta'").fetchone()[0]
+        self.assertEqual(json.loads(codes), ["S9.M5.1"])
+
     def test_rewritten_input_rescans(self):
         store.build(self.root)
         lines = self.input.read_text(encoding="utf-8").splitlines(keepends=True)
