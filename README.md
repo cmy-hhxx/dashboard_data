@@ -70,15 +70,15 @@ ssh eval_data 'chmod +x /tmp/pack_aime_io.sh && /tmp/pack_aime_io.sh'
 ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
 ```
 
-服务监听容器 `:5001`，对外地址由部署环境决定。服务每 10 分钟运行一次
+服务监听容器 `:5001`（展示端口，乌兰察布对外 `2768`）；其余端口角色（`5002` 页面接口、`5003` 供数、
+`5004` 开发调试、`5005` 备用）与两台服务器的映射见
+[docs/dashboard-deployment.md](docs/dashboard-deployment.md)。服务每 10 分钟运行一次
 `build.py --keep-on-empty`；构建是增量的：输入文件按 `(size, mtime_ns)` 只扫描变化部分，
 配对和样本摘要写入 `cache/build.sqlite3`。逐样本详情不再在构建时全量生成，而是在样本页
 第一次打开时由 `detail_builder.py` 从 SQLite 行号 + 输入/输出/compact 原始行生成并缓存。
-无数据变化时构建直接复用上一份 payload（约 1 秒）；新增一天/一个模型通常只扫新文件、
-只配对变化文件、只生成新摘要。2026-11-03 实测（44 GB 输入、约 1.6 万样本）：
-连续增量 **27–40 秒**，首次全量样本摘要（同日部署）225–267 秒，冷全量预计 4–5 分钟；
-首屏约 30 条样本在服务启动/每轮构建后后台预热，首访走静态缓存（实测约 2 ms）；
-其余样本首次打开约 0.6–4 秒，之后走静态缓存。删除 `cache/` 可强制全量重建。
+无数据变化时构建复用上一份 payload；有新数据时只扫新文件、只配对变化文件、只生成新摘要，
+耗时基线见 [docs/build-performance.md](docs/build-performance.md)。首屏样本在服务启动 / 每轮构建后
+后台预热，其余样本首次打开约 0.6–4 秒，之后走静态缓存。删除 `cache/` 会强制全量重建。
 
 `stats_worker.py` 作为独立进程常驻，每 10 分钟把输入侧的 records / traces / tools /
 tokens / task-subtask / lost 统计写到 `<datasets>/stats.json`；`build.py` 只接受

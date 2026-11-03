@@ -1,11 +1,11 @@
 # 看板交接
 
-> 2026-11-01 · `main` @ `20138ca` · 三视图、亮暗色、1440/1024/390 已验证。
+> 三视图、亮暗色、1440/1024/390 已验证。部署与端口见 `docs/dashboard-deployment.md`。
 
 ## 1. 先跑起来
 
 ```bash
-cd /Users/cmy/Desktop/dashboard_data
+cd /Users/cmy/Desktop/eval_data_server
 
 # 数据更新后重建（服务运行时也可以执行）
 ./dashboard/local_dev/refresh.sh
@@ -222,7 +222,10 @@ tr 轮数 · mc 消息数 · lang · case · s 短 slug
   改口径时同时改 `build_store.split_from_rel` / `_aggregate_line` 和前端 `volTree`。
 - **服务没有守护进程**：容器/环境重启后需要手动 `start.sh`；端口、刷新间隔和是否起统计旁路可用
   `PORT` / `REFRESH_SECONDS` / `STATS_WORKER` 覆盖（`deploy.sh` 会把本地设置的这三个变量带到远端）。
-  预发：`EVAL_DEPLOY_REMOTE=/opt/eval_dashboard_2 PORT=5002 STATS_WORKER=0 ./dashboard/deploy.sh`（对外 :2833）。
+  预发：`EVAL_DEPLOY_REMOTE=/opt/eval_dashboard_2 PORT=5004 STATS_WORKER=0 ./dashboard/deploy.sh`。
+  **端口角色固定**：`5001` 展示（看板生产）、`5002` 页面接口、`5003` 供数（数据接口，当前是对话分析
+  查询接口）、`5004` 开发调试、`5005` 备用；开发调试用 `5004`，不要占用 `5001` / `5002` / `5003`。
+  两台服务器映射见 `servers.conf` 与 `docs/dashboard-deployment.md`。
 - **推拉布局**：`data.js` 的 `pushPull` 管两行（`bento[data-top]` / `bento[data-bottom]`）。旭日图到最里层（焦点的子节点都是叶子，
   或在非根焦点下选中叶子）时自动展开，评测量 / 归因 / 预测由点击触发；同一行其它卡加 `.is-compact` 只留 `.compact` 关键数字。
   宽度动画是 FLIP + WAAPI（量旧盒子 → 切布局 → 从旧盒子播到新盒子），只在 ≥ 1181px；861–1180px 展开卡占整行，手机星图在图表下方。
