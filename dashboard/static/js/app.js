@@ -1,5 +1,5 @@
 /* Router and shell: ?view=data|system|samples&product=wencai|aime (+ sample params). */
-import { $, $$, segmented, getJSON, announce, showTip, hideTip } from "./core.js";
+import { $, $$, segmented, getJSON, announce } from "./core.js";
 
 const VIEWS = ["data", "system", "samples"];
 const PRODUCTS = ["wencai", "aime"];
@@ -36,25 +36,6 @@ function awayURL(product, params) {
   if (url.origin === location.origin) return null;
   url.search = new URLSearchParams(params).toString();
   return url.href;
-}
-
-/* A quiet marker beside the product switch: the products' data live on different servers. */
-function siteNote() {
-  const el = $("#siteNote");
-  const sited = PRODUCTS.filter((p) => SITES[p]);
-  if (!el || sited.every(servedHere)) return;
-  const name = (p) => $(`#productSwitch button[data-value="${p}"] > span`).textContent;
-  const html = `<div style="font-weight:var(--w-medium);margin-bottom:4px">数据分开部署</div>${sited
-    .map((p) => `<div class="t-row">${name(p)}<b style="margin-left:auto">${SITES[p].name}</b></div>`)
-    .join("")}<div style="color:var(--muted);margin-top:4px">切换产品会跳到对应服务器</div>`;
-  el.setAttribute("aria-label", `数据分开部署：${sited.map((p) => `${name(p)}在${SITES[p].name}`).join("，")}；切换产品会跳到对应服务器`);
-  const show = () => {
-    const r = el.getBoundingClientRect();
-    showTip(html, r.left, r.bottom - 8);
-  };
-  ["pointerenter", "focus", "click"].forEach((t) => el.addEventListener(t, show));
-  ["pointerleave", "blur"].forEach((t) => el.addEventListener(t, hideTip));
-  el.hidden = false;
 }
 
 let viewSeg;
@@ -216,7 +197,6 @@ async function boot() {
   // A link to a product served elsewhere (?product=aime on the 问财 server) continues on its server.
   const away = PRODUCTS.includes(asked) && awayURL(asked, new URLSearchParams(location.search));
   if (away) return location.replace(away);
-  siteNote();
   try {
     await loadProductData(state.product);
   } catch (err) {
