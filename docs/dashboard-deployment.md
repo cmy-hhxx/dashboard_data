@@ -9,11 +9,12 @@
 | 外部 IP | `117.50.195.94` | `10.217.219.2` |
 | 容器名（集群内部） | `interactive-i6piqwvlnsr5` | `interactive-npasm9ch66eb` |
 | SSH 别名 / 对外端口 | `eval_data` / `2834` | `aime_rsi_data` / `2225` |
-| 数据 | 问财（wencai） | AIME |
-| 数据根 | `/mnt/fin_bench/code_and_clean_data/datasets` | `/mnt/fin_bench/aime_rsi_data`（AIME 第二套，规划） |
+| 数据 | 问财（wencai，只构建 `0_wencai`） | AIME（只构建 `1_aime`） |
+| 数据根 | `/mnt/fin_bench/code_and_clean_data/datasets` | `/mnt/fin_bench/aime_rsi_data` |
 
 访问约定：集群内部跨容器用「容器名:容器端口」，同容器内用 `127.0.0.1`，本地 / 外部用「IP:对外端口」。
-迁移期约定（5001 暂时同时承载问财 + AIME、新版本只发 5004、生产代码冻结）见 [`Critic.md`](../Critic.md)。
+当前状态（2026-11-04 切分完成）：乌兰 5001 已按 `EVAL_PRODUCTS=wencai` 重建，不再构建 AIME；
+弗吉尼亚 5001/5002/5003 已起（AIME 数据只在弗吉尼亚更新）；乌兰 5003 已停用（问财供数接口尚未实现）。
 端口映射与密钥在本地 `servers.conf`（已 gitignore，不入库）。
 
 ## 端口分配（固定）
@@ -22,14 +23,15 @@
 |---|---|---|---|
 | `5001` | 展示（看板生产） | `2768` | `2221` |
 | `5002` | 页面接口（样本详情页 / JSON API） | `2833` | `2222` |
-| `5003` | 供数（数据接口，对话分析查询接口 v2） | `3335` | `2224` |
+| `5003` | 供数（数据接口，对话分析查询接口 v2） | 已停用（问财暂未实现） | `2224` |
 | `5004` | 开发调试 | `3336` | `2228` |
 | `5005` | 备用 | `3337` | `2243` |
 | `22` | SSH | `2834` | `2225` |
 
 - 页面接口（`5002`）对外有两种入口：DSW 代理
   `https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail/`（平台会剥掉路径前缀）和直连
-  `http://117.50.195.94:2833`。代理下前端 URL 必须用相对路径，否则会 404。
+  IP。代理当前指向乌兰（问财）；AIME 需要平台另配一条指向弗吉尼亚 5002 的代理基地址。
+  代理下前端 URL 必须用相对路径，否则会 404。
 - 生产入口固定，不在其上调试；开发调试 / 预发副本用 `5004`：
   `EVAL_DEPLOY_REMOTE=/opt/eval_dashboard_2 PORT=5004 STATS_WORKER=0 ./dashboard/deploy.sh`
 - 改端口三处同步：服务 `PORT`、平台映射、`servers.conf`。
@@ -40,18 +42,20 @@
 它的服务器（地址写在 `static/js/app.js` 的 `SITES`）。
 
 ```bash
-# 问财 → 乌兰察布 5004（对外 3336），数据 datasets/0_wencai；5001 已有 stats 进程，这里不再起
-EVAL_DEPLOY_REMOTE=/opt/eval_dashboard_2 PORT=5004 STATS_WORKER=0 \
-  EVAL_DATASETS=/mnt/fin_bench/code_and_clean_data/datasets EVAL_PRODUCTS=wencai ./dashboard/deploy.sh
+# 问财 → 乌兰察布 5001（对外 2768），数据 datasets/0_wencai，只构建问财
+EVAL_DATASETS=/mnt/fin_bench/code_and_clean_data/datasets EVAL_PRODUCTS=wencai ./dashboard/deploy.sh
 # AIME → 弗吉尼亚 5001（对外 2221），数据 /mnt/fin_bench/aime_rsi_data/1_aime
 EVAL_DEPLOY_HOST=aime_rsi_data EVAL_DATASETS=/mnt/fin_bench/aime_rsi_data EVAL_PRODUCTS=aime ./dashboard/deploy.sh
-curl -s http://117.50.195.94:3336/healthz | jq
+# 预发调试副本（乌兰 5004 对外 3336）
+EVAL_DEPLOY_REMOTE=/opt/eval_dashboard_2 PORT=5004 STATS_WORKER=0 \
+  EVAL_DATASETS=/mnt/fin_bench/code_and_clean_data/datasets EVAL_PRODUCTS=wencai ./dashboard/deploy.sh
+curl -s http://117.50.195.94:2768/healthz | jq
 curl -s http://10.217.219.2:2221/healthz | jq
 ```
 
 命令里设置的变量会写进远端 `deploy.env`，之后的定时构建、`start.sh`、手动重启都读它；不带变量重新部署
-会保留已有的 `deploy.env`。乌兰 `5001`（`/opt/eval_dashboard`，问财 + AIME 旧版）迁移期冻结，见
-`Critic.md`。问财迁回 `5001` 时：改 `SITES.wencai.url`，两边都重新部署。
+会保留已有的 `deploy.env`。乌兰 5001 的 `deploy.env` 现在带 `EVAL_PRODUCTS=wencai`，
+弗吉尼亚的带 `EVAL_PRODUCTS=aime`；两边的产品切换按钮分别跳到对方服务器（`static/js/app.js` 的 `SITES`）。
 
 `deploy.sh` 顺序：rsync 代码（不含生成物 / 缓存 / 日志 / tests）→ 远端 `build.py --keep-on-empty`
 （≤1800s）→ `precompress.sh` → `stop.sh` → `start.sh`。远端不是 git 仓库，回滚 = 切旧 commit 重新部署；

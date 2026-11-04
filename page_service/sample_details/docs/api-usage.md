@@ -7,11 +7,12 @@
 
 | 部署 | 主机 | 容器名 | 数据 | 5002 对外 |
 |---|---|---|---|---|
-| 乌兰察布 | `117.50.195.94` | `interactive-i6piqwvlnsr5` | 问财（规划） | `2833` |
+| 乌兰察布 | `117.50.195.94` | `interactive-i6piqwvlnsr5` | 问财（看板 wencai-only，页面接口沿用） | `2833` |
 | 弗吉尼亚 | `10.217.219.2` | `interactive-npasm9ch66eb` | AIME | `2222` |
 
-- DSW 代理：`https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail/`（当前指向乌兰的 5002）
-- 页面本身同时支持 `wencai` / `aime` 两个产品，取决于该环境的看板数据
+- DSW 代理：`https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail/`（当前指向乌兰的 5002，只服务问财；
+  AIME 的代理基地址待平台映射到弗吉尼亚 5002，未配好前 AIME 用直连 `10.217.219.2:2222`）
+- 每套部署只服务自己产品：乌兰只有 `wencai`，弗吉尼亚只有 `aime`；另一个产品会 404
 - 只读、无鉴权；仅内部使用，请勿公开传播
 - 数据约每 10 分钟随看板重建更新
 
@@ -23,7 +24,7 @@
 
 ```
 https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail/?product=wencai&case=daily%7Cb_fast%7Cthread_9d238e0db12e4d2d96efdebda331bef2
-https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail/?product=aime&slug=ba6ba417f2
+http://10.217.219.2:2222/?product=aime&slug=ba6ba417f2
 ```
 
 直连等价地址：`http://<外部IP>:<5002 对外端口>/?product=…`（乌兰 `117.50.195.94:2833`、
@@ -129,7 +130,7 @@ curl -s --compressed "$BASE/samples-wencai.json" -o index.json
 |---|---|---|---|
 | `5001` | 展示（看板生产） | `2768` | `2221` |
 | `5002` | 页面接口（本服务） | `2833` | `2222` |
-| `5003` | 供数（数据接口） | `3335` | `2224` |
+| `5003` | 供数（数据接口） | 已停用 | `2224` |
 | `5004` | 开发调试 | `3336` | `2228` |
 | `5005` | 备用 | `3337` | `2243` |
 

@@ -17,15 +17,15 @@ trace 的 `problems` 问题数组与 P0–P4 严重度，并新增 `GET /severit
 | 部署 | 对外 | 集群内 | 数据 |
 |---|---|---|---|
 | 弗吉尼亚 | `http://10.217.219.2:2224` | `http://interactive-npasm9ch66eb:5003` | AIME |
-| 乌兰察布 | `http://117.50.195.94:3335` | `http://interactive-i6piqwvlnsr5:5003` | 问财（规划） |
+| 乌兰察布 | 暂未提供（问财供数接口尚未实现，5003 已停用） | — | — |
 
 接口前缀 `/api/v1/analysis`，健康检查 `GET /healthz`。对外端口由平台侧映射到 pod 的 5003
-（`5003` 即固定的**供数端口**）。不做认证。两套部署的完整地址、端口映射与容器名见
+（`5003` 即固定的**供数端口**）。不做认证。5003 目前只部署在弗吉尼亚；地址、端口映射与容器名见
 [docs/接口使用指南.md](../../docs/接口使用指南.md) 第零节；端口角色见 `docs/dashboard-deployment.md`。
 
 ## 数据来源
 
-远端只读挂载：`/mnt/fin_bench/code_and_clean_data/datasets/1_aime`
+弗吉尼亚远端只读挂载：`/mnt/fin_bench/aime_rsi_data/1_aime`（`EVAL_DATASETS=/mnt/fin_bench/aime_rsi_data`）
 
 | 内容 | 路径 |
 |---|---|
@@ -101,8 +101,8 @@ trace 的 `problems` 问题数组与 P0–P4 严重度，并新增 `GET /severit
 # 用 fixture 自建一个小数据集并跑完整验收
 python3 tests/test_acceptance.py
 
-# 直接指向真实挂载（远端机器上）
-EVAL_DATASETS=/mnt/fin_bench/code_and_clean_data/datasets python3 run.py serve
+# 直接指向真实挂载（远端机器上；弗吉尼亚的 AIME 数据根）
+EVAL_DATASETS=/mnt/fin_bench/aime_rsi_data python3 run.py serve
 
 # 只建索引 / 看索引摘要
 python3 run.py build
@@ -116,9 +116,9 @@ python3 run.py status
 
 ```bash
 ./deploy.sh                     # rsync 到 /opt/eval_analysis + 重启 + 冒烟（EVAL_DEPLOY_HOST/PORT/KEY 可覆盖 ssh 别名）
-ssh eval_data 'cd /opt/eval_analysis && ./start.sh'
-ssh eval_data 'cd /opt/eval_analysis && ./stop.sh'
-curl -s http://117.50.195.94:3335/healthz          # 当前 AIME 部署在乌兰；两套地址见使用指南
+ssh aime_rsi_data 'cd /opt/eval_analysis && ./start.sh'
+ssh aime_rsi_data 'cd /opt/eval_analysis && ./stop.sh'
+curl -s http://10.217.219.2:2224/healthz           # 5003 目前只部署在弗吉尼亚
 ```
 
 `start.sh` 会等到 `/healthz` 返回 `ok:true`（首次构建实测 341 秒（扫 11.4 GB 输入）；
