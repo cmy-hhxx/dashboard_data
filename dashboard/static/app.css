@@ -172,6 +172,14 @@ h1, h2, h3, h4, p { margin: 0; }
 .icon-btn:hover { background: var(--hover); }
 .icon-btn:active { transform: scale(0.94); }
 .icon-btn svg { width: 18px; height: 18px; }
+/* 数据分开部署 marker beside the product switch: quiet until hovered. */
+.site-note {
+  width: 28px; height: 36px; margin-right: -6px; display: grid; place-items: center;
+  border-radius: var(--r-ctl); color: var(--faint); background: none; transition: color var(--snap);
+}
+.site-note[hidden] { display: none; }
+.site-note:hover, .site-note:focus-visible { color: var(--ink-2); }
+.site-note svg { width: 16px; height: 16px; }
 :root[data-mode="dark"] .i-sun { display: none; }
 :root:not([data-mode="dark"]) .i-moon { display: none; }
 

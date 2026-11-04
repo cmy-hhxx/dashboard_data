@@ -36,11 +36,22 @@
 
 ## 发布与验证
 
+问财、AIME 分开部署（数据也分开放）：每份只构建自己的产品（`EVAL_PRODUCTS`），点另一个产品时前端跳到
+它的服务器（地址写在 `static/js/app.js` 的 `SITES`）。
+
 ```bash
-./dashboard/deploy.sh                                  # 乌兰察布（默认 eval_data）
-EVAL_DEPLOY_HOST=aime_rsi_data ./dashboard/deploy.sh   # 弗吉尼亚
-curl -s http://117.50.195.94:2768/healthz | jq
+# 问财 → 乌兰察布 5004（对外 3336），数据 datasets/0_wencai；5001 已有 stats 进程，这里不再起
+EVAL_DEPLOY_REMOTE=/opt/eval_dashboard_2 PORT=5004 STATS_WORKER=0 \
+  EVAL_DATASETS=/mnt/fin_bench/code_and_clean_data/datasets EVAL_PRODUCTS=wencai ./dashboard/deploy.sh
+# AIME → 弗吉尼亚 5001（对外 2221），数据 /mnt/fin_bench/aime_rsi_data/1_aime
+EVAL_DEPLOY_HOST=aime_rsi_data EVAL_DATASETS=/mnt/fin_bench/aime_rsi_data EVAL_PRODUCTS=aime ./dashboard/deploy.sh
+curl -s http://117.50.195.94:3336/healthz | jq
+curl -s http://10.217.219.2:2221/healthz | jq
 ```
+
+命令里设置的变量会写进远端 `deploy.env`，之后的定时构建、`start.sh`、手动重启都读它；不带变量重新部署
+会保留已有的 `deploy.env`。乌兰 `5001`（`/opt/eval_dashboard`，问财 + AIME 旧版）迁移期冻结，见
+`Critic.md`。问财迁回 `5001` 时：改 `SITES.wencai.url`，两边都重新部署。
 
 `deploy.sh` 顺序：rsync 代码（不含生成物 / 缓存 / 日志 / tests）→ 远端 `build.py --keep-on-empty`
 （≤1800s）→ `precompress.sh` → `stop.sh` → `start.sh`。远端不是 git 仓库，回滚 = 切旧 commit 重新部署；

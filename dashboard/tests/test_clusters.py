@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 DASHBOARD = Path(__file__).resolve().parents[1]
@@ -48,6 +49,14 @@ class ClusterTaxonomyTests(unittest.TestCase):
             payload = build.taxonomy_out(taxonomy, {"S1.M1.1.1"})
             entry = payload["patterns"]["S1.M1.1.1"]
             self.assertEqual((entry["name"], entry["def"]), ("子模式", "子模式 定义"))
+
+    def test_trees_of_products_served_elsewhere_are_skipped(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(build, "ENABLED", {"wencai"}):
+            out = Path(folder) / "1_aime/eval_output/cluster/aime_fast"
+            out.mkdir(parents=True)
+            (out / "cluster_tree.json").write_text(json.dumps({"tree": node("root", 0, "全部")}), encoding="utf-8")
+            (out / "item_index.jsonl").write_text(json.dumps({"session_id": "s1", "path": "S1"}) + "\n", encoding="utf-8")
+            self.assertEqual(build.load_clusters(Path(folder))[1], {})
 
 
 if __name__ == "__main__":

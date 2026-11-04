@@ -73,6 +73,11 @@ PRODUCTS = {
     "wencai": {"label": "问财", "models": ["a_fast", "a_expert", "b_fast", "b_expert"]},
     "aime": {"label": "AIME", "models": ["aime_fast", "aime_expert"]},
 }
+# A deployment can serve a subset (EVAL_PRODUCTS=wencai). Every discovery path goes through
+# product_of(), so the other product's folders simply do not exist for it. Default: all products.
+ENABLED = {p.strip() for p in os.environ.get("EVAL_PRODUCTS", "").split(",") if p.strip()} or set(PRODUCTS)
+if ENABLED - set(PRODUCTS):
+    raise SystemExit(f"EVAL_PRODUCTS: unknown {sorted(ENABLED - set(PRODUCTS))}, known {sorted(PRODUCTS)}")
 MODEL_LABEL = {
     "a_fast": "A Fast", "a_expert": "A Expert", "b_fast": "B Fast", "b_expert": "B Expert",
     "aime_fast": "Fast", "aime_expert": "Expert",
@@ -119,7 +124,7 @@ WINDOW_PAD = 280
 
 def product_of(top: str) -> str | None:
     name = re.sub(r"^\d+_", "", top)
-    return name if name in PRODUCTS else None
+    return name if name in ENABLED else None
 
 
 TZ = timezone(timedelta(hours=8), "CST")
@@ -329,12 +334,16 @@ def input_files(datasets: Path, top: Path, product: str):
 
     AIME lost-user inputs come from the archive; the smaller
     ``eval_input/1_lost_user_eval`` copy is excluded so days are not counted
-    twice while that evaluation is in flight.  Wencai marks lost users inside
-    the task-eval input with ``meta.lost_user`` instead of a separate directory.
+    twice while that evaluation is in flight.  A root without the archive (the
+    弗吉尼亚 copy) keeps the full lost-user input in that eval folder, so it counts.
+    Wencai marks lost users inside the task-eval input with ``meta.lost_user``
+    instead of a separate directory.
     """
     files = [p for p in (top / "eval_input").rglob("*.jsonl") if "1_lost_user_eval" not in p.parts]
     if product == "aime":
-        files += list((top / ".archive" / "1_lost_user_input").rglob("*.jsonl"))
+        archive = top / ".archive" / "1_lost_user_input"
+        lost = archive if archive.is_dir() else top / "eval_input" / "1_lost_user_eval"
+        files += list(lost.rglob("*.jsonl"))
     return sorted(files)
 
 
@@ -731,6 +740,8 @@ def load_clusters(root: Path):
     index = {}
     for tree_path in sorted(root.glob("*/eval_output/**/cluster/*/cluster_tree.json")):
         product = product_of(tree_path.relative_to(root).parts[0])
+        if not product:
+            continue
         model = tree_path.parent.name
         try:
             tree = json.loads(tree_path.read_text(encoding="utf-8"))
@@ -1766,6 +1777,7 @@ def cluster_signature(root: Path, cache_dir: Path | None = None):
     """
     files = sorted(root.glob("*/eval_output/**/cluster/*/cluster_tree.json"))
     files += sorted(root.glob("*/eval_output/**/cluster/*/item_index.jsonl"))
+    files = [p for p in files if product_of(p.relative_to(root).parts[0])]
     stat_parts = []
     for path in files:
         try:
