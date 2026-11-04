@@ -3,15 +3,22 @@
 把单个评测样本的完整输入 / 输出、轨迹、对话、归因和证据定位做成可单独打开的详情页，
 并提供一组只读 JSON 接口，方便直接跳转查看或接入自己的系统。
 
-- 地址（推荐）：`https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail/`（DSW 代理）
-- 直连：`http://117.50.195.94:2833`（同一服务）
-- 数据：问财 `wencai`、AIME `aime`
+两套部署，接口形态一致（完整 IP / 端口映射 / 容器名见 [接口使用指南](../../../docs/接口使用指南.md) 第零节）：
+
+| 部署 | 主机 | 容器名 | 数据 | 5002 对外 |
+|---|---|---|---|---|
+| 乌兰察布 | `117.50.195.94` | `interactive-i6piqwvlnsr5` | 问财（规划） | `2833` |
+| 弗吉尼亚 | `10.217.219.2` | `interactive-npasm9ch66eb` | AIME | `2222` |
+
+- DSW 代理：`https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail/`（当前指向乌兰的 5002）
+- 页面本身同时支持 `wencai` / `aime` 两个产品，取决于该环境的看板数据
 - 只读、无鉴权；仅内部使用，请勿公开传播
 - 数据约每 10 分钟随看板重建更新
 
 ## 1. 页面
 
-看板在 `http://117.50.195.94:2768/`。在「具体数据」选中样本后，把地址栏的 `:2768` 换成详情页地址
+看板地址见 [接口使用指南](../../../docs/接口使用指南.md) 第零节（乌兰察布 `http://117.50.195.94:2768/`、
+弗吉尼亚 `http://10.217.219.2:2221/`）。在「具体数据」选中样本后，把地址栏的看板端口换成详情页端口
 （`view` 参数会被忽略）：
 
 ```
@@ -19,7 +26,8 @@ https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail/?product=wencai&case=dai
 https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail/?product=aime&slug=ba6ba417f2
 ```
 
-直连等价地址：`http://117.50.195.94:2833/?product=…`。
+直连等价地址：`http://<外部IP>:<5002 对外端口>/?product=…`（乌兰 `117.50.195.94:2833`、
+弗吉尼亚 `10.217.219.2:2222`）。
 
 `case` 是 `split|model|session_id`，也可以直接传 10 位小写 slug。AIME 一个会话的多轮评测会合并成一页，
 默认停在最后一轮。
@@ -38,7 +46,7 @@ https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail/?product=aime&case=daily
 ## 2. 接口
 
 > 下面示例里的 `$BASE` = `https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail`；
-> 直连时换成 `http://117.50.195.94:2833`。
+> 直连时换成目标环境的 `http://<外部IP>:<5002 对外端口>`（见第零节）。
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
@@ -125,6 +133,7 @@ curl -s --compressed "$BASE/samples-wencai.json" -o index.json
 | `5004` | 开发调试 | `3336` | `2228` |
 | `5005` | 备用 | `3337` | `2243` |
 
-- 外部同事用 DSW 代理地址或「IP + 对外端口」；集群内跨容器用容器名 + 容器端口（`interactive-i6piqwvlnsr5:5002`），同容器内用 `127.0.0.1`
+- 外部同事用 DSW 代理地址或「IP + 对外端口」；集群内跨容器用容器名 + 容器端口
+  （乌兰 `interactive-i6piqwvlnsr5:5002`、弗吉尼亚 `interactive-npasm9ch66eb:5002`），同容器内用 `127.0.0.1`
 - 生产入口固定，不在其上调试；页面 / 接口的迭代在 `5004` 验证后再发布到 `5002`
 - 代理会剥掉路径前缀，前端 URL 必须用相对路径（不带前导 `/`），否则在代理下会 404

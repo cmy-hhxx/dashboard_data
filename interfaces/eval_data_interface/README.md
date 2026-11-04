@@ -14,16 +14,14 @@ trace 的 `problems` 问题数组与 P0–P4 严重度，并新增 `GET /severit
 
 ## 地址
 
-| 方向 | 地址 |
-|---|---|
-| 对内 | `http://interactive-i6piqwvlnsr5:5003` |
-| 对外 | `http://117.50.195.94:3335` |
-| 接口前缀 | `/api/v1/analysis` |
-| 健康检查 | `GET /healthz` |
+| 部署 | 对外 | 集群内 | 数据 |
+|---|---|---|---|
+| 弗吉尼亚 | `http://10.217.219.2:2224` | `http://interactive-npasm9ch66eb:5003` | AIME |
+| 乌兰察布 | `http://117.50.195.94:3335` | `http://interactive-i6piqwvlnsr5:5003` | 问财（规划） |
 
-对外 3335 由平台侧映射到 pod 的 5003（`5003` 即固定的**供数端口**），进程只需监听 5003（已实测：
-在 pod 内起一个 5003 的 HTTP 服务，从本地访问 `117.50.195.94:3335` 可直接命中）。
-不做认证。端口角色见 `docs/dashboard-deployment.md`。
+接口前缀 `/api/v1/analysis`，健康检查 `GET /healthz`。对外端口由平台侧映射到 pod 的 5003
+（`5003` 即固定的**供数端口**）。不做认证。两套部署的完整地址、端口映射与容器名见
+[docs/接口使用指南.md](../../docs/接口使用指南.md) 第零节；端口角色见 `docs/dashboard-deployment.md`。
 
 ## 数据来源
 
@@ -120,7 +118,7 @@ python3 run.py status
 ./deploy.sh                     # rsync 到 /opt/eval_analysis + 重启 + 冒烟（EVAL_DEPLOY_HOST/PORT/KEY 可覆盖 ssh 别名）
 ssh eval_data 'cd /opt/eval_analysis && ./start.sh'
 ssh eval_data 'cd /opt/eval_analysis && ./stop.sh'
-curl -s http://117.50.195.94:3335/healthz
+curl -s http://117.50.195.94:3335/healthz          # 当前 AIME 部署在乌兰；两套地址见使用指南
 ```
 
 `start.sh` 会等到 `/healthz` 返回 `ok:true`（首次构建实测 341 秒（扫 11.4 GB 输入）；

@@ -9,6 +9,7 @@
 | 外部 IP | `117.50.195.94` | `10.217.219.2` |
 | 容器名（集群内部） | `interactive-i6piqwvlnsr5` | `interactive-npasm9ch66eb` |
 | SSH 别名 / 对外端口 | `eval_data` / `2834` | `aime_rsi_data` / `2225` |
+| 数据 | 问财（wencai） | AIME |
 | 数据根 | `/mnt/fin_bench/code_and_clean_data/datasets` | `/mnt/fin_bench/aime_rsi_data`（AIME 第二套，规划） |
 
 访问约定：集群内部跨容器用「容器名:容器端口」，同容器内用 `127.0.0.1`，本地 / 外部用「IP:对外端口」。
