@@ -423,6 +423,39 @@ def check_problem_entries(client, dataset):
         raise AssertionError(f"重跑后 trace_alpha 只应有 1 个问题：{alpha}")
 
 
+def check_session_problem_once(client, dataset):
+    """session 级问题只在会话最后一轮出现一次，列表/详情/统计三处一致。"""
+    payload = expect(
+        *client.post(f"{API}/traces/batch", {"dataset": dataset, "trace_ids": ["trace_multi_1", "trace_multi_2"]})
+    )
+    by_id = {item["trace_id"]: item for item in payload["data"]["items"]}
+    first, last = by_id["trace_multi_1"], by_id["trace_multi_2"]
+    if first["problem_count"] != 1 or any(p["session_level"] for p in first["problems"]):
+        raise AssertionError(f"第一轮不应带跨轮问题：{first['problems']}")
+    if last["problem_count"] != 1 or [p["session_level"] for p in last["problems"]] != [True]:
+        raise AssertionError(f"最后一轮应带 1 条跨轮问题：{last['problems']}")
+
+    detail_first = expect(*client.get(f"{API}/traces/trace_multi_1", dataset=dataset, day=fixtures.DAY))
+    detail_last = expect(*client.get(f"{API}/traces/trace_multi_2", dataset=dataset, day=fixtures.DAY))
+    if len(detail_first["data"]["analysis"]["problems"]) != 1:
+        raise AssertionError("第一轮详情不应出现跨轮问题")
+    last_problems = detail_last["data"]["analysis"]["problems"]
+    if len(last_problems) != 1 or not last_problems[0]["session_level"]:
+        raise AssertionError(f"最后一轮详情应只有 1 条跨轮问题：{last_problems}")
+
+    ids = expect(*client.get(f"{API}/traces", dataset=dataset, ids_only="true", page_size=5000))["data"]["items"]
+    unique_ids = sorted(set(ids))
+    problems_total = 0
+    for start in range(0, len(unique_ids), 1000):
+        batch = expect(
+            *client.post(f"{API}/traces/batch", {"dataset": dataset, "trace_ids": unique_ids[start:start + 1000]})
+        )
+        problems_total += sum(item["problem_count"] for item in batch["data"]["items"])
+    severity_total = expect(*client.get(f"{API}/severity", dataset=dataset))["data"]["total"]["problems"]
+    if problems_total != severity_total:
+        raise AssertionError(f"逐条 problems 之和 {problems_total} != /severity total {severity_total}")
+
+
 # --------------------------------------------------------------------------- 运行
 
 def start_fixture_server(workdir: Path):
@@ -511,6 +544,7 @@ def run_fixture_cases(workdir: Path):
         ("6 严重度分组", lambda: check_severity_groups(client, dataset)),
         ("7 问题数组", lambda: check_problem_entries(client, dataset)),
         ("7b 问题分组条目数", lambda: check_problem_group_counts(client, dataset)),
+        ("7c 跨轮问题只计一次", lambda: check_session_problem_once(client, dataset)),
         ("8 意图互斥", lambda: check_intent_leaf_sum(client, dataset)),
         ("9 多问题计数", lambda: check_multi_problem(client, dataset, "trace_gamma", ["S1.M1.1", "S9.M5.1"])),
         (
@@ -642,6 +676,7 @@ def run_real_cases(base, history_trace=None, history_day=None):
         ("6 严重度分组", lambda: check_severity_groups(client, dataset)),
         ("7 问题数组", lambda: check_problem_entries(client, dataset)),
         ("7b 问题分组条目数", lambda: check_problem_group_counts(client, dataset)),
+        ("7c 跨轮问题只计一次", lambda: check_session_problem_once(client, dataset)),
         ("8 意图互斥", lambda: check_intent_leaf_sum(client, dataset)),
         ("9 多问题计数", _multi),
         ("10 大类展开", _expansion),

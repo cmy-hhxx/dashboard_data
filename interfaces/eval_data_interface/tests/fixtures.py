@@ -143,14 +143,54 @@ def _session(session_id, trace_id, timestamp, task, subtask, user, model, proble
     }
 
 
-def _input_record(session_id, trace_id, timestamp, user, model, question="问句"):
+def _turns_session(session_id, traces, timestamp, task, subtask, user, model, question="问句",
+                   source="ths_ainvest_backtestarticle", session_problems=()):
+    """一个归因文件行里带多轮：traces = [(trace_id, [problem, ...]), ...]。"""
+    return {
+        "session_meta": {
+            "request_time": timestamp,
+            "session_id": session_id,
+            "user_id": user,
+            "question": question,
+            "agent_mode": "expert-analyst",
+            "source": "ainvest",
+            "thread_id": session_id,
+            "trace_id": session_id,
+        },
+        "turns": [
+            {
+                "meta": {
+                    "trace_id": trace_id,
+                    "session_id": session_id,
+                    "name": "expert-analyst",
+                    "mode": "expert",
+                    "model": model,
+                    "source": source,
+                    "timestamp": timestamp,
+                    "user_id": user,
+                    "task": task,
+                    "subtask": subtask,
+                    "difficulty": "中等",
+                },
+                "summary": "轮次摘要",
+                "problem": problems,
+                "is_correct": None,
+            }
+            for trace_id, problems in traces
+        ],
+        "session_summary": {"summary": "会话摘要"},
+        "session_problem": list(session_problems),
+    }
+
+
+def _input_record(session_id, trace_id, timestamp, user, model, question="问句", extra_traces=()):
     return {
         "request_time": timestamp,
         "meta": {"session_id": session_id, "user_id": user, "question": question, "source": "ainvest"},
         "traces": [
             {
                 "meta": {
-                    "trace_id": trace_id,
+                    "trace_id": tid,
                     "session_id": session_id,
                     "name": "expert-analyst",
                     "model": model,
@@ -164,6 +204,7 @@ def _input_record(session_id, trace_id, timestamp, user, model, question="问句
                 "message_pool": [],
                 "tool_sets": [],
             }
+            for tid in (trace_id, *extra_traces)
         ],
         "case_id": trace_id,
         "versions": "default",
@@ -225,6 +266,14 @@ def build(root: Path) -> Path:
             [_problem("自由文本问题", "P2"), _problem("提示级问题", "P4")],
             question="什么是市盈率",
         ),
+        # 多轮会话：跨轮（session 级）问题只挂在最后一轮，避免同一条问题在每轮重复计数
+        _turns_session(
+            "thread_multi",
+            [("trace_multi_1", [_problem("空查询参数重试", "P2")]), ("trace_multi_2", [])],
+            "2026-10-20T06:00:00.000Z", "事件解读", "行情事件解读", "u6", "AIME-Atlas",
+            question="多轮会话问句",
+            session_problems=[_problem("跨轮遗漏标的", "P1")],
+        ),
     ]
     attr_path = out / "0_daily_eval" / "aime_expert" / f"aime_expert_attribution-{DAY}.jsonl"
     _write_jsonl(attr_path, daily)
@@ -266,6 +315,8 @@ def build(root: Path) -> Path:
         _input_record("thread_b", "trace_beta", "2026-10-20T03:00:00.000Z", "u2", "AIME-Atlas", "AAPL 最新价"),
         _input_record("thread_c", "trace_gamma", "2026-10-20T04:00:00.000Z", "u1", "AIME-Atlas", "现在适合加仓吗"),
         _input_record("thread_d", "trace_delta", "2026-10-20T05:00:00.000Z", "u3", "AIME-Atlas", "什么是市盈率"),
+        _input_record("thread_multi", "trace_multi_1", "2026-10-20T06:00:00.000Z", "u6", "AIME-Atlas",
+                      "多轮会话问句", extra_traces=("trace_multi_2",)),
     ]
     _write_jsonl(aime / "eval_input" / "0_daily_eval_input" / "aime_expert" / f"{DAY}.jsonl", inputs)
     _write_jsonl(

@@ -802,8 +802,11 @@ def detail(snap: Snapshot, db_path, dataset: str, trace_id: str, day: str | None
     if turn:
         for idx, problem in enumerate(turn.get("problem") or []):
             problems.append(_problem_payload(problem, codes.get(("turn", idx)), session_level=False))
-        for idx, problem in enumerate((attribution or {}).get("session_problem") or []):
-            problems.append(_problem_payload(problem, codes.get(("session", idx)), session_level=True))
+        # 跨轮问题只在会话最后一轮计数（与 ingest 一致），否则同一问题会在每条 trace 上重复出现
+        turns = (attribution or {}).get("turns") or []
+        if turns and turn is turns[-1]:
+            for idx, problem in enumerate((attribution or {}).get("session_problem") or []):
+                problems.append(_problem_payload(problem, codes.get(("session", idx)), session_level=True))
     else:
         problems = [
             {"code": code, "label": code, "severity": None, "evidence": [], "session_level": False}
