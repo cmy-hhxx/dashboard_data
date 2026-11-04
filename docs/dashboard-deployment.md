@@ -13,6 +13,7 @@
 | 数据根 | `/mnt/fin_bench/code_and_clean_data/datasets` | `/mnt/fin_bench/aime_rsi_data`（AIME 第二套，规划） |
 
 访问约定：集群内部跨容器用「容器名:容器端口」，同容器内用 `127.0.0.1`，本地 / 外部用「IP:对外端口」。
+迁移期约定（5001 暂时同时承载问财 + AIME、新版本只发 5004、生产代码冻结）见 [`Critic.md`](../Critic.md)。
 端口映射与密钥在本地 `servers.conf`（已 gitignore，不入库）。
 
 ## 端口分配（固定）
