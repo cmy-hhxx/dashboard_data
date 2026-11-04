@@ -105,15 +105,25 @@ async function render({ refresh = false } = {}) {
 const POLL_MS = 120000;
 let polling = false;
 
+/* Data timestamps are Beijing time. A bare stamp (older payload) is read as +08:00, and the
+   label is always rendered in Beijing time instead of the viewer's browser zone. */
+function beijing(at) {
+  const s = String(at).trim();
+  const zoned = /(?:Z|[+-]\d{2}:?\d{2})$/.test(s);
+  const t = new Date(zoned ? s : `${s.replace(" ", "T")}+08:00`);
+  return Number.isNaN(t.getTime()) ? null : new Date(t.getTime() + 8 * 3600 * 1000);
+}
+
 function stamp(pulse = false) {
   const el = $("#stamp");
   const at = state.data && state.data.generated_at;
   if (!el || !at) return;
-  const t = new Date(at);
-  if (Number.isNaN(t.getTime())) return;
+  const t = beijing(at);
+  const now = beijing(new Date().toISOString());
+  if (!t || !now) return;
   const p2 = (n) => String(n).padStart(2, "0");
-  const today = new Date().toDateString() === t.toDateString();
-  el.textContent = `截至 ${today ? "" : `${p2(t.getMonth() + 1)}-${p2(t.getDate())} `}${p2(t.getHours())}:${p2(t.getMinutes())}`;
+  const today = now.getUTCFullYear() === t.getUTCFullYear() && now.getUTCMonth() === t.getUTCMonth() && now.getUTCDate() === t.getUTCDate();
+  el.textContent = `截至 ${today ? "" : `${p2(t.getUTCMonth() + 1)}-${p2(t.getUTCDate())} `}${p2(t.getUTCHours())}:${p2(t.getUTCMinutes())}`;
   el.dateTime = at;
   el.hidden = false;
   if (pulse) {

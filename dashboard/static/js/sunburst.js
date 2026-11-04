@@ -59,6 +59,9 @@ const marks = (node) =>
     : node.lost ? [{ n: node.lost, label: "流失", c: "var(--sev-1)" }] : [];
 const markTotal = (node) => marks(node).reduce((s, m) => s + m.n, 0);
 const byVolume = (a, b) => b.n - a.n || String(a.name).localeCompare(String(b.name));
+/* 未聚类 is not a taxonomy phase; keep its row last in the list whatever its volume. */
+const PINNED = "c/~un";
+const byList = (a, b) => (a.id === PINNED ? 1 : 0) - (b.id === PINNED ? 1 : 0) || byVolume(a, b);
 
 export function sunburst(host, tree, { unit = "", sort = false, state = null, animate = true, onChange = null, inert = null } = {}) {
   const root = prep(tree, null);
@@ -148,7 +151,7 @@ export function sunburst(host, tree, { unit = "", sort = false, state = null, an
     // Keep sibling categories visible while expanding the selected branch. 聚类体系 ranks by volume;
     // the arcs keep taxonomy order, the dots tie each row back to its arc.
     const kids = focus.children || [];
-    const order = sort ? [...kids].sort(byVolume) : kids;
+    const order = sort ? [...kids].sort(byList) : kids;
     list.innerHTML = order.map((n) =>
       row(n, n === open ? "head" : "") +
       (n === open && n.children ? (sort ? [...n.children].sort(byVolume) : n.children).map((c) => row(c, "sub")).join("") : "")
