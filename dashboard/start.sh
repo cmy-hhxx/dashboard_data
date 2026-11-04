@@ -3,6 +3,8 @@
 # environment. A second copy (staging) sets PORT and STATS_WORKER=0 so only one stats sidecar runs.
 set -euo pipefail
 cd "$(dirname "$0")"
+# Settings this copy was deployed with (deploy.sh writes deploy.env): port, data root, products.
+if [ -f deploy.env ]; then . ./deploy.env; fi
 mkdir -p logs
 PORT="${PORT:-5001}"
 

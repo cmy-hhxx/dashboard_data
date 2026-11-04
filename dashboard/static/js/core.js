@@ -76,9 +76,9 @@ export function bindTips(root, resolve) {
     const html = resolve ? resolve(t) : null;
     if (html) return showTip(html, e.clientX, e.clientY);
     if (t.dataset.tip) {
-      const [a, b] = t.dataset.tip.split("|");
+      const [a, b, note] = t.dataset.tip.split("|");
       const label = SEV_NAME[a] || a;
-      showTip(`<div class="t-row">${esc(label)}<b class="num" style="margin-left:auto">${esc(b)}</b></div>`, e.clientX, e.clientY);
+      showTip(`<div class="t-row">${esc(label)}<b class="num" style="margin-left:auto">${esc(b)}</b></div>${note ? `<div class="t-note">${esc(note)}</div>` : ""}`, e.clientX, e.clientY);
     } else hideTip();
   });
   root.addEventListener("pointerleave", hideTip);

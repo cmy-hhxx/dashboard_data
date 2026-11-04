@@ -3,6 +3,11 @@ import { $, $$, segmented, getJSON, announce } from "./core.js";
 
 const VIEWS = ["data", "system", "samples"];
 const PRODUCTS = ["wencai", "aime"];
+// Each product's board runs on its own server; a product with no data here opens its server instead.
+const SITES = {
+  wencai: { url: "http://117.50.195.94:3336/", name: "乌兰察布" },
+  aime: { url: "http://10.217.219.2:2221/", name: "弗吉尼亚" },
+};
 const state = { view: "data", product: "wencai", data: null, indexes: {}, indexP: {}, productData: {}, productP: {} };
 const modules = {};
 const loaders = { data: () => import("./data.js"), system: () => import("./system.js"), samples: () => import("./samples.js") };
@@ -20,6 +25,18 @@ export function navigate(params, { replace = false } = {}) {
   if (!replace) render();
 }
 window.addEventListener("popstate", () => render());
+
+const servedHere = (p) => Boolean(state.data && p in (state.data.products || {}));
+
+/* The other server's URL for a product not built here; null when it is served here (or this is its server). */
+function awayURL(product, params) {
+  const site = SITES[product];
+  if (!site || servedHere(product)) return null;
+  const url = new URL(site.url);
+  if (url.origin === location.origin) return null;
+  url.search = new URLSearchParams(params).toString();
+  return url.href;
+}
 
 let viewSeg;
 let productSeg;
@@ -142,7 +159,13 @@ async function boot() {
     announce(`切换到${{ data: "数据看板", system: "评测体系", samples: "具体数据" }[v]}`);
     navigate(v === "data" ? { view: v, detail: null, ed: null, em: null, ep: null, edp: null } : { view: v });
   });
-  productSeg = segmented($("#productSwitch"), (p) => navigate({ product: p, case: null }));
+  productSeg = segmented($("#productSwitch"), (p) => {
+    const away = awayURL(p, { view: state.view, product: p });
+    if (away) location.assign(away);
+    else navigate({ product: p, case: null });
+  });
+  // Back from the other product's server (bfcache): the knob moved before leaving; put it back.
+  window.addEventListener("pageshow", (e) => e.persisted && productSeg.set(state.product, { silent: true }));
   // 数据 tab already active on the evaluation-detail subpage: clicking it returns to the dashboard.
   $("#viewSwitch").addEventListener("click", (e) => {
     const b = e.target.closest('button[data-value="data"]');
@@ -167,9 +190,13 @@ async function boot() {
   state.data = await dataP;
   const mod = await moduleP;
   if (mod) modules[state.view] = mod;
-  if (!new URLSearchParams(location.search).get("product")) {
+  const asked = new URLSearchParams(location.search).get("product");
+  if (!asked) {
     state.product = PRODUCTS.find((p) => state.data.products[p]) || "wencai";
   }
+  // A link to a product served elsewhere (?product=aime on the 问财 server) continues on its server.
+  const away = PRODUCTS.includes(asked) && awayURL(asked, new URLSearchParams(location.search));
+  if (away) return location.replace(away);
   try {
     await loadProductData(state.product);
   } catch (err) {

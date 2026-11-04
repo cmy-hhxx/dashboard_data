@@ -2,8 +2,9 @@
    children, inside that child's arc. Click an inner arc to open it (again to drill in), an outer arc to
    drill in, the centre to step back. Arcs tween between states; nothing navigates away.
    `state` ({focus, open} node ids) is kept up to date so a redraw on fresh data lands on the same
-   ring; `onChange(focus, open)` reports every move. */
-import { esc, fmt, pct, REDUCED } from "./core.js";
+   ring; `onChange(focus, open)` reports every move. `inert(node)` returns a short note for a branch with
+   nothing behind it: its arc and row stay put when clicked and carry the note in their tip instead. */
+import { esc, fmt, pct, REDUCED, hideTip } from "./core.js";
 
 const S = 220;
 const C = S / 2;
@@ -39,13 +40,14 @@ function prep(node, parent) {
     const rest = kids.filter((c) => small.has(c));
     kids = kids.filter((c) => !small.has(c));
     kids.push({ id: `${node.id}/~`, name: "其他", n: rest.reduce((s, c) => s + c.n, 0),
-      lost: rest.reduce((s, c) => s + (c.lost || 0), 0), sev: sumSev(rest), other: true });
+      lost: rest.reduce((s, c) => s + (c.lost || 0), 0), sev: sumSev(rest), other: true,
+      ...(rest.some((c) => c.ev != null) ? { ev: rest.reduce((s, c) => s + (c.ev || 0), 0) } : {}) });
   }
   node.children = kids.length ? kids : null;
   if (node.children) node.children.forEach((c) => prep(c, node));
   return node;
 }
-const biggest = (n) => (n.children || []).filter((c) => !c.other).reduce((a, b) => (!a || b.n > a.n ? b : a), null);
+const biggest = (n, skip) => (n.children || []).filter((c) => !c.other && !(skip && skip(c))).reduce((a, b) => (!a || b.n > a.n ? b : a), null);
 
 /* Outer thin marks: 流失 for 数据量, P0/P1 for 聚类体系 — same little ring, one or two tones. */
 const marks = (node) =>
@@ -58,7 +60,7 @@ const marks = (node) =>
 const markTotal = (node) => marks(node).reduce((s, m) => s + m.n, 0);
 const byVolume = (a, b) => b.n - a.n || String(a.name).localeCompare(String(b.name));
 
-export function sunburst(host, tree, { unit = "", sort = false, state = null, animate = true, onChange = null } = {}) {
+export function sunburst(host, tree, { unit = "", sort = false, state = null, animate = true, onChange = null, inert = null } = {}) {
   const root = prep(tree, null);
   const byId = new Map();
   const index = (n) => {
@@ -67,8 +69,8 @@ export function sunburst(host, tree, { unit = "", sort = false, state = null, an
   };
   index(root);
   let focus = (state && byId.get(state.focus)) || root;
-  let open = state && state.open !== undefined && state.focus === focus.id ? byId.get(state.open) || null : biggest(focus);
-  if (open && open.parent !== focus) open = biggest(focus);
+  let open = state && state.open !== undefined && state.focus === focus.id ? byId.get(state.open) || null : biggest(focus, inert);
+  if (open && open.parent !== focus) open = biggest(focus, inert);
   const save = () => {
     if (state) {
       state.focus = focus.id;
@@ -131,7 +133,7 @@ export function sunburst(host, tree, { unit = "", sort = false, state = null, an
     const up = focus.parent;
     center.disabled = !up;
     center.setAttribute("aria-label", up ? `返回 ${up.name}` : focus.name);
-    center.innerHTML = `${up ? `<i>‹ ${esc(up.name)}</i>` : ""}<b class="num">${fmt(focus.n)}</b><small>${esc(up ? focus.name : unit)}</small>${
+    center.innerHTML = `${up ? `<i>‹ ${esc(up.name)}</i>` : ""}<b class="num">${fmt(focus.n)}</b><small title="${esc(up ? focus.name : unit)}">${esc(up ? focus.name : unit)}</small>${
       focus.lost ? `<small class="sb-lostc">流失 ${fmt(focus.lost)}</small>` : ""}`;
     const fill = new Map(target.filter((t) => t.mark == null).map((t) => [t.node, t.fill]));
     const row = (n, cls) => {
@@ -139,7 +141,9 @@ export function sunburst(host, tree, { unit = "", sort = false, state = null, an
       const tip = n.sev
         ? [["P0", n.sev.P0 || 0], ["P1", n.sev.P1 || 0]].filter((x) => x[1]).map(([k, v]) => `${k} ${fmt(v)}`).join(" · ")
         : n.lost ? `流失 ${fmt(n.lost)}` : "";
-      return `<button type="button" class="li sb-r ${cls}" data-k="${esc(n.id)}" data-n="${esc(n.id)}"><i style="--c:${fill.get(n)}"></i><span title="${esc(n.name)}">${esc(n.name)}</span><small class="sb-markn num"${tip ? ` title="${esc(`${tip} · 占 ${pct(total, n.n, 1)}`)}"` : ""}>${total ? fmt(total) : ""}</small><b class="num">${fmt(n.n)}</b><em class="num">${pct(n.n, n.parent.n)}</em></button>`;
+      const note = inert && inert(n);
+      const hold = note ? ` is-inert" aria-disabled="true" data-tip="${esc(`${n.name}|${fmt(n.n)} · ${pct(n.n, n.parent.n)}|${note}`)}` : "";
+      return `<button type="button" class="li sb-r ${cls}${hold}" data-k="${esc(n.id)}" data-n="${esc(n.id)}"><i style="--c:${fill.get(n)}"></i><span${note ? "" : ` title="${esc(n.name)}"`}>${esc(n.name)}</span><small class="sb-markn num"${tip ? ` title="${esc(`${tip} · 占 ${pct(total, n.n, 1)}`)}"` : ""}>${total ? fmt(total) : ""}</small><b class="num">${fmt(n.n)}</b><em class="num">${pct(n.n, n.parent.n)}</em></button>`;
     };
     // Keep sibling categories visible while expanding the selected branch. 聚类体系 ranks by volume;
     // the arcs keep taxonomy order, the dots tie each row back to its arc.
@@ -171,11 +175,12 @@ export function sunburst(host, tree, { unit = "", sort = false, state = null, an
       }
       svg.appendChild(el);
       el._t = t;
-      el.setAttribute("class", `sb-a${t.mark == null ? "" : " sb-mark"}${t.node === open && t.mark == null ? " on" : ""}`);
+      const note = inert && inert(t.node);
+      el.setAttribute("class", `sb-a${t.mark == null ? "" : " sb-mark"}${t.node === open && t.mark == null ? " on" : ""}${note ? " is-inert" : ""}`);
       el.style.fill = t.fill;
-      el.dataset.tip = t.mark == null
+      el.dataset.tip = (t.mark == null
         ? `${t.node.name}${t.node.sev && (t.node.sev.P0 || t.node.sev.P1) ? ` · P0 ${fmt(t.node.sev.P0 || 0)} · P1 ${fmt(t.node.sev.P1 || 0)}` : ""}|${fmt(t.node.n)} · ${pct(t.node.n, t.node.parent.n)}`
-        : `${t.node.name} · ${t.label}|${fmt(t.n)} · ${pct(t.n, t.node.n)}`;
+        : `${t.node.name} · ${t.label}|${fmt(t.n)} · ${pct(t.n, t.node.n)}`) + (note ? `|${note}` : "");
       jobs.push({ el, from, to: t.g, o0: Number(el.style.opacity || 1), o1: 1 });
     });
     els.forEach((el, id) => {
@@ -213,11 +218,17 @@ export function sunburst(host, tree, { unit = "", sort = false, state = null, an
     raf = requestAnimationFrame(step);
   }
 
-  function pick(node, ring) {
+  function pick(node, ring, e) {
+    if (inert && inert(node)) {
+      // Touch has no hover: hand the tap to the tip layer as a move, and let the note fade by itself.
+      e.target.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: e.clientX, clientY: e.clientY }));
+      if (e.pointerType && e.pointerType !== "mouse") setTimeout(hideTip, 2400);
+      return;
+    }
     if (ring === "in") {
       if (node === open && node.children) {
         focus = node;
-        open = biggest(node);
+        open = biggest(node, inert);
       } else open = node;
     } else {
       focus = open;
@@ -229,12 +240,12 @@ export function sunburst(host, tree, { unit = "", sort = false, state = null, an
 
   svg.addEventListener("click", (e) => {
     const t = e.target.closest("path") && e.target.closest("path")._t;
-    if (t) pick(t.node, t.ring);
+    if (t) pick(t.node, t.ring, e);
   });
   list.addEventListener("click", (e) => {
     const r = e.target.closest("[data-k]");
     const t = r && els.get(r.dataset.k) && els.get(r.dataset.k)._t;
-    if (t) pick(t.node, t.ring);
+    if (t) pick(t.node, t.ring, e);
   });
   center.addEventListener("click", () => {
     if (!focus.parent) return;

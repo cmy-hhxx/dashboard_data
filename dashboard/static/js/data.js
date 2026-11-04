@@ -1,6 +1,6 @@
 /* 数据: 会话场 · 数据量 · 评测量 · 归因体系 · 聚类体系 · 预测体系 · 聚类矩阵. Titles only; the layout carries the rest.
    Charts drill in place; a session tile or a matrix cell opens 具体数据 with that case / filter set. */
-import { $, $$, esc, fmt, pct, sum, WORST, SEV_NAME, sevColor, counter, runCounters, bindTips, segmented, REDUCED } from "./core.js";
+import { $, $$, esc, fmt, pct, sum, WORST, SEV_NAME, sevColor, counter, runCounters, bindTips, segmented, REDUCED, showTip, hideTip } from "./core.js";
 import { sunburst } from "./sunburst.js";
 import { galaxy } from "./galaxy.js";
 
@@ -13,6 +13,8 @@ const UI = {};
 const ui = (product) =>
   (UI[product] = UI[product] || { field: { w: null, pages: [] }, vol: {}, clu: {}, mx: { rows: [], cols: [], trail: [] }, pred: "vol" });
 const SPLIT_SHORT = { daily: "日常", lost: "流失" };
+// A 数据量 branch with inputs but no evaluated case: the ring keeps it shut and says where to look.
+const NO_CASE = "暂无已评测的 case，请去评测详情页面查看";
 const dot = (c) => `<i style="--c:${c}"></i>`;
 
 export async function render(root, c) {
@@ -38,6 +40,7 @@ export async function render(root, c) {
     const indexP = c.loadIndex(c.product).catch(() => null);
     const index = state.model ? await indexP : null;
     root.innerHTML = evalDetailPage(p, state, index);
+    runCounters(root);
     wireEvalDetail(root, state);
     window.scrollTo(0, 0);
     lastDetail = true;
@@ -94,11 +97,24 @@ const miniLine = (vals) => {
   const ys = vals.map((v) => H - pad - (Math.max(0, Math.min(100, v)) / 100) * (H - pad * 2));
   return `<svg class="cxline" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><polyline points="${xs.map((x, i) => `${x.toFixed(1)},${ys[i].toFixed(1)}`).join(" ")}"/></svg>`;
 };
-const miniView = (viz, items, hint = "") =>
-  `<div class="compact" aria-hidden="true"><div class="cx">${viz}</div><div class="cn">${items
+/* Under the numbers, the ranking behind them: a name, a value and a share bar per row, so a folded
+   card still answers "which one" instead of leaving a hollow card around two figures. */
+const miniRank = (rows) =>
+  rows.length
+    ? `<div class="cr-list">${rows
+        .map((r, i) => {
+          const w = r.share > 0 ? Math.max(1.5, Math.min(100, 100 * r.share)) : 0;
+          return `<div class="cr" style="--i:${i};--w:${w.toFixed(1)}%${r.c ? `;--c:${r.c}` : ""}"><span>${esc(r.name)}</span><b class="num">${r.value}</b><i></i></div>`;
+        })
+        .join("")}</div>`
+    : "";
+const miniView = (viz, items, hint = "", rank = [], foot = "") =>
+  `<div class="compact" aria-hidden="true"><div class="cx-top"><div class="cn">${items
     .filter(Boolean)
     .map(([v, l], i) => `<div${i ? "" : ' class="lead"'}><b class="num">${v}</b><small>${esc(l)}</small></div>`)
-    .join("")}</div>${hint ? `<small class="cxhint">${esc(hint)}</small>` : ""}</div>`;
+    .join("")}</div><div class="cx">${viz}</div></div>${hint ? `<small class="cxhint">${esc(hint)}</small>` : ""}${miniRank(rank)}${foot}</div>`;
+// The leader of a ranking in accent, the rest in one quiet tone.
+const leadTone = (i) => (i ? "var(--t2)" : "var(--accent)");
 const modelName = (p, id) => (p.models.find((m) => m.id === id) || { label: id }).label;
 const groupName = (p, g) => (p.unified || p.splits.length <= 1 ? "" : `${SPLIT_SHORT[g.split] || g.split} · `) + modelName(p, g.model);
 const stats = (items, cols = 4) => `<div class="stats${cols === 5 ? " stats-5" : ""}">${items.map(([l, v]) => `<div><b class="num">${v}</b><small>${l}</small></div>`).join("")}</div>`;
@@ -238,17 +254,19 @@ function volumeCard(p) {
     ["Tokens 输入/输出", tokens],
   ];
   const note = lost ? `<div class="sb-keys"><span class="sb-key" title="外圈细环是该分支里流失用户 trace 的占比，列表红字是流失 trace 数"><i></i>流失</span></div>` : "";
-  const folded = miniView(miniRing(volMiniSegs(p)), [
-    [fmt(input.traces ?? k.traces), "评测输入轨迹"], [fmt(input.records ?? k.inputs), "记录"],
+  const segs = volMiniSegs(p);
+  const segTotal = sum(segs.map((x) => x.n)) || 1;
+  const folded = miniView(miniRing(segs), [
+    [counter(input.traces ?? k.traces), "评测输入轨迹"], [fmt(input.records ?? k.inputs), "记录"],
     lost != null ? [fmt(lost), "流失轨迹"] : null, tin != null ? [tokenNum(tin), "输入 Tokens"] : null,
-  ]);
+  ], "", [...segs].sort((a, b) => b.n - a.n).slice(0, 8).map((x) => ({ name: x.name, value: fmt(x.n), share: x.n / segTotal, c: x.c })));
   return card(6, "数据量", `<div class="duo" id="vol"></div>${note}${stats(items, items.length > 4 ? 5 : 4)}${GX}${folded}`, "", "vol");
 }
 function inputTaskNodes(prefix, tasks) {
   return (tasks || []).map((t) => ({
-    id: `${prefix}/${t.task}`, name: t.task, n: t.n, lost: t.lost || 0,
+    id: `${prefix}/${t.task}`, name: t.task, n: t.n, lost: t.lost || 0, ev: t.ev,
     children: (t.sub || []).map((s) => ({
-      id: `${prefix}/${t.task}/${s.sub}`, name: s.sub, n: s.n, lost: s.lost || 0,
+      id: `${prefix}/${t.task}/${s.sub}`, name: s.sub, n: s.n, lost: s.lost || 0, ev: s.ev,
     })),
   }));
 }
@@ -263,7 +281,7 @@ function volTree(p) {
         return Object.entries(input.models)
           .sort(([a], [b]) => (order.get(a) ?? 99) - (order.get(b) ?? 99))
           .map(([id, m]) => ({
-            id: `v/${id}`, name: m.label || modelName(p, id), n: m.traces, lost: m.lost || 0,
+            id: `v/${id}`, name: m.label || modelName(p, id), n: m.traces, lost: m.lost || 0, ev: m.ev,
             children: inputTaskNodes(`v/${id}`, m.tasks),
           }));
       })(),
@@ -284,10 +302,10 @@ function volMiniSegs(p) {
     const order = new Map((p.models || []).map((m, i) => [m.id, i]));
     const list = Object.entries(input.models).sort(([a], [b]) => (order.get(a) ?? 99) - (order.get(b) ?? 99));
     const n = Math.max(list.length, (p.models || []).length, 1);
-    return list.map(([id, m], i) => ({ n: m.traces || 0, c: shade(order.has(id) ? order.get(id) : i, n) }));
+    return list.map(([id, m], i) => ({ name: m.label || modelName(p, id), n: m.traces || 0, c: shade(order.has(id) ? order.get(id) : i, n) }));
   }
   const tasks = input.tasks || [];
-  return tasks.slice(0, 6).map((t, i) => ({ n: t.n || 0, c: shade(i, Math.max(tasks.length, 1)) }));
+  return tasks.slice(0, 6).map((t, i) => ({ name: t.task, n: t.n || 0, c: shade(i, Math.max(tasks.length, 1)) }));
 }
 
 /* ---------------------------------------------------------------- 评测量: inputs vs completed per day */
@@ -439,8 +457,26 @@ function evalCard(p) {
 function evalCompact(p) {
   const w = evalWindow(p);
   const days = evalBuckets(w.days).slice(-12);
-  const viz = miniCols(days.map((x) => ({ done: x.evaluated || 0, all: Math.max(x.inputs || 0, x.evaluated || 0) })));
-  return miniView(viz, [[fmt(w.totalSessions), "完成 Session"], [pct(w.totalEval, w.totalInputs, 1), "完成率"], [fmt(w.totalTraces), "完成 Trace"]]);
+  // The folded card keeps the day chart it had open, scaled into whatever height the versions leave.
+  const cols = miniCols(days.map((x) => ({ done: x.evaluated || 0, all: Math.max(x.inputs || 0, x.evaluated || 0) })));
+  const ends = days.length > 1 ? [days[0], days[days.length - 1]] : days;
+  const foot = days.length ? `<div class="cx-days">${cols}<span>${ends.map((x) => `<small>${esc(x.label)}</small>`).join("")}</span></div>` : "";
+  // Per version over the same window: done / inputs, the bar is the version's completion.
+  const inWindow = new Set(w.days.map((x) => x.d));
+  const by = new Map();
+  evalRows(p)
+    .filter((r) => inWindow.has(r.d) && (EV.model === "all" || r.m === EV.model))
+    .forEach((r) => {
+      const x = by.get(r.m) || { m: r.m, inputs: 0, done: 0 };
+      x.inputs += r.inputs || 0;
+      x.done += r.evaluated || 0;
+      by.set(r.m, x);
+    });
+  const rank = [...by.values()]
+    .sort((a, b) => b.done - a.done || b.inputs - a.inputs)
+    .slice(0, 8)
+    .map((x) => ({ name: x.m === "all" ? "全部" : modelName(p, x.m), value: `${fmt(x.done)}<span class="stat-of"> / ${fmt(x.inputs)}</span>`, share: x.inputs ? x.done / x.inputs : 0 }));
+  return miniView("", [[counter(w.totalSessions), "完成 Session"], [pct(w.totalEval, w.totalInputs, 1), "完成率"], [fmt(w.totalTraces), "完成 Trace"]], "", rank, foot);
 }
 
 /* ---------------------------------------------------------------- 评测量详情: day → model → session */
@@ -481,16 +517,33 @@ function edModels(p, day) {
   return [...by.values()].sort((a, b) => b.inputs - a.inputs || b.evaluated - a.evaluated || a.label.localeCompare(b.label));
 }
 
-/* Status is progress: a quiet ring for partially evaluated days/models, ✅ only when every input is done. */
-const edRing = (ratio, title) =>
-  `<span class="st-ring" role="img" aria-label="${esc(title)}" title="${esc(title)}"><svg viewBox="0 0 18 18" aria-hidden="true"><circle class="st-track" cx="9" cy="9" r="6.5"/><circle class="st-arc" cx="9" cy="9" r="6.5" pathLength="100" style="stroke-dasharray:${Math.round(ratio * 100)} 100"/></svg></span>`;
-const edStatus = (r) => {
+/* One bar per day / model: its length is the inputs against the busiest row, its fill what has been
+   evaluated, so volume and progress read down a single column. ✅ only when every input is done. */
+const edBar = (r, max) => {
+  const inputs = r.inputs || 0;
+  const done = Math.min(r.evaluated || 0, inputs);
+  const title = inputs ? `已评测 ${fmt(done)} / ${fmt(inputs)} · ${pct(done, inputs, 1)}` : "暂无评测输入";
+  return `<td class="bar" title="${esc(title)}"><span class="ed-bar" style="--l:${max ? ((100 * inputs) / max).toFixed(2) : 0}%;--f:${inputs ? ((100 * done) / inputs).toFixed(2) : 0}%"><i></i></span></td>`;
+};
+const edRate = (r) => {
   const inputs = r.inputs || 0;
   const done = r.evaluated || 0;
-  if (!inputs) return `<span class="faint">—</span>`;
-  if (done >= inputs) return `<span class="ok" aria-label="全部评测完成" title="全部评测完成">✅</span>`;
-  return edRing(done / inputs, `已评测 ${fmt(done)} / ${fmt(inputs)} · ${pct(done, inputs, 1)}`);
+  if (!inputs) return `<td class="num is-zero">—</td>`;
+  const ok = done >= inputs ? `<span class="ok" aria-label="全部评测完成" title="全部评测完成">✅</span>` : "";
+  return `<td class="num${done ? "" : " is-zero"}">${ok}${pct(done, inputs, 1)}</td>`;
 };
+const edStats = (t) => `<div class="stats stats-5 ed-stats">${[
+  [counter(t.inputs), "评测输入"],
+  [counter(t.evaluated), "评测输出"],
+  [t.inputs ? counter((100 * t.evaluated) / t.inputs, { d: 1, suffix: "%" }) : "—", "完成率"],
+  [counter(t.sessions), "Session"],
+  [`<span class="num">${tokenNum(t.tokens)}</span>`, "Tokens"],
+].map(([b, label]) => `<div><b>${b}</b><small>${label}</small></div>`).join("")}</div>`;
+const edSum = (rows) =>
+  rows.reduce((t, r) => {
+    ["inputs", "evaluated", "sessions", "traces", "tokens"].forEach((k) => (t[k] += r[k] || 0));
+    return t;
+  }, { inputs: 0, evaluated: 0, sessions: 0, traces: 0, tokens: 0 });
 
 function edSessionGroups(rows) {
   const groups = new Map();
@@ -551,38 +604,36 @@ function evalDetailPage(p, state, index) {
   // One obvious way out of each level: model → day → date list → dashboard.
   const backLabel = model ? `← ${esc(day)}` : day ? "← 全部日期" : "← 返回数据看板";
   const num = (v, d = 0) => `<td class="num${v ? "" : " is-zero"}">${fmt(v, d)}</td>`;
-  const rate = (part, whole) => `<td class="num${part ? "" : " is-zero"}">${pct(part, whole, 1)}</td>`;
+  const head = (first) =>
+    `<th>${first}</th><th class="bar"></th><th class="num">评测输入</th><th class="num">评测输出</th><th class="num">完成率</th><th class="num">Session</th><th class="num">Trace</th><th class="num">Tokens</th>`;
+  const line = (r, i, first, max) => `<tr style="--i:${Math.min(i, 30)}"><td>${first}</td>${edBar(r, max)}
+      ${num(r.inputs)}${num(r.evaluated)}${edRate(r)}${num(r.sessions)}${num(r.traces)}
+      <td class="num${r.tokens ? "" : " is-zero"}">${tokenNum(r.tokens)}</td></tr>`;
+  const peak = (rows) => Math.max(0, ...rows.map((r) => r.inputs || 0));
+  const total = !days.length ? null : model ? rowTotal : day ? days.find((x) => x.d === day) : edSum(days);
 
   let body = "";
   let pager = "";
   if (!days.length) {
     body = `<div class="empty">暂无评测日期</div>`;
   } else if (!day) {
-    const head = `<th>日期</th><th title="圆环 = 评测进度（已评测 / 评测输入）；全部评测完才显示 ✅">状态</th><th class="num">评测输入</th><th class="num">评测输出</th><th class="num">完成率</th><th class="num">Session</th><th class="num">Trace</th><th class="num">Tokens</th>`;
-    const rows = days.slice((dpage - 1) * ED_PAGE, dpage * ED_PAGE).map((r) => `<tr>
-      <td><button type="button" class="link" data-eday="${esc(r.d)}">${esc(r.d)}</button></td>
-      <td class="st">${edStatus(r)}</td>
-      ${num(r.inputs)}${num(r.evaluated)}${rate(r.evaluated, r.inputs)}${num(r.sessions)}${num(r.traces)}
-      <td class="num${r.tokens ? "" : " is-zero"}">${tokenNum(r.tokens)}</td>
-    </tr>`);
-    body = edTable(head, rows, "is-day");
+    const max = peak(days);
+    const rows = days.slice((dpage - 1) * ED_PAGE, dpage * ED_PAGE).map((r, i) =>
+      line(r, i, `<button type="button" class="link" data-eday="${esc(r.d)}">${esc(r.d)}</button>`, max));
+    body = edTable(head("日期"), rows, "is-day");
     pager = edPager(dpage, dPages, days.length, "天", "edp");
   } else if (!model) {
-    const head = `<th>模型</th><th title="圆环 = 评测进度（已评测 / 评测输入）；全部评测完才显示 ✅">状态</th><th class="num">评测输入</th><th class="num">评测输出</th><th class="num">完成率</th><th class="num">Session</th><th class="num">Trace</th><th class="num">Tokens</th>`;
-    const rows = models.map((r) => `<tr>
-      <td><button type="button" class="link" data-emodel="${esc(r.key)}">${esc(r.label)}</button></td>
-      <td class="st">${edStatus(r)}</td>
-      ${num(r.inputs)}${num(r.evaluated)}${rate(r.evaluated, r.inputs)}${num(r.sessions)}${num(r.traces)}
-      <td class="num${r.tokens ? "" : " is-zero"}">${tokenNum(r.tokens)}</td>
-    </tr>`);
-    body = edTable(head, rows, "is-model");
+    const max = peak(models);
+    const rows = models.map((r, i) =>
+      line(r, i, `<button type="button" class="link" data-emodel="${esc(r.key)}" title="${esc(r.label)}">${esc(r.label)}</button>`, max));
+    body = edTable(head("模型"), rows, "is-model");
   } else if (!index) {
     body = `<div class="empty">样本索引读取失败，无法列出会话。</div>`;
   } else if (!groups.length) {
     body = `<div class="empty">该分组当天没有已完成的评测输出。</div>`;
   } else {
     const head = `<th>评测输入</th><th>评测输出</th><th class="num">轮</th><th></th>`;
-    const rows = groups.slice((spage - 1) * ES_PAGE, spage * ES_PAGE).map((g) => `<tr>
+    const rows = groups.slice((spage - 1) * ES_PAGE, spage * ES_PAGE).map((g, i) => `<tr style="--i:${Math.min(i, 30)}">
       <td>${esc(g.q || "（无提问）")}</td>
       <td class="st"><span class="ok" aria-label="已评测">✅</span><span class="sev" style="--c:${sevColor(g.w)}"><i></i>${g.w === "none" ? "无问题" : `${g.w} · ${g.n} 个问题`}</span></td>
       <td class="num">${fmt(g.tr)}</td>
@@ -597,7 +648,7 @@ function evalDetailPage(p, state, index) {
       <button type="button" class="link ed-back" id="edBack">${backLabel}</button>
       <div class="mx-crumbs" id="edCrumbs">${day ? `<span class="mx-crumb-group">${rootCrumb}${dayCrumb}${modelCrumb}</span>` : ""}</div>
       ${day ? `<button type="button" class="link ed-home" id="edHome">返回数据看板</button>` : ""}</header>
-    ${body}${pager}
+    ${total ? edStats(total) : ""}${body}${pager}
   </article></div>`;
 }
 
@@ -723,8 +774,8 @@ function attrCard(p) {
   const sevParts = WORST.map((w, i) => ({ n: p.severity[w] || 0, c: sevColor(i) }));
   return card(4, "归因体系", `<div class="hero"><b class="big">${counter(p.kpi.problems)}</b><small>个问题</small></div>
     ${sankeySVG(left, right, (l, r) => l.roles[r.key] || 0, { id: "ska", x0: 128, x1: 322 })}${GX}${miniView(miniStrip(sevParts), [
-      [fmt(p.kpi.problems), "问题"], top ? [pct(top.n, p.kpi.problems), `${top.name}占比`] : null,
-    ])}`, "", "attr");
+      [counter(p.kpi.problems), "问题"], top ? [pct(top.n, p.kpi.problems), `${top.name}占比`] : null,
+    ], "", [...right].sort((a, b) => b.n - a.n).slice(0, 6).map((r, i) => ({ name: r.name, value: fmt(r.n), share: r.n / (sum(right.map((x) => x.n)) || 1), c: leadTone(i) })))}`, "", "attr");
 }
 
 /* ---------------------------------------------------------------- 聚类体系: phase → stage → mechanism → pattern */
@@ -733,12 +784,14 @@ function clusterCard(p, tax) {
   const note = p.kpi.unclustered
     ? `<span class="sb-key is-note" title="归因没有匹配到聚类模式的问题：计入问题总数，不进矩阵"><i></i>未聚类 ${fmt(p.kpi.unclustered)}</span>`
     : "";
+  const phases = (cluTree(p, tax).children || []).filter((c) => c.n > 0).sort((a, b) => b.n - a.n);
+  const phaseTotal = sum(phases.map((c) => c.n)) || 1;
   return card(4, "聚类体系", `<div class="duo sm" id="clu"></div>
     <div class="sb-keys"><span class="sb-key" title="外圈细环是该分支里 P0·P1 问题的占比，列表红字是 P0+P1 数"><i></i>P0·P1</span>${note}</div>${GX}${miniView(miniRing([
       { n: p.kpi.clustered || 0, c: "var(--accent)" }, { n: p.kpi.unclustered || 0, c: "var(--t4)" },
     ]), [
-      [fmt(p.kpi.problems), "问题"], [pct(p.kpi.clustered, p.kpi.problems), "已聚类"],
-    ])}`, "", "clu");
+      [counter(p.kpi.problems), "问题"], [pct(p.kpi.clustered, p.kpi.problems), "已聚类"],
+    ], "", phases.slice(0, 6).map((c, i) => ({ name: c.name, value: fmt(c.n), share: c.n / phaseTotal, c: leadTone(i) })))}`, "", "clu");
 }
 
 const sevPair = (s) => [(s && s.P0) || 0, (s && s.P1) || 0];
@@ -925,7 +978,8 @@ function predictCard(p) {
       ${causes.length ? predSankey(p, predModels, causes, at.flows || {}) : `<div class="empty">暂无预测归因</div>`}
     </div>`;
   const cover = predCover(pr.dates);
-  const folded = miniView(miniLine(predSeries(pr)), [[fmt(forecast), "预测题"], pooledN ? [`${fmt((100 * right) / pooledN, 1)}%`, "准确率"] : null]);
+  const folded = miniView(miniLine(predSeries(pr)), [[counter(forecast), "预测题"], pooledN ? [`${fmt((100 * right) / pooledN, 1)}%`, "准确率"] : null], "",
+    [...acc].sort((a, b) => b.r - a.r).slice(0, 6).map((x) => ({ name: modelName(p, x.m), value: `${fmt(x.r, 1)}%`, share: x.r / 100, c: "var(--accent)" })));
   return card(4, `预测体系${cover ? ` <span class="status">${esc(cover)}</span>` : ""}`, `<div class="pred-panes">${panes}</div>${GX}${folded}`, PRED_TABS, "pred");
 }
 
@@ -1143,6 +1197,26 @@ const sevIdx = (w) => {
   const i = WORST.indexOf(w);
   return i < 0 ? 5 : i;
 };
+/* The cases behind an opened card, worst first, beside its star map: a severity (or result) dot, the
+   question and its problem count (or verdict). The head is the slice's size and its severity split. */
+const LEDGER_MAX = 120;
+const predDot = (it) => (it.r === "correct" ? "var(--accent)" : it.r === "wrong" ? "var(--sev-1)" : it.r === "pending" ? "var(--muted)" : "var(--faint)");
+function ledger(groups, pred) {
+  const all = groups.flatMap((g) => g.items);
+  const items = pred ? all : [...all].sort((a, b) => a.w - b.w || b.n - a.n || (b.d || "").localeCompare(a.d || ""));
+  const parts = pred
+    ? ["correct", "wrong", "pending", "undetermined"].map((r) => ({ n: all.filter((it) => (r === "undetermined" ? !["correct", "wrong", "pending"].includes(it.r) : it.r === r)).length, c: predDot({ r }) }))
+    : WORST.map((_, i) => ({ n: all.filter((it) => it.w === i).length, c: sevColor(i) }));
+  const rows = items.slice(0, LEDGER_MAX).map((it, k) =>
+    `<button type="button" class="gl-r${pred ? " is-inert" : ""}" data-i="${k}" style="--i:${Math.min(k, 14)};--c:${pred ? predDot(it) : sevColor(it.w)}"><i></i><span>${esc(it.q || "（无提问）")}</span><b class="num">${pred ? esc(RESULT[it.r] || "") : it.n ? fmt(it.n) : "—"}</b></button>`);
+  return {
+    items,
+    html: `<div class="gx-side"><div class="gl-sum"><b class="num">${fmt(all.length)}</b><small>${pred ? "道预测题" : "个 case"}</small><span class="gl-strip" aria-hidden="true">${parts
+      .filter((x) => x.n)
+      .map((x) => `<i style="flex:${x.n} 1 0;background:${x.c}"></i>`)
+      .join("")}</span></div><div class="gx-list">${rows.join("")}</div></div>`,
+  };
+}
 const caseItem = (r) => ({ s: r.s, w: sevIdx(r.w), n: r.n || 0, q: r.q || "", m: r.m, sp: r.sp, d: r.d || "" });
 function groupCases(rows, keyOf, nameOf = (k) => k) {
   const by = new Map();
@@ -1203,11 +1277,13 @@ function pushPull(bento, p, tax, u) {
         if (!c) return;
         const deep = !!spec && spec.card === k;
         const compact = !!spec && !deep;
+        const folding = compact && !c.classList.contains("is-compact");
         c.classList.toggle("is-deep", deep);
         c.classList.toggle("is-compact", compact);
         // The head button is the one visible way back for every card; folded mates stay clickable.
         const btn = $(".card-state", c);
         if (btn) btn.hidden = !deep;
+        if (folding) runCounters($(".compact", c));
         if (compact) {
           c.tabIndex = 0;
           c.setAttribute("role", "button");
@@ -1291,7 +1367,7 @@ function pushPull(bento, p, tax, u) {
 
   function volSpec(focus, opened) {
     const at = innermost(focus, opened);
-    if (!at) return null;
+    if (!at || at.ev === 0) return null;
     const chain = [];
     for (let n = at; n; n = n.parent) chain.unshift(n);
     const models = !!(p.input && p.input.models && Object.keys(p.input.models).length);
@@ -1381,11 +1457,46 @@ function pushPull(bento, p, tax, u) {
       return;
     }
     const pred = spec.card === "pred";
-    const map = galaxy(gx, groups, {
+    const led = ledger(groups, pred);
+    gx.innerHTML = `<div class="gx-in"><div class="gx-map"></div>${led.html}</div>`;
+    const list = $(".gx-list", gx);
+    const rowOf = new Map(led.items.slice(0, LEDGER_MAX).map((it, i) => [it, i]));
+    let lit = null;
+    // A star under the pointer lights its row, scrolling the ledger only when the row is out of view.
+    const light = (it) => {
+      if (lit) lit.classList.remove("is-hl");
+      lit = it && rowOf.has(it) ? list.children[rowOf.get(it)] : null;
+      if (!lit) return;
+      lit.classList.add("is-hl");
+      const top = lit.offsetTop;
+      if (top < list.scrollTop || top + lit.offsetHeight > list.scrollTop + list.clientHeight) {
+        list.scrollTo({ top: top - (list.clientHeight - lit.offsetHeight) / 2, behavior: REDUCED ? "auto" : "smooth" });
+      }
+    };
+    const map = galaxy($(".gx-map", gx), groups, {
       focus: spec.focus,
       tip: pred ? predTip : caseTip,
       colorOf: pred ? predColor : null,
       onPick: pred ? null : (it) => openSamples({ case: it.s }),
+      onHover: light,
+    });
+    const rowItem = (e) => {
+      const r = e.target.closest(".gl-r");
+      return r ? led.items[Number(r.dataset.i)] : null;
+    };
+    list.addEventListener("pointermove", (e) => {
+      const it = rowItem(e);
+      if (!it) return;
+      map.mark(it);
+      showTip((pred ? predTip : caseTip)(it), e.clientX, e.clientY);
+    });
+    list.addEventListener("pointerleave", () => {
+      map.mark(null);
+      hideTip();
+    });
+    list.addEventListener("click", (e) => {
+      const it = rowItem(e);
+      if (it && !pred) openSamples({ case: it.s });
     });
     maps[k] = { id: spec.id, map };
   }
@@ -1536,6 +1647,7 @@ function wire(bento, p, tax, u) {
       const s = $("#evStats", bento);
       s.innerHTML = evalStats(p);
       runCounters(s);
+      $('[data-card="eval"] > .compact', bento).outerHTML = evalCompact(p);
     };
     // A new window or model invalidates the picked day's star map.
     const range = segmented(evRange, (v) => { EV.range = v; push.closeEval(); repaint(); });
@@ -1710,6 +1822,7 @@ function wire(bento, p, tax, u) {
 
   push.rings.vol = sunburst($("#vol", bento), volTree(p), {
     unit: "评测输入", state: u.vol, animate: !ctx.refresh, onChange: (f, o) => push.fromRing("vol", f, o),
+    inert: (n) => (n.ev === 0 ? NO_CASE : null),
   });
   if (tax) {
     push.rings.clu = sunburst($("#clu", bento), cluTree(p, tax), {

@@ -50,7 +50,7 @@ REPO = DASHBOARD.parent
 STATIC = DASHBOARD / "static"
 PRODUCTION_DATASETS = Path("/mnt/fin_bench/code_and_clean_data/datasets")
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-03.6"
+PAYLOAD_VERSION = "2026-11-03.7"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 2
 
@@ -73,6 +73,11 @@ PRODUCTS = {
     "wencai": {"label": "问财", "models": ["a_fast", "a_expert", "b_fast", "b_expert"]},
     "aime": {"label": "AIME", "models": ["aime_fast", "aime_expert"]},
 }
+# A deployment can serve a subset (EVAL_PRODUCTS=wencai). Every discovery path goes through
+# product_of(), so the other product's folders simply do not exist for it. Default: all products.
+ENABLED = {p.strip() for p in os.environ.get("EVAL_PRODUCTS", "").split(",") if p.strip()} or set(PRODUCTS)
+if ENABLED - set(PRODUCTS):
+    raise SystemExit(f"EVAL_PRODUCTS: unknown {sorted(ENABLED - set(PRODUCTS))}, known {sorted(PRODUCTS)}")
 MODEL_LABEL = {
     "a_fast": "A Fast", "a_expert": "A Expert", "b_fast": "B Fast", "b_expert": "B Expert",
     "aime_fast": "Fast", "aime_expert": "Expert",
@@ -119,7 +124,7 @@ WINDOW_PAD = 280
 
 def product_of(top: str) -> str | None:
     name = re.sub(r"^\d+_", "", top)
-    return name if name in PRODUCTS else None
+    return name if name in ENABLED else None
 
 
 TZ = timezone(timedelta(hours=8), "CST")
@@ -329,12 +334,16 @@ def input_files(datasets: Path, top: Path, product: str):
 
     AIME lost-user inputs come from the archive; the smaller
     ``eval_input/1_lost_user_eval`` copy is excluded so days are not counted
-    twice while that evaluation is in flight.  Wencai marks lost users inside
-    the task-eval input with ``meta.lost_user`` instead of a separate directory.
+    twice while that evaluation is in flight.  A root without the archive (the
+    弗吉尼亚 copy) keeps the full lost-user input in that eval folder, so it counts.
+    Wencai marks lost users inside the task-eval input with ``meta.lost_user``
+    instead of a separate directory.
     """
     files = [p for p in (top / "eval_input").rglob("*.jsonl") if "1_lost_user_eval" not in p.parts]
     if product == "aime":
-        files += list((top / ".archive" / "1_lost_user_input").rglob("*.jsonl"))
+        archive = top / ".archive" / "1_lost_user_input"
+        lost = archive if archive.is_dir() else top / "eval_input" / "1_lost_user_eval"
+        files += list(lost.rglob("*.jsonl"))
     return sorted(files)
 
 
@@ -461,6 +470,30 @@ def input_payload(metas):
         "lost": sum(t.get("lost", 0) for t in top.values()),
         "tasks": _task_nodes(top), "models": models,
     }
+
+
+def mark_evaluated(payload, rows):
+    """Evaluated cases behind every 数据量 node, filed the way the dashboard's star map files them
+    (model → task → scene), so the ring can tell which branches have nothing to open."""
+    seen = Counter()
+    for r in rows:
+        task = r.get("task") or "未标注"
+        scene = r.get("sub") or r.get("sc") or r.get("skill") or "未标注"
+        for model in (r["m"], None):
+            seen[(model,)] += 1
+            seen[(model, task)] += 1
+            seen[(model, task, scene)] += 1
+
+    def tasks(nodes, model):
+        for t in nodes:
+            t["ev"] = seen[(model, t["task"])]
+            for s in t.get("sub", []):
+                s["ev"] = seen[(model, t["task"], s["sub"])]
+
+    for model, m in payload["models"].items():
+        m["ev"] = seen[(model,)]
+        tasks(m["tasks"], model)
+    tasks(payload["tasks"], None)
 
 
 def daily_inputs(metas):
@@ -731,6 +764,8 @@ def load_clusters(root: Path):
     index = {}
     for tree_path in sorted(root.glob("*/eval_output/**/cluster/*/cluster_tree.json")):
         product = product_of(tree_path.relative_to(root).parts[0])
+        if not product:
+            continue
         model = tree_path.parent.name
         try:
             tree = json.loads(tree_path.read_text(encoding="utf-8"))
@@ -1766,6 +1801,7 @@ def cluster_signature(root: Path, cache_dir: Path | None = None):
     """
     files = sorted(root.glob("*/eval_output/**/cluster/*/cluster_tree.json"))
     files += sorted(root.glob("*/eval_output/**/cluster/*/item_index.jsonl"))
+    files = [p for p in files if product_of(p.relative_to(root).parts[0])]
     stat_parts = []
     for path in files:
         try:
@@ -2437,6 +2473,8 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
                     s[2]["sc"] = sc
                 else:
                     s[2].pop("sc", None)
+            if "input" in products.get(product, {}):
+                mark_evaluated(products[product]["input"], [s[2] for s in rows_sorted])
             indexes[product] = {
                 "schema": 2, "generated_at": generated, "product": product,
                 "available": available,
