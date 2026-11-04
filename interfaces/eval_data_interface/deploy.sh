@@ -8,6 +8,12 @@ HOST_ALIAS="${EVAL_DEPLOY_HOST:-eval_data}"
 REMOTE="${EVAL_DEPLOY_REMOTE:-/opt/eval_analysis}"
 PORT="${PORT:-5003}"
 
+# 这份部署的设置（数据根、刷新间隔等）写进远端 deploy.env，start.sh 与手动重启都读它。
+RUN_ENV=""
+for var in PORT REFRESH_SECONDS EVAL_DATASETS ANALYSIS_STATE; do
+  if [ -n "${!var:-}" ]; then RUN_ENV+="export $var=$(printf '%q' "${!var}")"$'\n'; fi
+done
+
 # 与 dashboard/deploy.sh 一致：端口与密钥可用环境变量覆盖，否则交给 ~/.ssh/config
 SSH_OPTS=(-o ConnectTimeout=20)
 if [ -n "${EVAL_DEPLOY_PORT:-}" ]; then SSH_OPTS+=(-p "$EVAL_DEPLOY_PORT"); fi
@@ -21,13 +27,18 @@ rsync -az --delete -e "ssh ${SSH_OPTS[*]}" \
   --exclude 'state' \
   --exclude 'logs' \
   --exclude 'server.pid' \
+  --exclude 'deploy.env' \
   --exclude '__pycache__' \
   --exclude '*.pyc' \
   --exclude 'tests/__pycache__' \
   ./ "${HOST_ALIAS}:${REMOTE}/"
 
+if [ -n "$RUN_ENV" ]; then
+  printf '%s' "$RUN_ENV" | ssh "$HOST_ALIAS" "cat > '${REMOTE}/deploy.env'"
+fi
+
 echo "==> 重启服务"
-ssh "$HOST_ALIAS" "cd '${REMOTE}' && chmod +x start.sh stop.sh && ./stop.sh && PORT=${PORT} ./start.sh"
+ssh "$HOST_ALIAS" "cd '${REMOTE}' && { [ ! -f deploy.env ] || . ./deploy.env; } && chmod +x start.sh stop.sh && ./stop.sh && PORT=${PORT} ./start.sh"
 
 echo "==> 冒烟：健康检查 + 三个接口"
 ssh "$HOST_ALIAS" "set -e

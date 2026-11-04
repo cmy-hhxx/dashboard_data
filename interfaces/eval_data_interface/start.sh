@@ -7,6 +7,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+# 部署时写入的设置（数据根、端口、刷新间隔等）
+if [ -f deploy.env ]; then . ./deploy.env; fi
+
 PORT="${PORT:-5003}"
 HOST="${HOST:-0.0.0.0}"
 PYTHON="${PYTHON:-python3}"

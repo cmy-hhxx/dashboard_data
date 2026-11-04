@@ -37,6 +37,8 @@
   --muted: #7a828e;
   --faint: #a7aeb8;
   --accent: #3552d8;
+  --loc-ulq: #1d7d72;
+  --loc-vir: #6a43b8;
   --accent-soft: color-mix(in oklab, var(--accent) 12%, var(--card));
   --shadow: 0 1px 1px rgba(23, 28, 36, 0.03), 0 12px 32px -18px rgba(23, 28, 36, 0.14);
   --shadow-pop: 0 2px 4px rgba(23, 28, 36, 0.05), 0 18px 40px -16px rgba(23, 28, 36, 0.22);
@@ -67,6 +69,8 @@
   --muted: #858d98;
   --faint: #5b636e;
   --accent: #8ea2ff;
+  --loc-ulq: #62c6b6;
+  --loc-vir: #b49cff;
   --shadow: 0 1px 1px rgba(0, 0, 0, 0.18), 0 14px 34px -20px rgba(0, 0, 0, 0.6);
   --shadow-pop: 0 2px 6px rgba(0, 0, 0, 0.3), 0 20px 44px -18px rgba(0, 0, 0, 0.7);
   /* validated against #171a1f; the most severe step is the most luminous */
@@ -164,6 +168,12 @@ h1, h2, h3, h4, p { margin: 0; }
 }
 .seg button[aria-pressed="true"], .seg button[aria-selected="true"] { color: var(--ink); }
 .seg button:hover { color: var(--ink-2); }
+/* Each product wears its server's name above it, small and in that server's own hue. */
+#productSwitch button { display: grid; place-content: center; justify-items: center; gap: 1px; padding: 0 12px; line-height: 1.1; }
+.seg-loc { font-size: 9px; letter-spacing: 0.06em; color: var(--loc); opacity: 0.7; transition: opacity var(--snap); }
+#productSwitch button[aria-pressed="true"] .seg-loc { opacity: 1; }
+[data-value="wencai"] > .seg-loc { --loc: var(--loc-ulq); }
+[data-value="aime"] > .seg-loc { --loc: var(--loc-vir); }
 
 .icon-btn {
   width: 36px; height: 36px; display: grid; place-items: center; border-radius: var(--r-ctl);
@@ -178,7 +188,10 @@ h1, h2, h3, h4, p { margin: 0; }
 main { padding: 8px var(--gutter) 48px; max-width: 1480px; margin: 0 auto; }
 html[data-view="samples"] main { max-width: none; padding-bottom: 16px; }
 .view { display: none; }
-.view.is-active { display: block; animation: rise 360ms cubic-bezier(0.16, 1, 0.3, 1); }
+/* A view settles into place instead of fading up from the page background, so switching pages
+   (e.g. from the cluster matrix into 具体数据) never flashes pale. */
+.view.is-active { display: block; animation: view-in 320ms cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes view-in { from { transform: translateY(6px); } }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
 
 /* ------------------------------------------------------------------ bento */
@@ -193,7 +206,7 @@ html[data-view="samples"] main { max-width: none; padding-bottom: 16px; }
 .card-head .meta { color: var(--muted); font-size: 12px; }
 .card-head .end { margin-left: auto; }
 /* One state control on every push-pull card head: it is the way back from an opened row. */
-.card-head .card-state { margin-left: auto; width: 28px; height: 28px; align-self: center; color: var(--muted); }
+.card-head .card-state { margin-left: auto; width: 28px; height: 28px; align-self: center; color: var(--ink-2); }
 .card-head .end + .card-state { margin-left: 4px; }
 .card-head .card-state:hover { color: var(--ink); }
 .card-state[hidden] { display: none; }
@@ -236,6 +249,7 @@ html[data-view="samples"] main { max-width: none; padding-bottom: 16px; }
 .tip.is-on { opacity: 1; transform: none; }
 .tip b { font-weight: var(--w-medium); }
 .tip .t-row { display: flex; gap: 8px; align-items: center; color: var(--ink-2); }
+.tip .t-note { margin-top: 4px; color: var(--muted); font-size: 11.5px; }
 
 /* small histogram */
 .link { color: var(--accent); font-size: 12px; font-weight: var(--w-medium); }
@@ -297,7 +311,10 @@ button.cell[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px 
 
 .echo { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--gap); height: clamp(540px, calc(100vh - 320px), 640px); align-items: stretch; }
 .echo-main { display: grid; grid-template-rows: minmax(0, 1fr); min-width: 0; min-height: 0; }
-#anatomyBody { min-height: 0; overflow: auto; padding-right: 2px; }
+/* The evidence loop scrolls inside a fixed-height card; keep the wheel, drop the rail (as the
+   sunburst ledgers do) so the anatomy reads as one clean sheet. */
+#anatomyBody { min-height: 0; overflow: auto; padding-right: 2px; scrollbar-width: none; -ms-overflow-style: none; }
+#anatomyBody::-webkit-scrollbar { display: none; }
 
 .kind { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); white-space: nowrap; }
 .kind::before { content: ""; width: 6px; height: 6px; border-radius: 2px; background: var(--kc, var(--faint)); }
@@ -327,7 +344,7 @@ button.cell[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px 
 .ov-grid > .cmap { margin: 0; min-width: 0; }
 .ov-grid > .sp-box { margin: 0; padding-bottom: 1px; }
 .ov-box { display: grid; gap: 6px; min-width: 0; }
-.ov-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 6px; align-items: stretch; }
+.ov-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 6px; align-items: stretch; }
 .ov-item { display: block; padding: 6px 8px; border-radius: 8px; background: var(--well); height: 100%; }
 .ov-n { flex: none; width: 18px; height: 17px; display: inline-grid; place-items: center; border-radius: 5px; background: var(--well-2); color: var(--muted); font: var(--w-medium) 9px/1 var(--mono); margin-top: 1px; }
 .ov-item p { margin: 0; display: flex; align-items: flex-start; gap: 7px; font-size: 11.5px; line-height: 1.55; color: var(--ink-2); overflow-wrap: anywhere; }
@@ -367,18 +384,19 @@ button.cell[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px 
 .pane-sticky > .pane-scroll { flex: 1 1 auto; min-height: 0; }
 .pager {
   flex: none; display: flex; align-items: center; justify-content: space-between; gap: 4px;
-  padding: 8px 12px 12px; border-top: 1px solid var(--well-2);
+  min-width: 0; padding: 8px 12px 12px; border-top: 1px solid var(--well-2);
 }
 .pager[hidden] { display: none; }
 .pager button {
-  height: 26px; padding: 0 8px; border-radius: var(--r-chip); background: var(--well);
+  flex: none; height: 26px; padding: 0 8px; border-radius: var(--r-chip); background: var(--well);
   color: var(--ink-2); font-size: 11.5px; white-space: nowrap;
   transition: background var(--snap), color var(--snap), transform var(--spring);
 }
 .pager button:hover:not(:disabled) { background: var(--well-2); color: var(--ink); }
 .pager button:active:not(:disabled) { transform: scale(0.95); }
 .pager button:disabled { opacity: 0.35; cursor: default; }
-.pager-info { color: var(--muted); font-size: 11px; white-space: nowrap; }
+/* The info may shrink before the buttons do, so a long page count never clips the last arrow. */
+.pager-info { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 11px; white-space: nowrap; }
 .pager-info b { color: var(--ink-2); font-weight: var(--w-medium); }
 .srow {
   display: grid; grid-template-columns: 4px 1fr; gap: 10px; width: 100%; text-align: left; padding: 10px; border-radius: var(--r-well);
@@ -390,7 +408,9 @@ button.cell[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px 
 .srow .q { font-size: 13px; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .srow .m { font-size: 11.5px; color: var(--muted); margin-top: 3px; display: flex; gap: 8px; }
 
-.sample-head { padding: var(--py-lg) calc(var(--px) + 8px) var(--py); display: grid; gap: 12px; }
+/* One explicit column: a nowrap title or a wide date range can no longer widen the track past
+   the pane and push the head / Overview off the right edge on phones. */
+.sample-head { padding: var(--py-lg) calc(var(--px) + 8px) var(--py); display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .sample-head h2 { font-size: 18px; font-weight: var(--w-title); line-height: 1.45; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .headline { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .headline h2 { flex: 1 1 auto; min-width: 0; }
@@ -630,13 +650,15 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .sb-c i { font-style: normal; font-size: 11px; color: var(--accent); max-width: 92px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sb-c b { font-size: 28px; line-height: 1; font-weight: var(--w-light); letter-spacing: -0.02em; }
 .sb-c small { font-size: 11.5px; color: var(--muted); max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* The focus name under the count gets two lines inside the hole before it is cut. */
-.sb-c small:not(.sb-lostc) { max-width: 104px; font-size: 10.5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: normal; line-height: 1.25; overflow-wrap: anywhere; }
+/* Names stay on one line, in the hole and in the ledger alike; the full name lives in the title. */
+.sb-c small:not(.sb-lostc) { max-width: 104px; font-size: 10.5px; }
 .sb-list { justify-self: center; width: 100%; align-content: center; scrollbar-width: none; -ms-overflow-style: none; }
 .sb-list::-webkit-scrollbar { display: none; }
 .sb-r { width: 100%; margin: 0; min-height: 28px; padding-top: 3px; padding-bottom: 3px; grid-template-columns: 8px minmax(0, 1fr) 30px auto 44px; }
-/* Long task / cluster names wrap to a second line instead of leaving a bare "…" in the ledger. */
-.sb-r span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: normal; overflow-wrap: anywhere; line-height: 1.35; }
+.sb-r span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A branch with no evaluated case behind it is data, not a door: no pointer, no press. */
+.sb-a.is-inert, .sb-r.is-inert { cursor: default; }
+.sb-r.is-inert:active { transform: none; }
 .sb-r.head span { color: var(--ink); font-weight: var(--w-medium); }
 .sb-r.sub { padding-left: 20px; }
 .sb-r.hl { background: var(--hover); }
@@ -663,6 +685,11 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .ev-tools .seg-knob { top: 2px; bottom: 2px; }
 .eval-content { container-type: inline-size; }
 .eval-content .stats { margin-top: var(--py); grid-template-columns: repeat(4, minmax(0, 1fr)); }
+/* A narrow eval card cannot fit one date under each of 15 bars: keep every third label so the
+   row stays readable instead of the labels running into each other (or past the card edge). */
+@container (max-width: 480px) {
+  #evChart .evday:not(:nth-child(3n + 1)):not(:last-child) .evdate { visibility: hidden; }
+}
 /* Paired desktop cards share chart columns and a bottom-aligned stats row. */
 @media (min-width: 861px) {
   .card:has(> #vol), .card:has(> .eval-content) { display: flex; flex-direction: column; height: 456px; overflow: hidden; }
@@ -689,24 +716,29 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 /* ------------------------------------------------------------------ 聚类矩阵 (neutral heat) */
 .matrix { display: grid; grid-template-columns: minmax(112px, 150px) repeat(var(--cols), minmax(0, 1fr)) 120px; gap: 4px; align-items: center; }
 #mxShell { position: relative; }
-#mxShell.is-swapping { overflow: hidden; transition: height 320ms var(--ease-out); }
+/* A drill replaces the whole table - other rows, other columns, other height - so the two tables are
+   never painted together: the old one leaves, then the new one arrives while the block eases to its
+   height. Cross-fading them stacked the old and new column sets (different widths) on top of each
+   other, which read as a single broken table. */
+#mxShell.is-swapping { overflow: hidden; transition: height 280ms cubic-bezier(0.2, 0.7, 0.2, 1); }
 #mxShell.is-swapping .matrix { position: absolute; left: 0; right: 0; top: 0; }
-.matrix.is-out { opacity: 0; transition: opacity 110ms var(--snap); }
+.matrix.is-out { opacity: 0; pointer-events: none; transition: opacity 110ms cubic-bezier(0.4, 0, 1, 1); }
 .matrix.is-in { opacity: 0; transform: translateY(4px); }
-.matrix.is-on { opacity: 1; transform: none; transition: opacity 220ms var(--snap), transform 300ms var(--ease-out); }
-.matrix.is-hover .cell:not(.is-hl) { opacity: 0.45; }
-.matrix.is-hover .rh:not(.is-hl), .matrix.is-hover .mh:not(.is-hl) { color: var(--faint); }
-.matrix.is-hover .rowtot:not(.is-hl) { opacity: 0.45; }
+.matrix.is-on { opacity: 1; transform: none; transition: opacity 170ms cubic-bezier(0.2, 0.7, 0.2, 1) 20ms, transform 220ms cubic-bezier(0.16, 1, 0.3, 1) 20ms; }
+/* Hover reads the row and column under the pointer; everything else only steps back a little. */
+.matrix.is-hover .cell:not(.is-hl) { opacity: 0.66; }
+.matrix.is-hover .rh:not(.is-hl), .matrix.is-hover .mh:not(.is-hl), .matrix.is-hover .rowtot:not(.is-hl) { opacity: 0.5; }
 .matrix .cell.is-cur { outline: 1.5px solid var(--faint); outline-offset: 1px; }
 .matrix .mh {
   display: flex; align-items: center; justify-content: center; gap: 4px; min-width: 0;
   padding-bottom: 6px; font-size: 12px; color: var(--muted); white-space: nowrap;
+  transition: opacity 180ms cubic-bezier(0.2, 0.7, 0.2, 1), color var(--snap);
 }
 .matrix .mh .mx-lab { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.35; }
 .matrix .rh {
   display: flex; align-items: center; gap: 8px; min-width: 0; height: 30px; padding: 0 8px; margin-left: -8px;
   border-radius: 6px; font-size: 13px; color: var(--ink-2); text-align: left; white-space: nowrap;
-  transition: background var(--snap), color var(--snap);
+  transition: background var(--snap), color var(--snap), opacity 180ms cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 .matrix .mx-lab { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .matrix .mx-caret {
@@ -720,13 +752,13 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .matrix .cell {
   display: grid; place-items: center; height: 30px; border-radius: 6px; font-size: 12px; color: var(--ink-2);
   background: color-mix(in oklab, var(--ink) calc(var(--v) * 100%), transparent);
-  transition: opacity var(--snap), transform var(--spring);
+  transition: opacity 180ms cubic-bezier(0.2, 0.7, 0.2, 1), transform 160ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 .matrix .cell:not(.is-empty) { cursor: pointer; }
-.matrix .cell:not(.is-empty):active { transform: scale(0.94); transition: transform var(--snap); }
+.matrix .cell:not(.is-empty):active { transform: scale(0.97); }
 .matrix .cell.is-empty { background: none; }
 .matrix .cell.hot { color: var(--card); }
-.matrix .rowtot { transition: opacity var(--snap); display: flex; align-items: center; gap: 8px; padding-left: 12px; font-size: 12px; color: var(--muted); }
+.matrix .rowtot { transition: opacity 180ms cubic-bezier(0.2, 0.7, 0.2, 1); display: flex; align-items: center; gap: 8px; padding-left: 12px; font-size: 12px; color: var(--muted); }
 .matrix .rowtot i { height: 4px; border-radius: 2px; background: var(--t2); }
 .matrix .rowtot-head { padding: 0 0 6px 12px; font-size: 12px; color: var(--muted); white-space: nowrap; }
 
@@ -909,37 +941,55 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
   .card-head .ed-home { margin-left: auto; }
   .card-head #edCrumbs { order: 3; flex-basis: 100%; margin-left: 0; }
 }
-.ed-table { margin-top: 2px; }
-/* Dense comparison table: one line per day / model / session, 6–7px of air per cell. */
-.ed-table table { min-width: 680px; font-size: 12px; }
-.ed-table th { padding: 0 10px 6px; vertical-align: bottom; }
-.ed-table td { padding: 5px 10px; vertical-align: middle; line-height: 1.5; }
-.ed-table th:first-child, .ed-table td:first-child { padding-left: 0; }
-.ed-table th:last-child, .ed-table td:last-child { padding-right: 0; }
-.ed-table thead th { border-bottom: 1px solid var(--well-2); }
-.ed-table tbody tr { transition: background var(--snap); }
-.ed-table tbody tr:hover { background: var(--hover); }
+.ed-stats { margin: 0 0 var(--py-lg); }
+/* Same surface as the cards: a tonal header band, no rules between rows, the hovered row lifts as a pill.
+   Numbers sit in narrow right-aligned columns; the bar column takes whatever width is left. */
+.ed-table { margin: 0; overflow-y: hidden; }
+.ed-table table { min-width: 880px; font-size: 12px; border-collapse: separate; border-spacing: 0; }
+.ed-table th, .ed-table td { padding: 0 12px; height: 34px; border: 0; vertical-align: middle; line-height: 1.5; }
+.ed-table thead th { height: 30px; background: var(--well); white-space: nowrap; }
+.ed-table thead th:first-child, .ed-table tbody tr:hover td:first-child { border-radius: 8px 0 0 8px; }
+.ed-table thead th:last-child, .ed-table tbody tr:hover td:last-child { border-radius: 0 8px 8px 0; }
+.ed-table tbody tr { animation: rise 420ms cubic-bezier(0.16, 1, 0.3, 1) calc(var(--i, 0) * 16ms) both; }
+.ed-table tbody td { transition: background var(--snap); }
+.ed-table tbody tr:hover td { background: var(--hover); }
 .ed-table td.is-zero { color: var(--faint); }
 .ed-table td.st { white-space: nowrap; }
-.ed-table .ok { font-size: 12px; line-height: 1; }
+.ed-table .ok { margin-right: 4px; font-size: 11px; line-height: 1; }
+.ed-table td:first-child .link { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; max-width: 100%; }
+.ed-table td.bar { padding-right: 24px; }
+.ed-bar {
+  display: block; width: var(--l); height: 6px; border-radius: 3px; background: color-mix(in oklab, var(--accent) 18%, transparent); overflow: hidden;
+  transform-origin: left; animation: grow-x 760ms cubic-bezier(0.16, 1, 0.3, 1) calc(120ms + var(--i, 0) * 16ms) both;
+}
+.ed-bar i { display: block; width: var(--f); height: 100%; border-radius: inherit; background: var(--accent); }
 .ed-table.is-day table, .ed-table.is-model table { table-layout: fixed; }
-.ed-table.is-day th:nth-child(1), .ed-table.is-model th:nth-child(1) { width: 122px; }
-.ed-table.is-day th:nth-child(2), .ed-table.is-model th:nth-child(2) { width: 66px; }
+.ed-table.is-day th:nth-child(1) { width: 120px; }
+.ed-table.is-model th:nth-child(1) { width: 220px; }
+.ed-table.is-day th:nth-child(n+3), .ed-table.is-model th:nth-child(n+3) { width: 96px; }
 .ed-table.is-session table { min-width: 0; table-layout: fixed; }
-.ed-table.is-session th:nth-child(2) { width: 172px; }
-.ed-table.is-session th:nth-child(3) { width: 56px; }
-.ed-table.is-session th:nth-child(4) { width: 56px; }
-.ed-table.is-session td.st .sev { margin-left: 8px; }
-.ed-table.is-session .link { white-space: nowrap; }
+.ed-table.is-session td { height: auto; padding-top: 7px; padding-bottom: 7px; }
+.ed-table.is-session th:nth-child(2) { width: 196px; }
+.ed-table.is-session th:nth-child(3), .ed-table.is-session th:nth-child(4) { width: 64px; }
+.ed-table.is-session td.st .sev { margin-left: 4px; }
+/* Phones: inputs, the bar and the rate stay; the rest are in the totals above. */
+@media (max-width: 640px) {
+  .stats.ed-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 14px; }
+  .ed-table.is-day table, .ed-table.is-model table { min-width: 0; }
+  .ed-table th, .ed-table td { padding: 0 8px; }
+  .ed-table td.bar { padding-right: 12px; }
+  :is(.ed-table.is-day, .ed-table.is-model) :is(th, td):is(:nth-child(4), :nth-child(6), :nth-child(7), :nth-child(8)),
+  .ed-table.is-session :is(th, td):nth-child(3) { display: none; }
+  .ed-table.is-day th:nth-child(1) { width: 92px; }
+  .ed-table.is-model th:nth-child(1) { width: 116px; }
+  .ed-table.is-day th:nth-child(n+3), .ed-table.is-model th:nth-child(n+3) { width: 68px; }
+  .ed-table.is-session th:nth-child(2) { width: 124px; }
+  .ed-table.is-session th:nth-child(4) { width: 44px; }
+}
 .card-detail { padding-top: var(--py); }
 .card > .pager { justify-content: center; gap: 8px; padding: 12px 0 0; }
 .card > .pager .pager-info { margin: 0 8px; }
 
-.st-ring { display: inline-grid; place-items: center; width: 15px; height: 15px; vertical-align: -3px; }
-.st-ring svg { width: 15px; height: 15px; transform: rotate(-90deg); }
-.st-ring circle { fill: none; stroke-width: 2; }
-.st-ring .st-track { stroke: color-mix(in oklab, var(--ink) 18%, transparent); }
-.st-ring .st-arc { stroke: var(--accent); stroke-linecap: round; }
 .md-table tr:last-child td { border-bottom: 0; }
 
 .json-view {
@@ -1262,7 +1312,36 @@ mark.cx { background: color-mix(in oklab, var(--accent) 18%, transparent); color
    ≥ 1181px: a row's opened card takes 8 of 12 columns, its mates fold to the key numbers
    (top 8 | 4, bottom 8 | 2 | 2) and the star map sits beside the chart that opened it.
    Narrower, nothing folds: the opened card takes its row (phones: the map goes under it). */
-.gx { position: relative; min-width: 0; min-height: 0; }
+.gx { position: relative; min-width: 0; min-height: 0; container-type: inline-size; }
+/* The map shares its slot with the cases behind it, worst first; a row and its star light each other.
+   A slot too narrow for both keeps the map alone. */
+.gx-in { position: absolute; inset: 0; display: grid; grid-template-columns: minmax(0, 1fr) clamp(188px, 40%, 280px); gap: 16px; }
+.gx-map { position: relative; min-width: 0; min-height: 0; }
+.gx-side { display: flex; flex-direction: column; gap: 10px; min-width: 0; min-height: 0; animation: rise 460ms cubic-bezier(0.16, 1, 0.3, 1) 200ms both; }
+@container (max-width: 419px) {
+  .gx-in { grid-template-columns: minmax(0, 1fr); }
+  .gx-side { display: none; }
+}
+.gl-sum { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.gl-sum b { font-size: 20px; line-height: 1.1; font-weight: var(--w-light); letter-spacing: -0.01em; }
+.gl-sum small { font-size: 11.5px; color: var(--muted); }
+.gl-strip { flex-basis: 100%; display: flex; gap: 2px; height: 4px; margin-top: 4px; border-radius: 2px; overflow: hidden; }
+.gl-strip i { border-radius: 2px; transform-origin: left; animation: grow-x 900ms cubic-bezier(0.16, 1, 0.3, 1) 260ms both; }
+.gx-list {
+  position: relative; flex: 1; min-height: 0; overflow-y: auto; display: grid; align-content: start; gap: 1px;
+  margin: 0 -8px; scrollbar-width: none; mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent);
+}
+.gx-list::-webkit-scrollbar { display: none; }
+.gl-r {
+  display: grid; grid-template-columns: 7px minmax(0, 1fr) auto; align-items: center; gap: 9px; min-height: 28px; padding: 0 8px;
+  border-radius: 8px; text-align: left; font-size: 12px; color: var(--ink-2); cursor: pointer; transition: background var(--snap), color var(--snap);
+  animation: rise 460ms cubic-bezier(0.16, 1, 0.3, 1) calc(240ms + var(--i) * 28ms) both;
+}
+.gl-r i { width: 7px; height: 7px; border-radius: 50%; background: var(--c); }
+.gl-r span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gl-r b { font-size: 11.5px; font-weight: var(--w-medium); color: var(--muted); }
+.gl-r:hover, .gl-r.is-hl { background: var(--hover); color: var(--ink); }
+.gl-r.is-inert { cursor: default; }
 .gx[hidden], .compact { display: none; }
 .gx canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .gx .empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 0; }
@@ -1296,8 +1375,10 @@ mark.cx { background: color-mix(in oklab, var(--accent) 18%, transparent); color
   .bento[data-bottom] > [data-card="attr"], .bento[data-bottom] > [data-card="clu"], .bento[data-bottom] > [data-card="pred"] { grid-column: span 2; }
   .bento[data-bottom="attr"] > [data-card="attr"], .bento[data-bottom="clu"] > [data-card="clu"], .bento[data-bottom="pred"] > [data-card="pred"] { grid-column: span 8; }
   /* No forecast feed: the card rests folded, so 聚类 gets the freed columns (归因 keeps its sankey).
-     Scoped away from an opened row, where the push-pull spans above take over. */
+     Without cluster data there is no 聚类 card to grow, so 归因 takes the freed columns instead —
+     either way the row still adds up to 12. Scoped away from an opened row, where the spans above take over. */
   .bento:not([data-bottom]):has(> [data-card="pred"].is-mini) > [data-card="clu"] { grid-column: span 6; }
+  .bento:not([data-bottom]):has(> [data-card="pred"].is-mini):not(:has(> [data-card="clu"])) > [data-card="attr"] { grid-column: span 6; }
   .bento:not([data-bottom]):has(> [data-card="pred"].is-mini) > [data-card="pred"] { grid-column: span 2; }
 
   /* Folded: title plus a mini view of the same data; the whole card is the way back. */
@@ -1313,18 +1394,35 @@ mark.cx { background: color-mix(in oklab, var(--accent) 18%, transparent); color
 .card.is-mini { display: flex; flex-direction: column; }
 .card.is-mini > :not(.card-head):not(.compact) { display: none !important; }
 .card.is-mini .card-head { margin-bottom: 0; }
-.card.is-compact > .compact, .card.is-mini > .compact {
-  display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: center;
-  column-gap: 16px; row-gap: 10px; flex: 1; align-content: center;
-  animation: rise 360ms cubic-bezier(0.16, 1, 0.3, 1) 160ms both;
-}
+/* Folded: key numbers beside the card's own little graphic, then the ranking behind them. Rows flow
+   in a wrapping column clipped at the card's edge, so a row either fits whole or is not drawn. */
+.card.is-compact > .compact, .card.is-mini > .compact { display: flex; flex-direction: column; gap: 18px; flex: 1; min-height: 0; }
+.card.is-mini > .compact { justify-content: center; }
+.compact .cx-top { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; animation: rise 420ms cubic-bezier(0.16, 1, 0.3, 1) 120ms both; }
 .compact .cx { display: grid; place-items: center; width: 52px; height: 52px; color: var(--muted); }
-.compact .cn { display: grid; grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)); gap: 10px 16px; min-width: 0; }
+.compact .cx > * { animation: cx-in 900ms cubic-bezier(0.16, 1, 0.3, 1) 160ms both; }
+.compact .cx:empty { display: none; }
+.compact:has(> .cx-days) .cr-list { flex: 0 1 auto; }
+.cx-days { flex: 1 1 64px; min-height: 64px; display: flex; flex-direction: column; gap: 6px; animation: rise 520ms cubic-bezier(0.16, 1, 0.3, 1) 300ms both; }
+.cx-days .cxcols { flex: 1; width: 100%; height: auto; gap: 4px; transform-origin: bottom; animation: grow-y 820ms cubic-bezier(0.16, 1, 0.3, 1) 340ms both; }
+.cx-days > span { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--faint); }
+@keyframes grow-y { from { transform: scaleY(0); } }
+@keyframes cx-in { from { opacity: 0; transform: rotate(-60deg) scale(0.72); } }
+.compact .cn { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 20px; min-width: 0; }
 .compact .cn > div { display: grid; gap: 2px; min-width: 0; }
+.cr-list { flex: 1; min-height: 0; display: flex; flex-flow: column wrap; align-content: flex-start; gap: 11px 40px; overflow: hidden; }
+.cr { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 5px 10px; animation: rise 520ms cubic-bezier(0.16, 1, 0.3, 1) calc(200ms + var(--i) * 55ms) both; }
+.cr span { font-size: 12px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compact .cr b { font-size: 12px; line-height: 1.3; font-weight: var(--w-medium); letter-spacing: 0; color: var(--ink); }
+.cr i { grid-column: 1 / -1; height: 3px; border-radius: 2px; background: var(--well-2); overflow: hidden; }
+.cr i::after {
+  content: ""; display: block; width: var(--w); height: 100%; border-radius: inherit; background: var(--c, var(--accent));
+  transform-origin: left; animation: grow-x 900ms cubic-bezier(0.16, 1, 0.3, 1) calc(260ms + var(--i) * 55ms) both;
+}
 .compact b { font-size: 20px; line-height: 1.1; font-weight: var(--w-light); letter-spacing: -0.01em; white-space: nowrap; }
 .compact .lead b { font-size: 30px; letter-spacing: -0.02em; }
 .compact small { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.compact .cxhint { grid-column: 1 / -1; width: 100%; font-size: 11.5px; color: var(--faint); }
+.compact .cxhint { font-size: 11.5px; color: var(--faint); }
 .cxr { width: 52px; height: 52px; }
 .cxr circle { fill: none; stroke-width: 7; }
 .cxr-t { stroke: var(--well-2); }
