@@ -43,7 +43,7 @@ function siteNote() {
   const el = $("#siteNote");
   const sited = PRODUCTS.filter((p) => SITES[p]);
   if (!el || sited.every(servedHere)) return;
-  const name = (p) => $(`#productSwitch button[data-value="${p}"]`).textContent;
+  const name = (p) => $(`#productSwitch button[data-value="${p}"] > span`).textContent;
   const html = `<div style="font-weight:var(--w-medium);margin-bottom:4px">数据分开部署</div>${sited
     .map((p) => `<div class="t-row">${name(p)}<b style="margin-left:auto">${SITES[p].name}</b></div>`)
     .join("")}<div style="color:var(--muted);margin-top:4px">切换产品会跳到对应服务器</div>`;

@@ -46,6 +46,19 @@ class ProductSplitTests(unittest.TestCase):
             self.assertFalse((static / "data-aime.json").exists())
             self.assertFalse((static / "samples-aime.json").exists())
 
+    def test_volume_nodes_carry_their_evaluated_cases(self):
+        with tempfile.TemporaryDirectory() as folder:
+            datasets, static = Path(folder) / "datasets", Path(folder) / "static"
+            seed(datasets)
+            build(datasets, static)
+            volume = json.loads((static / "data-wencai.json").read_text())["products"]["wencai"]["input"]
+            models = volume["models"]
+            self.assertEqual(models["a_fast"]["ev"], 1)
+            self.assertEqual(sum(t["ev"] for t in models["a_fast"]["tasks"]), 1)
+            self.assertEqual(sum(t["ev"] for t in volume["tasks"]), 1)
+            # Inputs with nothing evaluated behind them stay at zero, so the ring keeps them shut.
+            self.assertTrue(all(m["ev"] == 0 for k, m in models.items() if k != "a_fast"))
+
     def test_unknown_product_fails_loudly(self):
         with tempfile.TemporaryDirectory() as folder:
             with self.assertRaises(subprocess.CalledProcessError):

@@ -56,7 +56,7 @@ function shelves(cells, W, H, scale) {
   return { rows, total, fits: total <= H && rows.every((r) => r.w <= W + 0.5) };
 }
 
-export function galaxy(host, groups, { onPick = null, tip = null, focus = null, colorOf = null } = {}) {
+export function galaxy(host, groups, { onPick = null, tip = null, focus = null, colorOf = null, onHover = null } = {}) {
   host.innerHTML = `<canvas aria-hidden="true"></canvas>`;
   const canvas = host.querySelector("canvas");
   const ctx2d = canvas.getContext("2d");
@@ -275,6 +275,7 @@ export function galaxy(host, groups, { onPick = null, tip = null, focus = null, 
       showTip(`<div class="t-row">${esc(hoverGal.g.name)}<b class="num" style="margin-left:auto">${hoverGal.g.items.length}</b></div>`, e.clientX, e.clientY);
     } else hideTip();
     if (changed) {
+      if (onHover) onHover(hover ? hover.it : null);
       if (still || !visible) draw(performance.now());
       else kick();
     }
@@ -282,6 +283,7 @@ export function galaxy(host, groups, { onPick = null, tip = null, focus = null, 
   const onLeave = () => {
     hover = null;
     hoverGal = null;
+    if (onHover) onHover(null);
     hideTip();
     draw(performance.now());
   };
@@ -333,6 +335,13 @@ export function galaxy(host, groups, { onPick = null, tip = null, focus = null, 
   return {
     destroy,
     total,
+    /* Ring one case from outside (the ledger beside the map) and dim the other galaxies. */
+    mark(it) {
+      hover = (it && stars.find((s) => s.it === it)) || null;
+      hoverGal = hover ? hover.gal : null;
+      if (still || !visible) draw(performance.now());
+      else kick();
+    },
     /* Re-light one galaxy without replaying the entry. */
     focus(key) {
       lit = key;

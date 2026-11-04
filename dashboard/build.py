@@ -50,7 +50,7 @@ REPO = DASHBOARD.parent
 STATIC = DASHBOARD / "static"
 PRODUCTION_DATASETS = Path("/mnt/fin_bench/code_and_clean_data/datasets")
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-03.6"
+PAYLOAD_VERSION = "2026-11-03.7"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 2
 
@@ -470,6 +470,30 @@ def input_payload(metas):
         "lost": sum(t.get("lost", 0) for t in top.values()),
         "tasks": _task_nodes(top), "models": models,
     }
+
+
+def mark_evaluated(payload, rows):
+    """Evaluated cases behind every 数据量 node, filed the way the dashboard's star map files them
+    (model → task → scene), so the ring can tell which branches have nothing to open."""
+    seen = Counter()
+    for r in rows:
+        task = r.get("task") or "未标注"
+        scene = r.get("sub") or r.get("sc") or r.get("skill") or "未标注"
+        for model in (r["m"], None):
+            seen[(model,)] += 1
+            seen[(model, task)] += 1
+            seen[(model, task, scene)] += 1
+
+    def tasks(nodes, model):
+        for t in nodes:
+            t["ev"] = seen[(model, t["task"])]
+            for s in t.get("sub", []):
+                s["ev"] = seen[(model, t["task"], s["sub"])]
+
+    for model, m in payload["models"].items():
+        m["ev"] = seen[(model,)]
+        tasks(m["tasks"], model)
+    tasks(payload["tasks"], None)
 
 
 def daily_inputs(metas):
@@ -2449,6 +2473,8 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
                     s[2]["sc"] = sc
                 else:
                     s[2].pop("sc", None)
+            if "input" in products.get(product, {}):
+                mark_evaluated(products[product]["input"], [s[2] for s in rows_sorted])
             indexes[product] = {
                 "schema": 2, "generated_at": generated, "product": product,
                 "available": available,
