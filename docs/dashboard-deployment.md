@@ -77,8 +77,30 @@ ssh eval_data 'cd /opt/eval_dashboard && ./stop.sh && ./start.sh'
 - 生成物只留远端；改 `static/` 后需重新执行 `precompress.sh`（`deploy.sh` 自动）。
 - 详情 `/samples/<slug>.json` 首次访问按需生成（约 0.5–4s），之后走磁盘缓存。
 - `/healthz` 为 `no-store`，其余 `no-cache`；构建缓存 `cache/build.sqlite3` 按 `(size, mtime_ns)` 增量，删除后全量重建。
-- 没有进程守护、日志不轮转：容器重启后需手动 `start.sh`，长期运行注意清理 `logs/`。
+- 进程守护见下节；日志不轮转，长期运行注意清理 `logs/`。
 - 预测数据放 `datasets/4_forecast/<产品>/prediction.json`，下一轮构建生效。
+
+## 进程守护（eval_supervisor）
+
+两台服务器各跑一个 `scripts/eval_supervisor.sh`：每 30s 探一次 `/healthz`，挂了就在对应目录执行
+`start.sh`，日志写 `/opt/eval_supervisor.log`；只拉起、不杀活着的进程（发布窗口的 stop/start 互不打架）。
+
+```bash
+# 安装/更新（脚本随仓库发布；配置按机器不同）
+scp scripts/eval_supervisor.sh <host>:/opt/eval_supervisor.sh
+ssh <host> 'chmod +x /opt/eval_supervisor.sh; cat > /opt/eval_services.conf <<EOF
+dashboard|http://127.0.0.1:5001/healthz|/opt/eval_dashboard|./start.sh
+page|http://127.0.0.1:5002/healthz|/opt/page_service/sample_details|./start.sh
+analysis|http://127.0.0.1:5003/healthz|/opt/eval_analysis|./start.sh
+EOF'
+nohup /opt/eval_supervisor.sh >> /opt/eval_supervisor.log 2>&1 &   # 幂等，flock 单实例
+```
+
+- 配置格式：`name|health_url|workdir|start_cmd`；乌兰不列已停用的 5003。
+- 维护 / 发布窗口先 `touch /opt/eval_supervisor.pause`，结束后 `rm`，避免守护进程在 stop 后把旧服务拉起来。
+- **容器重启不会自动拉起**（镜像没有 cron / systemd）：重启后手动跑一次上面的 nohup，或把
+  `nohup bash /opt/eval_boot.sh >/dev/null 2>&1 &` 追加到平台实例的启动命令（`scripts/eval_boot.sh` 可直接 scp 到 `/opt/`）。
+
 
 ## 注意事项
 
