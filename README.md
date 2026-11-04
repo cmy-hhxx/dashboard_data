@@ -8,7 +8,6 @@ AIME 评测数据在远端服务器上的**搬运、打包与看板**工程。
 ## 目录
 
 ```
-Critic.md                       # 迁移期临时约束（agent 必读，迁移完成后删除）
 servers.conf                    # 本地部署配置（已 gitignore，不入库）
 scripts/pack_aime_io.sh         # 常规打包：AIME 输入 + 输出 → 单个 tar.zst（约 2.5-3 分钟）
 scripts/pack_aime_input.sh      # 旧版单流口径（ceph 单流限速后已不推荐）
