@@ -12,7 +12,6 @@ servers.conf                    # 本地部署配置（已 gitignore，不入库
 scripts/pack_aime_io.sh         # 常规打包：AIME 输入 + 输出 → 单个 tar.zst（约 2.5-3 分钟）
 scripts/pack_aime_input.sh      # 旧版单流口径（ceph 单流限速后已不推荐）
 docs/aime-input-packaging.md    # 打包流程与参数说明
-docs/aime-data-inventory.md     # 2026-10-30 那份数据的解压体量与目录拆解
 docs/design-principles.md       # 界面设计原则：层级、字重、数字与动效
 docs/dashboard-deployment.md    # 看板部署、端口、启动与运维手册
 docs/build-performance.md       # 构建基线、增量索引、实测耗时与后续加速点
@@ -22,8 +21,8 @@ docs/接口使用指南.md             # 5003 供数接口 + 5002 页面接口�
 ## 快速开始
 
 ```bash
-scp scripts/pack_aime_io.sh eval_data:/tmp/
-ssh eval_data 'chmod +x /tmp/pack_aime_io.sh && /tmp/pack_aime_io.sh'
+scp scripts/pack_aime_io.sh aime_rsi_data:/tmp/
+ssh aime_rsi_data 'chmod +x /tmp/pack_aime_io.sh && SRC_BASE=/mnt/fin_bench/aime_rsi_data/1_aime /tmp/pack_aime_io.sh'
 ```
 
 产物落在 `/mnt/fin_bench/aime_data/aime_input_output_<日期>.tar.zst`。
@@ -35,14 +34,16 @@ ssh eval_data 'chmod +x /tmp/pack_aime_io.sh && /tmp/pack_aime_io.sh'
 
 ## 数据现状
 
+2026-11-04 起 AIME 数据只在弗吉尼亚更新（乌兰的 `1_aime` 是迁移前副本，不再用于打包）。
+弗吉尼亚数据根：`/mnt/fin_bench/aime_rsi_data`。
+
 | 数据 | 位置（远端） | 规模 |
 |---|---|---|
 | AIME 评测输入 | `…/1_aime/eval_input/` | 346 文件 / 11.39 GiB / 12,233,839,658 B |
 | AIME 评测输出 | `…/1_aime/eval_output/` | 113 文件 / 0.74 GiB（排除 `.runs`/`.delivery`） |
 | 打包产物 | `/mnt/fin_bench/aime_data/` | `aime_input_output_20261103.tar.zst` 826 MB（6.34% / 15.8×） |
 
-包内结构与源目录一致（顶层 `eval_input/`、`eval_output/`）。解压后体量、目录结构、
-逐日期记录数见 [docs/aime-data-inventory.md](docs/aime-data-inventory.md)。
+包内结构与源目录一致（顶层 `eval_input/`、`eval_output/`）。规模数字是 2026-11-03 打包时的快照。
 
 实时目录（`0_daily_eval_input` 及输出的 `.runs`/`.delivery`）流水线仍在写入；打包按快照语义
 处理，并默认排除 `.archive` 与运行现场，详见流程文档「打包口径」。
@@ -50,7 +51,8 @@ ssh eval_data 'chmod +x /tmp/pack_aime_io.sh && /tmp/pack_aime_io.sh'
 ## 数据看板
 
 `dashboard/` 是问财 / AIME 评测看板：原生 ES modules + SVG + Python 起服务；除可选的 `orjson` 外不依赖第三方运行时。
-本地读取仓库根目录的 `datasets/`，生产读取 `/mnt/fin_bench/code_and_clean_data/datasets`；
+本地读取仓库根目录的 `datasets/`；生产按产品分两套数据根：问财读乌兰的
+`/mnt/fin_bench/code_and_clean_data/datasets`，AIME 读弗吉尼亚的 `/mnt/fin_bench/aime_rsi_data`；
 可通过 `EVAL_DATASETS` 显式指定数据根目录（评测输入、输出、cluster_tree、item_index）。
 没有数据时显示待接入空态。将数据放入 `datasets/` 后运行 `./dashboard/local_dev/refresh.sh` 重建；
 本地启动方式见 [本地调试说明](dashboard/local_dev/README.md)。
@@ -68,7 +70,8 @@ ssh eval_data 'chmod +x /tmp/pack_aime_io.sh && /tmp/pack_aime_io.sh'
 
 ```bash
 ./dashboard/deploy.sh                                    # 同步、增量构建、预压缩、重启
-ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'     # 手动起服务
+ssh eval_data 'cd /opt/eval_dashboard && ./start.sh'       # 乌兰（问财）手动起服务
+ssh aime_rsi_data 'cd /opt/eval_dashboard && ./start.sh'   # 弗吉尼亚（AIME）手动起服务
 ```
 
 服务监听容器 `:5001`（展示端口，乌兰察布对外 `2768`）；其余端口角色（`5002` 页面接口、`5003` 供数、
@@ -148,6 +151,9 @@ tokens / task-subtask / lost 统计写到 `<datasets>/stats.json`；`build.py` �
 | `static/` | 三页入口、ES modules、`app.css`；无第三方运行时依赖 |
 | `static/js/` | `app.js` 路由/主题/数据加载，`data.js` 数据页，`sunburst.js` 可下钻旭日图，`system.js` 评测体系页，`samples.js` 样本页（含 compact 流程图），`core.js` 共享格式化/提示/数字动效 |
 | `precompress.sh` | 部署时预压缩 JS/CSS/HTML |
+
+AIME 相关路径相对弗吉尼亚数据根 `/mnt/fin_bench/aime_rsi_data`，问财相关路径相对乌兰数据根
+`/mnt/fin_bench/code_and_clean_data/datasets`。
 
 AIME 日常输出以 `1_aime/eval_output/0_daily_eval/<model>/<model>_attribution-<date>.jsonl` 与
 `compact/<model>_compact-<date>.jsonl` 为准；流失用户输出在

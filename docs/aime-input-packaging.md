@@ -3,11 +3,14 @@
 常规动作：一条命令把 `1_aime/eval_input` 与 `1_aime/eval_output` 打成**单个** tar.zst，
 放到 `/mnt/fin_bench/aime_data/`。端到端约 **2.5–3 分钟**，产物带完整性校验。
 
+> 2026-11-04 起 AIME 数据只在弗吉尼亚更新：在 `aime_rsi_data` 上打包
+> （`SRC_BASE=/mnt/fin_bench/aime_rsi_data/1_aime`）。乌兰的 `1_aime` 是迁移前副本，不要再用于打包。
+
 ## 用法
 
 ```bash
-scp scripts/pack_aime_io.sh eval_data:/tmp/
-ssh eval_data 'chmod +x /tmp/pack_aime_io.sh && /tmp/pack_aime_io.sh'
+scp scripts/pack_aime_io.sh aime_rsi_data:/tmp/
+ssh aime_rsi_data 'chmod +x /tmp/pack_aime_io.sh && SRC_BASE=/mnt/fin_bench/aime_rsi_data/1_aime /tmp/pack_aime_io.sh'
 ```
 
 产物：`/mnt/fin_bench/aime_data/aime_input_output_<日期>.tar.zst`（同日重复打包用 `--tag` 区分）。
@@ -38,7 +41,7 @@ OUT_FILE=/tmp/x.tar.zst ./pack_aime_io.sh     # 演练，不落正式目录
 `--long=27`（128 MB 窗口）让跨文件重复内容共享字典；产物解压**不需要**特殊参数
 （128 MB 窗口正好是 zstd 解码器默认上限）。
 
-## 实测（2026-11-03）
+## 实测（2026-11-03，迁移前在乌兰）
 
 | 指标 | 值 |
 |---|---:|
@@ -57,10 +60,8 @@ OUT_FILE=/tmp/x.tar.zst ./pack_aime_io.sh     # 演练，不落正式目录
 
 - **包含**：`eval_input/`、`eval_output/` 两棵树的全部业务文件（jsonl、附件、`cluster` 等）。
 - **排除**（任意层级）：`.archive`（历史运行现场，5.1 GiB）、`.runs` 与 `.delivery`
-  （流水线**实时写入**的运行现场，约 1.1 GiB）。依据见
-  [aime-data-inventory.md](aime-data-inventory.md) §7.3：业务结果都已落到 jsonl 里，
-  运行现场只对复现有用，且实时写入会把读取拖死、也无法得到一致快照。
-  要连运行现场一起带上用 `EXCLUDE=.archive`。
+  （流水线**实时写入**的运行现场，约 1.1 GiB）。业务结果都已落到 jsonl 里，运行现场只对复现有用，
+  且实时写入会把读取拖死、也无法得到一致快照。要连运行现场一起带上用 `EXCLUDE=.archive`。
 - **快照语义**：实时目录可能在搬运期间变化。脚本搬完先对账，个别文件被改写就重搬，
   最终包内是当时读到的**一致快照**；打包后校验包内条目数与解压后字节数。
 - 包内保留源目录的相对路径（顶层 `eval_input/`、`eval_output/`），不重命名、不合并。

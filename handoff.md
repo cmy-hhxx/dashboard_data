@@ -116,8 +116,7 @@ server.py（标准库 HTTP，:5001，定时 build）──> app.js
 | `dashboard/deploy.sh` | 同步、远端构建、预压缩、重启 | 发布 |
 
 先读 `README.md`、`docs/design-principles.md`、`docs/dashboard-deployment.md`、`docs/build-performance.md`、
-`docs/prediction-data.md`。`docs/dashboard-optimization.md` 是早期优化记录；涉及
-ECharts / board.js 的实现段落已不适用，当前是原生 SVG + ES modules。
+`docs/prediction-data.md`。前端是原生 SVG + ES modules，ECharts / board.js 的实现已不再适用。
 
 ## 5. 数据契约
 
