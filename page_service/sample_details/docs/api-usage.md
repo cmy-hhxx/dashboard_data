@@ -10,8 +10,10 @@
 | 乌兰察布 | `117.50.195.94` | `interactive-i6piqwvlnsr5` | 问财（看板 wencai-only，页面接口沿用） | `2833` |
 | 弗吉尼亚 | `10.217.219.2` | `interactive-npasm9ch66eb` | AIME | `2222` |
 
-- DSW 代理：`https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail/`（当前指向乌兰的 5002，只服务问财；
-  AIME 的代理基地址待平台映射到弗吉尼亚 5002，未配好前 AIME 用直连 `10.217.219.2:2222`）
+- DSW 代理（平台剥掉路径前缀，转发到对应容器的 5002）：
+  - 乌兰（问财）：`https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail/`
+  - 弗吉尼亚（AIME）：`https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail-oversea/`
+  - 未配代理时可用直连：乌兰 `117.50.195.94:2833`、弗吉尼亚 `10.217.219.2:2222`
 - 每套部署只服务自己产品：乌兰只有 `wencai`，弗吉尼亚只有 `aime`；另一个产品会 404
 - 只读、无鉴权；仅内部使用，请勿公开传播
 - 数据约每 10 分钟随看板重建更新
@@ -24,7 +26,7 @@
 
 ```
 https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail/?product=wencai&case=daily%7Cb_fast%7Cthread_9d238e0db12e4d2d96efdebda331bef2
-http://10.217.219.2:2222/?product=aime&slug=ba6ba417f2
+https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail-oversea/?product=aime&slug=ba6ba417f2
 ```
 
 直连等价地址：`http://<外部IP>:<5002 对外端口>/?product=…`（乌兰 `117.50.195.94:2833`、
@@ -37,7 +39,7 @@ http://10.217.219.2:2222/?product=aime&slug=ba6ba417f2
 `attribution.turns[].trace_id` 的那套 ID）：
 
 ```text
-https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail/?product=aime&case=daily%7Caime_fast%7Cthread_19de…&trace=20003020179337992707500000000286
+https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail-oversea/?product=aime&case=daily%7Caime_fast%7Cthread_19de…&trace=20003020179337992707500000000286
 ```
 
 - 找到 → 选中并滚动到该轮，归因区显示该轮的问题；URL 保留 `trace`，刷新仍定位同一轮。
@@ -46,7 +48,8 @@ https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail/?product=aime&case=daily
 
 ## 2. 接口
 
-> 下面示例里的 `$BASE` = `https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail`；
+> 下面示例里的 `$BASE` 按产品选代理基址：问财 `https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail`、
+> AIME `https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail-oversea`；
 > 直连时换成目标环境的 `http://<外部IP>:<5002 对外端口>`（见第零节）。
 
 | 方法 | 路径 | 用途 |

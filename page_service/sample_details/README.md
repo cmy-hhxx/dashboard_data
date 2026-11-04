@@ -71,10 +71,12 @@ python3 -m unittest discover -s tests -p 'test_*.py' -v
 | 弗吉尼亚 | `10.217.219.2` | `interactive-npasm9ch66eb` | AIME | `2222` |
 
 看板用 `5001`（展示），对外分别 `2768` / `2221`；`5003` 供数、`5004` 开发调试、`5005` 备用。
-对外也可通过 DSW 代理访问：`https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail/`
-（当前指向乌兰的 5002，只服务问财；AIME 的代理基地址待平台映射到弗吉尼亚 5002，未配好前用直连
-`10.217.219.2:2222`）。平台会剥掉路径前缀，因此 `static/` 下的前端 URL **必须保持相对路径**，
-不要写成 `/api/...`）。
+对外也可通过 DSW 代理访问（平台剥掉路径前缀，转发到对应容器的 5002）：
+- 乌兰（问财）：`https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail/`
+- 弗吉尼亚（AIME）：`https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail-oversea/`
+
+代理下前端 URL **必须保持相对路径**，不要写成 `/api/...`。未配代理时也可直连
+`117.50.195.94:2833`（问财）/ `10.217.219.2:2222`（AIME）。
 所以本服务直接监听 `:5002` 即可：
 
 ```bash

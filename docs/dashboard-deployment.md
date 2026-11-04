@@ -28,9 +28,10 @@
 | `5005` | 备用 | `3337` | `2243` |
 | `22` | SSH | `2834` | `2225` |
 
-- 页面接口（`5002`）对外有两种入口：DSW 代理
-  `https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail/`（平台会剥掉路径前缀）和直连
-  IP。代理当前指向乌兰（问财）；AIME 需要平台另配一条指向弗吉尼亚 5002 的代理基地址。
+- 页面接口（`5002`）对外有两种入口：DSW 代理和直连 IP。代理基址按产品分开
+  （平台会剥掉路径前缀，转发到对应容器的 5002）：
+  问财 `https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail/`、
+  AIME `https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail-oversea/`。
   代理下前端 URL 必须用相对路径，否则会 404。
 - 生产入口固定，不在其上调试；开发调试 / 预发副本用 `5004`：
   `EVAL_DEPLOY_REMOTE=/opt/eval_dashboard_2 PORT=5004 STATS_WORKER=0 ./dashboard/deploy.sh`
