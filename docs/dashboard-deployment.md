@@ -73,8 +73,10 @@ ssh eval_data 'cd /opt/eval_dashboard && ./stop.sh && ./start.sh'
 
 ## 运行要点
 
-- 启动时缺数据先构建；之后每 `REFRESH_SECONDS`（默认 600s）增量构建，页面每 2 分钟条件请求刷新。
-- 数据源为空时 `--keep-on-empty` 不写文件，保留上一份 payload。
+- 启动时缺数据先构建；之后按 `REFRESH_SECONDS` 增量构建。当前部署设为 **3600s（小时级）**，
+  `stats_worker` 同样 3600s；页面每 2 分钟条件请求 `data.json`，只有 `generated_at` 变了才换 payload。
+- 无变化时的检查只扫有限层级目录/文件（不再用 `**` 递归遍历 `eval_output` 的 `.runs`/`.delivery`）：
+  弗吉尼亚实测 27s（优化前同一份数据 75–743s），乌兰约 0.3s；数据源为空时 `--keep-on-empty` 不写文件，保留上一份 payload。
 - 生成物只留远端；改 `static/` 后需重新执行 `precompress.sh`（`deploy.sh` 自动）。
 - 详情 `/samples/<slug>.json` 首次访问按需生成（约 0.5–4s），之后走磁盘缓存。
 - `/healthz` 为 `no-store`，其余 `no-cache`；构建缓存 `cache/build.sqlite3` 按 `(size, mtime_ns)` 增量，删除后全量重建。

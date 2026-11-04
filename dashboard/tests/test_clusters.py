@@ -58,6 +58,16 @@ class ClusterTaxonomyTests(unittest.TestCase):
             (out / "item_index.jsonl").write_text(json.dumps({"session_id": "s1", "path": "S1"}) + "\n", encoding="utf-8")
             self.assertEqual(build.load_clusters(Path(folder))[1], {})
 
+    def test_split_level_cluster_layout_is_found(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(build, "ENABLED", {"wencai"}):
+            out = Path(folder) / "0_wencai/eval_output/0_daily_eval/cluster/a_fast"
+            out.mkdir(parents=True)
+            tree = {"tree": node("root", 0, "全部", [node("S1", 1, "取数")])}
+            (out / "cluster_tree.json").write_text(json.dumps(tree, ensure_ascii=False), encoding="utf-8")
+            (out / "item_index.jsonl").write_text(json.dumps({"session_id": "s1", "path": "S1"}) + "\n", encoding="utf-8")
+            taxonomy, _ = build.load_clusters(Path(folder))
+            self.assertEqual(taxonomy["stages"]["S1"]["name"], "取数")
+
 
 if __name__ == "__main__":
     unittest.main()

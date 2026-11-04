@@ -759,10 +759,38 @@ def pairs_from_keys(root: Path, store: bs.BuildStore):
 
 # --------------------------------------------------------------------------- clusters
 
+def cluster_tree_files(root: Path):
+    """Every cluster_tree.json, without the old recursive ** glob.
+
+    Two layouts are in use:
+      <product>/eval_output/cluster/<model>/cluster_tree.json       (AIME)
+      <product>/eval_output/<split>/cluster/<model>/cluster_tree.json (wencai)
+    The recursive glob also walked .runs/.delivery subtrees on ceph, which was
+    the expensive part of the "did anything change?" check.
+    """
+    found = []
+    for top in root.iterdir():
+        if not top.is_dir() or not product_of(top.name):
+            continue
+        out = top / "eval_output"
+        if not out.is_dir():
+            continue
+        direct = out / "cluster"
+        if direct.is_dir():
+            found.extend(direct.glob("*/cluster_tree.json"))
+        for split in out.iterdir():
+            if not split.is_dir() or split.name == "cluster":
+                continue
+            nested = split / "cluster"
+            if nested.is_dir():
+                found.extend(nested.glob("*/cluster_tree.json"))
+    return sorted(found)
+
+
 def load_clusters(root: Path):
     taxonomy = {"stages": {}, "l2": {}, "patterns": {}, "mechanisms": {}, "tags": {}, "meta": {}, "runs": []}
     index = {}
-    for tree_path in sorted(root.glob("*/eval_output/**/cluster/*/cluster_tree.json")):
+    for tree_path in cluster_tree_files(root):
         product = product_of(tree_path.relative_to(root).parts[0])
         if not product:
             continue
@@ -1799,8 +1827,8 @@ def cluster_signature(root: Path, cache_dir: Path | None = None):
     A stat-based side cache avoids re-reading the 30 MB of cluster files when
     their sizes and mtimes did not change at all.
     """
-    files = sorted(root.glob("*/eval_output/**/cluster/*/cluster_tree.json"))
-    files += sorted(root.glob("*/eval_output/**/cluster/*/item_index.jsonl"))
+    files = cluster_tree_files(root)
+    files += [p.with_name("item_index.jsonl") for p in files if p.with_name("item_index.jsonl").is_file()]
     files = [p for p in files if product_of(p.relative_to(root).parts[0])]
     stat_parts = []
     for path in files:

@@ -76,7 +76,7 @@ ssh aime_rsi_data 'cd /opt/eval_dashboard && ./start.sh'   # 弗吉尼亚（AIME
 
 服务监听容器 `:5001`（展示端口，乌兰察布对外 `2768`）；其余端口角色（`5002` 页面接口、`5003` 供数、
 `5004` 开发调试、`5005` 备用）与两台服务器的映射见
-[docs/dashboard-deployment.md](docs/dashboard-deployment.md)。服务每 10 分钟运行一次
+[docs/dashboard-deployment.md](docs/dashboard-deployment.md)。服务每小时运行一次
 `build.py --keep-on-empty`；构建是增量的：输入文件按 `(size, mtime_ns)` 只扫描变化部分，
 配对和样本摘要写入 `cache/build.sqlite3`。逐样本详情不再在构建时全量生成，而是在样本页
 第一次打开时由 `detail_builder.py` 从 SQLite 行号 + 输入/输出/compact 原始行生成并缓存。
@@ -84,7 +84,7 @@ ssh aime_rsi_data 'cd /opt/eval_dashboard && ./start.sh'   # 弗吉尼亚（AIME
 耗时基线见 [docs/build-performance.md](docs/build-performance.md)。首屏样本在服务启动 / 每轮构建后
 后台预热，其余样本首次打开约 0.6–4 秒，之后走静态缓存。删除 `cache/` 会强制全量重建。
 
-`stats_worker.py` 作为独立进程常驻，每 10 分钟把输入侧的 records / traces / tools /
+`stats_worker.py` 作为独立进程常驻，每 1 小时把输入侧的 records / traces / tools /
 tokens / task-subtask / lost 统计写到 `<datasets>/stats.json`；`build.py` 只接受
 `(size, mtime_ns)` 仍匹配的条目，因此旁路统计只是加速器，不会成为正确性依赖。
 
@@ -145,7 +145,7 @@ tokens / task-subtask / lost 统计写到 `<datasets>/stats.json`；`build.py` �
 | 文件 | 作用 |
 |---|---|
 | `build.py` | 增量扫描 `datasets/`：输入、归因、compact 按 `对应关系.csv` 或 session key 配对 → `static/data.json` + `data-<product>.json`、`static/samples.json` + `samples-<product>.json`（均带 `.gz`）；`cache/build.sqlite3` 保存文件索引、配对与样本摘要；`--jobs` 控制样本构建/输入扫描并发；`--keep-on-empty` 在数据源为空时保留上一份 |
-| `stats_worker.py` | 独立进程，每 10 分钟刷新 `<datasets>/stats.json` 输入统计旁路 |
+| `stats_worker.py` | 独立进程，每 1 小时刷新 `<datasets>/stats.json` 输入统计旁路 |
 | `detail_builder.py` | 样本页首次请求时按 SQLite 行号生成 `samples/<slug>.json(.gz)` |
 | `server.py` | `ThreadingHTTPServer` + 定时执行 `build.py --keep-on-empty`；`/samples/<slug>.json` 按需生成详情；`/healthz` 返回最近一次构建摘要 |
 | `static/` | 三页入口、ES modules、`app.css`；无第三方运行时依赖 |

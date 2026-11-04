@@ -19,7 +19,7 @@ SSH=(ssh "${SSH_OPTS[@]}")
 #   AIME  @ 弗吉尼亚:  EVAL_DEPLOY_HOST=aime_rsi_data EVAL_DATASETS=/mnt/fin_bench/aime_rsi_data EVAL_PRODUCTS=aime ./dashboard/deploy.sh
 #   问财  @ 乌兰 5004: EVAL_DEPLOY_REMOTE=/opt/eval_dashboard_2 PORT=5004 STATS_WORKER=0 EVAL_DATASETS=/mnt/fin_bench/code_and_clean_data/datasets EVAL_PRODUCTS=wencai ./dashboard/deploy.sh
 RUN_ENV=""
-for var in PORT STATS_WORKER REFRESH_SECONDS EVAL_DATASETS EVAL_PRODUCTS; do
+for var in PORT STATS_WORKER REFRESH_SECONDS STATS_REFRESH_SECONDS EVAL_DATASETS EVAL_PRODUCTS; do
   if [ -n "${!var:-}" ]; then RUN_ENV+="export $var=$(printf '%q' "${!var}")"$'\n'; fi
 done
 RSYNC=(rsync -az --delete --exclude 'data.json' --exclude 'data.json.gz' --exclude 'data-*.json' --exclude 'data-*.json.gz' --exclude 'samples.json' --exclude 'samples.json.gz' --exclude 'samples-*.json' --exclude 'samples-*.json.gz' --exclude 'static/samples' --exclude 'static/.samples-*' --exclude 'server.pid' --exclude 'stats.pid' --exclude 'deploy.env' --exclude 'logs' --exclude 'cache' --exclude '*.log' --exclude '__pycache__' --exclude 'local_dev' --exclude 'tests'

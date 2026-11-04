@@ -275,7 +275,7 @@ def check_reanalysis(client, dataset, trace_id, day, expect_codes, expect_histor
 def check_ids_only(client, dataset, attempts=3):
     """两轮翻页必须覆盖同一批 id。
 
-    线上服务每 10 分钟换一次快照，两轮之间如果正好重建，新增 trace 会让集合不一致；
+    线上服务每小时换一次快照，两轮之间如果正好重建，新增 trace 会让集合不一致；
     这时重试一轮，连续三轮都撞上重建才跳过（记录 NOTE）。
     """
     last_race = None

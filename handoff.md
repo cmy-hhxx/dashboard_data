@@ -42,7 +42,7 @@ for f in static/js/*.js; do node --check "$f"; done
 ## 2. 数据流
 
 ```text
-datasets/ ──> stats_worker.py ──> datasets/stats.json（每 10 分钟，独立进程）
+datasets/ ──> stats_worker.py ──> datasets/stats.json（每 1 小时，独立进程）
    │
    └─ build.py（cache/build.sqlite3 增量索引）
         ├─ static/data.json(.gz)              共享 taxonomy/system + 产品元数据
@@ -75,7 +75,7 @@ server.py（标准库 HTTP，:5001，定时 build）──> app.js
 - compact 的 `evidence_id` 里 message index 是**整场扁平 trace 的全局下标**；build 需按
   各 trace 消息数累加换算成 `(trace, local_index)`，不能把 compact turn 当 trace 直接
   `place()`，否则第 2 条 trace 起的 compact 证据会越界或错位。
-- `server.py` 启动时缺数据会构建，之后默认每 10 分钟刷新，页面每 2 分钟条件请求检查并就地刷新；`/healthz`
+- `server.py` 启动时缺数据会构建，之后每小时刷新（`REFRESH_SECONDS=3600`），页面每 2 分钟条件请求检查并就地刷新；`/healthz`
   返回最近一次构建摘要。
 - 前端无框架、无打包器、无外部运行时依赖；原生 ES modules + SVG + 手写 CSS。
 - 生产由 `deploy.sh` 同步代码到远端，在远端构建数据、预压缩并重启；不要手改远端目录。
