@@ -7,6 +7,7 @@ v2 不再输出 `is_error` / `has_error` 这类对错判定（数据里没有标
 trace 的 `problems` 问题数组与 P0–P4 严重度，并新增 `GET /severity` 统计接口。
 
 - 接入说明：[docs/接入说明.md](docs/接入说明.md)
+- 与 5002 页面接口一起使用的完整指南：[../../docs/接口使用指南.md](../../docs/接口使用指南.md)
 - v1 → v2 变更（逐字段）：[docs/v2-变更说明.md](docs/v2-变更说明.md)
 - v1 协议与落地差异：[docs/对话分析查询接口协议 v1.0.md](docs/对话分析查询接口协议%20v1.0.md)、
   [docs/协议落地说明.md](docs/协议落地说明.md)

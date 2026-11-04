@@ -16,6 +16,7 @@ docs/aime-data-inventory.md     # 2026-10-30 那份数据的解压体量与目�
 docs/design-principles.md       # 界面设计原则：层级、字重、数字与动效
 docs/dashboard-deployment.md    # 看板部署、端口、启动与运维手册
 docs/build-performance.md       # 构建基线、增量索引、实测耗时与后续加速点
+docs/接口使用指南.md             # 5003 供数接口 + 5002 页面接口的用法（推荐先读）
 ```
 
 ## 快速开始
