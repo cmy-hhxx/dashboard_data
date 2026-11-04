@@ -46,3 +46,4 @@ dashboard/*.pid
 
 # 本地 Claude worktree 与会话产物（不入库）
 .claude/
+tmp/
