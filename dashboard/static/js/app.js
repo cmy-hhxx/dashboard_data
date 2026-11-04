@@ -5,7 +5,7 @@ const VIEWS = ["data", "system", "samples"];
 const PRODUCTS = ["wencai", "aime"];
 // Each product's board runs on its own server; a product with no data here opens its server instead.
 const SITES = {
-  wencai: { url: "http://117.50.195.94:3336/", name: "乌兰察布" },
+  wencai: { url: "http://117.50.195.94:2768/", name: "乌兰察布" },
   aime: { url: "http://10.217.219.2:2221/", name: "弗吉尼亚" },
 };
 const state = { view: "data", product: "wencai", data: null, indexes: {}, indexP: {}, productData: {}, productP: {} };
