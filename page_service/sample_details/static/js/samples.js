@@ -742,7 +742,8 @@ function renderIn() {
       <div id="ov" class="ov-grid"></div>
     </div>`;
   if (D.input.missing) {
-    $("#stl", root).innerHTML = `<div class="empty">这一组没有找到对应的评测输入。</div>`;
+    $("#stl", root).innerHTML = `<div class="empty">这一组没有找到对应的评测输入。</div>
+      <button type="button" class="band-more" id="bandMore" hidden>展开全部</button>`;
     $("#ov", root).innerHTML = "";
     scheduleThreadsCompensate();
     return;
@@ -758,6 +759,7 @@ function renderTrace() {
   // 重画会把卡片和连线换成新的，旧的聚焦状态要一起清掉，不然新内容一上来就是淡的。
   hoverPid = null;
   S.active = null;
+  S.bandOpen = false;   // 换轮 / 换样本：长内容重新收起来
   $("#sanatomy", root)?.classList.remove("is-focus");
   $("#sanatomy", root)?.classList.toggle("is-session", session);
   $("#shead", root)?.classList.toggle("is-session", session);
@@ -806,6 +808,7 @@ function timelineHTML(t, messages) {
     out.push(`<div class="chain-box">
       <div class="chain-head"><span class="chain-k">中间链路</span><span class="num faint">${run.length} 步</span></div>
       <div class="chain-body">${run.map((i) => msgHTML(t, i, messages[i])).join("")}</div>
+      <button type="button" class="band-more" id="bandMore" hidden>展开全部</button>
     </div>`);
     run = [];
   };
@@ -1043,6 +1046,20 @@ async function copyText(text) {
 }
 
 function onInputClick(e) {
+  const more = e.target.closest("#bandMore");
+  if (more) {
+    const sbody = $("#sbody", root);
+    const band = $("#sanatomy", root);
+    const offset = band && sbody ? band.getBoundingClientRect().top - sbody.getBoundingClientRect().top : 0;
+    const anchorY = sbody ? sbody.scrollTop + offset : 0;
+    S.bandOpen = !S.bandOpen;
+    scheduleThreadsCompensate();
+    // 重排后把整条带的屏幕位置还原，展开 / 收起不会把人甩到别处。
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (sbody) sbody.scrollTop = anchorY - offset;
+    }));
+    return;
+  }
   const fold = e.target.closest("[data-fold]");
   if (fold) {
     const [t, i] = fold.dataset.fold.split(":").map(Number);
@@ -1160,16 +1177,12 @@ function wireThreads() {
     focus(null);
   });
   // 滚动时卡片从指针下面走开，pointermove 不会再触发：同样主动清掉。
+  // 只有一个滚动面（#sbody），滚动只是整体位移，连线坐标相对容器不变，不用重画。
   $("#sbody", root)?.addEventListener("scroll", () => {
     if (hoverPid == null) return;
     hoverPid = null;
     focus(null);
   }, { passive: true });
-  // 长链封顶后轨迹 / 链路在列内滚动，消息和卡片的屏幕位置会变，连线得跟着重画；
-  // 只重画不重排，否则一滚就把列的高度重新量一遍、滚动位置会被拉回去。
-  box.addEventListener("scroll", (e) => {
-    if (e.target !== box) scheduleThreads(false);
-  }, true);
   threadFlow($(".threads svg", box));
   if (threadObs) threadObs.disconnect();
   threadObs = new ResizeObserver(scheduleThreads);
@@ -1225,12 +1238,13 @@ function alignColumns() {
   const group = $("#sattr .tgroup", root);
   const body = stl ? $(".chain-body", stl) : null;
   const lists = [flow, group, body].filter(Boolean);
+  const more = $("#bandMore", root);
   // 先回到自然高度再量，否则上一轮撑出来的高度会被当成内容高度。
-  const kept = lists.map((el) => el.scrollTop);
   for (const el of lists) {
     el.style.height = "";
-    el.classList.remove("is-band", "is-scroll");
+    el.classList.remove("is-band", "is-clip", "is-dense");
   }
+  if (more) more.hidden = true;
   if (flow) {
     flow.style.marginTop = "";
     flow.classList.remove("is-tight");
@@ -1252,13 +1266,17 @@ function alignColumns() {
   // 自然高度：cflow / tgroup 都是 grid，scrollHeight 就是内容高度。
   const nat = { flow: flow.scrollHeight, group: group.scrollHeight, body: body ? body.scrollHeight : 0 };
   const tallest = Math.max(nat.flow, nat.group, nat.body);
-  // 每列最多比自然高度多 stretch 这么多（20%，上限 160px），再多就让它自己滚：
-  // 对齐不能靠把内容摊成一片空白，所以矮的一列最多撑两成，剩下交给内容多的一列滚动。
+  // 每列最多比自然高度多 stretch 这么多（20%，上限 160px）：矮的一列靠行距补，不能靠留白。
   const stretch = (n) => Math.min(160, Math.round(n * 0.2));
   // 只有一项的列没法靠行距补高，不参与定高，否则一张卡就能把整条带压扁。
   const room = (el, n) => (n && el && el.children.length > 1 ? n + stretch(n) : Infinity);
-  const H = Math.min(tallest, cap, room(flow, nat.flow), room(group, nat.group), body ? room(body, nat.body) : Infinity);
-  // 轨迹行数多于这一列能分到的高度时逐级压行（3 → 2 → 1 行），能收进去就不用滚动。
+  const folded = Math.min(tallest, cap, room(flow, nat.flow), room(group, nat.group), body ? room(body, nat.body) : Infinity);
+  // 一条滚轴：默认把整条带收在一屏内，超出部分先藏进渐隐里；点「展开全部」再把带放开。
+  const H = S.bandOpen ? tallest : folded;
+  // 链路比这一列高时先收紧行距，收得进去就都不裁。
+  const dense = !!(body && nat.body > H + 2);
+  if (dense) body.classList.add("is-dense");
+  // 轨迹行数多于这一列能分到的高度时逐级压行（3 → 2 → 1 行），能收进去就不用藏。
   if (nat.flow > H) {
     for (const n of [3, 2, 1]) {
       flow.style.setProperty("--cf-lines", String(n));
@@ -1272,15 +1290,30 @@ function alignColumns() {
   };
   toBand(flow, outT);
   toBand(group, outP);
+  let clipped = 0;
   const fit = (el, natural) => {
+    if (natural > H + 2) {
+      el.style.height = `${H}px`;
+      el.classList.add("is-clip");
+      clipped += 1;
+      return;
+    }
+    // 展开后不再把矮的列摊成一片空白：保持自然高度，顶边照旧对齐。
+    if (S.bandOpen) {
+      if (natural) el.style.height = `${natural}px`;
+      return;
+    }
     el.style.height = `${H}px`;
-    if (natural > H + 2) el.classList.add("is-scroll");
-    else el.classList.add("is-band");
+    el.classList.add("is-band");
   };
   fit(flow, flow.scrollHeight);
   fit(group, nat.group);
-  if (body) fit(body, nat.body);
-  lists.forEach((el, i) => { el.scrollTop = kept[i]; });
+  if (body) fit(body, body.scrollHeight);
+  if (more) {
+    // 只有当「收起来」真的藏了内容时才出现；展开后变成「收起」。
+    more.hidden = !(clipped || (S.bandOpen && folded < tallest));
+    more.textContent = S.bandOpen ? "收起" : "展开全部";
+  }
 }
 
 function drawThreads(realign = true) {
@@ -1307,12 +1340,16 @@ function drawThreads(realign = true) {
     return probe.matrixTransform(inv);
   };
   const byId = new Map(S.D.attribution.problems.map((p) => [p.id, p]));
+  // 内容被「收起」时，裁掉的部分看不见，连线也不要再画过去。
+  const bandBody = $(".chain-body", root);
+  const bandBottom = bandBody ? bandBody.getBoundingClientRect().bottom : Infinity;
   let paths = "";
   $$("#sattr .pcard", root).forEach((card) => {
     const pid = Number(card.id.replace("pc-", ""));
     const prob = byId.get(pid);
     if (!prob) return;
     const pr = card.getBoundingClientRect();
+    if (pr.top >= bandBottom) return;   // 被收进渐隐里的卡片
     const end = toLocal(pr.left, pr.top + 22 * scale);
     const x2 = end.x;
     const y2 = end.y;
@@ -1327,6 +1364,7 @@ function drawThreads(realign = true) {
       if (!msg) return;
       seen.add(key);
       const r = ($(".msg-body", msg) || msg).getBoundingClientRect();
+      if (r.top >= bandBottom) return;   // 被收进渐隐里的步骤
       const y = r.top + Math.min(26 * scale, r.height / 2);
       const start = toLocal(r.right, y);
       const x1 = start.x;

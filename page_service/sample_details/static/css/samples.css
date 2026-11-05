@@ -239,9 +239,34 @@
 .bench .traj .cflow.is-band,
 .chain-body.is-band,
 .bench .aprobs .tgroup.is-band { align-content: space-between; }
-.bench .traj .cflow.is-scroll,
-.chain-body.is-scroll,
-.bench .aprobs .tgroup.is-scroll { overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+/* 链路比这一列分到的高度高时先收紧行距（原样收进去），收不下才渐隐 + 「展开全部」。
+   只是密一点，字号、配色、结构都不变。 */
+.chain-body.is-dense .msg-body { padding-top: 4px; padding-bottom: 4px; }
+.chain-body.is-dense .msg.k-call .msg-body,
+.chain-body.is-dense .msg.k-result .msg-body { padding-top: 3px; padding-bottom: 3px; }
+.chain-body.is-dense .msg-dot { padding-top: 8px; }
+.chain-body.is-dense .msg-dot::after { top: 20px; bottom: -6px; }
+.chain-body.is-dense .msg-top { min-height: 16px; }
+
+/* 一条滚轴：三列都不再有自己的滚动条；内容比这条带高时先收进底部渐隐里，
+   由中栏底部的「展开全部」把整条带放开，滚轮永远只滚页面。 */
+.bench .traj .cflow.is-clip,
+.chain-body.is-clip,
+.bench .aprobs .tgroup.is-clip {
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 72px), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 72px), transparent 100%);
+}
+/* 「展开全部」跟在链路盒子末尾、带下沿之外，不压住被收起的那几行。 */
+.band-more {
+  display: block; width: fit-content; margin: 8px auto 0; z-index: 3;
+  height: 24px; padding: 0 12px; border-radius: 12px;
+  background: var(--lift); box-shadow: var(--shadow); color: var(--ink-2);
+  font-size: var(--fs-meta); font-weight: var(--w-medium); white-space: nowrap;
+  transition: color var(--snap), background var(--snap), box-shadow var(--snap);
+}
+.band-more:hover { color: var(--ink); box-shadow: var(--shadow-pop); }
+.band-more[hidden] { display: none; }
 
 /* ---------------------------------------------------------------- timeline */
 .msg {
@@ -315,7 +340,7 @@
 .cflow { position: relative; display: grid; }
 .cflow::before { content: ""; position: absolute; left: 6px; top: 14px; bottom: 14px; width: 2px; border-radius: 1px; background: var(--t4); }
 .cf {
-  position: relative; display: grid; grid-template-columns: 12px 3.6em minmax(0, 1fr); align-items: start;
+  position: relative; display: grid; grid-template-columns: 12px 4.5em minmax(0, 1fr); align-items: start;
   padding: 6px 8px 6px 0; border-radius: var(--r-ctl); cursor: pointer; transition: background var(--snap);
 }
 .cf:hover { background: var(--hover); }
@@ -330,7 +355,8 @@
 .cflow.is-tight .cf { padding: 2px 8px 2px 0; }
 .cflow.is-tight .cf .refs { display: none; }   /* 行本身可点，角标让位给对齐 */
 .cflow.is-tight .cf + .cf.plan, .cflow.is-tight .cf.plan + .cf.think { margin-top: 0; }
-.cf-tag { padding: 0 6px 0 8px; font-size: var(--fs-meta); line-height: 20px; font-weight: var(--w-medium); color: var(--muted); white-space: nowrap; }
+/* 标签列按最长的「答案生成」留宽（4 个汉字 + 内边距）；再长就省略，绝不压到后面的 2·#22。 */
+.cf-tag { padding: 0 6px 0 8px; font-size: var(--fs-meta); line-height: 20px; font-weight: var(--w-medium); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cf .refs { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 2px; }
 .cf .refs button { font-size: var(--fs-meta); color: var(--accent); font-family: var(--mono); }
 .cf.plan { --c: var(--t0); }
