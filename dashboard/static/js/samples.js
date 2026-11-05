@@ -5,7 +5,7 @@ import { threadFlow } from "./particles.js";
 
 const FOLD_OPEN = new Set(["user", "answer"]);
 const PAGE = 50;
-const S = { product: null, all: [], rows: [], pageRows: [], page: 1, slug: null, sessionKey: null, D: null, round: 0, trace: 0, turn: 0, cturn: 0, sessionView: false, open: new Set(), shut: new Set(), active: null, cache: new Map() };
+const S = { product: null, all: [], rows: [], pageRows: [], page: 1, slug: null, sessionKey: null, D: null, round: 0, trace: 0, turn: 0, cturn: 0, sessionView: false, open: new Set(), active: null, cache: new Map() };
 let ctx;
 let root;
 
@@ -595,7 +595,6 @@ async function loadSession(session, focusSlug, focusTrace) {
   S.turn = init?.turn ?? S.round;
   S.cturn = init?.compact ?? S.round;
   S.open = new Set();
-  S.shut = new Set();
   S.active = null;
   renderIn();
   renderOut();
@@ -848,16 +847,14 @@ function msgHTML(t, i, m) {
   const chat = m.k === "user" || m.k === "answer";
   const sevs = [...new Set((m.ev || []).map((e) => D._ix.sev.get(e)).filter(Boolean))]
     .sort((a, b) => SEV.indexOf(b) - SEV.indexOf(a));
-  // 被归因引用的消息默认展开：证据 mark 在折叠态看不见，闭环就断了。
-  const folded = S.shut.has(key) || (!FOLD_OPEN.has(m.k) && !sevs.length && !S.open.has(key));
+  const folded = !FOLD_OPEN.has(m.k) && !S.open.has(key);
   const time = m.dur != null ? `<span class="num dur">${m.dur >= 1000 ? fmt(m.dur / 1000, 1) + " s" : m.dur + " ms"}</span>` : "";
   const who = KIND[m.k] || m.k;
   const firstUser = t === 0 ? S.D.input.traces[0].messages.findIndex((x) => x.k === "user") : -1;
   const trans = t === 0 && i === firstUser && S.D.question_zh && S.D.question_zh !== S.D.question ? S.D.question_zh : "";
   const body = blockHTML(t, i, m);
   const hasBody = body || trans;
-  const cited = sevs.length ? ` has-ev" style="--c:${sevColor(sevs[0])}` : "";
-  return `<div class="msg k-${m.k}${chat ? " is-chat" : ""}${folded ? " is-folded" : ""}${cited}" id="m-${t}-${i}" data-key="${key}">
+  return `<div class="msg k-${m.k}${chat ? " is-chat" : ""}${folded ? " is-folded" : ""}" id="m-${t}-${i}" data-key="${key}">
     ${chat ? "" : '<span class="msg-dot" aria-hidden="true"></span>'}
     <div class="msg-body"><div class="msg-top">
       <span class="who">${who}</span>
@@ -945,7 +942,7 @@ function pieceHTML(t, mi, bi, b, plain = false) {
 
 /* Evidence inside a Markdown-rendered answer: find each quote in the rendered text (ignoring
    whitespace and Markdown syntax, which rendering drops) and wrap the covered runs in marks.
-   A quote that cannot be found still shows on the message edge (.has-ev) and its thread. */
+   A quote that cannot be found still shows as its thread plus the header swatches. */
 const MD_NOISE = /[\s*_`#>|~\\-]/;
 function markProse(scope) {
   $$(".md-find:not([data-done])", scope).forEach((host) => {
@@ -1047,9 +1044,7 @@ function onInputClick(e) {
   const fold = e.target.closest("[data-fold]");
   if (fold) {
     const [t, i] = fold.dataset.fold.split(":").map(Number);
-    const k = fold.dataset.fold;
-    const isFolded = fold.closest(".msg")?.classList.contains("is-folded");
-    if (isFolded) { S.open.add(k); S.shut.delete(k); } else { S.shut.add(k); S.open.delete(k); }
+    S.open.has(fold.dataset.fold) ? S.open.delete(fold.dataset.fold) : S.open.add(fold.dataset.fold);
     rerenderMsg(t, i);
     return;
   }
@@ -1103,7 +1098,6 @@ function jump(eid) {
   S.active = eid;
   if (prev != null && S.D.evidence[prev]) rerenderMsg(S.D.evidence[prev].t, S.D.evidence[prev].m);
   S.open.add(`${ev.t}:${ev.m}`);
-  S.shut.delete(`${ev.t}:${ev.m}`);
   rerenderMsg(ev.t, ev.m);
   const el = $(`#m-${ev.t}-${ev.m}`, root);
   $$("mark.on", root).forEach((m) => m.classList.remove("on"));
@@ -1172,10 +1166,8 @@ function wireThreads() {
   if (threadObs) threadObs.disconnect();
   threadObs = new ResizeObserver(scheduleThreads);
   threadObs.observe(box);
-  // 侧栏是 sticky 的、各自还能滚：主滚动或任一栏滚动都会改变两端的相对位置，
-  // 所以滚动时逐帧重画（几十条 path，一帧一次，rAF 合并）。
-  $("#sbody", root)?.addEventListener("scroll", scheduleThreads, { passive: true });
-  box.addEventListener("scroll", scheduleThreads, { capture: true, passive: true });
+  // 只有一个滚动面（#sbody），滚动的只是整体位移，连线坐标相对容器不变，不用重画；
+  // 折叠、换轮、字号变化仍由 ResizeObserver 与补偿重画覆盖。
   const stl = $("#stl", root);
   if (stl) threadObs.observe(stl);
   if (!wireThreads.bound) {
@@ -1196,7 +1188,6 @@ function scheduleThreads() {
   if (threadFrame) return;
   threadFrame = requestAnimationFrame(() => {
     threadFrame = 0;
-    markChainScroll();
     drawThreads();
     // 首屏的字号、折叠状态、上方 Overview/点评的高度都会在下一拍才稳定；
     // 位置一变连线就得重画，否则出入点会落在旧位置上。
@@ -1206,14 +1197,6 @@ function scheduleThreads() {
     scheduleThreads.compensate = false;
     threadTimers.forEach(clearTimeout);
     threadTimers = [220, 600, 1200, 2400].map((ms) => setTimeout(() => drawThreads(), ms));
-  });
-}
-
-/* 链路盒子里还有没露出来的步骤时，底部渐隐一下，提示「还能往下滚」。 */
-function markChainScroll() {
-  $$(".chain-box", root).forEach((box) => {
-    const body = $(".chain-body", box);
-    if (body) body.classList.toggle("is-more", body.scrollHeight - body.scrollTop - body.clientHeight > 4);
   });
 }
 
@@ -1239,15 +1222,6 @@ function drawThreads() {
     probe.y = y;
     return probe.matrixTransform(inv);
   };
-  // 两端都夹进各自的可视区：主滚动容器（#sbody）与问题栏自己的滚动区。被夹住的线画成虚线，
-  // 表示证据或卡片在视口外，线仍指向它所在的方向。
-  const view = ($("#sbody", root) || box).getBoundingClientRect();
-  const side = $("#sattr", root).getBoundingClientRect();
-  const sTop = Math.max(view.top, side.top) + 6 * scale;
-  const sBot = Math.min(view.bottom, side.bottom) - 6 * scale;
-  const vTop = view.top + 6 * scale;
-  const vBot = view.bottom - 6 * scale;
-  const clamp = (y, a, b) => Math.max(a, Math.min(b, y));
   const byId = new Map(S.D.attribution.problems.map((p) => [p.id, p]));
   let paths = "";
   $$("#sattr .pcard", root).forEach((card) => {
@@ -1255,9 +1229,7 @@ function drawThreads() {
     const prob = byId.get(pid);
     if (!prob) return;
     const pr = card.getBoundingClientRect();
-    const yCard = pr.top + 22 * scale;
-    const cardOff = yCard < sTop || yCard > sBot;
-    const end = toLocal(pr.left, clamp(yCard, sTop, sBot));
+    const end = toLocal(pr.left, pr.top + 22 * scale);
     const x2 = end.x;
     const y2 = end.y;
     const seen = new Set();
@@ -1271,21 +1243,12 @@ function drawThreads() {
       if (!msg) return;
       seen.add(key);
       const r = ($(".msg-body", msg) || msg).getBoundingClientRect();
-      const y0 = r.top + Math.min(26 * scale, r.height / 2);
-      let y = y0;
-      // 中间链路盒子内部滚过之后，消息可能已经滚出盒子的可视区：把出入点夹到盒子上下边缘。
-      const clipBox = msg.closest(".chain-body");
-      if (clipBox) {
-        const cb = clipBox.getBoundingClientRect();
-        y = clamp(y, cb.top + 4 * scale, cb.bottom - 4 * scale);
-      }
-      y = clamp(y, vTop, vBot);
-      const off = cardOff || Math.abs(y - y0) > 1;
+      const y = r.top + Math.min(26 * scale, r.height / 2);
       const start = toLocal(r.right, y);
       const x1 = start.x;
       const y1 = start.y;
       const span = Math.max(24, x2 - x1);
-      const cls = `${off ? "off" : ""}${pid === hoverPid ? " on" : ""}`.trim();
+      const cls = pid === hoverPid ? "on" : "";
       paths += `<path${cls ? ` class="${cls}"` : ""} data-p="${pid}" data-m="${ev.m}" style="--c:${sevColor(prob.sev)}" d="M${x1} ${y1} C ${x1 + span * 0.55} ${y1}, ${x2 - span * 0.45} ${y2}, ${x2} ${y2}"/>`;
     });
   });

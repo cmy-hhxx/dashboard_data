@@ -213,7 +213,7 @@
 
 /* ---------------------------------------------------------------- anatomy grid */
 .bench .anatomy {
-  min-height: 0; align-items: start;
+  min-height: 0;
   grid-template-columns: var(--col-traj) minmax(0, 1fr) var(--col-thread) var(--col-attr);
 }
 /* Session view: no trajectory column; the threads still connect cross-round problems. */
@@ -228,13 +228,14 @@
 .bench .traj > .out, .anatomy.is-session > .timeline { padding-left: calc(var(--col-pad) + 8px); }
 .bench .aprobs > .out { padding-right: calc(var(--col-pad) + 8px); }
 
-@media (min-width: 1181px) {
-  .bench #sbody { container-type: size; }
-  .bench .traj, .bench .aprobs {
-    position: sticky; top: 0; max-height: 100cqh;
-    overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; scrollbar-width: thin;
-  }
-}
+/* One scroll surface for the whole detail pane: the four columns flow together inside #sbody,
+   so a long chain or answer never creates a second scrollbar next to it. */
+.bench .anatomy { align-items: stretch; }
+.bench .traj, .bench .aprobs { display: grid; }
+/* Columns share one row: the trajectory's rail runs down to the same bottom edge as the timeline,
+   instead of the column visibly stopping early; rows keep their own height. */
+.bench .traj > .out { grid-template-rows: 1fr; height: 100%; }
+.bench .traj .cflow { height: 100%; }
 
 /* ---------------------------------------------------------------- timeline */
 .msg {
@@ -267,9 +268,6 @@
 @keyframes fade-in { from { opacity: 0; } }
 /* A cited message is washed in its worst severity's hue instead of carrying a bar:
    the tint says "cited", the header swatches say "which severities". */
-.msg.has-ev .msg-body { background: color-mix(in oklab, var(--c) 6%, var(--well)); }
-.msg.k-user.has-ev .msg-body { background: color-mix(in oklab, var(--c) 6%, var(--accent-soft)); }
-.msg.k-answer.has-ev .msg-body { background: color-mix(in oklab, var(--c) 5%, var(--lift)); box-shadow: var(--shadow); }
 .anatomy.is-focus .msg:not(.on) { opacity: 0.35; }
 .anatomy .msg.on .msg-body { background: var(--active); }
 .msg.flash .msg-body, .pcard.flash, .cf.flash { animation: flash 1.2s ease-out; }
@@ -296,8 +294,6 @@
 
 .blk.is-json { font-family: var(--mono); font-size: var(--fs-small); line-height: 1.6; color: var(--ink-2); }
 .blk-label { display: block; margin-top: 10px; font-size: var(--fs-meta); color: var(--muted); font-weight: var(--w-medium); }
-/* Step bodies stay short; chat bodies flow at full length in the main scroller. */
-.msg:not(.is-chat) .blk { max-height: min(48vh, 420px); overflow-y: auto; overflow-x: hidden; }
 .msg.is-folded .blk, .msg.is-folded .blk-label, .msg.is-folded .msg-zh { display: none; }
 .msg-zh { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--t4); color: var(--muted); font-size: var(--fs-small); line-height: 1.65; white-space: pre-wrap; }
 .gap { display: block; margin: 6px 0; color: var(--muted); font: 11px var(--font); text-align: center; letter-spacing: 0.03em; }
@@ -307,15 +303,7 @@
 .chain-box { display: grid; gap: 4px; }
 .chain-head { display: flex; align-items: baseline; gap: 8px; padding: 2px 0 2px 28px; font-size: var(--fs-meta); color: var(--muted); }
 .chain-k { font-weight: var(--w-medium); color: var(--ink-2); }
-.chain-body {
-  display: grid; gap: 5px; max-height: clamp(220px, 42vh, 560px);
-  overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; scrollbar-width: thin;
-}
-.chain-body.is-more {
-  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 26px), transparent);
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 26px), transparent);
-}
-.chain-body::-webkit-scrollbar { width: 6px; }
+.chain-body { display: grid; gap: 5px; }
 
 /* ---------------------------------------------------------------- trajectory (compact flow) */
 .cflow { position: relative; display: grid; }

@@ -50,12 +50,13 @@
 
 /* Evidence marks: one look everywhere — tint + underline in the problem's severity colour.
    `.ev.on` is the jumped-to quote; `.cx` is a compact citation. */
-mark.ev {
-  background: color-mix(in oklab, var(--c) 20%, transparent); color: inherit;
-  border-radius: 3px; box-shadow: inset 0 -1.5px 0 var(--c); padding: 0 1px;
-  cursor: pointer; transition: background var(--snap);
+/* Evidence is quiet until a problem is hovered or one of its evidence buttons was clicked:
+   the quoted text looks like plain text, and only the focused problem's marks tint in. */
+mark.ev { background: none; color: inherit; border-radius: 3px; padding: 0 1px; cursor: pointer; }
+mark.ev.on {
+  background: color-mix(in oklab, var(--c) 22%, transparent);
+  box-shadow: inset 0 -1.5px 0 var(--c);
 }
-mark.ev.on, mark.ev:hover { background: color-mix(in oklab, var(--c) 40%, transparent); }
 mark.cx { background: color-mix(in oklab, var(--accent) 18%, transparent); color: inherit; border-radius: 3px; }
 .md-find { display: contents; }
 
