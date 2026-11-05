@@ -756,10 +756,14 @@ function renderIn() {
   renderTrace();
 }
 
+/* 中间列没有链路盒子时（空输入 / 该轮没有消息 / 这一轮没有中间步骤），
+   「展开全部」要落在中间列末尾：轨迹列或归因列被收起时，它是唯一的展开入口。 */
+const bandToggleHTML = () => `<button type="button" class="band-more band-toggle" data-band hidden>展开全部</button>`;
+
 /* 没有评测输入（这一组只评测过、输入没落盘）时中间列的空态。
    换轮 / 从 session 总评切回来都要回到它，不能把上一屏的内容留在那儿。 */
 function renderMissingState() {
-  $("#stl", root).innerHTML = `<div class="empty">这一组没有找到对应的评测输入。</div>`;
+  $("#stl", root).innerHTML = `<div class="empty">这一组没有找到对应的评测输入。</div>${bandToggleHTML()}`;
   $("#ov", root).innerHTML = "";
   $("#ovBox", root).innerHTML = "";
   enter();
@@ -799,6 +803,7 @@ function renderTrace() {
   if (!tr) return renderMissingState();   // 切回这一轮时恢复空态，别把上一屏留在中间列
   renderOverview();
   $("#stl", root).innerHTML = timelineHTML(S.trace, tr.messages || []) || `<div class="empty">该轮没有消息</div>`;
+  if (!$(".chain-box", $("#stl", root))) $("#stl", root).insertAdjacentHTML("beforeend", bandToggleHTML());
   markProse($("#stl", root));
   enter();
   scheduleThreadsCompensate();
