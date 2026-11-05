@@ -1410,7 +1410,7 @@ function compactFlowHTML(D, t, multi) {
       const tag = !k || nodes[k - 1].cls !== n.cls ? n.name : "";
       const refs = n.ev.length > 1 ? `<span class="refs">${n.ev.map((e) => `<button type="button" data-e="${e}">${evAt(D.evidence[e], multi)}</button>`).join("")}</span>` : "";
       return `<div class="cf ${n.cls}" id="cf-${t.turn}-${k}"${n.ev.length ? ` data-e="${n.ev[0]}"` : ""}><span class="cf-dot"></span>
-        <span class="cf-tag">${tag}</span><div class="cf-body"><span class="cf-at num">${at(n.pos)}</span><span class="cf-text">${esc(n.x.c)}</span>${refs}</div></div>`;
+        <span class="cf-tag">${tag}</span><div class="cf-body"><span class="cf-at num">${at(n.pos)}</span><span class="cf-text" title="${esc(n.x.c)}">${esc(n.x.c)}</span>${refs}</div></div>`;
     })
     .join("");
   return `<div class="cflow">${flow}</div>`;

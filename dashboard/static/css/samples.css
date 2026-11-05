@@ -13,9 +13,9 @@
   --fs-meta: 11.5px;   /* labels, ids, counts */
   --fs-small: 12.5px;  /* secondary text */
   --fs-body: 13.5px;   /* message and card text */
-  --col-traj: clamp(232px, 22%, 400px);
-  --col-thread: 64px;
-  --col-attr: clamp(256px, 24%, 440px);
+  --col-traj: clamp(244px, 23%, 400px);
+  --col-thread: 56px;
+  --col-attr: clamp(264px, 25%, 440px);
   --col-pad: 16px;     /* one horizontal inset for every anatomy column */
 }
 
@@ -321,7 +321,7 @@
 .cflow { position: relative; display: grid; }
 .cflow::before { content: ""; position: absolute; left: 6px; top: 14px; bottom: 14px; width: 2px; border-radius: 1px; background: var(--t4); }
 .cf {
-  position: relative; display: grid; grid-template-columns: 12px 4.6em minmax(0, 1fr); align-items: start;
+  position: relative; display: grid; grid-template-columns: 12px 3.6em minmax(0, 1fr); align-items: start;
   padding: 6px 8px 6px 0; border-radius: var(--r-ctl); cursor: pointer; transition: background var(--snap);
 }
 .cf:hover { background: var(--hover); }
@@ -329,6 +329,9 @@
 .cf-at { padding-right: 6px; font-size: var(--fs-meta); line-height: 1.55; color: var(--muted); }
 .cf-dot { position: relative; z-index: 1; justify-self: center; width: 10px; height: 10px; margin-top: 5px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 3px var(--card); }
 .cf-body, .cf-text { min-width: 0; font-size: var(--fs-small); line-height: 1.6; color: var(--ink-2); overflow-wrap: anywhere; word-break: break-word; }
+/* Long tool names and mixed CJK/ASCII text turn a narrow step into an 8-line paragraph in a four
+   column layout. Keep rows one height; the full text is the row's title, the evidence stays clickable. */
+.cf-text { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .cf-tag { padding: 0 6px 0 8px; font-size: var(--fs-meta); line-height: 20px; font-weight: var(--w-medium); color: var(--muted); white-space: nowrap; }
 .cf .refs { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 2px; }
 .cf .refs button { font-size: var(--fs-meta); color: var(--accent); font-family: var(--mono); }
