@@ -3,11 +3,13 @@
 import json
 import mimetypes
 import os
+import re
 import shutil
 import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 from datetime import timezone
 from email.utils import parsedate_to_datetime
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -23,9 +25,12 @@ REFRESH = int(os.environ.get("REFRESH_SECONDS", "600"))
 _state = {"last_run": 0, "running": False, "error": "", "seconds": 0, "build": None}
 _lock = threading.Lock()
 _builder = None
+_lister = None
 _prewarm_lock = threading.Lock()
 _prewarm_running = False
 PREWARM = int(os.environ.get("DETAIL_PREWARM", "30"))
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+MODEL_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 def prewarm_details():
@@ -127,6 +132,38 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _serve_inputs(self, path_only):
+        """评测输入清单（按天/模型现读）与单条输入的详情。"""
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        product = (query.get("product") or [""])[0]
+        day = (query.get("d") or [""])[0]
+        model = (query.get("m") or [""])[0]
+        split = (query.get("sp") or ["daily"])[0]
+        if product not in ("wencai", "aime") or not DATE_RE.match(day) or not MODEL_RE.match(model) or split not in ("daily", "lost"):
+            self._send_body(400, b'{"error":"bad params"}', "application/json")
+            return True
+        if path_only == "/inputs.json":
+            try:
+                payload = _lister.listing(product, day, model, split)
+            except Exception as exc:  # noqa: BLE001 - 读不到就告诉前端，别挂页面
+                print(f"[serve] inputs {product} {day} {model}: {exc}", flush=True)
+                self._send_body(500, b'{"error":"input listing failed"}', "application/json")
+                return True
+            body = json.dumps(payload, ensure_ascii=False).encode()
+            self._send_body(200, body, "application/json")
+            return True
+        ref = urllib.parse.unquote(path_only[len("/inputs/"):-len(".json")])
+        try:
+            detail = _lister.detail(product, day, model, split, ref)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[serve] input detail {product} {day} {model} {ref}: {exc}", flush=True)
+            detail = None
+        if detail is None:
+            self._send_body(404, b'{"error":"input detail unavailable"}', "application/json")
+            return True
+        self._send_body(200, json.dumps(detail, ensure_ascii=False).encode(), "application/json")
+        return True
+
     def _gzip_matches_source(self, path, gz):
         """Reject a .gz that was not built from the current source file.
 
@@ -195,6 +232,9 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_body(200, body, "application/json")
             return
         path_only = self.path.split("?", 1)[0]
+        if _lister and (path_only == "/inputs.json" or (path_only.startswith("/inputs/") and path_only.endswith(".json"))):
+            if self._serve_inputs(path_only):
+                return
         if _builder and path_only.startswith("/samples/") and path_only.endswith(".json"):
             slug = path_only[len("/samples/"):-len(".json")]
             try:
@@ -247,7 +287,7 @@ def outputs_ready():
 
 
 def main():
-    global _builder
+    global _builder, _lister
     try:
         from build import default_datasets
         from detail_builder import DetailBuilder
@@ -257,6 +297,16 @@ def main():
         )
     except Exception as exc:  # noqa: BLE001 - keep serving pre-generated details
         print(f"[serve] lazy detail builder disabled: {exc}", flush=True)
+    try:
+        from build import default_datasets
+        from input_list import InputLister
+        _lister = InputLister(default_datasets(), os.path.join(HERE, "cache", "build.sqlite3"),
+                              os.path.join(HERE, "cache"), STATIC)
+        # 文件清单在弗吉尼亚要 23 秒（rglob 在 ceph 上），启动就后台读一遍，别让第一次点击等它。
+        import build as _build
+        threading.Thread(target=_lister.warm, args=(sorted(_build.ENABLED),), daemon=True).start()
+    except Exception as exc:  # noqa: BLE001 - 输入清单不可用时第三级退回旧行为
+        print(f"[serve] input lister disabled: {exc}", flush=True)
     if not outputs_ready():
         print("[serve] payloads missing, building once before serving", flush=True)
         refresh_once()

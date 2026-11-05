@@ -38,11 +38,10 @@ export async function render(root, c) {
   }
   if (detail) {
     const state = evalDetailState(p, { ed, em, ep, edp });
-    const indexP = c.loadIndex(c.product).catch(() => null);
-    const index = state.model ? await indexP : null;
-    root.innerHTML = evalDetailPage(p, state, index);
+    root.innerHTML = evalDetailPage(p, state);
     runCounters(root);
     wireEvalDetail(root, state);
+    if (state.day && state.model) fillEvalInputs(root, state);
     window.scrollTo(0, 0);
     lastDetail = true;
     return;
@@ -536,23 +535,6 @@ const edRing = (r) => {
     <b>${p == null ? "—" : `${p}<small>%</small>`}</b>
   </span></td>`;
 };
-function edSessionGroups(rows) {
-  const groups = new Map();
-  rows.forEach((r) => {
-    const key = `${r.sp}|${r.m}|${r.sid || r.s}`;
-    let g = groups.get(key);
-    if (!g) {
-      g = { key, slug: r.s, q: r.q || "", tr: 0, n: 0, w: "none" };
-      groups.set(key, g);
-    }
-    g.tr += r.tr || 1;
-    g.n += r.n || 0;
-    if (r.q) g.q = r.q;
-    if (WORST.indexOf(r.w) >= 0 && (g.w === "none" || WORST.indexOf(r.w) < WORST.indexOf(g.w))) g.w = r.w;
-  });
-  return [...groups.values()].sort((a, b) => WORST.indexOf(a.w) - WORST.indexOf(b.w) || b.n - a.n || (a.q || "").localeCompare(b.q || ""));
-}
-
 function evalDetailState(p, raw) {
   const days = edDays(p);
   const day = days.some((x) => x.d === raw.ed) ? raw.ed : "";
@@ -575,19 +557,11 @@ function edPager(page, pages, total, unit, kind) {
     ${btn(page + 1, "下一页", page === pages)}${btn(pages, "»", page === pages)}</div>`;
 }
 
-function evalDetailPage(p, state, index) {
+function evalDetailPage(p, state) {
   const { days, day, models, model } = state;
   const dPages = Math.max(1, Math.ceil(days.length / ED_PAGE));
   const dpage = Math.min(Math.max(1, state.edp), dPages);
   const modelRow = models.find((x) => x.key === model);
-  const all = ((index && index.products && index.products[ctx.product]) || {}).rows || [];
-  const mid = p.unified ? model.slice(1) : "";
-  const picked = model
-    ? all.filter((r) => r.d === day && (p.unified ? r.m === mid : `${r.sp}|${r.m}` === model))
-    : [];
-  const groups = edSessionGroups(picked);
-  const sPages = Math.max(1, Math.ceil(groups.length / ES_PAGE));
-  const spage = Math.min(Math.max(1, state.ep), sPages);
 
   const rootCrumb = day ? `<button type="button" class="mx-crumb" data-ed="root">全部日期</button>` : `<b>全部日期</b>`;
   const dayCrumb = day
@@ -619,18 +593,10 @@ function evalDetailPage(p, state, index) {
     const rows = models.map((r, i) =>
       row(r, i, `<button type="button" class="link" data-emodel="${esc(r.key)}" title="${esc(r.label)}">${esc(r.label)}</button>`));
     body = edTable(["150px", "8%", ...NUM_COLS], `<th class="first">模型</th><th class="ring">进度</th>${NUM_HEAD}`, rows, "is-model");
-  } else if (!index) {
-    body = `<div class="empty">样本索引读取失败，无法列出会话。</div>`;
-  } else if (!groups.length) {
-    body = `<div class="empty">该分组当天没有已完成的评测输出。</div>`;
   } else {
-    const rows = groups.slice((spage - 1) * ES_PAGE, spage * ES_PAGE).map((g, i) => `<tr class="ed-session" style="--i:${Math.min(i, 30)}" data-slug="${esc(g.slug)}">
-      <td class="first"><span class="ed-q">${esc(g.q || "（无提问）")}</span></td>
-      <td class="num">${fmt(g.tr)}</td>
-      <td class="act"><button type="button" class="ed-expand" data-slug="${esc(g.slug)}" aria-expanded="false">展开</button></td>
-    </tr>`);
-    body = edTable(["auto", "72px", "96px"], `<th class="first">样本</th><th class="num">轮</th><th class="act"></th>`, rows, "is-session");
-    pager = edPager(spage, sPages, groups.length, "个 session", "ep");
+    // 第三级看的是「这一天的评测输入对不对」，输入清单按天现读（server 的 /inputs.json），
+    // 评测输出只作为行尾的状态位，不再决定哪些会话能出现。
+    body = `<div class="ed-inputs" id="edInputs"><div class="empty">正在读取评测输入…</div></div>`;
   }
 
   return `<div class="bento"><article class="card card-detail" style="--span:12">
@@ -640,6 +606,59 @@ function evalDetailPage(p, state, index) {
       ${day ? `<button type="button" class="link ed-home" id="edHome">返回数据看板</button>` : ""}</header>
     ${body}${pager}
   </article></div>`;
+}
+
+/* ---------------------------------------------------------------- 评测详情: 第三级 = 当天的评测输入 */
+
+/* 这一级回答的是「当天的输入对不对」：输入清单由 server 按天现读（/inputs.json），
+   评测输出只在行尾做状态位（✓ 有 / — 无），不再决定哪些会话能出现。 */
+const splitOfModel = (key) => {
+  const [sp, m] = String(key || "").split("|");
+  return { split: sp || "daily", model: m || String(key || "") };
+};
+
+const inputSeq = { n: 0 };
+
+function inputTable(host, rows, state) {
+  if (!rows.length) {
+    host.innerHTML = `<div class="empty">该分组当天没有评测输入。</div>`;
+    return;
+  }
+  const { split, model } = splitOfModel(state.model);
+  const pages = Math.max(1, Math.ceil(rows.length / ES_PAGE));
+  const page = Math.min(Math.max(1, state.ep), pages);
+  const covered = rows.reduce((n, r) => n + (r.ev ? 1 : 0), 0);
+  const body = rows.slice((page - 1) * ES_PAGE, page * ES_PAGE).map((r, i) => `<tr class="ed-session" style="--i:${Math.min(i, 30)}"
+      data-ref="${esc(r.r)}" data-d="${esc(state.day)}" data-m="${esc(model)}" data-sp="${esc(split)}"${r.s ? ` data-slug="${esc(r.s)}"` : ""}>
+      <td class="first"><span class="ed-q">${esc(r.q || "（无提问）")}</span></td>
+      <td class="num">${fmt(r.tr)}</td>
+      <td class="out">${r.ev ? `<span class="ed-out is-yes" title="已有评测输出">✓</span>` : `<span class="ed-out" title="尚无评测输出">—</span>`}</td>
+      <td class="act"><button type="button" class="ed-expand" aria-expanded="false">展开</button></td>
+    </tr>`).join("");
+  host.innerHTML = `<div class="ed-input-note">共 <b class="num">${fmt(rows.length)}</b> 条评测输入，已有评测输出 <b class="num">${fmt(covered)}</b> 条</div>
+    <div class="md-table ed-table is-session"><table>
+      <colgroup><col><col style="width:72px"><col style="width:88px"><col style="width:96px"></colgroup>
+      <thead><tr><th class="first">样本</th><th class="num">轮</th><th class="out">输出</th><th class="act"></th></tr></thead>
+      <tbody>${body}</tbody></table></div>${edPager(page, pages, rows.length, "条输入", "ep")}`;
+}
+
+async function fillEvalInputs(root, state) {
+  const host = $("#edInputs", root);
+  if (!host) return;
+  const seq = ++inputSeq.n;
+  const { split, model } = splitOfModel(state.model);
+  const q = `product=${encodeURIComponent(ctx.product)}&d=${encodeURIComponent(state.day)}&m=${encodeURIComponent(model)}&sp=${encodeURIComponent(split)}`;
+  let rows;
+  try {
+    const res = await fetch(`inputs.json?${q}`, { cache: "no-cache" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    rows = (await res.json()).rows || [];
+  } catch (err) {
+    if (seq === inputSeq.n) host.innerHTML = `<div class="empty">评测输入读取失败：${esc(err.message)}</div>`;
+    return;
+  }
+  if (seq !== inputSeq.n || !host.isConnected) return;
+  inputTable(host, rows, state);
 }
 
 function wireEvalDetail(root, state) {
@@ -700,14 +719,15 @@ function wireEvalDetail(root, state) {
     const expandBtn = e.target.closest(".ed-expand");
     if (expandBtn) {
       e.preventDefault();
-      const slug = expandBtn.dataset.slug;
       const tr = expandBtn.closest("tr");
-      if (openSlug === slug) {
+      const slug = expandBtn.dataset.slug || "";
+      const key = slug || tr.dataset.ref;
+      if (openSlug === key) {
         closeExpand();
         return;
       }
       closeExpand();
-      openSlug = slug;
+      openSlug = key;
       expandBtn.textContent = "收起";
       expandBtn.setAttribute("aria-expanded", "true");
 
@@ -718,7 +738,7 @@ function wireEvalDetail(root, state) {
       tr.after(row);
       const box = row.querySelector(".ed-expand-box");
       try {
-        const D = await loadSample(slug);
+        const D = slug ? await loadSample(slug) : await loadInput(tr);
         box.innerHTML = renderSampleChain(D);
         // 列表里的问题来自索引（会被截断），展开后换成完整原文
         const full = D.question || D.question_zh;
@@ -741,6 +761,23 @@ function wireEvalDetail(root, state) {
 }
 
 /* ---------------------------------------------------------------- 评测详情: 行内展开的样本全链路 */
+
+const inputCache = new Map();
+const loadInput = (tr) => {
+  const q = new URLSearchParams({ product: ctx.product, d: tr.dataset.d, m: tr.dataset.m, sp: tr.dataset.sp });
+  const url = `inputs/${encodeURIComponent(tr.dataset.ref)}.json?${q}`;
+  if (!inputCache.has(url)) {
+    const p = fetch(url).then((r) => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    }).catch((err) => {
+      inputCache.delete(url);
+      throw err;
+    });
+    inputCache.set(url, p);
+  }
+  return inputCache.get(url);
+};
 
 const sampleCache = new Map();
 const loadSample = (slug) => {

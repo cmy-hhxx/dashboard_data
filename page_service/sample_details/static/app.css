@@ -989,6 +989,12 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .ed-table.is-session td { height: auto; padding-top: 14px; padding-bottom: 14px; white-space: normal; }
 .ed-table.is-session td.first { font-size: 13.5px; font-weight: 400; line-height: 1.6; color: var(--ink); padding-right: 24px; }
 .ed-table.is-session td.num, .ed-table.is-session th.num { width: 72px; }
+/* 评测输入清单：顶上一条汇总，行尾一个输出状态位（✓ 有 / — 无）。 */
+.ed-input-note { margin: 0 0 10px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ed-input-note b { color: var(--ink-2); font-weight: var(--w-medium); }
+.ed-table td.out, .ed-table th.out { text-align: center; }
+.ed-out { font-size: 13px; color: var(--faint); }
+.ed-out.is-yes { color: #2f9e63; font-weight: var(--w-medium); }
 .ed-table td.act, .ed-table th.act { text-align: right; white-space: nowrap; }
 .ed-expand {
   padding: 4px 2px; font-size: 12.5px; color: var(--accent);
