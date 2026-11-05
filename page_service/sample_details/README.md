@@ -32,7 +32,7 @@ http://<看板主机>:2833/?product=&case=  ──> /api/context（迷你索引�
 
 ## 前端快照
 
-`static/` 下的 `app.css`、`js/core.js`、`js/render.js`、`js/particles.js`、`js/samples.js`
+`static/` 下的 `css/base.css`、`css/layout.css`、`css/content.css`、`css/samples.css`、`js/core.js`、`js/render.js`、`js/particles.js`、`js/samples.js`
 是**看板前端的一份快照**（拷贝自 `dashboard/static/`），目的就是让页面和看板 pane 100% 一致；
 `static/entry.js` 与 `static/detail.css` 是本模块唯一的新前端代码（约 100 行）：
 入口取迷你索引后调用快照里的 `render()`，覆盖 CSS 把左侧样本列表和顶部导航去掉。
@@ -40,7 +40,7 @@ http://<看板主机>:2833/?product=&case=  ──> /api/context（迷你索引�
 **注意**：快照不会自动跟着看板更新。看板改了 pane 的样式/渲染后，需要重新拷贝一次：
 
 ```bash
-cp dashboard/static/app.css page_service/sample_details/static/app.css
+cp dashboard/static/css/{base,layout,content,samples}.css page_service/sample_details/static/css/
 cp dashboard/static/js/{core,render,particles,samples}.js page_service/sample_details/static/js/
 ```
 

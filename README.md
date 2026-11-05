@@ -148,7 +148,7 @@ tokens / task-subtask / lost 统计写到 `<datasets>/stats.json`；`build.py` �
 | `stats_worker.py` | 独立进程，每 1 小时刷新 `<datasets>/stats.json` 输入统计旁路 |
 | `detail_builder.py` | 样本页首次请求时按 SQLite 行号生成 `samples/<slug>.json(.gz)` |
 | `server.py` | `ThreadingHTTPServer` + 定时执行 `build.py --keep-on-empty`；`/samples/<slug>.json` 按需生成详情；`/healthz` 返回最近一次构建摘要 |
-| `static/` | 三页入口、ES modules、`app.css`；无第三方运行时依赖 |
+| `static/` | 三页入口、ES modules、`css/*.css`；无第三方运行时依赖 |
 | `static/js/` | `app.js` 路由/主题/数据加载，`data.js` 数据页，`sunburst.js` 可下钻旭日图，`system.js` 评测体系页，`samples.js` 样本页（含 compact 流程图），`core.js` 共享格式化/提示/数字动效 |
 | `precompress.sh` | 部署时预压缩 JS/CSS/HTML |
 

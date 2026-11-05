@@ -195,7 +195,7 @@ class SampleDetailsTest(unittest.TestCase):
         self.assertEqual(headers.get("Content-Encoding"), "gzip")
 
     def test_static_assets(self):
-        for path in ("/js/samples.js", "/js/core.js", "/app.css", "/detail.css", "/entry.js"):
+        for path in ("/js/samples.js", "/js/core.js", "/css/samples.css", "/detail.css", "/entry.js"):
             status, _, body = fetch(self.base + path)
             self.assertEqual(status, 200, path)
             self.assertTrue(body)

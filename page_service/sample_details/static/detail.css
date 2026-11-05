@@ -1,6 +1,6 @@
 /* Standalone shell: keep only the right-hand pane of the dashboard sample page.
-   app.css is a snapshot of dashboard/static/app.css and carries every style
-   inside the pane; this file only reshapes the page around it. */
+   css/*.css is a snapshot of dashboard/static/css (base, layout, content, samples) and
+   carries every style inside the pane; this file only reshapes the page around it. */
 html, body { min-height: 100%; }
 
 main#main { max-width: 1480px; padding: 8px var(--gutter) 12px; }
@@ -34,8 +34,8 @@ main#main { max-width: 1480px; padding: 8px var(--gutter) 12px; }
 /* ---------------------------------------------------------------- 超大屏（老板的显示器）
    两种目标屏：3840×2160（16:9，带鱼屏放一半）和 7680×2160（32:9，全屏）。
    做法：整页按 --ext-zoom 放大（字不显小），宽度按缩放折算回 CSS px；
-   三栏改成「左右各 24% / 中间吃掉剩余 / 证据连线固定」，中间对话的阅读宽度自然封顶，
-   不会被拉成超长横条；整页居中。窄屏（≤1800px）保持原来 1480 的版面，内部页面不受影响。 */
+   四栏改成「左右各 24% / 中间吃掉剩余 / 证据连线固定」，左右两栏 sticky 跟随，长对话旁不留空栏；
+   整页居中。窄屏（≤1800px）保持原来 1480 的版面，内部页面不受影响。 */
 @media (min-width: 1800px) {
   :root { --ext-zoom: 1.12; --ext-w: 2100px; }
 }
@@ -54,18 +54,14 @@ main#main { max-width: 1480px; padding: 8px var(--gutter) 12px; }
     height: calc((100vh - 20px) / var(--ext-zoom));
     min-height: calc(560px / var(--ext-zoom));
   }
-  /* 三栏只给「单轮对话」：左右各 24%，中间对话吃剩余宽度，证据连线固定宽度 */
-  #root .bench .anatomy:not(.is-session) {
-    grid-template-columns: 24% minmax(0, 1fr) 88px 24%;
-    column-gap: clamp(16px, 1.2vw, 36px);
-  }
-  /* session 总评是「对话 + 连线 + 问题」三栏：左侧轨迹栏不要，连线栏和单轮一样保留 */
-  #root .bench .anatomy.is-session {
-    grid-template-columns: minmax(0, 1fr) 88px minmax(300px, 22%);
-    column-gap: clamp(16px, 1.2vw, 36px);
-  }
-  /* 顶部信息也分两栏：Overview 在左、Trace 点评在右，长段落不至于横跨整屏 */
-  #root .sample-head { grid-template-columns: repeat(2, minmax(0, 96ch)); column-gap: clamp(24px, 2vw, 56px); justify-content: center; }
+  /* 四栏只调列宽 token（网格本身在 samples.css）：轨迹 / 问题两侧各 24%，连线固定，对话吃剩余；
+     超宽屏上对话栏本身就是阅读宽度，气泡不再另设上限，免得右侧空一大片。 */
+  #root .bench { --col-traj: 24%; --col-attr: 24%; --col-thread: 88px; --col-pad: 20px; }
+  #root .bench .anatomy.is-session { --col-attr: minmax(320px, 26%); }
+  #root .msg.k-user .msg-body, #root .msg.k-answer .msg-body { max-width: none; }
+  /* 顶部信息也分两栏：Overview 在左、Trace 点评在右，长段落不至于横跨整屏；
+     两栏铺满，左右缘与下方四栏对齐（居中的窄栏会让头部和正文错开两条边）。 */
+  #root .sample-head { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: clamp(24px, 2vw, 56px); }
   #root .sample-head > .headline,
   #root .sample-head > .chip-groups,
   #root .sample-head > .trace-tabs,
@@ -73,7 +69,7 @@ main#main { max-width: 1480px; padding: 8px var(--gutter) 12px; }
   #root .sample-head > #ovBox { grid-column: 1; }
   #root .sample-head > #sumBox { grid-column: 2; }
   /* session 总评没有 Overview，点评直接通栏铺开 */
-  #root #shead.is-session .sample-head { grid-template-columns: minmax(0, 96ch); justify-content: center; }
+  #root #shead.is-session .sample-head { grid-template-columns: minmax(0, 1fr); }
   #root #shead.is-session .sample-head > #sumBox { grid-column: 1; }
 }
 

@@ -1,0 +1,160 @@
+/* shell (top bar, main) + bento cards and the small shared controls */
+/* ------------------------------------------------------------------ shell */
+.top {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; gap: var(--gap);
+  padding: 12px var(--gutter);
+  background: color-mix(in oklab, var(--bg) 86%, transparent);
+  backdrop-filter: saturate(1.4) blur(14px);
+  -webkit-backdrop-filter: saturate(1.4) blur(14px);
+}
+.brand { display: flex; align-items: center; gap: 10px; font-weight: var(--w-title); letter-spacing: 0.01em; white-space: nowrap; }
+.brand-mark { width: 22px; height: 22px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; }
+.brand-mark i { border-radius: 2px; background: var(--sev-none); }
+.brand-mark i:nth-child(1), .brand-mark i:nth-child(5) { background: var(--sev-2); }
+.brand-mark i:nth-child(3) { background: var(--sev-0); }
+.brand-mark i:nth-child(8) { background: var(--sev-4); }
+.top-spacer { flex: 1; }
+.stamp { color: var(--faint); font-size: 12px; white-space: nowrap; }
+.stamp.is-new { animation: stamp-new 2.4s cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes stamp-new { 0%, 30% { color: var(--accent); } }
+/* An in-place data refresh swaps the payload under the reader; nothing replays its entrance. */
+.view.is-refresh, .view.is-refresh * { animation: none !important; }
+
+.seg {
+  position: relative; display: inline-flex; padding: 3px; height: 36px;
+  background: var(--well); border-radius: var(--r-ctl); touch-action: none; user-select: none;
+}
+.seg-knob {
+  position: absolute; top: 3px; bottom: 3px; left: 0; width: 0;
+  background: var(--lift); border-radius: var(--r-knob); box-shadow: var(--shadow);
+  transition: transform var(--spring), width var(--spring);
+}
+.seg.is-dragging .seg-knob { transition: none; }
+.seg.is-snapping .seg-knob { transition: transform var(--snap), width var(--snap); }
+.seg button {
+  position: relative; z-index: 1; padding: 0 14px; border-radius: var(--r-knob);
+  color: var(--muted); font-weight: var(--w-medium); white-space: nowrap;
+  transition: color var(--snap);
+}
+.seg button[aria-pressed="true"], .seg button[aria-selected="true"] { color: var(--ink); }
+.seg button:hover { color: var(--ink-2); }
+/* Each product wears its server's name above it, small and in that server's own hue. */
+#productSwitch button { display: grid; place-content: center; justify-items: center; gap: 1px; padding: 0 12px; line-height: 1.1; }
+.seg-loc { font-size: 9px; letter-spacing: 0.06em; color: var(--loc); opacity: 0.7; transition: opacity var(--snap); }
+#productSwitch button[aria-pressed="true"] .seg-loc { opacity: 1; }
+[data-value="wencai"] > .seg-loc { --loc: var(--loc-ulq); }
+[data-value="aime"] > .seg-loc { --loc: var(--loc-vir); }
+
+.icon-btn {
+  width: 36px; height: 36px; display: grid; place-items: center; border-radius: var(--r-ctl);
+  color: var(--ink-2); background: none; transition: background var(--snap), transform var(--snap);
+}
+.icon-btn:hover { background: var(--hover); }
+.icon-btn:active { transform: scale(0.94); }
+.icon-btn svg { width: 18px; height: 18px; }
+:root[data-mode="dark"] .i-sun { display: none; }
+:root:not([data-mode="dark"]) .i-moon { display: none; }
+
+main { padding: 8px var(--gutter) 48px; max-width: 1480px; margin: 0 auto; }
+html[data-view="samples"] main { max-width: none; padding-bottom: 16px; }
+.view { display: none; }
+/* A view settles into place instead of fading up from the page background, so switching pages
+   (e.g. from the cluster matrix into 具体数据) never flashes pale. */
+.view.is-active { display: block; animation: view-in 320ms cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes view-in { from { transform: translateY(6px); } }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+
+/* ------------------------------------------------------------------ bento */
+.bento { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: var(--gap); }
+.card {
+  grid-column: span var(--span, 4);
+  background: var(--card); border-radius: var(--r-card); box-shadow: var(--shadow);
+  padding: var(--py-lg) calc(var(--px) + 8px); min-width: 0; position: relative;
+}
+.card-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: var(--py); flex-wrap: wrap; }
+.card-head h2 { font-size: 15px; font-weight: var(--w-title); letter-spacing: 0.01em; }
+.card-head .meta { color: var(--muted); font-size: 12px; }
+.card-head .end { margin-left: auto; }
+/* One state control on every push-pull card head: it is the way back from an opened row. */
+.card-head .card-state { margin-left: auto; width: 28px; height: 28px; align-self: center; color: var(--ink-2); }
+.card-head .end + .card-state { margin-left: 4px; }
+.card-head .card-state:hover { color: var(--ink); }
+.card-state[hidden] { display: none; }
+.card-state svg { width: 16px; height: 16px; }
+.big { font-size: 46px; line-height: 1; font-weight: var(--w-light); letter-spacing: -0.025em; }
+.mid { font-size: 28px; line-height: 1.05; font-weight: var(--w-light); letter-spacing: -0.02em; }
+.unit { color: var(--muted); font-size: 13px; margin-left: 4px; }
+.dim { color: var(--muted); }
+.faint { color: var(--faint); }
+.empty { padding: 48px 0; text-align: center; color: var(--muted); }
+
+/* severity chips & legends */
+.sev { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+.sev i { width: 10px; height: 10px; border-radius: 3px; background: var(--c); flex: none; }
+.pill {
+  display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0;
+  border-radius: var(--r-chip); background: none; color: var(--ink-2); font-size: 12px; white-space: nowrap;
+}
+.legend { display: flex; flex-wrap: wrap; gap: 6px; }
+.legend button {
+  display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 8px;
+  border-radius: var(--r-chip); background: none; color: var(--ink-2); font-size: 12px;
+  transition: background var(--snap), opacity var(--snap), transform var(--spring);
+}
+.legend button i { width: 9px; height: 9px; border-radius: 2px; background: var(--c); }
+.legend button b { font-weight: var(--w-medium); color: var(--ink); }
+.legend button:hover { background: var(--hover); }
+.legend button:active { transform: scale(0.95); }
+.legend button[aria-pressed="true"] { background: var(--active); }
+
+/* stacked severity bar: 2px surface gaps, rounded data ends */
+
+/* tooltip */
+.tip {
+  position: fixed; z-index: 60; pointer-events: none; max-width: 320px;
+  background: var(--lift); color: var(--ink); border-radius: var(--r-well); box-shadow: var(--shadow-pop);
+  padding: 10px 12px; font-size: 12px; line-height: 1.5;
+  opacity: 0; transform: translateY(4px) scale(0.98); transition: opacity var(--snap), transform var(--snap);
+}
+.tip.is-on { opacity: 1; transform: none; }
+.tip b { font-weight: var(--w-medium); }
+.tip .t-row { display: flex; gap: 8px; align-items: center; color: var(--ink-2); }
+.tip .t-note { margin-top: 4px; color: var(--muted); font-size: 11.5px; }
+
+/* small histogram */
+.link { color: var(--accent); font-size: 12px; font-weight: var(--w-medium); }
+.link:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+.field-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--py) var(--gap); }
+.fgroup-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; font-size: 13px; }
+.fgroup-head b { font-weight: var(--w-medium); }
+.fgroup-lost { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+.fgroup-lost i { width: 5px; height: 5px; border-radius: 50%; box-shadow: inset 0 0 0 1px currentColor; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, 11px); grid-auto-rows: 11px; gap: 2px; align-content: start; }
+.tiles span {
+  width: 11px; height: 11px; border-radius: 2px; background: var(--c); cursor: pointer;
+  transition: opacity var(--snap), transform var(--spring);
+}
+.tiles span:hover { transform: scale(1.45); position: relative; z-index: 2; box-shadow: 0 0 0 2px var(--card); transition: opacity var(--snap), transform var(--snap); }
+.tiles span:active { transform: scale(1.1); }
+.field.is-filtered .tiles span:not(.on) { opacity: 0.14; }
+.field.is-filtered .tiles span.on { animation: pop var(--spring); }
+@keyframes pop { 40% { transform: scale(1.35); } }
+.field.is-intro .tiles span { animation: tile-in 520ms cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: calc(var(--i) * 0.9ms); }
+@keyframes tile-in { from { opacity: 0; transform: scale(0.4); } }
+.fgroup .field-pager { margin: 4px 0 0; padding: 6px 0 0; border-top: 0; justify-content: center; flex-wrap: wrap; gap: 4px 8px; }
+button.cell:hover { transform: scale(1.06); box-shadow: var(--shadow); }
+button.cell[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px var(--accent); }
+@media (max-width: 1180px) {
+  .card { grid-column: span min(var(--span, 4) * 2, 12); }
+  .card.keep { grid-column: span var(--span); }
+}
+@media (max-width: 860px) {
+  :root { --gutter: 16px; --r-card: 22px; }
+  .top { flex-wrap: wrap; gap: 10px; }
+  .top-spacer, .stamp { display: none; }
+  .bento { grid-template-columns: minmax(0, 1fr); }
+  .card, .card.keep { grid-column: 1 / -1; padding: var(--py) var(--px); }
+  .big { font-size: 38px; }
+}

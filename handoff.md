@@ -55,7 +55,7 @@ server.py（标准库 HTTP，:5001，定时 build）──> app.js
                                                 ├─ data.js    数据页
                                                 ├─ system.js  评测体系页
                                                 └─ samples.js 样本页
-                                                   core.js / sunburst.js / app.css
+                                                   core.js / sunburst.js / css/*.css
 ```
 
 - `build.py` 增量扫描输入、归因、compact，按 `对应关系.csv` 或 session key 配对；只生成变化的
@@ -111,7 +111,7 @@ server.py（标准库 HTTP，:5001，定时 build）──> app.js
 | `dashboard/static/js/sunburst.js` | 原生 SVG 可下钻旭日图 | 数据量 / 聚类环 |
 | `dashboard/static/js/galaxy.js` | 星图：一颗星一个 case、按分组成团的 canvas 视图（推拉展开的卡片里） | 星图布局、配色、交互 |
 | `dashboard/static/js/particles.js` | 证据流：沿证据连线流动的低密度粒子（体系页证据闭环、样本页） | 粒子密度、速度 |
-| `dashboard/static/app.css` | 所有样式与 token | 样式微调、响应式 |
+| `dashboard/static/css/*.css` | 样式按页拆分，按 index.html 中的顺序加载：`base`（token / 重置）→ `layout`（外壳 + Bento）→ `content`（消息内容、证据 mark、anatomy 底座）→ `data` → `system` → `samples`（具体数据工作台） | 样式微调、响应式 |
 | `dashboard/tests/*.py` | 合成数据端到端构建、增量、sidecar、懒详情测试 | 改 build.py 后 |
 | `dashboard/deploy.sh` | 同步、远端构建、预压缩、重启 | 发布 |
 
@@ -177,7 +177,7 @@ tr 轮数 · mc 消息数 · lang · case · s 短 slug
    `build_store.BUILD_VERSION`，否则旧样本缓存会被误用；改完删 `cache/` 跑一次全量验证。
 6. **改样本筛选**：`samples.js` 的 `F()`、`skeleton()`、`syncFilters()` 和列表
    过滤逻辑；筛选字段来自 `samples-<product>.json` 行，保持 URL 可分享。
-7. **改样式**：只改 `app.css`，优先复用现有 token 和类。不用硬边框，用 1%~3% 的
+7. **改样式**：改 `css/` 下对应页面的文件（样本页只在 `samples.css`），优先复用现有 token 和类。不用硬边框，用 1%~3% 的
    微差灰阶分层、同心圆角、16pt 横向 / 16–24pt 纵向间距、数字 `tabular-nums`。
 
 ## 7. 容易踩的坑
