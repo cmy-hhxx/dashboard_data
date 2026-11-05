@@ -212,6 +212,8 @@ function skeleton() {
   $("#shead", root).addEventListener("click", onOutClick);
   $("#sout", root).addEventListener("click", onOutClick);
   $("#sattr", root).addEventListener("click", onOutClick);
+  // 归因卡片的「现象 / 证据」展开会改这一列的内容高度，三列矩形要重新量一次。
+  $("#sattr", root).addEventListener("toggle", () => scheduleThreadsCompensate(), true);
   wireCmapPan($("#shead", root));
   bindTips($("#shead", root), (t) => {
     if ((!t.closest(".cmap") && !t.closest(".sp")) || !t.dataset.tip) return null;
@@ -695,7 +697,7 @@ function renderOverviewItems() {
   if (!box || !S.D) return;
   const items = overviewItems(S.D);
   box.innerHTML = items.length
-    ? `<span class="sp-k">Overview</span><div class="ov-list">${items
+    ? `<span class="sp-k">概览</span><div class="ov-list">${items
         .map((x, i) => `<div class="ov-item" title="${esc(x)}"><p><span class="ov-n" aria-hidden="true">${String(i + 1).padStart(2, "0")}</span><span class="ov-t">${esc(x)}</span></p></div>`)
         .join("")}</div>`
     : "";
@@ -1118,6 +1120,7 @@ function flash(el, scroll) {
 
 /* ---------------------------------------------------------------- evidence threads */
 let threadFrame = 0;
+let threadRealign = false;
 let threadTimers = [];
 let threadObs = null;
 let hoverPid = null;   // 当前指针压在哪个问题卡上
@@ -1162,6 +1165,11 @@ function wireThreads() {
     hoverPid = null;
     focus(null);
   }, { passive: true });
+  // 长链封顶后轨迹 / 链路在列内滚动，消息和卡片的屏幕位置会变，连线得跟着重画；
+  // 只重画不重排，否则一滚就把列的高度重新量一遍、滚动位置会被拉回去。
+  box.addEventListener("scroll", (e) => {
+    if (e.target !== box) scheduleThreads(false);
+  }, true);
   threadFlow($(".threads svg", box));
   if (threadObs) threadObs.disconnect();
   threadObs = new ResizeObserver(scheduleThreads);
@@ -1184,12 +1192,16 @@ function scheduleThreadsCompensate() {
   scheduleThreads();
 }
 
-function scheduleThreads() {
+function scheduleThreads(realign = true) {
+  // 盒内滚动（长链封顶后）只挪了消息半径内，重画连线就够；重排才需要重新量列。
+  if (realign !== false) threadRealign = true;
   if (threadFrame) return;
   threadFrame = requestAnimationFrame(() => {
     threadFrame = 0;
-    drawThreads();
-    // 首屏的字号、折叠状态、上方 Overview/点评的高度都会在下一拍才稳定；
+    const align = threadRealign;
+    threadRealign = false;
+    drawThreads(align);
+    // 首屏的字号、折叠状态、上方概览/点评的高度都会在下一拍才稳定；
     // 位置一变连线就得重画，否则出入点会落在旧位置上。
     // 首屏与后续重排（滚动条出现、折叠态、字体）都会让消息位置变；跑一串补偿重画，
     // 每次都很便宜（几十条 path），比监听所有祖先元素稳。
@@ -1200,44 +1212,79 @@ function scheduleThreads() {
   });
 }
 
-/* 轨迹栏只描述「中间链路」：上沿对齐 chain-box、下沿对齐回答消息。行数比链路少时由竖线补足，
-   行数更多时自然往下长，不裁切。 */
-function alignTraj() {
+/* 轨迹 / 中间链路 / 归因卡片合成一个矩形：三列上沿都落在链路第一步
+   （这一轮没有链路时退回到对话第一条），下沿落在同一条线上。
+   三列内容量天生不同，所以定高时给每列留一点拉伸余量（自然高度的 20%，上限 160px），
+   谁比这条线高就谁自己滚动：既不会用大片留白换对齐，也不会让某一列拖出几千像素的长条。 */
+function alignColumns() {
   const box = $("#sanatomy", root);
-  const out = $("#sout > .out", root);
-  const flow = $("#sout .cflow", root);
   const stl = $("#stl", root);
-  if (!box || !out || !flow || !stl) return;
-  const clear = () => {
-    flow.style.marginTop = "";
-    flow.style.minHeight = "";
-    out.style.paddingTop = "";
-  };
-  // 单栏（窄屏）与 session 总评没有并排的轨迹栏，保持自然流。
-  if (box.classList.contains("is-session") || !matchMedia("(min-width: 1181px)").matches) return clear();
-  const chain = $(".chain-box", stl);
-  const ans = $(".msg.k-answer", stl);
-  if (!chain || !ans) return clear();
-  const sr = stl.getBoundingClientRect();
-  const k = sr.height / (stl.offsetHeight || 1) || 1;   // 整页 zoom 时 rect 是放大后的像素
-  const top = (chain.getBoundingClientRect().top - sr.top) / k;
-  const bot = (ans.getBoundingClientRect().top - sr.top) / k;
-  const span = Math.max(0, bot - top);
-  out.style.paddingTop = "0px";
-  flow.style.marginTop = `${Math.max(0, top)}px`;
-  // 行数比链路多时逐级压行：3 行 → 2 行 → 1 行（更紧的行距、证据角标并到行内），
-  // 取第一个能收进链路高度的档位；全文仍在 title 里。
-  flow.style.minHeight = "0px";
-  for (const n of [3, 2, 1]) {
-    flow.style.setProperty("--cf-lines", String(n));
-    flow.classList.toggle("is-tight", n < 3);
-    if (flow.scrollHeight <= span + 2) break;
+  const outT = $("#sout > .out", root);
+  const flow = $("#sout .cflow", root);
+  const outP = $("#sattr > .out", root);
+  const group = $("#sattr .tgroup", root);
+  const body = stl ? $(".chain-body", stl) : null;
+  const lists = [flow, group, body].filter(Boolean);
+  // 先回到自然高度再量，否则上一轮撑出来的高度会被当成内容高度。
+  const kept = lists.map((el) => el.scrollTop);
+  for (const el of lists) {
+    el.style.height = "";
+    el.classList.remove("is-band", "is-scroll");
   }
-  flow.style.minHeight = `${span}px`;
+  if (flow) {
+    flow.style.marginTop = "";
+    flow.classList.remove("is-tight");
+    flow.style.removeProperty("--cf-lines");
+  }
+  if (group) group.style.marginTop = "";
+  if (outT) outT.style.paddingTop = "";
+  if (outP) outP.style.paddingTop = "";
+  if (!box || !stl || !flow || !group) return;
+  // 窄屏是单栏堆叠，session 总评没有轨迹栏：都保持自然流。
+  if (box.classList.contains("is-session") || !matchMedia("(min-width: 1181px)").matches) return;
+  // 上沿的锚点：链路第一步 → 对话第一条 → 该轮没有输入时的空态。
+  const anchorEl = (body && $(".msg", body)) || $(".msg", stl) || stl.firstElementChild;
+  if (!anchorEl) return;
+  const zoom = stl.offsetHeight ? stl.getBoundingClientRect().height / stl.offsetHeight : 1;   // 整页 zoom 时 rect 是放大后的像素
+  const anchor = anchorEl.getBoundingClientRect().top;
+  const pane = $("#sbody", root);
+  const cap = Math.max(720, pane ? pane.clientHeight : 900);
+  // 自然高度：cflow / tgroup 都是 grid，scrollHeight 就是内容高度。
+  const nat = { flow: flow.scrollHeight, group: group.scrollHeight, body: body ? body.scrollHeight : 0 };
+  const tallest = Math.max(nat.flow, nat.group, nat.body);
+  // 每列最多比自然高度多 stretch 这么多（20%，上限 160px），再多就让它自己滚：
+  // 对齐不能靠把内容摊成一片空白，所以矮的一列最多撑两成，剩下交给内容多的一列滚动。
+  const stretch = (n) => Math.min(160, Math.round(n * 0.2));
+  // 只有一项的列没法靠行距补高，不参与定高，否则一张卡就能把整条带压扁。
+  const room = (el, n) => (n && el && el.children.length > 1 ? n + stretch(n) : Infinity);
+  const H = Math.min(tallest, cap, room(flow, nat.flow), room(group, nat.group), body ? room(body, nat.body) : Infinity);
+  // 轨迹行数多于这一列能分到的高度时逐级压行（3 → 2 → 1 行），能收进去就不用滚动。
+  if (nat.flow > H) {
+    for (const n of [3, 2, 1]) {
+      flow.style.setProperty("--cf-lines", String(n));
+      flow.classList.toggle("is-tight", n < 3);
+      if (flow.scrollHeight <= H) break;
+    }
+  }
+  const toBand = (el, out) => {
+    out.style.paddingTop = "0px";
+    el.style.marginTop = `${(anchor - el.getBoundingClientRect().top) / zoom}px`;
+  };
+  toBand(flow, outT);
+  toBand(group, outP);
+  const fit = (el, natural) => {
+    el.style.height = `${H}px`;
+    if (natural > H + 2) el.classList.add("is-scroll");
+    else el.classList.add("is-band");
+  };
+  fit(flow, flow.scrollHeight);
+  fit(group, nat.group);
+  if (body) fit(body, nat.body);
+  lists.forEach((el, i) => { el.scrollTop = kept[i]; });
 }
 
-function drawThreads() {
-  alignTraj();
+function drawThreads(realign = true) {
+  if (realign) alignColumns();
   const box = $("#sanatomy", root);
   const svg = box && $(".threads svg", box);
   if (!svg) return;
@@ -1336,7 +1383,7 @@ function attrHTML(D) {
   const turn = D.rounds?.[S.round]?.turn ?? S.turn ?? S.round;
   const current = A.turns[Math.max(0, Math.min(turn, A.turns.length - 1))];
   let body = S.sessionView ? group(A.session_problems || []) : (current ? group(current.problems, S.round) : "");
-  return body || `<div class="empty">未发现 跨trace 问题 👍</div>`;
+  return body || `<div class="empty">未发现跨 trace 问题</div>`;
 }
 
 function renderOverview() {

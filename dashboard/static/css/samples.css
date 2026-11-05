@@ -3,11 +3,10 @@
    list pane | detail pane = head (#shead) + anatomy (#sout | #stl | .threads | #sattr)
 
    Layout contract (≥ 1181px):
-   - #sbody is the one scroller and a size container (100cqh = its visible height).
-   - The timeline flows in that scroller at full length; the trajectory and the problem
-     columns are sticky and scroll on their own, so a long trace or answer never leaves
-     the side columns as empty stripes.
-   - Nested scroll boxes (step chain, long step bodies) chain to #sbody at their ends.
+   - #sbody is the one scroller.
+   - 轨迹 / 中间链路 / 归因三列由 samples.js · alignColumns 合成一个矩形：上沿对齐中间链路
+     的第一步，下沿对齐三列里最高的那条线；矮的那列均分富余高度，超过可视高度 1.25 倍时
+     那一列自己滚。窄屏（< 1181px）单栏堆叠，对齐关闭。
    ========================================================================== */
 :root {
   --fs-meta: 11.5px;   /* labels, ids, counts */
@@ -130,7 +129,7 @@
 .chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .chip-groups { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
 .cg { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-.cg-k { flex: none; font-size: var(--fs-meta); letter-spacing: 0.05em; color: var(--muted); font-weight: var(--w-medium); }
+.cg-k { flex: none; font-size: var(--fs-meta); letter-spacing: 0.01em; color: var(--muted); font-weight: var(--w-medium); }
 .cg .pill { height: 20px; padding: 0 7px; border-radius: var(--r-chip); background: var(--well); font-size: var(--fs-small); color: var(--ink-2); }
 .cg.is-model .pill { background: var(--accent-soft); color: var(--accent); font-weight: var(--w-medium); }
 .cg.is-scene .pill { background: var(--well-2); color: var(--ink); font-weight: var(--w-medium); }
@@ -174,7 +173,7 @@
 }
 .ov-t { min-width: 0; }
 .summary { display: block; font-size: var(--fs-body); line-height: 1.75; color: var(--ink-2); }
-.sp-k { display: inline-block; justify-self: start; font-size: var(--fs-meta); letter-spacing: 0.06em; color: var(--muted); font-weight: var(--w-medium); }
+.sp-k { display: inline-block; justify-self: start; font-size: var(--fs-meta); letter-spacing: 0.01em; color: var(--muted); font-weight: var(--w-medium); }
 .sum-box .sp-k, .ov-box .sp-k { color: var(--accent); letter-spacing: 0.01em; }
 
 .cmap {
@@ -184,7 +183,7 @@
 .cmap::-webkit-scrollbar { display: none; }
 .cmap.is-scrollable { cursor: grab; }
 .cmap.is-dragging { cursor: grabbing; user-select: none; }
-.cmap-k { font-size: var(--fs-meta); color: var(--muted); letter-spacing: 0.05em; padding: 0 0 4px; font-weight: var(--w-medium); }
+.cmap-k { font-size: var(--fs-meta); color: var(--muted); letter-spacing: 0.01em; padding: 0 0 4px; font-weight: var(--w-medium); }
 .cmap svg { display: block; overflow: visible; }
 .cm-l { font-size: var(--fs-meta); fill: var(--muted); dominant-baseline: middle; }
 .cm-g { stroke: var(--t4); stroke-width: 1; stroke-dasharray: 1 4; stroke-linecap: round; }
@@ -232,11 +231,17 @@
    so a long chain or answer never creates a second scrollbar next to it. */
 .bench .anatomy { align-items: stretch; }
 .bench .traj, .bench .aprobs { display: grid; }
-/* The trajectory brackets the middle chain: samples.js measures the chain box and the answer
-   and pins the flow to that span, so both lists read as one block. */
+/* 轨迹 / 中间链路 / 归因三列合一个矩形（samples.js · alignColumns）：
+   上沿都落在链路第一步，下沿落在最高那条线上；矮的一列用 space-between 把富余高度
+   均分进行距，高过一屏时那一列自己滚，长链不会把旁边两列拉成几千像素的空条。 */
 .bench .traj > .out { align-self: start; align-content: start; }
-/* Rows keep their natural height: a stretched grid track would space them out to fill the column. */
 .bench .traj .cflow { align-content: start; }
+.bench .traj .cflow.is-band,
+.chain-body.is-band,
+.bench .aprobs .tgroup.is-band { align-content: space-between; }
+.bench .traj .cflow.is-scroll,
+.chain-body.is-scroll,
+.bench .aprobs .tgroup.is-scroll { overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 
 /* ---------------------------------------------------------------- timeline */
 .msg {
@@ -321,7 +326,7 @@
 /* Long tool names and mixed CJK/ASCII text turn a narrow step into an 8-line paragraph in a four
    column layout. Keep rows one height; the full text is the row's title, the evidence stays clickable. */
 .cf-text { display: -webkit-box; -webkit-line-clamp: var(--cf-lines, 3); -webkit-box-orient: vertical; overflow: hidden; }
-/* 轨迹比中间链路长时（alignTraj 逐级压行）收紧行距并把证据角标并到行内，两端才能对齐。 */
+/* 轨迹比这一列分到的高度高时（alignColumns 逐级压行）收紧行距并把证据角标并到行内，尽量不靠滚动。 */
 .cflow.is-tight .cf { padding: 2px 8px 2px 0; }
 .cflow.is-tight .cf .refs { display: none; }   /* 行本身可点，角标让位给对齐 */
 .cflow.is-tight .cf + .cf.plan, .cflow.is-tight .cf.plan + .cf.think { margin-top: 0; }
@@ -345,9 +350,9 @@
 
 /* ---------------------------------------------------------------- problem cards */
 .tgroup { display: grid; gap: 8px; }
-.tgroup + .tgroup { margin-top: 6px; padding-top: 14px; border-top: 1px solid var(--well-2); }
+.tgroup + .tgroup { margin-top: 8px; padding-top: 16px; border-top: 1px solid var(--well-2); }
 .pcard {
-  display: grid; gap: 5px; padding: 10px 11px 10px 12px; border-radius: 10px; scroll-margin-top: 90px;
+  display: grid; gap: 5px; padding: 10px 12px; border-radius: 10px; scroll-margin-top: 90px;
   background: color-mix(in oklab, var(--c) 5%, var(--well));
   transition: background var(--snap), box-shadow var(--snap), opacity 180ms ease;
   animation: rise 360ms cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: calc(min(var(--i, 0), 8) * 28ms);
