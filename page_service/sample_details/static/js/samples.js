@@ -5,7 +5,7 @@ import { threadFlow } from "./particles.js";
 
 const FOLD_OPEN = new Set(["user", "answer"]);
 const PAGE = 50;
-const S = { product: null, all: [], rows: [], pageRows: [], page: 1, slug: null, sessionKey: null, D: null, round: 0, trace: 0, turn: 0, cturn: 0, sessionView: false, open: new Set(), active: null, cache: new Map() };
+const S = { product: null, all: [], rows: [], pageRows: [], page: 1, slug: null, sessionKey: null, D: null, round: 0, trace: 0, turn: 0, cturn: 0, sessionView: false, open: new Set(), active: null, cache: new Map(), loadSeq: 0, refocusList: false };
 let ctx;
 let root;
 
@@ -206,7 +206,9 @@ function skeleton() {
     e.preventDefault();
     const i = S.rows.findIndex((x) => x.s === S.slug);
     const next = S.rows[Math.max(0, Math.min(S.rows.length - 1, i + (e.key === "ArrowDown" ? 1 : -1)))];
-    if (next) ctx.navigate({ case: next.s, p: null }, { replace: true }) || render(root, ctx);
+    if (!next) return;
+    S.refocusList = true;   // 换样本会整表重画，焦点要还回新的当前行，否则只能按一次
+    ctx.navigate({ case: next.s, p: null }, { replace: true }) || render(root, ctx);
   });
   $("#sbody", root).addEventListener("click", onInputClick);
   $("#shead", root).addEventListener("click", onOutClick);
@@ -414,6 +416,7 @@ function markCurrent() {
     const r = cur.getBoundingClientRect();
     const lr = list.getBoundingClientRect();
     if (r.top < lr.top || r.bottom > lr.bottom) cur.scrollIntoView({ block: "nearest" });
+    if (S.refocusList) { S.refocusList = false; cur.focus({ preventScroll: true }); }
   }
 }
 
@@ -556,6 +559,9 @@ function mergeSessionDetails(parts, session) {
 }
 
 async function loadSession(session, focusSlug, focusTrace) {
+  // 连点样本时详情是异步拉的：先发起的旧请求可能后到，晚到的旧数据会把新样本的界面盖掉。
+  // 每次进入都领一个序号，await 回来后发现已经不是最新一次就整段丢掉。
+  const token = ++S.loadSeq;
   S.slug = session.key;
   S.sessionKey = session.key;
   S.session = session;
@@ -568,6 +574,7 @@ async function loadSession(session, focusSlug, focusTrace) {
   try {
     parts = await Promise.all(session.rows.map(async (row) => ({ slug: row.s, detail: await fetchDetail(row.s) })));
   } catch (e) {
+    if (token !== S.loadSeq) return;   // 失败的旧请求不该覆盖新样本
     $("#shead", root).innerHTML = `<div class="empty">会话详情读取失败（${esc(e.message)}）。运行 local_dev/refresh.sh 重新生成。</div>`;
     $("#stl", root).innerHTML = "";
     $("#sout", root).innerHTML = "";
@@ -575,6 +582,7 @@ async function loadSession(session, focusSlug, focusTrace) {
     scheduleThreadsCompensate();
     return;
   }
+  if (token !== S.loadSeq) return;   // 期间用户又点了别的样本：这一份晚到的数据不要写进界面
   parts.sort((a, b) => String(a.detail.meta?.request_time || a.detail.date || "").localeCompare(String(b.detail.meta?.request_time || b.detail.date || "")));
   const kept = dropSubsetParts(parts);
   const D = kept.length === 1 ? withRounds(kept[0]) : mergeSessionDetails(kept, session);
@@ -621,11 +629,18 @@ function roundWithSev(D, sev) {
   return at >= 0 ? at : Math.min(turnAt, (D.rounds || []).length - 1);
 }
 
-function scrollRound(i) {
-  const el = $(`#round-${i}`, root);
-  if (!el) return;
-  el.scrollIntoView({ block: "nearest", behavior: REDUCED ? "auto" : "smooth" });
-  flash(el);
+/* 切轮次只保证「看的还是这一轮的开头」：以前会去 scrollIntoView 归因卡片，
+   而那一步发生在三列重排之前——卡片那时还是自然高度，点第 4 轮能被甩到几百上千像素外，
+   标签栏直接滚出视口。现在只在整条带已经滚到视口上方时才把它拉回来。 */
+function revealRound() {
+  const sbody = $("#sbody", root);
+  const band = $("#sanatomy", root);
+  if (!sbody || !band) return;
+  if (band.getBoundingClientRect().top >= sbody.getBoundingClientRect().top) return;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (!band.isConnected) return;
+    sbody.scrollTop += band.getBoundingClientRect().top - sbody.getBoundingClientRect().top;
+  }));
 }
 
 function selectRound(i, { scroll = true } = {}) {
@@ -647,7 +662,7 @@ function selectRound(i, { scroll = true } = {}) {
   S.cturn = r?.compact ?? round;
   renderTrace();
   renderOut();
-  if (scroll) scrollRound(round);
+  if (scroll) revealRound();
 }
 
 function selectTraceRound(trace) {

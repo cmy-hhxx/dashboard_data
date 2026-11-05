@@ -129,7 +129,7 @@
 .headline .idline { flex: 0 1 auto; min-width: 0; margin: 0; justify-content: flex-end; }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .chip-groups { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
-.cg { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.cg { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 .cg-k { flex: none; font-size: var(--fs-meta); letter-spacing: 0.01em; color: var(--muted); font-weight: var(--w-medium); }
 .cg .pill { height: 20px; padding: 0 7px; border-radius: var(--r-chip); background: var(--well); font-size: var(--fs-small); color: var(--ink-2); }
 .cg.is-model .pill { background: var(--accent-soft); color: var(--accent); font-weight: var(--w-medium); }
@@ -452,7 +452,9 @@
   html[data-view="samples"] main { padding-bottom: 48px; }
   .bench > .pane { height: auto; }
   .pane-sticky, .bench .pane-sticky { position: static; height: auto; max-height: 420px; }
-  .headline { flex-direction: column; align-items: stretch; gap: 4px; }
+  .headline { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 4px; }
+  /* column 方向下 flex-basis:0 会把标题高度压成 0（标题直接消失），这里恢复按内容高度 */
+  .headline h2 { flex: 0 0 auto; }
   .headline .idline { justify-content: flex-start; }
   .sp-box { padding-left: 0; }
 }
