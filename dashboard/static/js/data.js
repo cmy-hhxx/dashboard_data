@@ -1,6 +1,7 @@
 /* 数据: 会话场 · 数据量 · 评测量 · 归因体系 · 聚类体系 · 预测体系 · 聚类矩阵. Titles only; the layout carries the rest.
    Charts drill in place; a session tile or a matrix cell opens 具体数据 with that case / filter set. */
-import { $, $$, esc, fmt, pct, sum, WORST, SEV_NAME, sevColor, counter, runCounters, bindTips, segmented, REDUCED, showTip, hideTip } from "./core.js";
+import { $, $$, esc, fmt, pct, sum, WORST, SEV_NAME, KIND, sevColor, counter, runCounters, bindTips, segmented, REDUCED, showTip, hideTip } from "./core.js";
+import { renderContent } from "./render.js";
 import { sunburst } from "./sunburst.js";
 import { galaxy } from "./galaxy.js";
 
@@ -517,41 +518,31 @@ function edModels(p, day) {
   return [...by.values()].sort((a, b) => b.inputs - a.inputs || b.evaluated - a.evaluated || a.label.localeCompare(b.label));
 }
 
-/* One bar per day / model: its length is the inputs against the busiest row, its fill what has been
-   evaluated, so volume and progress read down a single column. ✅ only when every input is done. */
-const edBar = (r, max) => {
+/* 完成度圆环：一圈轨道 + 一段进度弧 + 中心百分比，替代原来的进度条和「完成率」列。
+   某天 / 某个模型的数据拉齐了没有，扫一眼这一列就够了；100% 变绿，空数据是灰环。 */
+const edRing = (r) => {
   const inputs = r.inputs || 0;
   const done = Math.min(r.evaluated || 0, inputs);
-  const title = inputs ? `已评测 ${fmt(done)} / ${fmt(inputs)} · ${pct(done, inputs, 1)}` : "暂无评测输入";
-  return `<td class="bar" title="${esc(title)}"><span class="ed-bar" style="--l:${max ? ((100 * inputs) / max).toFixed(2) : 0}%;--f:${inputs ? ((100 * done) / inputs).toFixed(2) : 0}%"><i></i></span></td>`;
+  const p = inputs ? Math.round((100 * done) / inputs) : null;
+  const R = 16;
+  const C = 2 * Math.PI * R;
+  const off = p == null ? C : C * (1 - Math.min(100, Math.max(0, p)) / 100);
+  const title = inputs ? `已评测 ${fmt(done)} / ${fmt(inputs)} · ${p}%` : "暂无评测输入";
+  return `<td class="ring"><span class="ed-ring${p === 100 ? " is-full" : ""}" title="${esc(title)}">
+    <svg viewBox="0 0 40 40" aria-hidden="true">
+      <circle class="ring-track" cx="20" cy="20" r="${R}"/>
+      ${p == null ? "" : `<circle class="ring-fill" cx="20" cy="20" r="${R}" style="stroke-dasharray:${C.toFixed(2)};stroke-dashoffset:${off.toFixed(2)}"/>`}
+    </svg>
+    <b>${p == null ? "—" : `${p}<small>%</small>`}</b>
+  </span></td>`;
 };
-const edRate = (r) => {
-  const inputs = r.inputs || 0;
-  const done = r.evaluated || 0;
-  if (!inputs) return `<td class="num is-zero">—</td>`;
-  const ok = done >= inputs ? `<span class="ok" aria-label="全部评测完成" title="全部评测完成">✅</span>` : "";
-  return `<td class="num${done ? "" : " is-zero"}">${ok}${pct(done, inputs, 1)}</td>`;
-};
-const edStats = (t) => `<div class="stats stats-5 ed-stats">${[
-  [counter(t.inputs), "评测输入"],
-  [counter(t.evaluated), "评测输出"],
-  [t.inputs ? counter((100 * t.evaluated) / t.inputs, { d: 1, suffix: "%" }) : "—", "完成率"],
-  [counter(t.sessions), "Session"],
-  [`<span class="num">${tokenNum(t.tokens)}</span>`, "Tokens"],
-].map(([b, label]) => `<div><b>${b}</b><small>${label}</small></div>`).join("")}</div>`;
-const edSum = (rows) =>
-  rows.reduce((t, r) => {
-    ["inputs", "evaluated", "sessions", "traces", "tokens"].forEach((k) => (t[k] += r[k] || 0));
-    return t;
-  }, { inputs: 0, evaluated: 0, sessions: 0, traces: 0, tokens: 0 });
-
 function edSessionGroups(rows) {
   const groups = new Map();
   rows.forEach((r) => {
     const key = `${r.sp}|${r.m}|${r.sid || r.s}`;
     let g = groups.get(key);
     if (!g) {
-      g = { key, q: r.q || "", tr: 0, n: 0, w: "none" };
+      g = { key, slug: r.s, q: r.q || "", tr: 0, n: 0, w: "none" };
       groups.set(key, g);
     }
     g.tr += r.tr || 1;
@@ -570,8 +561,11 @@ function evalDetailState(p, raw) {
   return { days, day, models, model, ep: raw.ep, edp: raw.edp };
 }
 
-const edTable = (head, rows, cls = "") =>
-  `<div class="md-table ed-table${cls ? ` ${cls}` : ""}"><table><thead><tr>${head}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+/* 固定列宽，数字列右对齐、圆环居中；表头与单元格用同一套 colgroup，所以上下一定对齐。 */
+const edTable = (cols, head, rows, cls = "") =>
+  `<div class="md-table ed-table${cls ? ` ${cls}` : ""}"><table>
+    <colgroup>${cols.map((w) => `<col${w === "auto" ? "" : ` style="width:${w}"`}>`).join("")}</colgroup>
+    <thead><tr>${head}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
 
 function edPager(page, pages, total, unit, kind) {
   if (pages <= 1) return "";
@@ -594,52 +588,48 @@ function evalDetailPage(p, state, index) {
   const groups = edSessionGroups(picked);
   const sPages = Math.max(1, Math.ceil(groups.length / ES_PAGE));
   const spage = Math.min(Math.max(1, state.ep), sPages);
-  const rowTotal = modelRow || {};
 
   const rootCrumb = day ? `<button type="button" class="mx-crumb" data-ed="root">全部日期</button>` : `<b>全部日期</b>`;
   const dayCrumb = day
     ? ` <i class="mx-sep">/</i> ${model ? `<button type="button" class="mx-crumb" data-ed="day">${esc(day)}</button>` : `<b>${esc(day)}</b>`}`
     : "";
-  const modelCrumb = model ? ` <i class="mx-sep">/</i> <b>${esc(rowTotal.label || model)}</b>` : "";
+  const modelCrumb = model ? ` <i class="mx-sep">/</i> <b>${esc(modelRow.label || model)}</b>` : "";
   // One obvious way out of each level: model → day → date list → dashboard.
   const backLabel = model ? `← ${esc(day)}` : day ? "← 全部日期" : "← 返回数据看板";
+
   const num = (v, d = 0) => `<td class="num${v ? "" : " is-zero"}">${fmt(v, d)}</td>`;
-  const head = (first) =>
-    `<th>${first}</th><th class="bar"></th><th class="num">评测输入</th><th class="num">评测输出</th><th class="num">完成率</th><th class="num">Session</th><th class="num">Trace</th><th class="num">Tokens</th>`;
-  const line = (r, i, first, max) => `<tr style="--i:${Math.min(i, 30)}"><td>${first}</td>${edBar(r, max)}
-      ${num(r.inputs)}${num(r.evaluated)}${edRate(r)}${num(r.sessions)}${num(r.traces)}
-      <td class="num${r.tokens ? "" : " is-zero"}">${tokenNum(r.tokens)}</td></tr>`;
-  const peak = (rows) => Math.max(0, ...rows.map((r) => r.inputs || 0));
-  const total = !days.length ? null : model ? rowTotal : day ? days.find((x) => x.d === day) : edSum(days);
+  const nums = (r) =>
+    `${num(r.inputs)}${num(r.evaluated)}${num(r.sessions)}${num(r.traces)}` +
+    `<td class="num${r.tokens ? "" : " is-zero"}">${tokenNum(r.tokens)}</td>`;
+  const NUM_HEAD = `<th class="num">评测输入</th><th class="num">评测输出</th><th class="num">Session</th><th class="num">Trace</th><th class="num">Tokens</th>`;
+  const NUM_COLS = ["15.6%", "15.6%", "15.6%", "15.6%", "15.6%"];
+  const row = (r, i, first) =>
+    `<tr style="--i:${Math.min(i, 30)}"><td class="first">${first}</td>${edRing(r)}${nums(r)}</tr>`;
 
   let body = "";
   let pager = "";
   if (!days.length) {
     body = `<div class="empty">暂无评测日期</div>`;
   } else if (!day) {
-    const max = peak(days);
     const rows = days.slice((dpage - 1) * ED_PAGE, dpage * ED_PAGE).map((r, i) =>
-      line(r, i, `<button type="button" class="link" data-eday="${esc(r.d)}">${esc(r.d)}</button>`, max));
-    body = edTable(head("日期"), rows, "is-day");
+      row(r, i, `<button type="button" class="link" data-eday="${esc(r.d)}">${esc(r.d)}</button>`));
+    body = edTable(["150px", "8%", ...NUM_COLS], `<th class="first">日期</th><th class="ring">进度</th>${NUM_HEAD}`, rows, "is-day");
     pager = edPager(dpage, dPages, days.length, "天", "edp");
   } else if (!model) {
-    const max = peak(models);
     const rows = models.map((r, i) =>
-      line(r, i, `<button type="button" class="link" data-emodel="${esc(r.key)}" title="${esc(r.label)}">${esc(r.label)}</button>`, max));
-    body = edTable(head("模型"), rows, "is-model");
+      row(r, i, `<button type="button" class="link" data-emodel="${esc(r.key)}" title="${esc(r.label)}">${esc(r.label)}</button>`));
+    body = edTable(["150px", "8%", ...NUM_COLS], `<th class="first">模型</th><th class="ring">进度</th>${NUM_HEAD}`, rows, "is-model");
   } else if (!index) {
     body = `<div class="empty">样本索引读取失败，无法列出会话。</div>`;
   } else if (!groups.length) {
     body = `<div class="empty">该分组当天没有已完成的评测输出。</div>`;
   } else {
-    const head = `<th>评测输入</th><th>评测输出</th><th class="num">轮</th><th></th>`;
-    const rows = groups.slice((spage - 1) * ES_PAGE, spage * ES_PAGE).map((g, i) => `<tr style="--i:${Math.min(i, 30)}">
-      <td>${esc(g.q || "（无提问）")}</td>
-      <td class="st"><span class="ok" aria-label="已评测">✅</span><span class="sev" style="--c:${sevColor(g.w)}"><i></i>${g.w === "none" ? "无问题" : `${g.w} · ${g.n} 个问题`}</span></td>
+    const rows = groups.slice((spage - 1) * ES_PAGE, spage * ES_PAGE).map((g, i) => `<tr class="ed-session" style="--i:${Math.min(i, 30)}" data-slug="${esc(g.slug)}">
+      <td class="first"><span class="ed-q">${esc(g.q || "（无提问）")}</span></td>
       <td class="num">${fmt(g.tr)}</td>
-      <td class="num act"><button type="button" class="link" data-ecase="${esc(g.key)}">查看</button></td>
+      <td class="act"><button type="button" class="ed-expand" data-slug="${esc(g.slug)}" aria-expanded="false">展开</button></td>
     </tr>`);
-    body = edTable(head, rows, "is-session");
+    body = edTable(["auto", "72px", "96px"], `<th class="first">样本</th><th class="num">轮</th><th class="act"></th>`, rows, "is-session");
     pager = edPager(spage, sPages, groups.length, "个 session", "ep");
   }
 
@@ -648,13 +638,38 @@ function evalDetailPage(p, state, index) {
       <button type="button" class="link ed-back" id="edBack">${backLabel}</button>
       <div class="mx-crumbs" id="edCrumbs">${day ? `<span class="mx-crumb-group">${rootCrumb}${dayCrumb}${modelCrumb}</span>` : ""}</div>
       ${day ? `<button type="button" class="link ed-home" id="edHome">返回数据看板</button>` : ""}</header>
-    ${total ? edStats(total) : ""}${body}${pager}
+    ${body}${pager}
   </article></div>`;
 }
 
 function wireEvalDetail(root, state) {
   const card = $(".card", root) || root;
-  card.addEventListener("click", (e) => {
+  let openSlug = null;
+
+  const closeExpand = () => {
+    $$(".ed-expand-row", card).forEach((row) => row.remove());
+    $$(".ed-expand", card).forEach((btn) => {
+      btn.textContent = "展开";
+      btn.setAttribute("aria-expanded", "false");
+    });
+    openSlug = null;
+  };
+
+  card.addEventListener("click", async (e) => {
+    // 展开行内部：中间链路整段折叠 / 单条步骤折叠
+    const stepHead = e.target.closest(".ed-step-head");
+    if (stepHead) {
+      const open = stepHead.closest(".ed-step").classList.toggle("is-open");
+      stepHead.setAttribute("aria-expanded", String(open));
+      return;
+    }
+    const chainHead = e.target.closest(".ed-chain-head");
+    if (chainHead) {
+      const open = chainHead.closest(".ed-chain").classList.toggle("is-open");
+      chainHead.setAttribute("aria-expanded", String(open));
+      return;
+    }
+
     const back = e.target.closest("#edBack");
     if (back) {
       if (state.model) ctx.navigate({ detail: "eval", ed: state.day, em: null, ep: null });
@@ -682,15 +697,39 @@ function wireEvalDetail(root, state) {
       ctx.navigate({ detail: "eval", ed: state.day, em: model.dataset.emodel, ep: null });
       return;
     }
-    const session = e.target.closest("[data-ecase]");
-    if (session) {
-      ctx.navigate({
-        view: "samples", product: ctx.product, case: session.dataset.ecase,
-        detail: null, ed: null, em: null, ep: null, edp: null,
-        p: null, tab: null, q: null, w: null, split: null, model: null, stage: null, mech: null, pattern: null,
-      });
+    const expandBtn = e.target.closest(".ed-expand");
+    if (expandBtn) {
+      e.preventDefault();
+      const slug = expandBtn.dataset.slug;
+      const tr = expandBtn.closest("tr");
+      if (openSlug === slug) {
+        closeExpand();
+        return;
+      }
+      closeExpand();
+      openSlug = slug;
+      expandBtn.textContent = "收起";
+      expandBtn.setAttribute("aria-expanded", "true");
+
+      const colspan = tr.querySelectorAll("td").length;
+      const row = document.createElement("tr");
+      row.className = "ed-expand-row";
+      row.innerHTML = `<td colspan="${colspan}"><div class="ed-expand-box"><div class="ed-expand-loading">正在加载…</div></div></td>`;
+      tr.after(row);
+      const box = row.querySelector(".ed-expand-box");
+      try {
+        const D = await loadSample(slug);
+        box.innerHTML = renderSampleChain(D);
+        // 列表里的问题来自索引（会被截断），展开后换成完整原文
+        const full = D.question || D.question_zh;
+        const q = tr.querySelector(".ed-q");
+        if (full && q) q.textContent = full;
+      } catch (err) {
+        box.innerHTML = `<div class="ed-expand-error">样本数据加载失败：${esc(err.message)}</div>`;
+      }
       return;
     }
+
     const dpage = e.target.closest("[data-edp]");
     if (dpage) {
       ctx.navigate({ detail: "eval", edp: Number(dpage.dataset.edp), ep: null });
@@ -699,6 +738,106 @@ function wireEvalDetail(root, state) {
     const spage = e.target.closest("[data-ep]");
     if (spage) ctx.navigate({ detail: "eval", ep: Number(spage.dataset.ep) });
   });
+}
+
+/* ---------------------------------------------------------------- 评测详情: 行内展开的样本全链路 */
+
+const sampleCache = new Map();
+const loadSample = (slug) => {
+  if (!sampleCache.has(slug)) {
+    const p = fetch(`samples/${encodeURIComponent(slug)}.json`).then((r) => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    }).catch((err) => {
+      sampleCache.delete(slug);
+      throw err;
+    });
+    sampleCache.set(slug, p);
+  }
+  return sampleCache.get(slug);
+};
+
+const blockText = (b) => (b.x || []).map((x) => (typeof x === "string" ? x : "\u2026")).join("");
+
+function blocksHTML(m) {
+  return (m.blocks || []).map((b) => {
+    const text = blockText(b);
+    if (!text.trim()) return "";
+    return `<div class="ed-block">${renderContent(text, b.f)}</div>`;
+  }).join("");
+}
+
+const stepName = (m) => {
+  const call = (m.blocks || []).map((b) => b.l).find((x) => x && x.startsWith("call:"));
+  return m.name || (call ? call.slice(5) : "");
+};
+
+function stepHTML(m) {
+  const label = KIND[m.k] || m.k;
+  const name = stepName(m);
+  const dur = m.dur != null ? (m.dur >= 1000 ? `${fmt(m.dur / 1000, 1)} s` : `${m.dur} ms`) : "";
+  const body = blocksHTML(m);
+  return `<div class="ed-step">
+    <button type="button" class="ed-step-head" aria-expanded="false">
+      <span class="ed-step-role">${esc(label)}</span>
+      ${name ? `<span class="ed-step-name">${esc(name)}</span>` : ""}
+      <span class="ed-step-dur">${dur}</span>
+      ${body ? `<span class="ed-caret" aria-hidden="true"></span>` : ""}
+    </button>
+    ${body ? `<div class="ed-step-body">${body}</div>` : ""}
+  </div>`;
+}
+
+function mainMsgHTML(m, cls) {
+  return `<div class="ed-msg ${cls}">
+    <div class="ed-msg-head"><span class="ed-role">${esc(KIND[m.k] || m.k)}</span></div>
+    <div class="ed-msg-body">${blocksHTML(m)}</div>
+  </div>`;
+}
+
+/* 一轮 = 用户问题 → 中间链路（默认折叠）→ 回答。中间的工具调用、模型思考收进折叠区里，
+   展开后每条步骤还是各自折叠的，点开才看到参数 / 返回原文。 */
+function roundHTML(trace, ti, total) {
+  const msgs = trace.messages || [];
+  const parts = [];
+  let chain = [];
+  let chainMs = 0;
+  const flush = () => {
+    if (!chain.length) return;
+    const dur = chainMs ? `<span class="ed-chain-dur">${fmt(chainMs / 1000, 1)} s</span>` : "";
+    parts.push(`<div class="ed-chain">
+      <button type="button" class="ed-chain-head" aria-expanded="false">
+        <span class="ed-caret" aria-hidden="true"></span>
+        <span class="ed-chain-label">中间链路</span>
+        <span class="ed-chain-count">${chain.length} 步</span>
+        ${dur}
+      </button>
+      <div class="ed-chain-body">${chain.join("")}</div>
+    </div>`);
+    chain = [];
+    chainMs = 0;
+  };
+  msgs.forEach((m) => {
+    if (m.k === "user") {
+      flush();
+      parts.push(mainMsgHTML(m, "is-q"));
+    } else if (m.k === "answer") {
+      flush();
+      parts.push(mainMsgHTML(m, "is-a"));
+    } else {
+      chainMs += m.dur || 0;
+      chain.push(stepHTML(m));
+    }
+  });
+  flush();
+  return `<section class="ed-round">${total > 1 ? `<div class="ed-round-label">第 ${ti + 1} 轮</div>` : ""}${parts.join("")}</section>`;
+}
+
+function renderSampleChain(D) {
+  if (!D) return `<div class="ed-expand-error">无数据</div>`;
+  const traces = (D.input && D.input.traces) || [];
+  if (!traces.length) return `<div class="ed-expand-empty">该样本没有评测输入（流失侧样本未带输入）。</div>`;
+  return `<div class="ed-rounds">${traces.map((t, i) => roundHTML(t, i, traces.length)).join("")}</div>`;
 }
 
 /* ---------------------------------------------------------------- 归因体系: version → component role */

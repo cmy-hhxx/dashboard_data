@@ -141,7 +141,7 @@ function skeleton() {
       <div class="pane-scroll" id="slist" tabindex="0" aria-label="样本"></div>
       <div class="pager" id="spager" hidden></div>
     </aside>
-    <section class="pane pane-out pane-sticky" aria-label="评测输入与输出">
+    <section class="pane pane-out pane-sticky" aria-label="数据详情">
       <div class="pane-scroll" id="sbody">
         <div id="shead"></div>
         <div class="anatomy" id="sanatomy">
