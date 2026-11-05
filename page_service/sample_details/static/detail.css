@@ -31,6 +31,44 @@ main#main { max-width: 1480px; padding: 8px var(--gutter) 12px; }
 .usage code { font-family: var(--mono); font-size: 13px; }
 .usage a { color: var(--accent); }
 
+/* ---------------------------------------------------------------- 超大屏（老板的显示器）
+   两种目标屏：3840×2160（16:9，带鱼屏放一半）和 7680×2160（32:9，全屏）。
+   做法：整页按 --ext-zoom 放大（字不显小），宽度按缩放折算回 CSS px；
+   三栏改成「左右各 24% / 中间吃掉剩余 / 证据连线固定」，中间对话的阅读宽度自然封顶，
+   不会被拉成超长横条；整页居中。窄屏（≤1800px）保持原来 1480 的版面，内部页面不受影响。 */
+@media (min-width: 1800px) {
+  :root { --ext-zoom: 1.12; --ext-w: 2100px; }
+}
+@media (min-width: 3000px) {
+  :root { --ext-zoom: 1.4; --ext-w: 2460px; }   /* 3840×2160 → 物理 3444（90%） */
+}
+@media (min-width: 5200px) {
+  :root { --ext-zoom: 2.1; --ext-w: 2900px; }   /* 7680×2160 → 物理 6090（79%，居中） */
+}
+
+@media (min-width: 1800px) {
+  #main { zoom: var(--ext-zoom); }
+  main#main { max-width: var(--ext-w); padding: 8px 24px 12px; }
+  #root { min-height: calc((100vh - 20px) / var(--ext-zoom)); }
+  #root .bench {
+    height: calc((100vh - 20px) / var(--ext-zoom));
+    min-height: calc(560px / var(--ext-zoom));
+  }
+  /* 左右两栏各 24%，中间对话吃剩余宽度，证据连线固定宽度 */
+  #root .bench .anatomy {
+    grid-template-columns: 24% minmax(0, 1fr) 88px 24%;
+    column-gap: clamp(16px, 1.2vw, 36px);
+  }
+  /* 顶部信息也分两栏：Overview 在左、Trace 点评在右，长段落不至于横跨整屏 */
+  #root .sample-head { grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr); column-gap: clamp(20px, 1.6vw, 48px); }
+  #root .sample-head > .headline,
+  #root .sample-head > .chip-groups,
+  #root .sample-head > .trace-tabs,
+  #root .sample-head > #ov { grid-column: 1 / -1; }
+  #root .sample-head > #ovBox { grid-column: 1; }
+  #root .sample-head > #sumBox { grid-column: 2; }
+}
+
 @media (max-width: 900px) {
   main#main { padding: 8px 8px 12px; }
   #root .bench { height: auto; min-height: 0; }

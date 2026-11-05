@@ -984,6 +984,7 @@ function flash(el, scroll) {
 
 /* ---------------------------------------------------------------- evidence threads */
 let threadFrame = 0;
+let threadTimers = [];
 let threadObs = null;
 
 function wireThreads() {
@@ -1007,6 +1008,15 @@ function wireThreads() {
   if (threadObs) threadObs.disconnect();
   threadObs = new ResizeObserver(scheduleThreads);
   threadObs.observe(box);
+  // 时间线里的滚动条 / 字号变化会让消息右缘移动几个像素，连线跟着重画一次；
+  // 窗口 resize 也要重画（外部分享页整页 zoom 过，尺寸换算依赖当前布局）。
+  const stl = $("#stl", root);
+  if (stl) threadObs.observe(stl);
+  if (!wireThreads.bound) {
+    wireThreads.bound = true;
+    window.addEventListener("resize", () => scheduleThreads(), { passive: true });
+    window.addEventListener("load", () => scheduleThreads(), { once: true });
+  }
 }
 
 function scheduleThreads() {
@@ -1014,6 +1024,12 @@ function scheduleThreads() {
   threadFrame = requestAnimationFrame(() => {
     threadFrame = 0;
     drawThreads();
+    // 首屏的字号、折叠状态、上方 Overview/点评的高度都会在下一拍才稳定；
+    // 位置一变连线就得重画，否则出入点会落在旧位置上。
+    // 首屏与后续重排（滚动条出现、折叠态、字体）都会让消息位置变；跑一串补偿重画，
+    // 每次都很便宜（几十条 path），比监听所有祖先元素稳。
+    threadTimers.forEach(clearTimeout);
+    threadTimers = [220, 600, 1200, 2400].map((ms) => setTimeout(() => drawThreads(), ms));
   });
 }
 
@@ -1044,14 +1060,27 @@ function drawThreads() {
   alignAprobs();
   const host = svg.getBoundingClientRect();
   if (!host.width) return;
+  // 连线坐标统一走 SVG 自己的坐标系：外部分享页整页用 zoom 放大了，
+  // getBoundingClientRect 给的是放大后的像素，直接相减会让连线的出入点整体偏移。
+  const ctm = svg.getScreenCTM();
+  if (!ctm) return;
+  const scale = ctm.a || 1;            // zoom 后的实际缩放（外部分享页 >1，内部页 1）
+  const inv = ctm.inverse();
+  const probe = svg.createSVGPoint();
+  const toLocal = (x, y) => {
+    probe.x = x;
+    probe.y = y;
+    return probe.matrixTransform(inv);
+  };
   let paths = "";
   $$("#sattr .pcard", root).forEach((card) => {
     const pid = Number(card.id.replace("pc-", ""));
     const prob = S.D.attribution.problems.find((p) => p.id === pid);
     if (!prob) return;
     const pr = card.getBoundingClientRect();
-    const x2 = pr.left - host.left;
-    const y2 = pr.top + 22 - host.top;
+    const end = toLocal(pr.left, pr.top + 22 * scale);
+    const x2 = end.x;
+    const y2 = end.y;
     const seen = new Set();
     prob.ev.forEach((e) => {
       const ev = S.D.evidence[e];
@@ -1060,8 +1089,9 @@ function drawThreads() {
       if (!msg) return;
       seen.add(ev.m);
       const r = ($(".msg-body", msg) || msg).getBoundingClientRect();
-      const x1 = r.right - host.left;
-      const y1 = r.top + Math.min(26, r.height / 2) - host.top;
+      const start = toLocal(r.right, r.top + Math.min(26 * scale, r.height / 2));
+      const x1 = start.x;
+      const y1 = start.y;
       const span = Math.max(24, x2 - x1);
       paths += `<path data-p="${pid}" data-m="${ev.m}" style="--c:${sevColor(prob.sev)}" d="M${x1} ${y1} C ${x1 + span * 0.55} ${y1}, ${x2 - span * 0.45} ${y2}, ${x2} ${y2}"/>`;
     });
