@@ -561,13 +561,7 @@ function evalDetailPage(p, state) {
   const { days, day, models, model } = state;
   const dPages = Math.max(1, Math.ceil(days.length / ED_PAGE));
   const dpage = Math.min(Math.max(1, state.edp), dPages);
-  const modelRow = models.find((x) => x.key === model);
 
-  const rootCrumb = day ? `<button type="button" class="mx-crumb" data-ed="root">全部日期</button>` : `<b>全部日期</b>`;
-  const dayCrumb = day
-    ? ` <i class="mx-sep">/</i> ${model ? `<button type="button" class="mx-crumb" data-ed="day">${esc(day)}</button>` : `<b>${esc(day)}</b>`}`
-    : "";
-  const modelCrumb = model ? ` <i class="mx-sep">/</i> <b>${esc(modelRow.label || model)}</b>` : "";
   // One obvious way out of each level: model → day → date list → dashboard.
   const backLabel = model ? `← ${esc(day)}` : day ? "← 全部日期" : "← 返回数据看板";
 
@@ -599,9 +593,7 @@ function evalDetailPage(p, state) {
 
   return `<div class="bento"><article class="card card-detail" style="--span:12">
     <header class="card-head"><h2>评测数据详情</h2>
-      <button type="button" class="link ed-back" id="edBack">${backLabel}</button>
-      <div class="mx-crumbs" id="edCrumbs">${day ? `<span class="mx-crumb-group">${rootCrumb}${dayCrumb}${modelCrumb}</span>` : ""}</div>
-      ${day ? `<button type="button" class="link ed-home" id="edHome">返回数据看板</button>` : ""}</header>
+      <button type="button" class="link ed-back" id="edBack">${backLabel}</button></header>
     ${body}${pager}
   </article></div>`;
 }
@@ -616,14 +608,28 @@ const splitOfModel = (key) => {
 };
 
 let inputAll = [];      // 当前分组的全部输入行（未过滤）
-let inputQuery = "";    // 搜索词：Trace ID / Session ID / 问句
 let inputView = null;   // { day, model, split, ep }
 const inputSeq = { n: 0 };
+// 筛选条件：问句 / Trace ID / Session ID 文本 + 类别 + 评测量状态 + 问题分布
+const inputF = { q: "", cat: "", state: "", dist: "" };
+const emptyFilter = () => Object.assign(inputF, { q: "", cat: "", state: "", dist: "" });
 
 const inputHit = (r) => {
-  if (!inputQuery) return true;
-  const s = inputQuery.toLowerCase();
-  return [r.q, r.sid, r.tid].some((v) => String(v || "").toLowerCase().includes(s));
+  if (inputF.q) {
+    const q = inputF.q.toLowerCase();
+    if (![r.q, r.sid, r.tid].some((v) => String(v || "").toLowerCase().includes(q))) return false;
+  }
+  if (inputF.cat && (r.cat || "") !== inputF.cat) return false;
+  if (inputF.state === "yes" && !r.ev) return false;
+  if (inputF.state === "no" && r.ev) return false;
+  if (inputF.dist) {
+    if (!r.ev) return false;
+    const sv = Array.isArray(r.sv) ? r.sv : null;
+    if (inputF.dist === "none") return !sv || !sv.some((n) => n > 0);
+    const i = WORST.indexOf(inputF.dist);
+    return !!sv && i >= 0 && Number(sv[i] || 0) > 0;
+  }
+  return true;
 };
 
 /* P0–P4 分布：只画有的档位（P0 3 · P2 5），零值不占位，读起来比五个 0 干净。 */
@@ -636,7 +642,7 @@ const sevDist = (sv) => {
     : "")).join("");
 };
 
-const ED_INPUT_COLS = '<colgroup><col><col style="width:116px"><col style="width:52px"><col style="width:172px"><col style="width:56px"><col style="width:72px"></colgroup>';
+const ED_INPUT_COLS = '<colgroup><col><col style="width:116px"><col style="width:52px"><col style="width:224px"><col style="width:56px"><col style="width:72px"></colgroup>';
 
 function renderInputTable() {
   if (!inputView) return;
@@ -647,8 +653,9 @@ function renderInputTable() {
   const rows = inputAll.filter(inputHit);
   const covered = inputAll.reduce((n, r) => n + (r.ev ? 1 : 0), 0);
   if (note) {
+    const filtering = inputF.q || inputF.cat || inputF.state || inputF.dist;
     note.innerHTML = `共 <b class="num">${fmt(inputAll.length)}</b> 条评测输入，已有评测输出 <b class="num">${fmt(covered)}</b> 条`
-      + (inputQuery ? ` · 命中 <b class="num">${fmt(rows.length)}</b> 条` : "");
+      + (filtering ? ` · 命中 <b class="num">${fmt(rows.length)}</b> 条` : "");
   }
   if (!rows.length) {
     table.innerHTML = `<div class="empty">${inputAll.length ? "没有匹配的输入。" : "该分组当天没有评测输入。"}</div>`;
@@ -679,10 +686,20 @@ async function fillEvalInputs(root, state) {
   const seq = ++inputSeq.n;
   const { split, model } = splitOfModel(state.model);
   inputAll = [];
-  inputQuery = "";
+  emptyFilter();
   inputView = { day: state.day, model, split, ep: state.ep };
   host.innerHTML = `<div class="ed-tools">
-      <input class="ed-search" id="edSearch" type="search" placeholder="搜索 Trace ID / Session ID / 问句" autocomplete="off" aria-label="搜索评测输入">
+      <div class="ed-search-row">
+        <input class="ed-search" id="edSearch" type="search" placeholder="搜索 Trace ID / Session ID / 问句" autocomplete="off" aria-label="搜索评测输入">
+        <select class="ed-filter" id="edCat" aria-label="按类别筛选"><option value="">全部类别</option></select>
+        <select class="ed-filter" id="edState" aria-label="按评测状态筛选">
+          <option value="">全部状态</option><option value="yes">有评测输出</option><option value="no">无评测输出</option>
+        </select>
+        <select class="ed-filter" id="edDist" aria-label="按问题分布筛选">
+          <option value="">全部分布</option><option value="P0">含 P0</option><option value="P1">含 P1</option>
+          <option value="P2">含 P2</option><option value="P3">含 P3</option><option value="P4">含 P4</option><option value="none">无问题</option>
+        </select>
+      </div>
       <div class="ed-input-note" id="edNote"></div>
     </div>
     <div id="edTable"><div class="empty">正在读取评测输入…</div></div>
@@ -699,6 +716,15 @@ async function fillEvalInputs(root, state) {
   }
   if (seq !== inputSeq.n || !host.isConnected) return;
   inputAll = rows;
+  const cats = new Map();
+  rows.forEach((r) => {
+    const c = r.cat || "";
+    if (c) cats.set(c, (cats.get(c) || 0) + 1);
+  });
+  const catOpts = [...cats.entries()].sort((a, b) => b[1] - a[1])
+    .map(([c, n]) => `<option value="${esc(c)}">${esc(c)}（${fmt(n)}）</option>`).join("");
+  const catSel = $("#edCat", host);
+  if (catSel) catSel.insertAdjacentHTML("beforeend", catOpts);
   renderInputTable();
 }
 
@@ -817,21 +843,6 @@ function wireEvalDetail(root, state) {
       else ctx.navigate({ detail: null, ed: null, em: null, ep: null, edp: null });
       return;
     }
-    const home = e.target.closest("#edHome");
-    if (home) {
-      ctx.navigate({ detail: null, ed: null, em: null, ep: null, edp: null });
-      return;
-    }
-    const rootCrumb = e.target.closest('[data-ed="root"]');
-    if (rootCrumb) {
-      ctx.navigate({ detail: "eval", ed: null, em: null, ep: null });
-      return;
-    }
-    const dayCrumb = e.target.closest('[data-ed="day"]');
-    if (dayCrumb) {
-      ctx.navigate({ detail: "eval", ed: state.day, em: null, ep: null });
-      return;
-    }
     const day = e.target.closest("[data-eday]");
     if (day) {
       ctx.navigate({ detail: "eval", ed: day.dataset.eday, em: null, ep: null });
@@ -856,7 +867,15 @@ function wireEvalDetail(root, state) {
 
   card.addEventListener("input", (e) => {
     if (e.target.id !== "edSearch") return;
-    inputQuery = e.target.value.trim();
+    inputF.q = e.target.value.trim();
+    if (inputView) inputView.ep = 1;
+    renderInputTable();
+  });
+
+  card.addEventListener("change", (e) => {
+    const id = e.target.id;
+    if (id !== "edCat" && id !== "edState" && id !== "edDist") return;
+    inputF[id === "edCat" ? "cat" : id === "edState" ? "state" : "dist"] = e.target.value;
     if (inputView) inputView.ep = 1;
     renderInputTable();
   });

@@ -22,7 +22,7 @@ import json_compat as json
 import build
 import build_store as bs
 
-LIST_VERSION = 4
+LIST_VERSION = 5
 Q_LIMIT = 200
 # 每行只读开头这几 KB：question / session_id / n_traces 都在 meta 里靠前。
 # AIME 单日输入文件 1.6 GB，整文件读一遍要两分钟；按行读前缀是十几 MB、一秒级。
@@ -245,6 +245,7 @@ class InputLister:
         paired = self._paired_map(product)
         index_rows = self._index_rows(product)
         rows = []
+        paired_slugs = []
         with self._lock:
             store = self._open()
             for fi, (rel, path) in enumerate(files):
@@ -254,9 +255,14 @@ class InputLister:
                 tids = index.get("tids") or []
                 lines = len(offsets) - 1
                 if lines < 1:
+                    # 构建的 files 表里没有这个文件（例如文件在构建之后才落地）：按磁盘自己读一遍。
+                    extra = self._scan_unknown(fi, path, paired, index_rows)
+                    rows.extend(extra)
+                    for row in extra:
+                        if row.get("s"):
+                            paired_slugs.append(row["s"])
                     continue
                 pending = {}
-                paired_slugs = []
                 for number in range(1, lines + 1):
                     ih = f"{hashes[number - 1]:016x}" if number - 1 < len(hashes) else None
                     slug = paired.get(ih) if ih else None
@@ -291,6 +297,51 @@ class InputLister:
                     row["sv"] = sev[slug]
         rows.sort(key=lambda r: (int(r["r"].split(":", 1)[0]), int(r["r"].split(":", 1)[1])))
         return rows
+
+    def _scan_unknown(self, fi, path, paired, index_rows):
+        """构建缓存里没有这个输入文件时，直接读磁盘：算行哈希判断有没有输出，再解析这一行。"""
+        out = []
+        try:
+            with open(path, "rb", buffering=8 << 20) as fh:
+                for number, raw in enumerate(fh, 1):
+                    body = raw.rstrip(b"\n")
+                    if body.endswith(b"\r"):
+                        body = body[:-1]
+                    if not body.strip():
+                        continue
+                    ih = f"{bs.line_hash(body):016x}"
+                    slug = paired.get(ih)
+                    if slug and slug in index_rows:
+                        hit = index_rows[slug]
+                        out.append({
+                            "r": f"{fi}:{number}", "q": hit["q"][:Q_LIMIT], "sid": hit["sid"],
+                            "tid": hit["tid"], "cat": hit["cat"],
+                            "tr": hit["tr"] or 1, "rq": "", "ev": 1, "s": slug,
+                        })
+                        continue
+                    payload = None
+                    try:
+                        payload = json.loads(body)
+                    except ValueError:
+                        payload = None
+                    if isinstance(payload, dict):
+                        meta = payload.get("meta") or {}
+                        q = build.decode_question(meta.get("question"))
+                        sid = meta.get("session_id") or meta.get("thread_id") or ""
+                        tr = len(payload.get("traces") or []) or 1
+                        tid = meta.get("trace_id") or ""
+                        cat = meta.get("skill_name") or meta.get("task") or ""
+                        rq = payload.get("request_time") or meta.get("request_time") or ""
+                    else:
+                        q, sid, rq, ntr, tid, cat = self._fields(body)
+                        tr = ntr or 1
+                    out.append({
+                        "r": f"{fi}:{number}", "q": q[:Q_LIMIT], "sid": sid, "tid": tid, "cat": cat,
+                        "tr": tr, "rq": rq, "ev": 0,
+                    })
+        except OSError:
+            return out
+        return out
 
     def _sev_counts(self, slugs):
         """已配对样本的 P0–P4 问题数：samples.row 里存了 sv，按 slug 批量取。"""

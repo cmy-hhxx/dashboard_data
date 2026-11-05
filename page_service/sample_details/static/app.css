@@ -994,14 +994,22 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .ed-cat { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 评测输入清单：工具条 + 汇总 + 输出状态位（✓ 有 / — 无） */
-.ed-tools { display: flex; align-items: center; gap: 12px; margin: 0 0 6px; }
+/* 工具条：搜索框居中，下面一行汇总 */
+.ed-tools { display: grid; justify-items: center; gap: 6px; margin: 4px 0 10px; }
+.ed-search-row { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; width: 100%; max-width: 900px; margin: 0 auto; }
 .ed-search {
-  height: 30px; width: 300px; max-width: 50%; border: 0; border-radius: var(--r-ctl);
+  height: 30px; flex: 0 0 auto; width: 280px; border: 0; border-radius: var(--r-ctl);
   background: var(--well); padding: 0 10px; font-size: 12.5px; outline: none;
   transition: background var(--snap), box-shadow var(--snap);
 }
 .ed-search:focus { background: var(--lift); box-shadow: 0 0 0 2px var(--accent); }
-.ed-input-note { margin-left: auto; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ed-filter {
+  height: 30px; border: 0; border-radius: var(--r-ctl); background: var(--well);
+  padding: 0 8px; font-size: 12.5px; color: var(--ink-2); outline: none;
+  transition: background var(--snap), box-shadow var(--snap);
+}
+.ed-filter:focus { background: var(--lift); box-shadow: 0 0 0 2px var(--accent); }
+.ed-input-note { text-align: center; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .ed-input-note b { color: var(--ink-2); font-weight: var(--w-medium); }
 .ed-table td.out, .ed-table th.out { text-align: center; }
 .ed-out { font-size: 13px; color: var(--faint); }
@@ -1010,7 +1018,7 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 
 /* P0–P4 分布：五档固定列宽，零值压暗，所以每行的位置都一样 */
 .ed-table td.dist, .ed-table th.dist { text-align: left; white-space: nowrap; }
-.ed-sev { display: inline-flex; align-items: center; gap: 4px; margin-right: 8px; font-size: 11px; line-height: 1; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ed-sev { display: inline-flex; align-items: center; gap: 4px; margin-right: 9px; font-size: 10.5px; line-height: 1; color: var(--muted); font-variant-numeric: tabular-nums; }
 .ed-sev:last-child { margin-right: 0; }
 .ed-sev i { width: 6px; height: 6px; border-radius: 2px; background: var(--c); flex: none; }
 .ed-sev b { font-weight: var(--w-medium); color: var(--ink-2); }
@@ -1107,9 +1115,8 @@ body.is-modal { overflow: hidden; }
 @media (max-width: 860px) {
   .ed-modal-card { width: calc(100vw - 24px); max-height: 92vh; }
   .ed-modal-body { padding: 8px 12px 14px; }
-  .ed-tools { flex-wrap: wrap; }
-  .ed-search { width: 100%; max-width: none; }
-  .ed-input-note { margin-left: 0; }
+  .ed-search-row { flex-direction: column; align-items: stretch; }
+  .ed-search, .ed-filter { width: 100%; }
 }
 .card-detail { padding-top: var(--py); }
 .card > .pager { justify-content: center; gap: 8px; padding: 12px 0 0; }
