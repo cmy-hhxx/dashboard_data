@@ -22,7 +22,7 @@ import json_compat as json
 import build
 import build_store as bs
 
-LIST_VERSION = 3
+LIST_VERSION = 4
 Q_LIMIT = 200
 # 每行只读开头这几 KB：question / session_id / n_traces 都在 meta 里靠前。
 # AIME 单日输入文件 1.6 GB，整文件读一遍要两分钟；按行读前缀是十几 MB、一秒级。
@@ -36,6 +36,10 @@ SID_RE = re.compile(rb'"session_id"\s*:\s*"([^"]*)"')
 THREAD_RE = re.compile(rb'"thread_id"\s*:\s*"([^"]*)"')
 RQT_RE = re.compile(rb'"request_time"\s*:\s*"([^"]*)"')
 NTR_RE = re.compile(rb'"n_traces"\s*:\s*(\d+)')
+TID_RE = re.compile(rb'"trace_id"\s*:\s*"([^"]*)"')
+SKILL_RE = re.compile(rb'"skill_name"\s*:\s*"((?:[^"\\]|\\.)*)"')
+TASK_RE = re.compile(rb'"task"\s*:\s*"((?:[^"\\]|\\.)*)"')
+CHUNK = 400
 
 
 class InputLister:
@@ -180,7 +184,10 @@ class InputLister:
             for row in (payload.get("products", {}).get(product) or {}).get("rows") or []:
                 slug = row.get("s")
                 if slug:
-                    out[slug] = {"q": row.get("q") or "", "sid": row.get("sid") or "", "tr": row.get("tr") or 1}
+                    out[slug] = {
+                        "q": row.get("q") or "", "sid": row.get("sid") or "", "tr": row.get("tr") or 1,
+                        "tid": row.get("tid") or "", "cat": row.get("skill") or row.get("task") or "",
+                    }
         except (OSError, ValueError, KeyError):
             out = {}
         self._index[product] = (stamp, out)
@@ -249,6 +256,7 @@ class InputLister:
                 if lines < 1:
                     continue
                 pending = {}
+                paired_slugs = []
                 for number in range(1, lines + 1):
                     ih = f"{hashes[number - 1]:016x}" if number - 1 < len(hashes) else None
                     slug = paired.get(ih) if ih else None
@@ -256,8 +264,10 @@ class InputLister:
                         hit = index_rows[slug]
                         rows.append({
                             "r": f"{fi}:{number}", "q": hit["q"][:Q_LIMIT], "sid": hit["sid"],
+                            "tid": hit["tid"], "cat": hit["cat"],
                             "tr": hit["tr"] or 1, "rq": "", "ev": 1, "s": slug,
                         })
+                        paired_slugs.append(slug)
                     else:
                         pending[number] = slug
                 if not pending:
@@ -273,8 +283,37 @@ class InputLister:
                     rows.extend(self._scan_stream(fi, path, pending, tids, lines))
                 else:
                     rows.extend(self._scan_sparse(fi, path, pending, offsets, tids))
+        if paired_slugs:
+            sev = self._sev_counts(paired_slugs)
+            for row in rows:
+                slug = row.get("s")
+                if slug and slug in sev:
+                    row["sv"] = sev[slug]
         rows.sort(key=lambda r: (int(r["r"].split(":", 1)[0]), int(r["r"].split(":", 1)[1])))
         return rows
+
+    def _sev_counts(self, slugs):
+        """已配对样本的 P0–P4 问题数：samples.row 里存了 sv，按 slug 批量取。"""
+        out = {}
+        with self._lock:
+            store = self._open()
+            for start in range(0, len(slugs), CHUNK):
+                chunk = slugs[start:start + CHUNK]
+                marks = ",".join("?" * len(chunk))
+                try:
+                    rows = store.db.execute(
+                        f"SELECT slug,row FROM samples WHERE slug IN ({marks})", chunk).fetchall()
+                except Exception:  # noqa: BLE001
+                    return out
+                for slug, row_json in rows:
+                    try:
+                        row = json.loads(row_json)
+                    except (TypeError, ValueError):
+                        continue
+                    sv = row.get("sv") if isinstance(row, dict) else None
+                    if isinstance(sv, list) and len(sv) >= 5:
+                        out[slug] = [int(v or 0) for v in sv[:5]]
+        return out
 
     @staticmethod
     def _fields(raw: bytes):
@@ -288,13 +327,18 @@ class InputLister:
         rq = match.group(1).decode("utf-8", "replace") if match else ""
         match = NTR_RE.search(raw)
         ntr = int(match.group(1)) if match else 0
-        return q, sid, rq, ntr
+        match = TID_RE.search(raw)
+        tid = match.group(1).decode("utf-8", "replace") if match else ""
+        match = SKILL_RE.search(raw) or TASK_RE.search(raw)
+        cat = _json_str(match.group(1)) if match else ""
+        return q, sid, rq, ntr, tid, cat
 
-    def _row(self, fi, number, slug, q, sid, rq, ntr, tids):
+    def _row(self, fi, number, slug, fields, tids):
+        q, sid, rq, ntr, tid, cat = fields
         if not ntr:
             ntr = len(tids[number - 1]) if number - 1 < len(tids) else 0
-        item = {"r": f"{fi}:{number}", "q": q[:Q_LIMIT], "sid": sid, "tr": ntr or 1,
-                "rq": rq, "ev": 1 if slug else 0}
+        item = {"r": f"{fi}:{number}", "q": q[:Q_LIMIT], "sid": sid, "tid": tid, "cat": cat,
+                "tr": ntr or 1, "rq": rq, "ev": 1 if slug else 0}
         if slug:
             item["s"] = slug
         return item
@@ -310,11 +354,10 @@ class InputLister:
             def one(number, slug=None):
                 start, end = offsets[number - 1], offsets[number]
                 raw = os.pread(fd, min(end - start, PREFIX), start)
-                q, sid, rq, ntr = self._fields(raw)
-                if not q:
-                    raw = os.pread(fd, end - start, start)
-                    q, sid, rq, ntr = self._fields(raw)
-                return self._row(fi, number, slug, q, sid, rq, ntr, tids)
+                fields = self._fields(raw)
+                if not fields[0]:
+                    fields = self._fields(os.pread(fd, end - start, start))
+                return self._row(fi, number, slug, fields, tids)
 
             items = list(pending.items())
             workers = max(1, min(THREADS, len(items)))
@@ -341,8 +384,7 @@ class InputLister:
                     body = raw.rstrip(b"\n")
                     if body.endswith(b"\r"):
                         body = body[:-1]
-                    q, sid, rq, ntr = self._fields(body)
-                    out.append(self._row(fi, number, slug, q, sid, rq, ntr, tids))
+                    out.append(self._row(fi, number, slug, self._fields(body), tids))
         except OSError:
             return out
         return out
