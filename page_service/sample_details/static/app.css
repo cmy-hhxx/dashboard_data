@@ -302,7 +302,9 @@ button.cell[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px 
 .flow-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .anatomy.is-focus .threads path { opacity: 0.08; }
 .anatomy.is-focus .threads path.on { opacity: 1; stroke-width: 2; }
-.aprobs { display: grid; gap: 8px; align-content: start; }
+.aprobs { display: grid; gap: 8px; align-content: start; --ap-off: 0px; }
+/* 右栏不跟着用户问句起，而是和 timeline 的第一条非用户消息顶对齐（--ap-off 由 samples.js 量出来）。 */
+.aprobs > .out { padding-top: calc(var(--py) + var(--ap-off)); }
 .aprob { text-align: left; padding: 12px 14px; border-radius: var(--r-well); background: none; transition: background var(--snap), transform var(--spring); }
 .aprob:hover, .aprob.on { background: var(--active); }
 .aprob:active { transform: scale(0.98); }
@@ -949,15 +951,14 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
   padding: 0 14px; height: 44px; border: 0; vertical-align: middle;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+/* 表头只留一条细线和一行小字：不铺灰底，表格和卡片是同一张纸，扫起来更干净。 */
 .ed-table thead th {
-  height: 34px; background: var(--well); color: var(--muted);
+  height: 34px; background: none; color: var(--muted);
   font-weight: var(--w-medium); font-size: 11.5px; letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--well-2);
 }
-.ed-table thead th:first-child { border-radius: 10px 0 0 10px; }
-.ed-table thead th:last-child { border-radius: 0 10px 10px 0; }
-.ed-table tbody tr { border-bottom: 1px solid var(--well); transition: background var(--snap); }
+.ed-table tbody tr { border-bottom: 1px solid var(--well); }
 .ed-table tbody tr:last-child { border-bottom: 0; }
-.ed-table tbody tr:hover { background: var(--hover); }
 .ed-table td { color: var(--ink-2); }
 .ed-table td.is-zero { color: var(--faint); }
 .ed-table th:first-child, .ed-table td.first { padding-left: 20px; }
@@ -990,10 +991,10 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .ed-table.is-session td.num, .ed-table.is-session th.num { width: 72px; }
 .ed-table td.act, .ed-table th.act { text-align: right; white-space: nowrap; }
 .ed-expand {
-  padding: 4px 10px; border-radius: 6px; font-size: 12.5px; color: var(--accent);
-  background: none; transition: background var(--snap);
+  padding: 4px 2px; font-size: 12.5px; color: var(--accent);
+  background: none; transition: color var(--snap);
 }
-.ed-expand:hover { background: var(--accent-soft); }
+.ed-expand:hover { text-decoration: underline; text-underline-offset: 3px; }
 
 /* 行内展开：用户问题 → 中间链路（默认折叠）→ 回答，全部留在表格里，不跳页面 */
 .ed-expand-row > td { padding: 0; border: 0; white-space: normal; }
@@ -1003,7 +1004,7 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .ed-round + .ed-round { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--well-2); }
 .ed-round-label { margin-bottom: 8px; font-size: 11.5px; color: var(--muted); letter-spacing: 0.04em; }
 .ed-msg { padding: 14px 18px; border-radius: 10px; }
-.ed-msg.is-q { background: var(--well); }
+.ed-msg.is-q { padding-left: 16px; border-left: 2px solid var(--well-2); }
 .ed-msg.is-a { background: var(--card); box-shadow: inset 0 0 0 1px var(--well-2); }
 .ed-msg-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .ed-role { font-size: 11.5px; font-weight: var(--w-medium); color: var(--muted); letter-spacing: 0.04em; }
@@ -1014,9 +1015,10 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .ed-chain { margin: 10px 0; border: 1px solid var(--well-2); border-radius: 10px; overflow: hidden; }
 .ed-chain-head {
   width: 100%; display: flex; align-items: center; gap: 10px;
-  padding: 10px 16px; background: var(--well); font-size: 12.5px; color: var(--ink-2); text-align: left;
+  padding: 10px 16px; background: none; font-size: 12.5px; color: var(--ink-2); text-align: left;
+  transition: color var(--snap);
 }
-.ed-chain-head:hover { background: var(--well-2); }
+.ed-chain-head:hover { color: var(--ink); }
 .ed-chain-label { font-weight: var(--w-medium); }
 .ed-chain-count { font-size: 12px; color: var(--muted); }
 .ed-chain-dur { margin-left: auto; font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
@@ -1024,8 +1026,8 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .ed-chain.is-open .ed-chain-body { display: block; }
 
 .ed-step + .ed-step { border-top: 1px solid var(--well-2); }
-.ed-step-head { width: 100%; display: flex; align-items: center; gap: 10px; padding: 9px 16px; text-align: left; }
-.ed-step-head:hover { background: var(--hover); }
+.ed-step-head { width: 100%; display: flex; align-items: center; gap: 10px; padding: 9px 16px; text-align: left; transition: color var(--snap); }
+.ed-step-head:hover { color: var(--ink); }
 .ed-step-role { font-size: 12px; color: var(--muted); }
 .ed-step-name {
   padding: 1px 6px; border-radius: 4px; font-family: var(--mono); font-size: 11.5px;

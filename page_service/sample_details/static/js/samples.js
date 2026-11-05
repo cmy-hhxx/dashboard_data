@@ -121,6 +121,10 @@ export async function render(r, c) {
       if (at >= 0) pid = at;
     }
     requestAnimationFrame(() => flash($(`#pc-${pid}`, root)));
+  } else if (S.D) {
+    const sev = params().get("w");
+    const card = sev && $(`#sattr .pcard[data-sev="${sev}"]`, root);
+    if (card) requestAnimationFrame(() => flash(card));
   }
   return { trace: focusTrace || null, traceMiss: S.traceMiss };
 }
@@ -573,6 +577,12 @@ async function loadSession(session, focusSlug, focusTrace) {
   if (focusSlug && kept.length > 1) {
     const at = D.rounds.findIndex((r) => r.slug === focusSlug);
     if (at >= 0) S.round = at;
+  } else {
+    // 从「P0」这类严重度筛选里点进样本时，落在有该等级问题的那一轮：
+    // 用户想看的是自己点的那类问题，而不是整段会话最后一轮碰巧出现的问题。
+    const sev = params().get("w");
+    const at = sev ? roundWithSev(D, sev) : -1;
+    if (at >= 0) S.round = at;
   }
   S.traceMiss = null;
   if (focusTrace) {
@@ -588,6 +598,17 @@ async function loadSession(session, focusSlug, focusTrace) {
   S.active = null;
   renderIn();
   renderOut();
+}
+
+/* 某一严重度的问题落在第几轮：取第一条该等级问题的轮次，找不到返回 -1。 */
+function roundWithSev(D, sev) {
+  const turns = D.attribution?.turns || [];
+  const problems = D.attribution?.problems || [];
+  const hit = (turn) => (turn?.problems || []).some((idx) => problems[idx]?.sev === sev);
+  const turnAt = turns.findIndex(hit);
+  if (turnAt < 0) return -1;
+  const at = (D.rounds || []).findIndex((r) => (r.turn ?? -1) === turnAt);
+  return at >= 0 ? at : Math.min(turnAt, (D.rounds || []).length - 1);
 }
 
 function scrollRound(i) {
@@ -996,6 +1017,22 @@ function scheduleThreads() {
   });
 }
 
+/* 右栏不跟着用户问句起：把 timeline 第一条非用户消息的位置量出来，差值补到 .aprobs 的 padding 上。 */
+function alignAprobs() {
+  const box = $("#sattr", root);
+  const card = box && $(".pcard", box);
+  const first = !S.sessionView && $("#stl .msg:not(.k-user)", root);
+  if (!box) return;
+  const cur = parseFloat(box.style.getPropertyValue("--ap-off")) || 0;
+  if (!card || !first) {
+    if (cur) box.style.setProperty("--ap-off", "0px");
+    return;
+  }
+  const delta = first.getBoundingClientRect().top - card.getBoundingClientRect().top;
+  const next = Math.max(0, Math.round(cur + delta));
+  if (Math.abs(next - cur) > 0.5) box.style.setProperty("--ap-off", `${next}px`);
+}
+
 function drawThreads() {
   const box = $("#sanatomy", root);
   const svg = box && $(".threads svg", box);
@@ -1004,6 +1041,7 @@ function drawThreads() {
     svg.innerHTML = "";
     return;
   }
+  alignAprobs();
   const host = svg.getBoundingClientRect();
   if (!host.width) return;
   let paths = "";
@@ -1057,7 +1095,7 @@ function attrHTML(D) {
     const evs = p.ev.map(evOne).join("");
     const more = [p.ph && ["现象", p.ph], p.why && ["原因", p.why], p.sevr && ["定级理由", p.sevr], p.calc && p.calc.length && ["核算", p.calc.join("\n")]].filter(Boolean);
     const comp = p.fam && p.comp && p.fam !== p.comp ? `${p.fam} › ${p.comp}` : (p.comp || p.fam || "");
-    return `<article class="pcard" id="pc-${p.id}" style="--c:${sevColor(p.sev)}">
+    return `<article class="pcard" id="pc-${p.id}" data-sev="${esc(p.sev || "")}" style="--c:${sevColor(p.sev)}">
       <div class="pcard-head"><span class="sev-badge">${p.sev || "—"}</span><h3>${esc(p.label)}</h3></div>
       <div class="pcard-meta">${comp ? `<span class="faint">${esc(comp)}</span>` : ""}
         ${p.cl ? `<button type="button" class="path" data-pattern="${p.cl.path}" title="${esc((pat && pat.plain) || "")}"><span class="mono">${p.cl.path}</span><span>${esc(pat ? pat.name : "")}</span></button>` : `<span class="faint">未聚类</span>`}</div>
