@@ -54,9 +54,14 @@ main#main { max-width: 1480px; padding: 8px var(--gutter) 12px; }
     height: calc((100vh - 20px) / var(--ext-zoom));
     min-height: calc(560px / var(--ext-zoom));
   }
-  /* 左右两栏各 24%，中间对话吃剩余宽度，证据连线固定宽度 */
-  #root .bench .anatomy {
+  /* 三栏只给「单轮对话」：左右各 24%，中间对话吃剩余宽度，证据连线固定宽度 */
+  #root .bench .anatomy:not(.is-session) {
     grid-template-columns: 24% minmax(0, 1fr) 88px 24%;
+    column-gap: clamp(16px, 1.2vw, 36px);
+  }
+  /* session 总评是两栏：对话 + 问题（这里没有链路栏和连线） */
+  #root .bench .anatomy.is-session {
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 22%);
     column-gap: clamp(16px, 1.2vw, 36px);
   }
   /* 顶部信息也分两栏：Overview 在左、Trace 点评在右，长段落不至于横跨整屏 */
@@ -67,6 +72,8 @@ main#main { max-width: 1480px; padding: 8px var(--gutter) 12px; }
   #root .sample-head > #ov { grid-column: 1 / -1; }
   #root .sample-head > #ovBox { grid-column: 1; }
   #root .sample-head > #sumBox { grid-column: 2; }
+  /* session 总评没有 Overview，点评通栏，限一下阅读宽度 */
+  #root #shead.is-session .sample-head > #sumBox { grid-column: 1 / -1; max-width: 1200px; }
 }
 
 @media (max-width: 900px) {
