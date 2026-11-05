@@ -148,11 +148,13 @@ function skeleton() {
     <section class="pane pane-out pane-sticky" aria-label="数据详情">
       <div class="pane-scroll" id="sbody">
         <div id="shead"></div>
-        <div class="anatomy" id="sanatomy">
-          <div class="traj" id="sout"></div>
-          <div class="timeline" id="stl"></div>
-          <div class="threads"><svg aria-hidden="true"></svg></div>
-          <div class="aprobs" id="sattr"></div>
+        <div class="anatomy-scroll">
+          <div class="anatomy" id="sanatomy">
+            <div class="traj" id="sout"></div>
+            <div class="timeline" id="stl"></div>
+            <div class="threads"><svg aria-hidden="true"></svg></div>
+            <div class="aprobs" id="sattr"></div>
+          </div>
         </div>
       </div>
     </section>
@@ -705,6 +707,9 @@ function renderIn() {
   const D = S.D;
   $("#sanatomy", root)?.classList.remove("is-session");
   $("#shead", root)?.classList.remove("is-session");
+  // 换样本时对话区自己的滚动位置要归零，否则会停在上一份样本滚到的地方。
+  const scroller = $(".anatomy-scroll", root);
+  if (scroller) scroller.scrollTop = 0;
   const m = D.meta || {};
   const label = (S.prod.models.find((x) => x.id === D.model) || { label: D.model }).label;
   const scene = [m.task, m.subtask, m.difficulty, m.skill, m.mode].filter(Boolean);

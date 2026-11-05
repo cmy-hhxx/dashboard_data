@@ -342,6 +342,13 @@ button.cell[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px 
 .bench .aprobs { min-width: 0; }
 .bench > .pane { height: 100%; }
 .bench .pane-sticky { height: 100%; max-height: none; }
+/* 标题 / 标签 / 点评固定在一屏内，三栏（轨迹 · 对话 · 归因）共用一个滚动区。
+   否则一段十几轮的 session 总评、或单轮里上百条中间链路，会把整页拉到上万像素：
+   屏幕「撑开」后点评和右栏问题卡都跟着滚走，看不到上下文。 */
+#sbody { display: flex; flex-direction: column; overflow: auto; }
+#sbody > #shead { flex: 0 0 auto; }
+/* 对话区至少占半屏（上限 520px）：窗口特别矮时宁可整块再滚一点，也不把三栏压成一条缝。 */
+.anatomy-scroll { flex: 1 1 auto; min-height: min(50vh, 520px); overflow: auto; overscroll-behavior: contain; }
 .ov-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; align-items: start; min-width: 0; }
 #shead.is-session .ov-box, #shead.is-session #ov { display: none; }
 .ov-grid > .cmap { margin: 0; min-width: 0; }
@@ -511,6 +518,9 @@ mark.cx { background: color-mix(in oklab, var(--accent) 22%, transparent); color
   .stage::after { display: none; }
   .anatomy { grid-template-columns: minmax(0, 1fr); }
   .threads { display: none; }
+  /* 窄屏整页就是一条长滚动，不再单独给三栏开滚动区 */
+  #sbody { display: block; overflow: auto; }
+  .anatomy-scroll { overflow: visible; }
   .echo { height: auto; }
   .echo-main { grid-template-rows: none; }
   #anatomyBody { overflow: visible; }
