@@ -287,7 +287,10 @@
    and they span the full column — line length comes from the column, not from a cap. */
 .msg.is-chat { grid-template-columns: minmax(0, 1fr); padding-left: 28px; }
 .msg.k-user .msg-body { background: var(--accent-soft); border-radius: 14px; padding: 10px 14px; }
+.msg.k-answer { --kc: var(--accent); }
 .msg.k-answer .msg-body { background: var(--lift); box-shadow: var(--shadow); border-radius: 14px; padding: 10px 14px; }
+/* 回答接在链路最后一步后面：把链路盒子和回答之间的空档收掉，轨道看起来是连着的。 */
+.chain-box + .msg.k-answer { margin-top: -6px; }
 .msg.k-user .msg-top .who { color: var(--ink-2); }
 /* Readable measure on very wide screens; on normal widths the column is narrower than this. */
 .msg.k-user .msg-body { max-width: 96ch; justify-self: end; }

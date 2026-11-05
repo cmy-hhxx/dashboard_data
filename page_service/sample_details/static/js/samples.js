@@ -849,7 +849,9 @@ function qaHTML(D) {
 function msgHTML(t, i, m) {
   const D = S.D;
   const key = `${t}:${i}`;
-  const chat = m.k === "user" || m.k === "answer";
+  // 单轮视图里只有问句是气泡：回答和链路步骤共用一条轨道，读作「链路 → 回答」；
+  // session 总评本来就是 Q→A 对话，回答继续按对话气泡排。
+  const chat = m.k === "user" || (m.k === "answer" && S.sessionView);
   const sevs = [...new Set((m.ev || []).map((e) => D._ix.sev.get(e)).filter(Boolean))]
     .sort((a, b) => SEV.indexOf(b) - SEV.indexOf(a));
   const folded = !FOLD_OPEN.has(m.k) && !S.open.has(key);
