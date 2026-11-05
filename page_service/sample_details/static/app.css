@@ -470,7 +470,8 @@ mark.cx { background: color-mix(in oklab, var(--accent) 22%, transparent); color
 
 .out { padding: var(--py) calc(var(--px) + 8px) var(--py-lg); display: grid; gap: 16px; }
 .summary { font-size: 14px; color: var(--ink-2); line-height: 1.75; }
-.pcard { background: none; border-radius: var(--r-well); padding: 6px 0; display: grid; gap: 10px; scroll-margin-top: 90px; transition: box-shadow var(--snap); }
+/* 问题卡同理：超过这个高度就在卡内滚动，右栏不会因为一张长卡拉得很长。 */
+.pcard { background: none; border-radius: var(--r-well); padding: 6px 0; display: grid; gap: 10px; scroll-margin-top: 90px; transition: box-shadow var(--snap); max-height: clamp(180px, 44vh, 560px); overflow-y: auto; overscroll-behavior: contain; }
 .pcard.flash { animation: flash 1.2s ease-out; }
 .pcard h3 { font-size: 15px; font-weight: var(--w-title); line-height: 1.5; }
 .pcard .path { font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; }
@@ -917,6 +918,18 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
   max-width: 100%; background: var(--lift); box-shadow: var(--shadow);
   border-radius: 14px; padding: 8px 12px;
 }
+/* 用户问句和回答别无限展开：气泡高度按屏幕比例封顶（50vh，200–700px），
+   超长的正文在自己的气泡里滚；宽度留出舒适阅读行宽，气泡本身仍和链路行同宽。 */
+.msg.k-user .msg-body,
+.msg.k-answer .msg-body {
+  max-height: clamp(200px, 50vh, 700px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+/* 气泡自己会滚了，正文就不用再套一层滚动 */
+.msg.k-user .blk,
+.msg.k-answer .blk { max-height: none; overflow: visible; max-width: 96ch; }
 .msg.k-user .blk { color: var(--ink); }
 .msg-zh { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--t4); color: var(--muted); font-size: 12.5px; line-height: 1.65; white-space: pre-wrap; }
 .msg.k-user .msg-top .who { color: var(--ink-2); }
