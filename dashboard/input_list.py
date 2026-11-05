@@ -26,7 +26,7 @@ LIST_VERSION = 5
 Q_LIMIT = 200
 # 每行只读开头这几 KB：question / session_id / n_traces 都在 meta 里靠前。
 # AIME 单日输入文件 1.6 GB，整文件读一遍要两分钟；按行读前缀是十几 MB、一秒级。
-FILES_TTL = 300
+FILES_TTL = 3600
 PREAD_SECONDS = 0.014
 STREAM_BYTES_PER_SECOND = 27 * 1024 * 1024
 PREFIX = 1024
@@ -129,10 +129,14 @@ class InputLister:
                 hit[2].clear()
 
     def warm(self, products):
-        """启动时后台预热文件清单：第一次点进来不要等 23 秒。"""
+        """启动时后台预热文件清单：优先用磁盘上那份（秒级），没有才重扫。
+
+        之前这里无条件 _scan_files：每次发布重启都在弗吉尼亚重 rglob 2.6 万个输入文件，
+        数据没变也要跑十几分钟，白占 I/O。
+        """
         for product in products:
             try:
-                self._scan_files(product)
+                self._all_files(product)
             except Exception:  # noqa: BLE001
                 continue
 
