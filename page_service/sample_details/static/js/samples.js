@@ -148,13 +148,11 @@ function skeleton() {
     <section class="pane pane-out pane-sticky" aria-label="数据详情">
       <div class="pane-scroll" id="sbody">
         <div id="shead"></div>
-        <div class="anatomy-scroll">
-          <div class="anatomy" id="sanatomy">
-            <div class="traj" id="sout"></div>
-            <div class="timeline" id="stl"></div>
-            <div class="threads"><svg aria-hidden="true"></svg></div>
-            <div class="aprobs" id="sattr"></div>
-          </div>
+        <div class="anatomy" id="sanatomy">
+          <div class="traj" id="sout"></div>
+          <div class="timeline" id="stl"></div>
+          <div class="threads"><svg aria-hidden="true"></svg></div>
+          <div class="aprobs" id="sattr"></div>
         </div>
       </div>
     </section>
@@ -707,9 +705,6 @@ function renderIn() {
   const D = S.D;
   $("#sanatomy", root)?.classList.remove("is-session");
   $("#shead", root)?.classList.remove("is-session");
-  // 换样本时对话区自己的滚动位置要归零，否则会停在上一份样本滚到的地方。
-  const scroller = $(".anatomy-scroll", root);
-  if (scroller) scroller.scrollTop = 0;
   const m = D.meta || {};
   const label = (S.prod.models.find((x) => x.id === D.model) || { label: D.model }).label;
   const scene = [m.task, m.subtask, m.difficulty, m.skill, m.mode].filter(Boolean);
@@ -773,8 +768,36 @@ function renderTrace() {
   const tr = D.input.traces[S.trace];
   if (!tr) return;
   renderOverview();
-  $("#stl", root).innerHTML = tr.messages.map((m, i) => msgHTML(S.trace, i, m)).join("") || `<div class="empty">该轮没有消息</div>`;
+  $("#stl", root).innerHTML = timelineHTML(S.trace, tr.messages || []) || `<div class="empty">该轮没有消息</div>`;
   scheduleThreads();
+}
+
+/* 用户与回答之间的那一串思考 / 调用 / 返回（中间链路）单独收进一个固定高度的盒子：
+   一条 trace 动辄上百步，平铺会把整页拉成上万像素，回答被顶到屏幕外。
+   链路在自己的盒子里滚，用户问句和最终回答始终留在盒子的上下。 */
+const CHAIN_KINDS = new Set(["user", "answer"]);
+
+function timelineHTML(t, messages) {
+  const out = [];
+  let run = [];
+  const flush = () => {
+    if (!run.length) return;
+    out.push(`<div class="chain-box">
+      <div class="chain-head"><span class="chain-k">中间链路</span><span class="num faint">${run.length} 步</span></div>
+      <div class="chain-body">${run.map((i) => msgHTML(t, i, messages[i])).join("")}</div>
+    </div>`);
+    run = [];
+  };
+  messages.forEach((m, i) => {
+    if (CHAIN_KINDS.has(m.k)) {
+      flush();
+      out.push(msgHTML(t, i, m));
+    } else {
+      run.push(i);
+    }
+  });
+  flush();
+  return out.join("");
 }
 
 /* Session 总评: only the chat turns, so the page reads Q → A → Q → A instead of
@@ -884,6 +907,9 @@ function pieceHTML(t, mi, bi, b, plain = false) {
 function rerenderMsg(t, i) {
   const el = $(`#m-${t}-${i}`, root);
   if (el) el.outerHTML = msgHTML(t, i, S.D.input.traces[t].messages[i]);
+  // 中间链路盒子高度封顶后，展开/收起某一步不会改变盒子高度（也就不会触发 ResizeObserver），
+  // 里面步骤的位置变了，连线得手动重画一次。
+  scheduleThreads();
 }
 
 async function copyText(text) {
@@ -1016,6 +1042,8 @@ function wireThreads() {
   threadObs.observe(box);
   // 时间线里的滚动条 / 字号变化会让消息右缘移动几个像素，连线跟着重画一次；
   // 窗口 resize 也要重画（外部分享页整页 zoom 过，尺寸换算依赖当前布局）。
+  // 中间链路盒子内部滚动时同理：capture 拿得到不冒泡的 scroll。
+  box.addEventListener("scroll", () => scheduleThreads(), true);
   const stl = $("#stl", root);
   if (stl) threadObs.observe(stl);
   if (!wireThreads.bound) {
@@ -1029,6 +1057,7 @@ function scheduleThreads() {
   if (threadFrame) return;
   threadFrame = requestAnimationFrame(() => {
     threadFrame = 0;
+    markChainScroll();
     drawThreads();
     // 首屏的字号、折叠状态、上方 Overview/点评的高度都会在下一拍才稳定；
     // 位置一变连线就得重画，否则出入点会落在旧位置上。
@@ -1039,12 +1068,20 @@ function scheduleThreads() {
   });
 }
 
+/* 链路盒子里还有没露出来的步骤时，底部渐隐一下，提示「还能往下滚」。 */
+function markChainScroll() {
+  $$(".chain-box", root).forEach((box) => {
+    const body = $(".chain-body", box);
+    if (body) body.classList.toggle("is-more", body.scrollHeight - body.scrollTop - body.clientHeight > 4);
+  });
+}
+
 /* 右栏不跟着用户问句起：把 timeline 第一条非用户消息的位置量出来，差值补到 .aprobs 的 padding 上。 */
 function alignAprobs() {
   const box = $("#sattr", root);
   const card = box && $(".pcard", box);
-  // 和第一条「非用户」消息对齐（单轮是模型开始，session 总评是第一条回答），不跟用户问句起。
-  const first = $("#stl .msg:not(.k-user)", root);
+  // 和第一条「非用户」内容对齐（单轮是中间链路的盒子顶，session 总评是第一条回答），不跟用户问句起。
+  const first = $("#stl .chain-box, #stl .msg:not(.k-user)", root);
   if (!box) return;
   const cur = parseFloat(box.style.getPropertyValue("--ap-off")) || 0;
   if (!card || !first) {
@@ -1099,7 +1136,15 @@ function drawThreads() {
       if (!msg) return;
       seen.add(key);
       const r = ($(".msg-body", msg) || msg).getBoundingClientRect();
-      const start = toLocal(r.right, r.top + Math.min(26 * scale, r.height / 2));
+      let y = r.top + Math.min(26 * scale, r.height / 2);
+      // 中间链路盒子内部滚过之后，消息可能已经滚出盒子的可视区：把出入点夹到盒子上下边缘，
+      // 线仍然指进这段链路，而不是飘到盒子外面去。
+      const clipBox = msg.closest(".chain-body");
+      if (clipBox) {
+        const cb = clipBox.getBoundingClientRect();
+        y = Math.max(cb.top + 4 * scale, Math.min(cb.bottom - 4 * scale, y));
+      }
+      const start = toLocal(r.right, y);
       const x1 = start.x;
       const y1 = start.y;
       const span = Math.max(24, x2 - x1);
