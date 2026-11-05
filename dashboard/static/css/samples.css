@@ -273,6 +273,9 @@
 .chain-head { position: relative; }
 .chain-head .chain-acts { position: absolute; right: 0; top: 50%; transform: translateY(-50%); display: flex; align-items: center; gap: 6px; }
 .chain-head .band-more { margin: 0; height: 22px; padding: 0 10px; }
+/* 展开后的长链路：标题行吸顶，滚到链路中段也点得到「收起 / 全部收起」。
+   收起态不吸顶，免得平时滚读时这条标题一直压在内容上。 */
+.chain-box.is-open > .chain-head { position: sticky; top: 0; z-index: 3; background: var(--card); }
 
 /* ---------------------------------------------------------------- timeline */
 .msg {

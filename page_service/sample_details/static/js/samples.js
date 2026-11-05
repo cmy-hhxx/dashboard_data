@@ -146,7 +146,7 @@ function skeleton() {
       <div class="pager" id="spager" hidden></div>
     </aside>
     <section class="pane pane-out pane-sticky" aria-label="数据详情">
-      <div class="pane-scroll" id="sbody">
+      <div class="pane-scroll" id="sbody" tabindex="0" aria-label="样本详情">
         <div id="shead"></div>
         <div class="anatomy" id="sanatomy">
           <div class="traj" id="sout"></div>
@@ -211,6 +211,14 @@ function skeleton() {
   $("#sbody", root).addEventListener("click", onInputClick);
   $("#shead", root).addEventListener("click", onOutClick);
   $("#sout", root).addEventListener("click", onOutClick);
+  // 轨迹行本身可点，键盘也要能用：Enter / 空格和鼠标点击走同一条路径
+  $("#sout", root).addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const cf = e.target.closest(".cf");
+    if (!cf || e.target !== cf) return;
+    e.preventDefault();
+    cf.click();
+  });
   $("#sattr", root).addEventListener("click", onOutClick);
   // 归因卡片的「现象 / 证据」展开会改这一列的内容高度，三列矩形要重新量一次。
   $("#sattr", root).addEventListener("toggle", () => scheduleThreadsCompensate(), true);
@@ -1076,10 +1084,21 @@ function keepBand() {
 function onInputClick(e) {
   const more = e.target.closest("[data-band]");
   if (more) {
+    const sbody = $("#sbody", root);
+    const band = $("#sanatomy", root);
+    // 收起时如果人已经在链路中段（标题行在视口上方），收完要把带子拉回视口顶，
+    // 否则会停在链路尾巴 / 回答那一屏，看不到收起来的样子。
+    const deep = !!(sbody && band && band.getBoundingClientRect().top < sbody.getBoundingClientRect().top + 4);
     const restore = keepBand();
     S.bandOpen = !S.bandOpen;
     scheduleThreadsCompensate();
-    restore();
+    if (deep && !S.bandOpen && sbody && band) {
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        sbody.scrollTop += band.getBoundingClientRect().top - sbody.getBoundingClientRect().top;
+      }));
+    } else {
+      restore();
+    }
     return;
   }
   // 点证据会逐个展开链路步骤，展开散了一地时一键收回：不用一条一条点「收起」。
@@ -1317,6 +1336,8 @@ function alignColumns() {
   if (outT) outT.style.paddingTop = "";
   if (outP) outP.style.paddingTop = "";
   if (!box || !stl) return;
+  // 展开后链路可能几千像素：标题行吸顶，滚到中段也点得到「收起 / 全部收起」。
+  $$(".chain-box", root).forEach((b) => b.classList.toggle("is-open", S.bandOpen));
   const zoom = stl.offsetHeight ? stl.getBoundingClientRect().height / stl.offsetHeight : 1;   // 整页 zoom 时 rect 是放大后的像素
   // 窄屏是单栏堆叠，对齐关闭。
   if (!matchMedia("(min-width: 1181px)").matches) return;
@@ -1579,7 +1600,7 @@ function compactFlowHTML(D, t, multi) {
     .map((n, k) => {
       const tag = !k || nodes[k - 1].cls !== n.cls ? n.name : "";
       const refs = n.ev.length > 1 ? `<span class="refs">${n.ev.map((e) => `<button type="button" data-e="${e}">${evAt(D.evidence[e], multi)}</button>`).join("")}</span>` : "";
-      return `<div class="cf ${n.cls}" id="cf-${t.turn}-${k}"${n.ev.length ? ` data-e="${n.ev[0]}"` : ""}><span class="cf-dot"></span>
+      return `<div class="cf ${n.cls}" id="cf-${t.turn}-${k}" tabindex="0"${n.ev.length ? ` data-e="${n.ev[0]}"` : ""}><span class="cf-dot"></span>
         <span class="cf-tag">${tag}</span><div class="cf-body"><span class="cf-at num">${at(n.pos)}</span><span class="cf-text" title="${esc(n.x.c)}">${esc(n.x.c)}</span>${refs}</div></div>`;
     })
     .join("");
