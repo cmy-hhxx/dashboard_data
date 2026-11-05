@@ -743,7 +743,7 @@ function renderIn() {
     </div>`;
   if (D.input.missing) {
     $("#stl", root).innerHTML = `<div class="empty">这一组没有找到对应的评测输入。</div>
-      <button type="button" class="band-more" id="bandMore" hidden>展开全部</button>`;
+      <button type="button" class="band-more band-toggle" data-band hidden>展开全部</button>`;
     $("#ov", root).innerHTML = "";
     scheduleThreadsCompensate();
     return;
@@ -806,9 +806,13 @@ function timelineHTML(t, messages) {
   const flush = () => {
     if (!run.length) return;
     out.push(`<div class="chain-box">
-      <div class="chain-head"><span class="chain-k">中间链路</span><span class="num faint">${run.length} 步</span></div>
+      <div class="chain-head"><span class="chain-k">中间链路</span><span class="num faint">${run.length} 步</span>
+        <span class="chain-acts">
+          <button type="button" class="band-more band-toggle" data-band hidden>展开全部</button>
+          <button type="button" class="band-more fold-all" data-fold-all hidden>全部收起</button>
+        </span></div>
       <div class="chain-body">${run.map((i) => msgHTML(t, i, messages[i])).join("")}</div>
-      <button type="button" class="band-more" id="bandMore" hidden>展开全部</button>
+      <button type="button" class="band-more band-toggle" data-band hidden>展开全部</button>
     </div>`);
     run = [];
   };
@@ -1047,19 +1051,38 @@ async function copyText(text) {
   }
 }
 
+/* 记录整条带在屏幕上的位置，重排（展开 / 收起）后把它还原，不把人甩到别处。 */
+function keepBand() {
+  const sbody = $("#sbody", root);
+  const band = $("#sanatomy", root);
+  if (!sbody || !band) return () => {};
+  const offset = band.getBoundingClientRect().top - sbody.getBoundingClientRect().top;
+  const y = sbody.scrollTop + offset;
+  return () => requestAnimationFrame(() => requestAnimationFrame(() => { sbody.scrollTop = y - offset; }));
+}
+
 function onInputClick(e) {
-  const more = e.target.closest("#bandMore");
+  const more = e.target.closest("[data-band]");
   if (more) {
-    const sbody = $("#sbody", root);
-    const band = $("#sanatomy", root);
-    const offset = band && sbody ? band.getBoundingClientRect().top - sbody.getBoundingClientRect().top : 0;
-    const anchorY = sbody ? sbody.scrollTop + offset : 0;
+    const restore = keepBand();
     S.bandOpen = !S.bandOpen;
     scheduleThreadsCompensate();
-    // 重排后把整条带的屏幕位置还原，展开 / 收起不会把人甩到别处。
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      if (sbody) sbody.scrollTop = anchorY - offset;
-    }));
+    restore();
+    return;
+  }
+  // 点证据会逐个展开链路步骤，展开散了一地时一键收回：不用一条一条点「收起」。
+  const foldAll = e.target.closest("[data-fold-all]");
+  if (foldAll) {
+    const keys = $$("#stl .toggle", root).filter((b) => b.textContent === "收起").map((b) => b.dataset.fold);
+    if (!keys.length) return;
+    const restore = keepBand();
+    keys.forEach((k) => S.open.delete(k));
+    keys.forEach((k) => {
+      const [t, i] = k.split(":").map(Number);
+      rerenderMsg(t, i);
+    });
+    scheduleThreadsCompensate();
+    restore();
     return;
   }
   const fold = e.target.closest("[data-fold]");
@@ -1098,8 +1121,9 @@ function onInputClick(e) {
 function jump(eid) {
   const ev = S.D.evidence[eid];
   if (!ev || ev.m == null) return;
-  const wasSession = S.sessionView;
-  S.sessionView = false;
+  // session 总评本来就是「问 → 答」的全景，点证据不该把人踢回某一轮：
+  // 留在这一页，能定位到那条消息就滚过去。
+  if (S.sessionView) return jumpInSession(eid, ev);
   if (ev.t !== S.trace) {
     const at = S.D.rounds?.findIndex((r) => r.trace === ev.t) ?? -1;
     const rr = at >= 0 ? S.D.rounds[at] : null;
@@ -1111,9 +1135,6 @@ function jump(eid) {
     }
     renderTrace();
     renderOut();
-  } else if (wasSession) {
-    renderTrace();
-    renderOut();
   }
   const prev = S.active;
   S.active = eid;
@@ -1121,12 +1142,37 @@ function jump(eid) {
   S.open.add(`${ev.t}:${ev.m}`);
   rerenderMsg(ev.t, ev.m);
   const el = $(`#m-${ev.t}-${ev.m}`, root);
+  if (!el) { threadFocus?.(hoverPid); return; }   // 数据里点到一条这一轮没渲染出来的消息
   $$("mark.on", root).forEach((m) => m.classList.remove("on"));
   $$(`mark[data-e~="${eid}"]`, el).forEach((m) => m.classList.add("on"));
-  focus(hoverPid);
+  threadFocus?.(hoverPid);
   const target = $(`mark[data-e~="${eid}"]`, el) || el;
   target.scrollIntoView({ block: "center", behavior: REDUCED ? "auto" : "smooth" });
   flash(el);
+}
+
+/* session 总评里点证据：只在这一页里定位。总评只铺了问答消息，证据落在中间步骤时
+   退到同一轮最近的那条问答，至少让人知道是哪一轮。 */
+function jumpInSession(eid, ev) {
+  const msgs = S.D.input.traces?.[ev.t]?.messages || [];
+  const pick = (i) => {
+    const m = msgs[i];
+    return m && (m.k === "user" || m.k === "answer") ? $(`#m-${ev.t}-${i}`, root) : null;
+  };
+  let el = pick(ev.m);
+  for (let i = ev.m - 1; i >= 0 && !el; i -= 1) el = pick(i);
+  for (let i = ev.m + 1; i < msgs.length && !el; i += 1) el = pick(i);
+  S.active = eid;
+  $$("mark.on", root).forEach((m) => m.classList.remove("on"));
+  if (el) {
+    $$(`mark[data-e~="${eid}"]`, el).forEach((m) => m.classList.add("on"));
+    flash(el);
+    // 回答动辄几千像素，按整条消息居中会落到它的中段；直接滚到被引用的那句话。
+    const target = $(`mark[data-e~="${eid}"]`, el) || el;
+    target.scrollIntoView({ block: "center", behavior: REDUCED ? "auto" : "smooth" });
+  }
+  threadFocus?.(hoverPid);
+  scheduleThreadsCompensate();
 }
 
 function flash(el, scroll) {
@@ -1143,6 +1189,7 @@ let threadRealign = false;
 let threadTimers = [];
 let threadObs = null;
 let hoverPid = null;   // 当前指针压在哪个问题卡上
+let threadFocus = null;   // 高亮某张卡对应的连线 / 消息；跳到证据后要重新点一次
 
 function wireThreads() {
   const box = $("#sanatomy", root);
@@ -1164,6 +1211,7 @@ function wireThreads() {
     $$("mark.ev", box).forEach((m) => m.classList.toggle("on", m.dataset.e.split(" ").some((e) => evs.has(e))));
     $$("path", svg).forEach((p) => p.classList.toggle("on", p.dataset.p === String(pid)));
   };
+  threadFocus = focus;
   const trackHover = (e) => {
     const c = e.target.closest(".pcard");
     const pid = c ? Number(c.id.replace("pc-", "")) : null;
@@ -1216,6 +1264,7 @@ function scheduleThreads(realign = true) {
     const align = threadRealign;
     threadRealign = false;
     drawThreads(align);
+    syncFoldAll();
     // 首屏的字号、折叠状态、上方概览/点评的高度都会在下一拍才稳定；
     // 位置一变连线就得重画，否则出入点会落在旧位置上。
     // 首屏与后续重排（滚动条出现、折叠态、字体）都会让消息位置变；跑一串补偿重画，
@@ -1240,13 +1289,13 @@ function alignColumns() {
   const group = $("#sattr .tgroup", root);
   const body = stl ? $(".chain-body", stl) : null;
   const lists = [flow, group, body].filter(Boolean);
-  const more = $("#bandMore", root);
+  const bands = $$(".band-toggle", root);
   // 先回到自然高度再量，否则上一轮撑出来的高度会被当成内容高度。
   for (const el of lists) {
     el.style.height = "";
     el.classList.remove("is-band", "is-clip", "is-dense");
   }
-  if (more) more.hidden = true;
+  bands.forEach((b) => { b.hidden = true; });
   if (flow) {
     flow.style.marginTop = "";
     flow.classList.remove("is-tight");
@@ -1255,13 +1304,21 @@ function alignColumns() {
   if (group) group.style.marginTop = "";
   if (outT) outT.style.paddingTop = "";
   if (outP) outP.style.paddingTop = "";
-  if (!box || !stl || !flow || !group) return;
-  // 窄屏是单栏堆叠，session 总评没有轨迹栏：都保持自然流。
-  if (box.classList.contains("is-session") || !matchMedia("(min-width: 1181px)").matches) return;
+  if (!box || !stl) return;
+  const zoom = stl.offsetHeight ? stl.getBoundingClientRect().height / stl.offsetHeight : 1;   // 整页 zoom 时 rect 是放大后的像素
+  // 窄屏是单栏堆叠，对齐关闭。
+  if (!matchMedia("(min-width: 1181px)").matches) return;
+  // Session 总评：左列是「问 → 答」的全景，没有链路也没有轨迹列。右列归因卡片仍然要对齐
+  // 到第一段模型回答的顶部（和单轮视图里对齐链路第一步是一个意思），而不是跟着用户问句走。
+  if (box.classList.contains("is-session")) {
+    const answer = $(".msg.k-answer", stl);
+    if (answer && group) group.style.marginTop = `${(answer.getBoundingClientRect().top - group.getBoundingClientRect().top) / zoom}px`;
+    return;
+  }
+  if (!flow || !group) return;
   // 上沿的锚点：链路第一步 → 对话第一条 → 该轮没有输入时的空态。
   const anchorEl = (body && $(".msg", body)) || $(".msg", stl) || stl.firstElementChild;
   if (!anchorEl) return;
-  const zoom = stl.offsetHeight ? stl.getBoundingClientRect().height / stl.offsetHeight : 1;   // 整页 zoom 时 rect 是放大后的像素
   const anchor = anchorEl.getBoundingClientRect().top;
   const pane = $("#sbody", root);
   const cap = Math.max(720, pane ? pane.clientHeight : 900);
@@ -1311,11 +1368,18 @@ function alignColumns() {
   fit(flow, flow.scrollHeight);
   fit(group, nat.group);
   if (body) fit(body, body.scrollHeight);
-  if (more) {
-    // 只有当「收起来」真的藏了内容时才出现；展开后变成「收起」。
-    more.hidden = !(clipped || (S.bandOpen && folded < tallest));
-    more.textContent = S.bandOpen ? "收起" : "展开全部";
-  }
+  // 只有当「收起来」真的藏了内容时才出现；展开后变成「收起」。顶部和底部各一个，长链路不用滚到底才点得到。
+  const canFold = clipped > 0 || (S.bandOpen && folded < tallest);
+  bands.forEach((b) => {
+    b.hidden = !canFold;
+    b.textContent = S.bandOpen ? "收起" : "展开全部";
+  });
+}
+
+/* 「全部收起」只在链路上有步骤被展开时才出现。 */
+function syncFoldAll() {
+  const on = $$("#stl .toggle", root).some((b) => b.textContent === "收起");
+  $$("[data-fold-all]", root).forEach((b) => { b.hidden = !on; });
 }
 
 function drawThreads(realign = true) {
@@ -1342,16 +1406,23 @@ function drawThreads(realign = true) {
     return probe.matrixTransform(inv);
   };
   const byId = new Map(S.D.attribution.problems.map((p) => [p.id, p]));
-  // 内容被「收起」时，裁掉的部分看不见，连线也不要再画过去。
-  const bandBody = $(".chain-body", root);
-  const bandBottom = bandBody ? bandBody.getBoundingClientRect().bottom : Infinity;
+  // 内容被「收起」时，裁掉的部分看不见，连线也不要再画过去。但「裁到哪儿」是每个容器自己的事：
+  // 链路盒子和两列各有一条渐隐线，以前统一用链路盒子的下沿，结果链路盒子外面的最终回答
+  // （以及比链路盒子更高的那列的卡片）全被顺手裁掉，连线就时有时无。
+  const clippedBottom = (el) => {
+    let limit = Infinity;
+    for (let p = el.parentElement; p && p !== box; p = p.parentElement) {
+      if (p.classList.contains("is-clip")) limit = Math.min(limit, p.getBoundingClientRect().bottom);
+    }
+    return limit;
+  };
   let paths = "";
   $$("#sattr .pcard", root).forEach((card) => {
     const pid = Number(card.id.replace("pc-", ""));
     const prob = byId.get(pid);
     if (!prob) return;
     const pr = card.getBoundingClientRect();
-    if (pr.top >= bandBottom) return;   // 被收进渐隐里的卡片
+    if (pr.top >= clippedBottom(card)) return;   // 被收进渐隐里的卡片
     const end = toLocal(pr.left, pr.top + 22 * scale);
     const x2 = end.x;
     const y2 = end.y;
@@ -1366,7 +1437,7 @@ function drawThreads(realign = true) {
       if (!msg) return;
       seen.add(key);
       const r = ($(".msg-body", msg) || msg).getBoundingClientRect();
-      if (r.top >= bandBottom) return;   // 被收进渐隐里的步骤
+      if (r.top >= clippedBottom(msg)) return;   // 被收进渐隐里的步骤
       const y = r.top + Math.min(26 * scale, r.height / 2);
       const start = toLocal(r.right, y);
       const x1 = start.x;

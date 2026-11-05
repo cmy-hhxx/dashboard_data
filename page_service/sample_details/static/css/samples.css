@@ -7,6 +7,7 @@
    - 轨迹 / 中间链路 / 归因三列由 samples.js · alignColumns 合成一个矩形：上沿对齐中间链路
      的第一步，下沿对齐三列里最高的那条线；矮的那列均分富余高度，超过可视高度 1.25 倍时
      那一列自己滚。窄屏（< 1181px）单栏堆叠，对齐关闭。
+   - session 总评没有链路：右列归因卡片的上沿对齐第一段模型回答，而不是用户问句。
    ========================================================================== */
 :root {
   --fs-meta: 11.5px;   /* labels, ids, counts */
@@ -267,6 +268,11 @@
 }
 .band-more:hover { color: var(--ink); box-shadow: var(--shadow-pop); }
 .band-more[hidden] { display: none; }
+/* 链路标题行右侧的「展开全部 / 全部收起」：展开后不用滚到链路末尾才点得到「收起」。
+   绝对定位，不撑高标题行——否则按钮一出现，链路整体下移，三列上沿就错开了。 */
+.chain-head { position: relative; }
+.chain-head .chain-acts { position: absolute; right: 0; top: 50%; transform: translateY(-50%); display: flex; align-items: center; gap: 6px; }
+.chain-head .band-more { margin: 0; height: 22px; padding: 0 10px; }
 
 /* ---------------------------------------------------------------- timeline */
 .msg {
