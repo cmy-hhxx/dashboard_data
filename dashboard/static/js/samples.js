@@ -5,7 +5,7 @@ import { threadFlow } from "./particles.js";
 
 const FOLD_OPEN = new Set(["user", "answer"]);
 const PAGE = 50;
-const S = { product: null, all: [], rows: [], pageRows: [], page: 1, slug: null, sessionKey: null, D: null, round: 0, trace: 0, turn: 0, cturn: 0, sessionView: false, open: new Set(), active: null, cache: new Map() };
+const S = { product: null, all: [], rows: [], pageRows: [], page: 1, slug: null, sessionKey: null, D: null, round: 0, trace: 0, turn: 0, cturn: 0, sessionView: false, open: new Set(), shut: new Set(), active: null, cache: new Map() };
 let ctx;
 let root;
 
@@ -595,6 +595,7 @@ async function loadSession(session, focusSlug, focusTrace) {
   S.turn = init?.turn ?? S.round;
   S.cturn = init?.compact ?? S.round;
   S.open = new Set();
+  S.shut = new Set();
   S.active = null;
   renderIn();
   renderOut();
@@ -765,6 +766,8 @@ function renderTrace() {
   if (session) {
     $("#sout", root).innerHTML = "";
     $("#stl", root).innerHTML = qaHTML(D);
+    markProse($("#stl", root));
+    enter();
     scheduleThreadsCompensate();
     return;
   }
@@ -772,7 +775,19 @@ function renderTrace() {
   if (!tr) return;
   renderOverview();
   $("#stl", root).innerHTML = timelineHTML(S.trace, tr.messages || []) || `<div class="empty">该轮没有消息</div>`;
+  markProse($("#stl", root));
+  enter();
   scheduleThreadsCompensate();
+}
+
+/* Round / sample switch: replay the settle-in motion and start the columns at the top. */
+function enter() {
+  const box = $("#sanatomy", root);
+  if (!box) return;
+  $$(".traj, .aprobs", box).forEach((c) => { c.scrollTop = 0; });
+  box.classList.remove("is-enter");
+  void box.offsetWidth;
+  box.classList.add("is-enter");
 }
 
 /* 用户与回答之间的那一串思考 / 调用 / 返回（中间链路）单独收进一个固定高度的盒子：
@@ -830,15 +845,17 @@ function msgHTML(t, i, m) {
   const D = S.D;
   const key = `${t}:${i}`;
   const chat = m.k === "user" || m.k === "answer";
-  const folded = !FOLD_OPEN.has(m.k) && !S.open.has(key);
   const sevs = [...new Set((m.ev || []).map((e) => D._ix.sev.get(e)).filter(Boolean))].sort();
+  // 被归因引用的消息默认展开：证据 mark 在折叠态看不见，闭环就断了。
+  const folded = S.shut.has(key) || (!FOLD_OPEN.has(m.k) && !sevs.length && !S.open.has(key));
   const time = m.dur != null ? `<span class="num dur">${m.dur >= 1000 ? fmt(m.dur / 1000, 1) + " s" : m.dur + " ms"}</span>` : "";
   const who = KIND[m.k] || m.k;
   const firstUser = t === 0 ? S.D.input.traces[0].messages.findIndex((x) => x.k === "user") : -1;
   const trans = t === 0 && i === firstUser && S.D.question_zh && S.D.question_zh !== S.D.question ? S.D.question_zh : "";
   const body = blockHTML(t, i, m);
   const hasBody = body || trans;
-  return `<div class="msg k-${m.k}${chat ? " is-chat" : ""}${folded ? " is-folded" : ""}" id="m-${t}-${i}" data-key="${key}">
+  const cited = sevs.length ? ` has-ev" style="--c:${sevColor(sevs[0])}` : "";
+  return `<div class="msg k-${m.k}${chat ? " is-chat" : ""}${folded ? " is-folded" : ""}${cited}" id="m-${t}-${i}" data-key="${key}">
     ${chat ? "" : '<span class="msg-dot" aria-hidden="true"></span>'}
     <div class="msg-body"><div class="msg-top">
       <span class="who">${who}</span>
@@ -883,11 +900,15 @@ function pieceHTML(t, mi, bi, b, plain = false) {
   // The final answer is prose we want to read: give Markdown precedence over
   // per-character evidence highlighting, which would otherwise leave raw
   // tables/lists on screen. Evidence dots stay in the message header.
-  if (plain && !gaps) return renderContent(b.x.join(""), b.f);
   const ids = (D._ix.byBlock.get(`${t}:${mi}:${bi}`) || []).filter((e) => D.evidence[e].src === "attr" || e === S.active);
   const marks = ids
     .filter((e) => D.evidence[e].o)
     .map((e) => ({ e: [e], src: D.evidence[e].src, s: D.evidence[e].o[0], z: D.evidence[e].o[1] }));
+  if (plain && !gaps) {
+    const html = renderContent(b.x.join(""), b.f);
+    const attr = marks.filter((k) => k.src === "attr");
+    return attr.length ? `<div class="md-find" data-src="${t}:${mi}:${bi}" data-ev="${attr.map((k) => k.e[0]).join(" ")}">${html}</div>` : html;
+  }
 
   if (!marks.length && !gaps) return renderContent(b.x.join(""), b.f);
   if (!marks.length) {
@@ -920,9 +941,68 @@ function pieceHTML(t, mi, bi, b, plain = false) {
     .join("");
 }
 
+/* Evidence inside a Markdown-rendered answer: find each quote in the rendered text (ignoring
+   whitespace and Markdown syntax, which rendering drops) and wrap the covered runs in marks.
+   A quote that cannot be found still shows on the message edge (.has-ev) and its thread. */
+const MD_NOISE = /[\s*_`#>|~\\-]/;
+function markProse(scope) {
+  $$(".md-find:not([data-done])", scope).forEach((host) => {
+    host.dataset.done = "1";
+    const [t, mi, bi] = host.dataset.src.split(":").map(Number);
+    const block = S.D.input.traces[t]?.messages[mi]?.blocks[bi];
+    if (!block) return;
+    const text = block.x.join("");
+    const nodes = [];
+    const walk = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+    let flat = "";
+    const at = [];   // flat index → [node index, offset]
+    for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+      const v = n.nodeValue;
+      for (let k = 0; k < v.length; k += 1) {
+        if (MD_NOISE.test(v[k])) continue;
+        flat += v[k];
+        at.push([nodes.length, k]);
+      }
+      nodes.push(n);
+    }
+    const spans = [];   // [node index, start, end, eid]
+    host.dataset.ev.split(" ").map(Number).forEach((e) => {
+      const ev = S.D.evidence[e];
+      const want = text.slice(ev.o[0], ev.o[1]).replace(/^\s*\d+\.\s/gm, "").split("").filter((c) => !MD_NOISE.test(c)).join("");
+      if (want.length < 2) return;
+      let p = flat.indexOf(want);
+      let len = want.length;
+      if (p < 0 && want.length > 24) {
+        p = flat.indexOf(want.slice(0, 24));
+        len = 24;
+      }
+      if (p < 0) return;
+      const [n0, o0] = at[p];
+      const [n1, o1] = at[p + len - 1];
+      for (let n = n0; n <= n1; n += 1) spans.push([n, n === n0 ? o0 : 0, n === n1 ? o1 + 1 : nodes[n].nodeValue.length, e]);
+    });
+    // Wrap from the end so earlier offsets stay valid while text nodes split.
+    spans.sort((a, b) => b[0] - a[0] || b[1] - a[1]).forEach(([n, a, z, e]) => {
+      const node = nodes[n];
+      if (z <= a || z > node.nodeValue.length) return;
+      const range = document.createRange();
+      range.setStart(node, a);
+      range.setEnd(node, z);
+      const mark = document.createElement("mark");
+      mark.className = "ev";
+      mark.dataset.e = String(e);
+      mark.style.setProperty("--c", sevColor(S.D._ix.sev.get(e)));
+      range.surroundContents(mark);
+    });
+  });
+}
+
 function rerenderMsg(t, i) {
   const el = $(`#m-${t}-${i}`, root);
-  if (el) el.outerHTML = msgHTML(t, i, S.D.input.traces[t].messages[i]);
+  if (el) {
+    el.outerHTML = msgHTML(t, i, S.D.input.traces[t].messages[i]);
+    markProse($(`#m-${t}-${i}`, root));
+  }
   // 中间链路盒子高度封顶后，展开/收起某一步不会改变盒子高度（也就不会触发 ResizeObserver），
   // 里面步骤的位置变了，连线得手动重画一次。
   scheduleThreadsCompensate();
@@ -958,7 +1038,9 @@ function onInputClick(e) {
   const fold = e.target.closest("[data-fold]");
   if (fold) {
     const [t, i] = fold.dataset.fold.split(":").map(Number);
-    S.open.has(fold.dataset.fold) ? S.open.delete(fold.dataset.fold) : S.open.add(fold.dataset.fold);
+    const k = fold.dataset.fold;
+    const isFolded = fold.closest(".msg")?.classList.contains("is-folded");
+    if (isFolded) { S.open.add(k); S.shut.delete(k); } else { S.shut.add(k); S.open.delete(k); }
     rerenderMsg(t, i);
     return;
   }
@@ -1012,6 +1094,7 @@ function jump(eid) {
   S.active = ev.src === "compact" ? eid : null;
   if (prev != null && S.D.evidence[prev]) rerenderMsg(S.D.evidence[prev].t, S.D.evidence[prev].m);
   S.open.add(`${ev.t}:${ev.m}`);
+  S.shut.delete(`${ev.t}:${ev.m}`);
   rerenderMsg(ev.t, ev.m);
   const el = $(`#m-${ev.t}-${ev.m}`, root);
   $$("mark.on", root).forEach((m) => m.classList.remove("on"));
@@ -1033,7 +1116,6 @@ function flash(el, scroll) {
 let threadFrame = 0;
 let threadTimers = [];
 let threadObs = null;
-let threadScrollIdle = null;  // 滚动进行中：连线重建先挂起，停稳后再补
 let hoverPid = null;   // 当前指针压在哪个问题卡上
 
 function wireThreads() {
@@ -1045,8 +1127,10 @@ function wireThreads() {
     const prob = pid == null || !S.D ? null : S.D.attribution.problems.find((p) => p.id === pid);
     // 证据按「轮次:消息」定位，session 总评里同一张卡可能落在多轮上。
     const msgs = new Set(prob ? prob.ev.map((e) => S.D.evidence[e]).filter((ev) => ev && ev.m != null).map((ev) => `${ev.t}:${ev.m}`) : []);
+    const evs = new Set(prob ? prob.ev.map(String) : []);
     box.classList.toggle("is-focus", !!prob);
     $$(".msg", box).forEach((m) => m.classList.toggle("on", msgs.has(m.dataset.key)));
+    $$("mark.ev", box).forEach((m) => m.classList.toggle("on", m.dataset.e.split(" ").some((e) => evs.has(e))));
     $$("path", svg).forEach((p) => p.classList.toggle("on", p.dataset.p === String(pid)));
   };
   const trackHover = (e) => {
@@ -1073,19 +1157,10 @@ function wireThreads() {
   if (threadObs) threadObs.disconnect();
   threadObs = new ResizeObserver(scheduleThreads);
   threadObs.observe(box);
-  // 时间线里的滚动条 / 字号变化会让消息右缘移动几个像素，连线跟着重画一次；
-  // 窗口 resize 也要重画（外部分享页整页 zoom 过，尺寸换算依赖当前布局）。
-  // 滚动时**不**重建连线：滚动只是整体位移，path 坐标相对容器不变，重建纯属白烧；
-  // 而且滚动方是滚动容器而不是连线容器（#sanatomy 内部各栏各自滚），
-  // 消息与卡片的相对位置也保持不变。滚动期间挂起重建，停下 160ms 后再补一次。
-  box.addEventListener("scroll", () => {
-    if (!threadScrollIdle) {
-      threadScrollIdle = setTimeout(() => {
-        threadScrollIdle = null;
-        scheduleThreads();
-      }, 160);
-    }
-  }, { capture: true, passive: true });
+  // 侧栏是 sticky 的、各自还能滚：主滚动或任一栏滚动都会改变两端的相对位置，
+  // 所以滚动时逐帧重画（几十条 path，一帧一次，rAF 合并）。
+  $("#sbody", root)?.addEventListener("scroll", scheduleThreads, { passive: true });
+  box.addEventListener("scroll", scheduleThreads, { capture: true, passive: true });
   const stl = $("#stl", root);
   if (stl) threadObs.observe(stl);
   if (!wireThreads.bound) {
@@ -1149,13 +1224,25 @@ function drawThreads() {
     probe.y = y;
     return probe.matrixTransform(inv);
   };
+  // 两端都夹进各自的可视区：主滚动容器（#sbody）与问题栏自己的滚动区。被夹住的线画成虚线，
+  // 表示证据或卡片在视口外，线仍指向它所在的方向。
+  const view = ($("#sbody", root) || box).getBoundingClientRect();
+  const side = $("#sattr", root).getBoundingClientRect();
+  const sTop = Math.max(view.top, side.top) + 6 * scale;
+  const sBot = Math.min(view.bottom, side.bottom) - 6 * scale;
+  const vTop = view.top + 6 * scale;
+  const vBot = view.bottom - 6 * scale;
+  const clamp = (y, a, b) => Math.max(a, Math.min(b, y));
+  const byId = new Map(S.D.attribution.problems.map((p) => [p.id, p]));
   let paths = "";
   $$("#sattr .pcard", root).forEach((card) => {
     const pid = Number(card.id.replace("pc-", ""));
-    const prob = S.D.attribution.problems.find((p) => p.id === pid);
+    const prob = byId.get(pid);
     if (!prob) return;
     const pr = card.getBoundingClientRect();
-    const end = toLocal(pr.left, pr.top + 22 * scale);
+    const yCard = pr.top + 22 * scale;
+    const cardOff = yCard < sTop || yCard > sBot;
+    const end = toLocal(pr.left, clamp(yCard, sTop, sBot));
     const x2 = end.x;
     const y2 = end.y;
     const seen = new Set();
@@ -1169,19 +1256,22 @@ function drawThreads() {
       if (!msg) return;
       seen.add(key);
       const r = ($(".msg-body", msg) || msg).getBoundingClientRect();
-      let y = r.top + Math.min(26 * scale, r.height / 2);
-      // 中间链路盒子内部滚过之后，消息可能已经滚出盒子的可视区：把出入点夹到盒子上下边缘，
-      // 线仍然指进这段链路，而不是飘到盒子外面去。
+      const y0 = r.top + Math.min(26 * scale, r.height / 2);
+      let y = y0;
+      // 中间链路盒子内部滚过之后，消息可能已经滚出盒子的可视区：把出入点夹到盒子上下边缘。
       const clipBox = msg.closest(".chain-body");
       if (clipBox) {
         const cb = clipBox.getBoundingClientRect();
-        y = Math.max(cb.top + 4 * scale, Math.min(cb.bottom - 4 * scale, y));
+        y = clamp(y, cb.top + 4 * scale, cb.bottom - 4 * scale);
       }
+      y = clamp(y, vTop, vBot);
+      const off = cardOff || Math.abs(y - y0) > 1;
       const start = toLocal(r.right, y);
       const x1 = start.x;
       const y1 = start.y;
       const span = Math.max(24, x2 - x1);
-      paths += `<path data-p="${pid}" data-m="${ev.m}" style="--c:${sevColor(prob.sev)}" d="M${x1} ${y1} C ${x1 + span * 0.55} ${y1}, ${x2 - span * 0.45} ${y2}, ${x2} ${y2}"/>`;
+      const cls = `${off ? "off" : ""}${pid === hoverPid ? " on" : ""}`.trim();
+      paths += `<path${cls ? ` class="${cls}"` : ""} data-p="${pid}" data-m="${ev.m}" style="--c:${sevColor(prob.sev)}" d="M${x1} ${y1} C ${x1 + span * 0.55} ${y1}, ${x2 - span * 0.45} ${y2}, ${x2} ${y2}"/>`;
     });
   });
   svg.innerHTML = paths;
@@ -1204,7 +1294,7 @@ function attrHTML(D) {
   const multi = D.input.traces.length > 1;
   const tax = ctx.data.taxonomy;
 
-  const card = (p) => {
+  const card = (p, i) => {
     const pat = p.cl && tax && tax.patterns[p.cl.path];
     const evOne = (e) => {
       const ev = D.evidence[e];
@@ -1213,7 +1303,7 @@ function attrHTML(D) {
     const evs = p.ev.map(evOne).join("");
     const more = [p.ph && ["现象", p.ph], p.why && ["原因", p.why], p.sevr && ["定级理由", p.sevr], p.calc && p.calc.length && ["核算", p.calc.join("\n")]].filter(Boolean);
     const comp = p.fam && p.comp && p.fam !== p.comp ? `${p.fam} › ${p.comp}` : (p.comp || p.fam || "");
-    return `<article class="pcard" id="pc-${p.id}" data-sev="${esc(p.sev || "")}" style="--c:${sevColor(p.sev)}">
+    return `<article class="pcard" id="pc-${p.id}" data-sev="${esc(p.sev || "")}" style="--c:${sevColor(p.sev)};--i:${i}">
       <div class="pcard-head"><span class="sev-badge">${p.sev || "—"}</span><h3>${esc(p.label)}</h3></div>
       <div class="pcard-meta">${comp ? `<span class="faint">${esc(comp)}</span>` : ""}
         ${p.cl ? `<button type="button" class="path" data-pattern="${p.cl.path}" title="${esc((pat && pat.plain) || "")}"><span class="mono">${p.cl.path}</span><span>${esc(pat ? pat.name : "")}</span></button>` : `<span class="faint">未聚类</span>`}</div>
