@@ -1506,9 +1506,17 @@ function drawThreads(realign = true) {
       const msg = $(`#m-${ev.t}-${ev.m}`, root);
       if (!msg) return;
       seen.add(key);
-      const r = ($(".msg-body", msg) || msg).getBoundingClientRect();
-      if (r.top >= clippedBottom(msg)) return;   // 被收进渐隐里的步骤
-      const y = r.top + Math.min(26 * scale, r.height / 2);
+      const body = $(".msg-body", msg) || msg;
+      const r = body.getBoundingClientRect();
+      const clip = clippedBottom(msg);
+      if (r.top >= clip) return;   // 被收进渐隐里的步骤
+      // 长回答里证据挂在很靠下的句子：线端跟着被引用的那句话走，不再永远钉在消息顶部。
+      const mark = $$("mark.ev", msg).find((m) => m.dataset.e.split(" ").includes(String(e)));
+      const mr = mark ? mark.getBoundingClientRect() : null;
+      // 折叠着的步骤里 mark 是 display:none，rect 全 0：这种退回消息顶部，别把线画到页面顶上。
+      const onMark = !!(mr && mr.width > 1 && mr.height > 1);
+      const y = onMark ? mr.top + Math.min(mr.height / 2, 10 * scale) : r.top + Math.min(26 * scale, r.height / 2);
+      if (y >= clip) return;   // 指向的那句话被收起来了
       const start = toLocal(r.right, y);
       const x1 = start.x;
       const y1 = start.y;
@@ -1564,7 +1572,7 @@ function attrHTML(D) {
   const turn = D.rounds?.[S.round]?.turn ?? S.turn ?? S.round;
   const current = A.turns[Math.max(0, Math.min(turn, A.turns.length - 1))];
   let body = S.sessionView ? group(A.session_problems || []) : (current ? group(current.problems, S.round) : "");
-  return body || `<div class="empty">未发现跨 trace 问题</div>`;
+  return body || `<div class="empty">${S.sessionView ? "未发现跨 trace 问题" : "本轮未发现问题"}</div>`;
 }
 
 function renderOverview() {

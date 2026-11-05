@@ -13,9 +13,9 @@
   --fs-meta: 11.5px;   /* labels, ids, counts */
   --fs-small: 12.5px;  /* secondary text */
   --fs-body: 13.5px;   /* message and card text */
-  --col-traj: clamp(244px, 23%, 400px);
+  --col-traj: clamp(196px, 23%, 400px);
   --col-thread: 56px;
-  --col-attr: clamp(264px, 25%, 440px);
+  --col-attr: clamp(220px, 25%, 440px);
   --col-pad: 16px;     /* one horizontal inset for every anatomy column */
 }
 
@@ -443,6 +443,11 @@
 }
 
 /* ---------------------------------------------------------------- responsive */
+/* 1181–1330 是「刚进四列」的一段：左右两列按最小宽度占掉 508px，中间只剩 229px，
+   整页会被撑到两倍高。这一段把连线列收窄一点，中间列多让出 100 多像素。 */
+@media (min-width: 1181px) and (max-width: 1330px) {
+  .bench { --col-thread: 44px; }
+}
 @media (max-width: 1180px) {
   .bench .anatomy, .bench .anatomy.is-session { grid-template-columns: minmax(0, 1fr); }
   .bench .threads { display: none; }
