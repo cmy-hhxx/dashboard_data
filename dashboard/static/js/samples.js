@@ -756,6 +756,7 @@ function renderTrace() {
   renderOverviewItems();
   // 重画会把卡片和连线换成新的，旧的聚焦状态要一起清掉，不然新内容一上来就是淡的。
   hoverPid = null;
+  S.active = null;
   $("#sanatomy", root)?.classList.remove("is-focus");
   $("#sanatomy", root)?.classList.toggle("is-session", session);
   $("#shead", root)?.classList.toggle("is-session", session);
@@ -845,7 +846,8 @@ function msgHTML(t, i, m) {
   const D = S.D;
   const key = `${t}:${i}`;
   const chat = m.k === "user" || m.k === "answer";
-  const sevs = [...new Set((m.ev || []).map((e) => D._ix.sev.get(e)).filter(Boolean))].sort();
+  const sevs = [...new Set((m.ev || []).map((e) => D._ix.sev.get(e)).filter(Boolean))]
+    .sort((a, b) => SEV.indexOf(b) - SEV.indexOf(a));
   // 被归因引用的消息默认展开：证据 mark 在折叠态看不见，闭环就断了。
   const folded = S.shut.has(key) || (!FOLD_OPEN.has(m.k) && !sevs.length && !S.open.has(key));
   const time = m.dur != null ? `<span class="num dur">${m.dur >= 1000 ? fmt(m.dur / 1000, 1) + " s" : m.dur + " ms"}</span>` : "";
@@ -965,7 +967,7 @@ function markProse(scope) {
       }
       nodes.push(n);
     }
-    const spans = [];   // [node index, start, end, eid]
+    const spans = new Map();   // "node:start:end" → [node index, start, end, [eid…]]
     host.dataset.ev.split(" ").map(Number).forEach((e) => {
       const ev = S.D.evidence[e];
       const want = text.slice(ev.o[0], ev.o[1]).replace(/^\s*\d+\.\s/gm, "").split("").filter((c) => !MD_NOISE.test(c)).join("");
@@ -979,10 +981,17 @@ function markProse(scope) {
       if (p < 0) return;
       const [n0, o0] = at[p];
       const [n1, o1] = at[p + len - 1];
-      for (let n = n0; n <= n1; n += 1) spans.push([n, n === n0 ? o0 : 0, n === n1 ? o1 + 1 : nodes[n].nodeValue.length, e]);
+      for (let n = n0; n <= n1; n += 1) {
+        const a = n === n0 ? o0 : 0;
+        const z = n === n1 ? o1 + 1 : nodes[n].nodeValue.length;
+        const k = `${n}:${a}:${z}`;
+        if (spans.has(k)) spans.get(k)[3].push(e);
+        else spans.set(k, [n, a, z, [e]]);
+      }
     });
-    // Wrap from the end so earlier offsets stay valid while text nodes split.
-    spans.sort((a, b) => b[0] - a[0] || b[1] - a[1]).forEach(([n, a, z, e]) => {
+    // Wrap from the end so earlier offsets stay valid while text nodes split; two problems that
+    // cite the same sentence share one mark (jump highlights it whichever side was clicked).
+    [...spans.values()].sort((a, b) => b[0] - a[0] || b[1] - a[1]).forEach(([n, a, z, ids]) => {
       const node = nodes[n];
       if (z <= a || z > node.nodeValue.length) return;
       const range = document.createRange();
@@ -990,8 +999,8 @@ function markProse(scope) {
       range.setEnd(node, z);
       const mark = document.createElement("mark");
       mark.className = "ev";
-      mark.dataset.e = String(e);
-      mark.style.setProperty("--c", sevColor(S.D._ix.sev.get(e)));
+      mark.dataset.e = ids.join(" ");
+      mark.style.setProperty("--c", sevColor(S.D._ix.sev.get(ids[0])));
       range.surroundContents(mark);
     });
   });
@@ -1091,7 +1100,7 @@ function jump(eid) {
     renderOut();
   }
   const prev = S.active;
-  S.active = ev.src === "compact" ? eid : null;
+  S.active = eid;
   if (prev != null && S.D.evidence[prev]) rerenderMsg(S.D.evidence[prev].t, S.D.evidence[prev].m);
   S.open.add(`${ev.t}:${ev.m}`);
   S.shut.delete(`${ev.t}:${ev.m}`);
@@ -1099,6 +1108,7 @@ function jump(eid) {
   const el = $(`#m-${ev.t}-${ev.m}`, root);
   $$("mark.on", root).forEach((m) => m.classList.remove("on"));
   $$(`mark[data-e~="${eid}"]`, el).forEach((m) => m.classList.add("on"));
+  focus(hoverPid);
   const target = $(`mark[data-e~="${eid}"]`, el) || el;
   target.scrollIntoView({ block: "center", behavior: REDUCED ? "auto" : "smooth" });
   flash(el);
@@ -1128,6 +1138,11 @@ function wireThreads() {
     // 证据按「轮次:消息」定位，session 总评里同一张卡可能落在多轮上。
     const msgs = new Set(prob ? prob.ev.map((e) => S.D.evidence[e]).filter((ev) => ev && ev.m != null).map((ev) => `${ev.t}:${ev.m}`) : []);
     const evs = new Set(prob ? prob.ev.map(String) : []);
+    // 跳转过来的那条证据一直保持高亮：跳转后的滚动会触发 pointerleave / scroll，把悬停焦点清掉，
+    // 不能因此把用户刚点开的那句话一起弄丢。
+    const pin = S.active != null ? S.D && S.D.evidence[S.active] : null;
+    if (pin && pin.m != null) msgs.add(`${pin.t}:${pin.m}`);
+    if (S.active != null) evs.add(String(S.active));
     box.classList.toggle("is-focus", !!prob);
     $$(".msg", box).forEach((m) => m.classList.toggle("on", msgs.has(m.dataset.key)));
     $$("mark.ev", box).forEach((m) => m.classList.toggle("on", m.dataset.e.split(" ").some((e) => evs.has(e))));

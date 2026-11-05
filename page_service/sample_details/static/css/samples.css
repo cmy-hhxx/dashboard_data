@@ -265,9 +265,11 @@
 .anatomy.is-enter > .timeline { animation-delay: 40ms; }
 .anatomy.is-enter > .threads svg { animation: fade-in 420ms 180ms ease-out both; }
 @keyframes fade-in { from { opacity: 0; } }
-/* A cited message carries its worst severity on the left edge, located quote or not. */
-.msg.has-ev .msg-body { box-shadow: inset 2px 0 0 var(--c); }
-.msg.k-answer.has-ev .msg-body { box-shadow: inset 2px 0 0 var(--c), var(--shadow); }
+/* A cited message is washed in its worst severity's hue instead of carrying a bar:
+   the tint says "cited", the header swatches say "which severities". */
+.msg.has-ev .msg-body { background: color-mix(in oklab, var(--c) 6%, var(--well)); }
+.msg.k-user.has-ev .msg-body { background: color-mix(in oklab, var(--c) 6%, var(--accent-soft)); }
+.msg.k-answer.has-ev .msg-body { background: color-mix(in oklab, var(--c) 5%, var(--lift)); box-shadow: var(--shadow); }
 .anatomy.is-focus .msg:not(.on) { opacity: 0.35; }
 .anatomy .msg.on .msg-body { background: var(--active); }
 .msg.flash .msg-body, .pcard.flash, .cf.flash { animation: flash 1.2s ease-out; }
@@ -349,12 +351,12 @@
 .tgroup { display: grid; gap: 8px; }
 .tgroup + .tgroup { margin-top: 6px; padding-top: 14px; border-top: 1px solid var(--well-2); }
 .pcard {
-  display: grid; gap: 5px; padding: 9px 10px 9px 12px; border-radius: 10px; background: var(--well);
-  box-shadow: inset 2px 0 0 var(--c); scroll-margin-top: 90px;
+  display: grid; gap: 5px; padding: 10px 11px 10px 12px; border-radius: 10px; scroll-margin-top: 90px;
+  background: color-mix(in oklab, var(--c) 5%, var(--well));
   transition: background var(--snap), box-shadow var(--snap), opacity 180ms ease;
   animation: rise 360ms cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: calc(min(var(--i, 0), 8) * 28ms);
 }
-.pcard:hover { background: var(--well-2); }
+.pcard:hover { background: color-mix(in oklab, var(--c) 10%, var(--well)); }
 .anatomy.is-focus .pcard:not(:hover) { opacity: 0.55; }
 .pcard-head { display: flex; align-items: baseline; gap: 6px; }
 .sev-badge {
