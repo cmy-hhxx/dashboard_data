@@ -553,7 +553,7 @@ async function loadSession(session, focusSlug, focusTrace) {
   $("#stl", root).innerHTML = "";
   $("#sout", root).innerHTML = "";
   $("#sattr", root).innerHTML = "";
-  scheduleThreads();
+  scheduleThreadsCompensate();
   let parts;
   try {
     parts = await Promise.all(session.rows.map(async (row) => ({ slug: row.s, detail: await fetchDetail(row.s) })));
@@ -562,7 +562,7 @@ async function loadSession(session, focusSlug, focusTrace) {
     $("#stl", root).innerHTML = "";
     $("#sout", root).innerHTML = "";
     $("#sattr", root).innerHTML = "";
-    scheduleThreads();
+    scheduleThreadsCompensate();
     return;
   }
   parts.sort((a, b) => String(a.detail.meta?.request_time || a.detail.date || "").localeCompare(String(b.detail.meta?.request_time || b.detail.date || "")));
@@ -742,7 +742,7 @@ function renderIn() {
   if (D.input.missing) {
     $("#stl", root).innerHTML = `<div class="empty">这一组没有找到对应的评测输入。</div>`;
     $("#ov", root).innerHTML = "";
-    scheduleThreads();
+    scheduleThreadsCompensate();
     return;
   }
   renderTrace();
@@ -765,14 +765,14 @@ function renderTrace() {
   if (session) {
     $("#sout", root).innerHTML = "";
     $("#stl", root).innerHTML = qaHTML(D);
-    scheduleThreads();
+    scheduleThreadsCompensate();
     return;
   }
   const tr = D.input.traces[S.trace];
   if (!tr) return;
   renderOverview();
   $("#stl", root).innerHTML = timelineHTML(S.trace, tr.messages || []) || `<div class="empty">该轮没有消息</div>`;
-  scheduleThreads();
+  scheduleThreadsCompensate();
 }
 
 /* 用户与回答之间的那一串思考 / 调用 / 返回（中间链路）单独收进一个固定高度的盒子：
@@ -832,7 +832,7 @@ function msgHTML(t, i, m) {
   const chat = m.k === "user" || m.k === "answer";
   const folded = !FOLD_OPEN.has(m.k) && !S.open.has(key);
   const sevs = [...new Set((m.ev || []).map((e) => D._ix.sev.get(e)).filter(Boolean))].sort();
-  const time = m.dur != null ? `<span class="num">${m.dur >= 1000 ? fmt(m.dur / 1000, 1) + " s" : m.dur + " ms"}</span>` : "";
+  const time = m.dur != null ? `<span class="num dur">${m.dur >= 1000 ? fmt(m.dur / 1000, 1) + " s" : m.dur + " ms"}</span>` : "";
   const who = KIND[m.k] || m.k;
   const firstUser = t === 0 ? S.D.input.traces[0].messages.findIndex((x) => x.k === "user") : -1;
   const trans = t === 0 && i === firstUser && S.D.question_zh && S.D.question_zh !== S.D.question ? S.D.question_zh : "";
@@ -840,10 +840,14 @@ function msgHTML(t, i, m) {
   const hasBody = body || trans;
   return `<div class="msg k-${m.k}${chat ? " is-chat" : ""}${folded ? " is-folded" : ""}" id="m-${t}-${i}" data-key="${key}">
     ${chat ? "" : '<span class="msg-dot" aria-hidden="true"></span>'}
-    <div class="msg-body"><div class="msg-top"><span class="who">${who}</span><span class="num faint">#${i}</span>
-      ${m.name ? `<span class="mname">${esc(m.name)}</span>` : ""}${m.model ? `<span class="faint">${esc(m.model)}</span>` : ""}${time}
+    <div class="msg-body"><div class="msg-top">
+      <span class="who">${who}</span>
+      <span class="num idx faint">#${i}</span>
+      ${m.name ? `<span class="mname">${esc(m.name)}</span>` : m.model ? `<span class="faint">${esc(m.model)}</span>` : '<span></span>'}
+      ${time}
+      ${FOLD_OPEN.has(m.k) || !hasBody ? '<span></span>' : `<button type="button" class="toggle" data-fold="${key}">${folded ? "展开" : "收起"}</button>`}
       <span class="evs">${sevs.map((s) => `<i style="--c:${sevColor(s)}" title="${s} 证据"></i>`).join("")}</span>
-      ${FOLD_OPEN.has(m.k) || !hasBody ? "" : `<button type="button" class="toggle" data-fold="${key}">${folded ? "展开" : "收起"}</button>`}</div>
+    </div>
       ${body}${trans ? `<div class="msg-zh">${esc(trans)}</div>` : ""}</div></div>`;
 }
 
@@ -921,7 +925,7 @@ function rerenderMsg(t, i) {
   if (el) el.outerHTML = msgHTML(t, i, S.D.input.traces[t].messages[i]);
   // 中间链路盒子高度封顶后，展开/收起某一步不会改变盒子高度（也就不会触发 ResizeObserver），
   // 里面步骤的位置变了，连线得手动重画一次。
-  scheduleThreads();
+  scheduleThreadsCompensate();
 }
 
 async function copyText(text) {
@@ -1029,6 +1033,7 @@ function flash(el, scroll) {
 let threadFrame = 0;
 let threadTimers = [];
 let threadObs = null;
+let threadScrollIdle = null;  // 滚动进行中：连线重建先挂起，停稳后再补
 let hoverPid = null;   // 当前指针压在哪个问题卡上
 
 function wireThreads() {
@@ -1070,8 +1075,17 @@ function wireThreads() {
   threadObs.observe(box);
   // 时间线里的滚动条 / 字号变化会让消息右缘移动几个像素，连线跟着重画一次；
   // 窗口 resize 也要重画（外部分享页整页 zoom 过，尺寸换算依赖当前布局）。
-  // 中间链路盒子内部滚动时同理：capture 拿得到不冒泡的 scroll。
-  box.addEventListener("scroll", () => scheduleThreads(), true);
+  // 滚动时**不**重建连线：滚动只是整体位移，path 坐标相对容器不变，重建纯属白烧；
+  // 而且滚动方是滚动容器而不是连线容器（#sanatomy 内部各栏各自滚），
+  // 消息与卡片的相对位置也保持不变。滚动期间挂起重建，停下 160ms 后再补一次。
+  box.addEventListener("scroll", () => {
+    if (!threadScrollIdle) {
+      threadScrollIdle = setTimeout(() => {
+        threadScrollIdle = null;
+        scheduleThreads();
+      }, 160);
+    }
+  }, { capture: true, passive: true });
   const stl = $("#stl", root);
   if (stl) threadObs.observe(stl);
   if (!wireThreads.bound) {
@@ -1079,6 +1093,13 @@ function wireThreads() {
     window.addEventListener("resize", () => scheduleThreads(), { passive: true });
     window.addEventListener("load", () => scheduleThreads(), { once: true });
   }
+}
+
+/* 整块重绘（换轮 / 换 session / 折叠 / 切筛选）后字号与高度要下一拍才稳定，
+   这时才需要那一串补偿重画；单纯的滚动位移不需要。 */
+function scheduleThreadsCompensate() {
+  scheduleThreads.compensate = true;
+  scheduleThreads();
 }
 
 function scheduleThreads() {
@@ -1091,6 +1112,8 @@ function scheduleThreads() {
     // 位置一变连线就得重画，否则出入点会落在旧位置上。
     // 首屏与后续重排（滚动条出现、折叠态、字体）都会让消息位置变；跑一串补偿重画，
     // 每次都很便宜（几十条 path），比监听所有祖先元素稳。
+    if (!scheduleThreads.compensate) return;
+    scheduleThreads.compensate = false;
     threadTimers.forEach(clearTimeout);
     threadTimers = [220, 600, 1200, 2400].map((ms) => setTimeout(() => drawThreads(), ms));
   });
@@ -1171,7 +1194,7 @@ function renderOut() {
   $("#sout", root).innerHTML = `<div class="out">${compactHTML(D)}</div>`;
   $("#sattr", root).innerHTML = `<div class="out">${attrHTML(D)}</div>`;
   requestAnimationFrame(markCmapScroll);
-  scheduleThreads();
+  scheduleThreadsCompensate();
 }
 
 const evAt = (ev, multi) => (ev.m == null ? "未定位" : `${multi ? `${ev.t + 1}·` : ""}#${ev.m}`);

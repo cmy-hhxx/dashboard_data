@@ -58,9 +58,17 @@ curl -s http://10.217.219.2:2221/healthz | jq
 会保留已有的 `deploy.env`。乌兰 5001 的 `deploy.env` 现在带 `EVAL_PRODUCTS=wencai`，
 弗吉尼亚的带 `EVAL_PRODUCTS=aime`；两边的产品切换按钮分别跳到对方服务器（`static/js/app.js` 的 `SITES`）。
 
-`deploy.sh` 顺序：rsync 代码（不含生成物 / 缓存 / 日志 / tests）→ 远端 `build.py --keep-on-empty`
-（≤1800s）→ `precompress.sh` → `stop.sh` → `start.sh`。远端不是 git 仓库，回滚 = 切旧 commit 重新部署；
-构建失败不阻断发布，服务继续用旧数据，部署后**必须看 `logs/build.log`**。
+`deploy.sh` 顺序：rsync 代码（不含生成物 / 缓存 / 日志 / tests）→ `precompress.sh` → `stop.sh` → `start.sh`，
+**不再同步等构建**：`server.py` 重启后只要 `data.json` 超过 120s 就会在后台自己重建（进度看 `/healthz` 的
+`running` / `seconds` / `error`）。发布本身因此只要几秒到十几秒，ceph 再慢也不拖慢上线。
+需要「发布前先构建」的老行为时加 `EVAL_DEPLOY_BUILD=1`。
+
+远端不是 git 仓库，回滚 = 切旧 commit 重新部署；构建失败不阻断发布，服务继续用旧数据。
+
+**为什么以前那么慢**：`input_files()` 每次都用 `rglob` 走一遍 `eval_input`（弗吉尼亚 52 个目录、ceph 上
+50–250s），数据没变也照走。现在走 `dashboard/filelist.py` 的目录清单缓存（`cache/tree-*.json`，默认
+15 分钟有效），没变化就完全不碰元数据；`build.py` 的增量缓存（`cache/build.sqlite3`）配合，数据没变时
+整次构建是亚秒级（问财实测 0.6s），真有增量时也只重扫新增/改动的文件。
 
 `healthz` 恒返回 200，看 JSON：`ok=true`、`error` 为空、`build.pairs > 0`；`kept_previous` 表示
 数据源为空、保留了旧数据。

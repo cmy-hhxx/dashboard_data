@@ -9,7 +9,7 @@ HOST="${EVAL_DEPLOY_HOST:-eval_data}"
 REMOTE="${EVAL_DEPLOY_REMOTE:-/opt/eval_dashboard}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
-SSH_OPTS=(-o StrictHostKeyChecking=no -o ConnectTimeout=20)
+SSH_OPTS=(-o StrictHostKeyChecking=no -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
 if [ -n "${EVAL_DEPLOY_PORT:-}" ]; then SSH_OPTS+=(-p "$EVAL_DEPLOY_PORT"); fi
 if [ -n "${EVAL_DEPLOY_KEY:-}" ]; then SSH_OPTS+=(-i "$EVAL_DEPLOY_KEY"); fi
 
@@ -28,5 +28,8 @@ RSYNC=(rsync -az --delete --exclude 'data.json' --exclude 'data.json.gz' --exclu
 "${SSH[@]}" "$HOST" "mkdir -p $REMOTE/static $REMOTE/logs"
 if [ -n "$RUN_ENV" ]; then printf '%s' "$RUN_ENV" | "${SSH[@]}" "$HOST" "cat > $REMOTE/deploy.env"; fi
 "${RSYNC[@]}" "$HERE/" "$HOST:$REMOTE/"
-"${SSH[@]}" "$HOST" "cd $REMOTE && { [ ! -f deploy.env ] || . ./deploy.env; } && mkdir -p logs && (python3 -c 'import orjson' 2>/dev/null || python3 -m pip install --user --quiet orjson >> logs/build.log 2>&1 || true) && (timeout 1800 python3 build.py --keep-on-empty >> logs/build.log 2>&1 || echo '[deploy] build skipped, serving the previous payloads') && chmod +x start.sh stop.sh precompress.sh && ./precompress.sh && ./stop.sh && ./start.sh"
+# 部署只管「代码上线」：rsync + 预压缩 + 重启，十几秒结束。
+# 数据构建交给 server 自己的刷新循环（重启后 data.json 超过 120s 就会立刻在后台重建），
+# 不再让每次发布都在 ceph 上干等两三分钟；EVAL_DEPLOY_BUILD=1 可恢复「发布前先构建」。
+"${SSH[@]}" "$HOST" "cd $REMOTE && { [ ! -f deploy.env ] || . ./deploy.env; } && mkdir -p logs && chmod +x start.sh stop.sh precompress.sh && ./precompress.sh && ./stop.sh && ./start.sh && if [ \"\${EVAL_DEPLOY_BUILD:-0}\" = \"1\" ]; then (timeout 1800 python3 build.py --keep-on-empty >> logs/build.log 2>&1 || echo '[deploy] build skipped, serving the previous payloads'); fi && (python3 -c 'import orjson' 2>/dev/null || python3 -m pip install --user --quiet orjson >> logs/build.log 2>&1 || true)"
 echo "deployed -> $REMOTE"

@@ -65,7 +65,7 @@ main#main { max-width: 1480px; padding: 8px var(--gutter) 12px; }
     column-gap: clamp(16px, 1.2vw, 36px);
   }
   /* 顶部信息也分两栏：Overview 在左、Trace 点评在右，长段落不至于横跨整屏 */
-  #root .sample-head { grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr); column-gap: clamp(20px, 1.6vw, 48px); }
+  #root .sample-head { grid-template-columns: repeat(2, minmax(0, 96ch)); column-gap: clamp(24px, 2vw, 56px); justify-content: center; }
   #root .sample-head > .headline,
   #root .sample-head > .chip-groups,
   #root .sample-head > .trace-tabs,
@@ -73,7 +73,8 @@ main#main { max-width: 1480px; padding: 8px var(--gutter) 12px; }
   #root .sample-head > #ovBox { grid-column: 1; }
   #root .sample-head > #sumBox { grid-column: 2; }
   /* session 总评没有 Overview，点评直接通栏铺开 */
-  #root #shead.is-session .sample-head > #sumBox { grid-column: 1 / -1; max-width: none; }
+  #root #shead.is-session .sample-head { grid-template-columns: minmax(0, 96ch); justify-content: center; }
+  #root #shead.is-session .sample-head > #sumBox { grid-column: 1; }
 }
 
 @media (max-width: 900px) {

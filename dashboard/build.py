@@ -44,6 +44,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 import build_store as bs
+from filelist import TreeCache
 
 DASHBOARD = Path(__file__).resolve().parent
 REPO = DASHBOARD.parent
@@ -339,11 +340,15 @@ def input_files(datasets: Path, top: Path, product: str):
     Wencai marks lost users inside the task-eval input with ``meta.lost_user``
     instead of a separate directory.
     """
-    files = [p for p in (top / "eval_input").rglob("*.jsonl") if "1_lost_user_eval" not in p.parts]
+    # rglob 在弗吉尼亚的 ceph 上要 50 秒（目录太多），改成走目录清单缓存：
+    # 只有 mtime 变过的目录才重新 readdir，数据没变时就是几十次 stat。
+    tree = TreeCache(DASHBOARD / "cache")
+    base = top / "eval_input"
+    files = [base / rel for rel in tree.walk(base, f"in-{product}-eval", skip_parts=("1_lost_user_eval",))]
     if product == "aime":
         archive = top / ".archive" / "1_lost_user_input"
         lost = archive if archive.is_dir() else top / "eval_input" / "1_lost_user_eval"
-        files += list(lost.rglob("*.jsonl"))
+        files += [lost / rel for rel in tree.walk(lost, f"in-{product}-lost")]
     return sorted(files)
 
 

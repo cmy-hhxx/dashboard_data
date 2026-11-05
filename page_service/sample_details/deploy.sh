@@ -10,7 +10,7 @@ PORT="${PORT:-5002}"
 UPSTREAM="${UPSTREAM:-http://127.0.0.1:5001}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
-SSH_OPTS=(-o StrictHostKeyChecking=no -o ConnectTimeout=20)
+SSH_OPTS=(-o StrictHostKeyChecking=no -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
 if [ -n "${EVAL_DEPLOY_PORT:-}" ]; then SSH_OPTS+=(-p "$EVAL_DEPLOY_PORT"); fi
 if [ -n "${EVAL_DEPLOY_KEY:-}" ]; then SSH_OPTS+=(-i "$EVAL_DEPLOY_KEY"); fi
 
