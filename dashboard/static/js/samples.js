@@ -733,22 +733,34 @@ function renderIn() {
         ${group("场景", "is-scene", scene)}
         ${group("规模", "is-scale", scale)}
       </div>
-      ${rounds.length || D.attribution.summary || D.attribution.session_problems?.length ? `<div class="trace-tabs" id="ttabs">${rounds.map((r, i) => {
-        const t = D.input.traces[r.trace];
+      ${hasChat(D) || rounds.length > 1 ? `<div class="trace-tabs" id="ttabs">${rounds.map((r, i) => {
+        const t = D.input.traces?.[r.trace];
         return `<button type="button" class="pill" data-t="${i}" aria-pressed="${!S.sessionView && i === S.round}"${t?.agent ? ` title="${esc(t.agent)}"` : ""}>第 ${i + 1} 轮</button>`;
-      }).join("")}<button type="button" class="pill" data-t="session" aria-pressed="${S.sessionView}">session 总评</button></div>` : ""}
+      }).join("")}${hasChat(D) ? `<button type="button" class="pill" data-t="session" aria-pressed="${S.sessionView}">session 总评</button>` : ""}</div>` : ""}
       <div id="ovBox" class="ov-box"></div>
       <div id="sumBox">${summaryInner(D)}</div>
       <div id="ov" class="ov-grid"></div>
     </div>`;
   if (D.input.missing) {
-    $("#stl", root).innerHTML = `<div class="empty">这一组没有找到对应的评测输入。</div>
-      <button type="button" class="band-more band-toggle" data-band hidden>展开全部</button>`;
-    $("#ov", root).innerHTML = "";
-    scheduleThreadsCompensate();
+    renderMissingState();
     return;
   }
   renderTrace();
+}
+
+/* 没有评测输入（这一组只评测过、输入没落盘）时中间列的空态。
+   换轮 / 从 session 总评切回来都要回到它，不能把上一屏的内容留在那儿。 */
+function renderMissingState() {
+  $("#stl", root).innerHTML = `<div class="empty">这一组没有找到对应的评测输入。</div>`;
+  $("#ov", root).innerHTML = "";
+  $("#ovBox", root).innerHTML = "";
+  enter();
+  scheduleThreadsCompensate();
+}
+
+/* 这一组有没有可以铺成「问 → 答」的对话：没有的话 session 总评只会是空页，不该给入口。 */
+function hasChat(D) {
+  return (D.input?.traces || []).some((tr) => (tr.messages || []).some((m) => m.k === "user" || m.k === "answer"));
 }
 
 function renderTrace() {
@@ -775,8 +787,8 @@ function renderTrace() {
     scheduleThreadsCompensate();
     return;
   }
-  const tr = D.input.traces[S.trace];
-  if (!tr) return;
+  const tr = D.input.traces?.[S.trace];
+  if (!tr) return renderMissingState();   // 切回这一轮时恢复空态，别把上一屏留在中间列
   renderOverview();
   $("#stl", root).innerHTML = timelineHTML(S.trace, tr.messages || []) || `<div class="empty">该轮没有消息</div>`;
   markProse($("#stl", root));
