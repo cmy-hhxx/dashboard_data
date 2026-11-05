@@ -753,6 +753,9 @@ function renderTrace() {
   const D = S.D;
   const session = S.sessionView;
   renderOverviewItems();
+  // 重画会把卡片和连线换成新的，旧的聚焦状态要一起清掉，不然新内容一上来就是淡的。
+  hoverPid = null;
+  $("#sanatomy", root)?.classList.remove("is-focus");
   $("#sanatomy", root)?.classList.toggle("is-session", session);
   $("#shead", root)?.classList.toggle("is-session", session);
   $$("#ttabs .pill", root).forEach((b) => {
@@ -1026,6 +1029,7 @@ function flash(el, scroll) {
 let threadFrame = 0;
 let threadTimers = [];
 let threadObs = null;
+let hoverPid = null;   // 当前指针压在哪个问题卡上
 
 function wireThreads() {
   const box = $("#sanatomy", root);
@@ -1040,11 +1044,26 @@ function wireThreads() {
     $$(".msg", box).forEach((m) => m.classList.toggle("on", msgs.has(m.dataset.key)));
     $$("path", svg).forEach((p) => p.classList.toggle("on", p.dataset.p === String(pid)));
   };
-  box.addEventListener("pointerover", (e) => {
+  const trackHover = (e) => {
     const c = e.target.closest(".pcard");
-    if (c) focus(Number(c.id.replace("pc-", "")));
+    const pid = c ? Number(c.id.replace("pc-", "")) : null;
+    if (pid === hoverPid) return;
+    hoverPid = pid;
+    focus(pid);
+  };
+  // 用 pointermove 而不是 pointerover：从卡片挪到对话上也要立刻复位，
+  // 否则整页停在「聚焦」的淡化样式里出不来。
+  box.addEventListener("pointermove", trackHover);
+  box.addEventListener("pointerleave", () => {
+    hoverPid = null;
+    focus(null);
   });
-  box.addEventListener("pointerleave", () => focus(null));
+  // 滚动时卡片从指针下面走开，pointermove 不会再触发：同样主动清掉。
+  $("#sbody", root)?.addEventListener("scroll", () => {
+    if (hoverPid == null) return;
+    hoverPid = null;
+    focus(null);
+  }, { passive: true });
   threadFlow($(".threads svg", box));
   if (threadObs) threadObs.disconnect();
   threadObs = new ResizeObserver(scheduleThreads);
