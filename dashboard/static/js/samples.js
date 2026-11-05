@@ -1088,7 +1088,10 @@ function alignAprobs() {
     if (cur) box.style.setProperty("--ap-off", "0px");
     return;
   }
-  const delta = first.getBoundingClientRect().top - card.getBoundingClientRect().top;
+  // 外部分享页整页 zoom 过：rect 量到的是放大后的物理像素，而 --ap-off 是 CSS px。
+  // 不除这个缩放，补偿就会过冲（2.1× 屏上会来回震荡、最后停在 0）。
+  const zoom = box.offsetWidth ? box.getBoundingClientRect().width / box.offsetWidth : 1;
+  const delta = (first.getBoundingClientRect().top - card.getBoundingClientRect().top) / (zoom || 1);
   const next = Math.max(0, Math.round(cur + delta));
   if (Math.abs(next - cur) > 0.5) box.style.setProperty("--ap-off", `${next}px`);
 }
