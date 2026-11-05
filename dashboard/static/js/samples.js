@@ -763,7 +763,7 @@ const bandToggleHTML = () => `<button type="button" class="band-more band-toggle
 /* 没有评测输入（这一组只评测过、输入没落盘）时中间列的空态。
    换轮 / 从 session 总评切回来都要回到它，不能把上一屏的内容留在那儿。 */
 function renderMissingState() {
-  $("#stl", root).innerHTML = `<div class="empty">这一组没有找到对应的评测输入。</div>${bandToggleHTML()}`;
+  $("#stl", root).innerHTML = `<div class="empty">这一组没有找到对应的评测输入，仅能查看评测输出与归因。</div>${bandToggleHTML()}`;
   $("#ov", root).innerHTML = "";
   $("#ovBox", root).innerHTML = "";
   enter();
@@ -1427,6 +1427,7 @@ function alignColumns() {
   bands.forEach((b) => {
     b.hidden = !canFold;
     b.textContent = S.bandOpen ? "收起" : "展开全部";
+    b.setAttribute("aria-expanded", String(S.bandOpen));
   });
 }
 
