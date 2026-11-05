@@ -2378,6 +2378,21 @@ def feed_signature(datasets: Path):
     return hashlib.sha1(json.dumps(parts, separators=(",", ":")).encode()).hexdigest()
 
 
+def input_signature(product_metas):
+    """Fingerprint of the input files the payload's input aggregates were built from.
+
+    The stats worker's sidecar pre-scans new input files, so a build can pick them up
+    without scanning anything itself (``scanned == 0``).  That must not be read as
+    "the input side did not change": a file delivered after its attribution (or an
+    appended day) still has to invalidate the payload.  Hash ``(path, lines)`` per
+    product so a new/renamed file or new rows always breaks the reuse marker.
+    """
+    parts = []
+    for product, metas in sorted(product_metas.items()):
+        parts.append([product, sorted([m.get("path"), int(m.get("lines") or 0)] for m in metas)])
+    return hashlib.sha1(json.dumps(parts, separators=(",", ":")).encode()).hexdigest()
+
+
 def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs: int = 0):
     started = time.time()
     if not datasets.is_dir():
@@ -2401,6 +2416,7 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
             product_metas[product] = metas
             scan_info[product] = info
         timers["scan"] = round(time.time() - t0, 1)
+        input_sig = input_signature(product_metas)
 
         t0 = time.time()
         if pairing in ("auto", "csv") and (datasets / "对应关系.csv").exists():
@@ -2425,6 +2441,7 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
                 and marker.get("pairs_sig") == pairs_sig
                 and marker.get("cluster") == cluster_sig
                 and marker.get("feed") == feed_sig
+                and marker.get("input") == input_sig
                 and (out_dir / "data.json").exists() and (out_dir / "samples.json").exists()
                 and (out_dir / "samples").is_dir() and payload_files_exist(out_dir)):
             timers["cluster"] = round(time.time() - t0, 1)
@@ -2558,7 +2575,8 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
         store.delete_samples_not(slugs)
         store.set_meta("complete", {
             "build": bs.BUILD_VERSION, "payload": PAYLOAD_VERSION, "pairs": len(pairs),
-            "pairs_sig": pairs_sig, "cluster": cluster_sig, "feed": feed_sig, "at": generated,
+            "pairs_sig": pairs_sig, "cluster": cluster_sig, "feed": feed_sig, "input": input_sig,
+            "at": generated,
         })
         store.commit()
 
