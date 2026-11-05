@@ -22,11 +22,13 @@ import json_compat as json
 import build
 import build_store as bs
 
-LIST_VERSION = 2
+LIST_VERSION = 3
 Q_LIMIT = 200
 # 每行只读开头这几 KB：question / session_id / n_traces 都在 meta 里靠前。
 # AIME 单日输入文件 1.6 GB，整文件读一遍要两分钟；按行读前缀是十几 MB、一秒级。
 FILES_TTL = 300
+PREAD_SECONDS = 0.014
+STREAM_BYTES_PER_SECOND = 27 * 1024 * 1024
 PREFIX = 1024
 THREADS = 8
 Q_RE = re.compile(rb'"question"\s*:\s*"((?:[^"\\]|\\.)*)"')
@@ -227,8 +229,11 @@ class InputLister:
         """行级信息只花在「没有配对输出」的输入上。
 
         每行的内容哈希（files.hashes）和样本的 ih 都在 sqlite 里，所以哪些行有输出不用读文件；
-        有输出的行直接从 samples-<product>.json 取 q/sid/轮数，只有没输出的行才去 ceph pread 前缀。
-        弗吉尼亚一天 3,395 条输入里 3,336 条有输出，于是只读 59 行；问财反过来，读的多但文件小。
+        有输出的行直接从 samples-<product>.json 取 q/sid/轮数。
+
+        没输出的行要读文件，两种读法按代价挑：ceph 上单次 pread 约 14ms、顺序读约 27MB/s，
+        所以行少就逐行 pread，行多就整文件顺序扫一遍（问财 304MB 的日文件 11 秒扫完，
+        逐行 pread 2053 行要 57 秒；AIME 1.6GB 那天只有几十行没输出，逐行反而更划算）。
         """
         paired = self._paired_map(product)
         index_rows = self._index_rows(product)
@@ -243,7 +248,7 @@ class InputLister:
                 lines = len(offsets) - 1
                 if lines < 1:
                     continue
-                pending = []
+                pending = {}
                 for number in range(1, lines + 1):
                     ih = f"{hashes[number - 1]:016x}" if number - 1 < len(hashes) else None
                     slug = paired.get(ih) if ih else None
@@ -254,46 +259,93 @@ class InputLister:
                             "tr": hit["tr"] or 1, "rq": "", "ev": 1, "s": slug,
                         })
                     else:
-                        pending.append((number, slug))
+                        pending[number] = slug
                 if not pending:
                     continue
                 try:
-                    fd = os.open(path, os.O_RDONLY)
+                    size = path.stat().st_size
                 except OSError:
                     continue
-                try:
-                    def one(number, slug=None, fd=fd, offsets=offsets, hashes=hashes, tids=tids, fi=fi):
-                        start, end = offsets[number - 1], offsets[number]
-                        raw = os.pread(fd, min(end - start, PREFIX), start)
-                        q = ""
-                        match = Q_RE.search(raw)
-                        if match:
-                            q = _json_str(match.group(1))
-                        m = SID_RE.search(raw) or THREAD_RE.search(raw)
-                        sid = m.group(1).decode("utf-8", "replace") if m else ""
-                        m = RQT_RE.search(raw)
-                        rq = m.group(1).decode("utf-8", "replace") if m else ""
-                        m = NTR_RE.search(raw)
-                        ntr = int(m.group(1)) if m else 0
-                        if not ntr:
-                            ntr = len(tids[number - 1]) if number - 1 < len(tids) else 0
-                        item = {"r": f"{fi}:{number}", "q": q[:Q_LIMIT], "sid": sid, "tr": ntr or 1,
-                                "rq": rq, "ev": 1 if slug else 0}
-                        if slug:
-                            item["s"] = slug
-                        return item
-
-                    workers = max(1, min(THREADS, len(pending)))
-                    if workers == 1:
-                        rows.extend(one(n, slug) for n, slug in pending)
-                    else:
-                        with ThreadPoolExecutor(max_workers=workers) as pool:
-                            rows.extend(pool.map(lambda item: one(item[0], item[1]), pending))
-                finally:
-                    os.close(fd)
-        order = lambda r: (int(r["r"].split(":", 1)[0]), int(r["r"].split(":", 1)[1]))
-        rows.sort(key=order)
+                # 逐行 pread 的估算代价（最坏 2 次读/行）对上整文件顺序读。
+                pread_cost = len(pending) * 2 * PREAD_SECONDS
+                stream_cost = size / STREAM_BYTES_PER_SECOND
+                if pread_cost > stream_cost:
+                    rows.extend(self._scan_stream(fi, path, pending, tids, lines))
+                else:
+                    rows.extend(self._scan_sparse(fi, path, pending, offsets, tids))
+        rows.sort(key=lambda r: (int(r["r"].split(":", 1)[0]), int(r["r"].split(":", 1)[1])))
         return rows
+
+    @staticmethod
+    def _fields(raw: bytes):
+        q = ""
+        match = Q_RE.search(raw)
+        if match:
+            q = _json_str(match.group(1))
+        match = SID_RE.search(raw) or THREAD_RE.search(raw)
+        sid = match.group(1).decode("utf-8", "replace") if match else ""
+        match = RQT_RE.search(raw)
+        rq = match.group(1).decode("utf-8", "replace") if match else ""
+        match = NTR_RE.search(raw)
+        ntr = int(match.group(1)) if match else 0
+        return q, sid, rq, ntr
+
+    def _row(self, fi, number, slug, q, sid, rq, ntr, tids):
+        if not ntr:
+            ntr = len(tids[number - 1]) if number - 1 < len(tids) else 0
+        item = {"r": f"{fi}:{number}", "q": q[:Q_LIMIT], "sid": sid, "tr": ntr or 1,
+                "rq": rq, "ev": 1 if slug else 0}
+        if slug:
+            item["s"] = slug
+        return item
+
+    def _scan_sparse(self, fi, path, pending, offsets, tids):
+        """行少：逐行 pread 前缀，取不到 question 再读整行（问财的 meta 有时在行尾）。"""
+        out = []
+        try:
+            fd = os.open(path, os.O_RDONLY)
+        except OSError:
+            return out
+        try:
+            def one(number, slug=None):
+                start, end = offsets[number - 1], offsets[number]
+                raw = os.pread(fd, min(end - start, PREFIX), start)
+                q, sid, rq, ntr = self._fields(raw)
+                if not q:
+                    raw = os.pread(fd, end - start, start)
+                    q, sid, rq, ntr = self._fields(raw)
+                return self._row(fi, number, slug, q, sid, rq, ntr, tids)
+
+            items = list(pending.items())
+            workers = max(1, min(THREADS, len(items)))
+            if workers == 1:
+                out.extend(one(n, slug) for n, slug in items)
+            else:
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    out.extend(pool.map(lambda item: one(item[0], item[1]), items))
+        finally:
+            os.close(fd)
+        return out
+
+    def _scan_stream(self, fi, path, pending, tids, lines):
+        """行多：整文件顺序扫一遍，只对需要的行做正则提取。"""
+        out = []
+        try:
+            with open(path, "rb", buffering=8 << 20) as fh:
+                for number, raw in enumerate(fh, 1):
+                    if number >= lines + 1:
+                        break
+                    slug = pending.get(number)
+                    if slug is None and number not in pending:
+                        continue
+                    body = raw.rstrip(b"\n")
+                    if body.endswith(b"\r"):
+                        body = body[:-1]
+                    q, sid, rq, ntr = self._fields(body)
+                    out.append(self._row(fi, number, slug, q, sid, rq, ntr, tids))
+        except OSError:
+            return out
+        return out
 
     # ---------------------------------------------------------------- one record
     def detail(self, product: str, day: str, model: str, split: str, ref: str):
