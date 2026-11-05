@@ -21,7 +21,7 @@ git switch main                       # 或者先回 main 的旧状态
    样本页四栏网格改由 `--col-*` token 驱动，`page_service/sample_details/static/detail.css`
    只调 token。`sample_details` 的 12 个测试通过（`python3 -m pytest tests/test_server.py -q`）。
 
-2. `b2a9d35` wip(samples): 样本页交互改造 —— **未在浏览器验证**。
+2. `b2a9d35` wip(samples): 样本页交互改造 —— 已在浏览器验证，见下。
 
 ## 已验证（2026-11-05，本地 1440 / 1024 / 390 / 3840×2160 / 7680×2160，亮暗色）
 
