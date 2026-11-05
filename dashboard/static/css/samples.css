@@ -124,9 +124,9 @@
   display: block; min-width: 0; font-size: 17px; font-weight: var(--w-title); line-height: 1.5; letter-spacing: -0.005em;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.headline { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.headline h2 { flex: 1 1 auto; }
-.headline .idline { flex: 0 0 auto; margin: 0; justify-content: flex-end; }
+.headline { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-width: 0; }   /* 一行放不下时 ID 行整体换行，不撑出横向滚动 */
+.headline h2 { flex: 1 1 0; }
+.headline .idline { flex: 0 1 auto; min-width: 0; margin: 0; justify-content: flex-end; }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .chip-groups { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
 .cg { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }

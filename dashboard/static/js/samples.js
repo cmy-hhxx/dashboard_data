@@ -1174,12 +1174,28 @@ function jump(eid) {
   rerenderMsg(ev.t, ev.m);
   const el = $(`#m-${ev.t}-${ev.m}`, root);
   if (!el) { threadFocus?.(hoverPid); return; }   // 数据里点到一条这一轮没渲染出来的消息
+  // 证据落在被「收起」的渐隐里时，先展开整条带：否则跳过去看到的是被遮住的步骤。
+  if (underClip(el)) S.bandOpen = true;
   $$("mark.on", root).forEach((m) => m.classList.remove("on"));
   $$(`mark[data-e~="${eid}"]`, el).forEach((m) => m.classList.add("on"));
   threadFocus?.(hoverPid);
-  const target = $(`mark[data-e~="${eid}"]`, el) || el;
-  target.scrollIntoView({ block: "center", behavior: REDUCED ? "auto" : "smooth" });
-  flash(el);
+  // 展开会让三列重排，等重排落地再滚，落点才是最终的。
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const target = $(`mark[data-e~="${eid}"]`, el) || el;
+    if (!target || !target.isConnected) return;
+    target.scrollIntoView({ block: "center", behavior: REDUCED ? "auto" : "smooth" });
+    flash(el);
+  }));
+}
+
+/* 元素是否被某个「收起」容器的渐隐线挡在下面（看不见）。 */
+function underClip(el) {
+  if (!el) return false;
+  const box = $("#sanatomy", root);
+  for (let p = el.parentElement; p && p !== box; p = p.parentElement) {
+    if (p.classList.contains("is-clip") && el.getBoundingClientRect().top >= p.getBoundingClientRect().bottom - 0.5) return true;
+  }
+  return false;
 }
 
 /* session 总评里点证据：只在这一页里定位。总评只铺了问答消息，证据落在中间步骤时
