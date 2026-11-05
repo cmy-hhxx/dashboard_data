@@ -1200,7 +1200,44 @@ function scheduleThreads() {
   });
 }
 
+/* 轨迹栏只描述「中间链路」：上沿对齐 chain-box、下沿对齐回答消息。行数比链路少时由竖线补足，
+   行数更多时自然往下长，不裁切。 */
+function alignTraj() {
+  const box = $("#sanatomy", root);
+  const out = $("#sout > .out", root);
+  const flow = $("#sout .cflow", root);
+  const stl = $("#stl", root);
+  if (!box || !out || !flow || !stl) return;
+  const clear = () => {
+    flow.style.marginTop = "";
+    flow.style.minHeight = "";
+    out.style.paddingTop = "";
+  };
+  // 单栏（窄屏）与 session 总评没有并排的轨迹栏，保持自然流。
+  if (box.classList.contains("is-session") || !matchMedia("(min-width: 1181px)").matches) return clear();
+  const chain = $(".chain-box", stl);
+  const ans = $(".msg.k-answer", stl);
+  if (!chain || !ans) return clear();
+  const sr = stl.getBoundingClientRect();
+  const k = sr.height / (stl.offsetHeight || 1) || 1;   // 整页 zoom 时 rect 是放大后的像素
+  const top = (chain.getBoundingClientRect().top - sr.top) / k;
+  const bot = (ans.getBoundingClientRect().top - sr.top) / k;
+  const span = Math.max(0, bot - top);
+  out.style.paddingTop = "0px";
+  flow.style.marginTop = `${Math.max(0, top)}px`;
+  // 行数比链路多时逐级压行：3 行 → 2 行 → 1 行（更紧的行距、证据角标并到行内），
+  // 取第一个能收进链路高度的档位；全文仍在 title 里。
+  flow.style.minHeight = "0px";
+  for (const n of [3, 2, 1]) {
+    flow.style.setProperty("--cf-lines", String(n));
+    flow.classList.toggle("is-tight", n < 3);
+    if (flow.scrollHeight <= span + 2) break;
+  }
+  flow.style.minHeight = `${span}px`;
+}
+
 function drawThreads() {
+  alignTraj();
   const box = $("#sanatomy", root);
   const svg = box && $(".threads svg", box);
   if (!svg) return;

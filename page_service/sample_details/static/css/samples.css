@@ -232,10 +232,11 @@
    so a long chain or answer never creates a second scrollbar next to it. */
 .bench .anatomy { align-items: stretch; }
 .bench .traj, .bench .aprobs { display: grid; }
-/* Columns share one row: the trajectory's rail runs down to the same bottom edge as the timeline,
-   instead of the column visibly stopping early; rows keep their own height. */
-.bench .traj > .out { grid-template-rows: 1fr; height: 100%; }
-.bench .traj .cflow { height: 100%; }
+/* The trajectory brackets the middle chain: samples.js measures the chain box and the answer
+   and pins the flow to that span, so both lists read as one block. */
+.bench .traj > .out { align-self: start; align-content: start; }
+/* Rows keep their natural height: a stretched grid track would space them out to fill the column. */
+.bench .traj .cflow { align-content: start; }
 
 /* ---------------------------------------------------------------- timeline */
 .msg {
@@ -319,7 +320,11 @@
 .cf-body, .cf-text { min-width: 0; font-size: var(--fs-small); line-height: 1.6; color: var(--ink-2); overflow-wrap: anywhere; word-break: break-word; }
 /* Long tool names and mixed CJK/ASCII text turn a narrow step into an 8-line paragraph in a four
    column layout. Keep rows one height; the full text is the row's title, the evidence stays clickable. */
-.cf-text { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.cf-text { display: -webkit-box; -webkit-line-clamp: var(--cf-lines, 3); -webkit-box-orient: vertical; overflow: hidden; }
+/* 轨迹比中间链路长时（alignTraj 逐级压行）收紧行距并把证据角标并到行内，两端才能对齐。 */
+.cflow.is-tight .cf { padding: 2px 8px 2px 0; }
+.cflow.is-tight .cf .refs { display: none; }   /* 行本身可点，角标让位给对齐 */
+.cflow.is-tight .cf + .cf.plan, .cflow.is-tight .cf.plan + .cf.think { margin-top: 0; }
 .cf-tag { padding: 0 6px 0 8px; font-size: var(--fs-meta); line-height: 20px; font-weight: var(--w-medium); color: var(--muted); white-space: nowrap; }
 .cf .refs { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 2px; }
 .cf .refs button { font-size: var(--fs-meta); color: var(--accent); font-family: var(--mono); }
