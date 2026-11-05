@@ -72,8 +72,8 @@ main#main { max-width: 1480px; padding: 8px var(--gutter) 12px; }
   #root .sample-head > #ov { grid-column: 1 / -1; }
   #root .sample-head > #ovBox { grid-column: 1; }
   #root .sample-head > #sumBox { grid-column: 2; }
-  /* session 总评没有 Overview，点评通栏，限一下阅读宽度 */
-  #root #shead.is-session .sample-head > #sumBox { grid-column: 1 / -1; max-width: 1200px; }
+  /* session 总评没有 Overview，点评直接通栏铺开 */
+  #root #shead.is-session .sample-head > #sumBox { grid-column: 1 / -1; max-width: none; }
 }
 
 @media (max-width: 900px) {

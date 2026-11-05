@@ -1037,7 +1037,8 @@ function scheduleThreads() {
 function alignAprobs() {
   const box = $("#sattr", root);
   const card = box && $(".pcard", box);
-  const first = !S.sessionView && $("#stl .msg:not(.k-user)", root);
+  // 和第一条「非用户」消息对齐（单轮是模型开始，session 总评是第一条回答），不跟用户问句起。
+  const first = $("#stl .msg:not(.k-user)", root);
   if (!box) return;
   const cur = parseFloat(box.style.getPropertyValue("--ap-off")) || 0;
   if (!card || !first) {
