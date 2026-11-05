@@ -1085,21 +1085,6 @@ function markChainScroll() {
   });
 }
 
-/* 右栏和 timeline 上下对齐：顶部和第一条消息自然齐平，底部落到最后一条消息的底边
-   （卡片之间均分空档，别让右栏下半截空着）。只量一个内容高度，用 --ap-h 交给 CSS。 */
-function alignAprobs() {
-  const box = $("#sattr", root);
-  const card = box && $(".pcard", box);
-  if (!box) return;
-  const msgs = $$("#stl .msg", root);
-  const last = msgs[msgs.length - 1];
-  // 外部分享页整页 zoom 过：rect 量到的是放大后的物理像素，而 --ap-h 是 CSS px。
-  const zoom = box.offsetWidth ? box.getBoundingClientRect().width / box.offsetWidth : 1;
-  const scale = zoom || 1;
-  const h = card && last ? (last.getBoundingClientRect().bottom - card.getBoundingClientRect().top) / scale : 0;
-  box.style.setProperty("--ap-h", `${Math.max(0, Math.round(h))}px`);
-}
-
 function drawThreads() {
   const box = $("#sanatomy", root);
   const svg = box && $(".threads svg", box);
@@ -1108,7 +1093,6 @@ function drawThreads() {
     svg.innerHTML = "";
     return;
   }
-  alignAprobs();
   const host = svg.getBoundingClientRect();
   if (!host.width) return;
   // 连线坐标统一走 SVG 自己的坐标系：外部分享页整页用 zoom 放大了，

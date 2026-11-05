@@ -302,15 +302,9 @@ button.cell[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px 
 .flow-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .anatomy.is-focus .threads path { opacity: 0.08; }
 .anatomy.is-focus .threads path.on { opacity: 1; stroke-width: 2; }
-.aprobs { display: grid; gap: 8px; align-content: start; --ap-h: 0px; }
-/* 右栏和 timeline 上下一条线：顶部自然齐平，内容区撑到 timeline 最后一条消息的底边（--ap-h 由 samples.js 量），
-   卡片之间均分空档，让三栏是一个上下齐平的矩形。 */
-.aprobs > .out {
-  padding-top: var(--py);
-  min-height: calc(var(--ap-h) + var(--py) + var(--py-lg));
-}
-/* 卡片都包在一个 .tgroup 里，真正均分空档的是它：撑满右栏内容区，首卡贴顶、末卡贴底。 */
-.aprobs .tgroup { display: grid; align-content: space-between; }
+.aprobs { display: grid; gap: 8px; align-content: start; }
+/* 右栏和 timeline 从同一条顶线开始往下排，不拉满、不均分：卡片有几张就排几张。 */
+.aprobs > .out { padding-top: var(--py); }
 .aprob { text-align: left; padding: 12px 14px; border-radius: var(--r-well); background: none; transition: background var(--snap), transform var(--spring); }
 .aprob:hover, .aprob.on { background: var(--active); }
 .aprob:active { transform: scale(0.98); }
