@@ -333,9 +333,10 @@ button.cell[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px 
 /* ------------------------------------------------------------------ 样本 */
 .bench { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: var(--gap); align-items: stretch; height: calc(100vh - 88px); min-height: 640px; }
 .bench .anatomy { min-height: 0; grid-template-columns: 340px minmax(0, 1.5fr) 84px 280px; }
-.anatomy.is-session { grid-template-columns: minmax(0, 1fr) 280px; }
-.anatomy.is-session .traj, .anatomy.is-session .threads { display: none; }
-.anatomy.is-session .aprobs { grid-column: 2; }
+/* session 总评只去掉左侧的轨迹栏，连线栏保留：跨轮问题同样要连到各自轮次的消息。 */
+.anatomy.is-session { grid-template-columns: minmax(0, 1fr) 84px 280px; }
+.anatomy.is-session .traj { display: none; }
+.anatomy.is-session .aprobs { grid-column: 3; }
 .bench .traj { min-width: 0; }
 .bench .timeline { padding-top: var(--py); }
 .bench .aprobs { min-width: 0; }

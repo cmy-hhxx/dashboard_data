@@ -994,9 +994,10 @@ function wireThreads() {
     const svg = $(".threads svg", box);
     if (!svg) return;
     const prob = pid == null || !S.D ? null : S.D.attribution.problems.find((p) => p.id === pid);
-    const msgs = new Set(prob ? prob.ev.map((e) => S.D.evidence[e]).filter((ev) => ev && ev.t === S.trace && ev.m != null).map((ev) => ev.m) : []);
+    // 证据按「轮次:消息」定位，session 总评里同一张卡可能落在多轮上。
+    const msgs = new Set(prob ? prob.ev.map((e) => S.D.evidence[e]).filter((ev) => ev && ev.m != null).map((ev) => `${ev.t}:${ev.m}`) : []);
     box.classList.toggle("is-focus", !!prob);
-    $$(".msg", box).forEach((m) => m.classList.toggle("on", msgs.has(Number(m.dataset.key.split(":")[1]))));
+    $$(".msg", box).forEach((m) => m.classList.toggle("on", msgs.has(m.dataset.key)));
     $$("path", svg).forEach((p) => p.classList.toggle("on", p.dataset.p === String(pid)));
   };
   box.addEventListener("pointerover", (e) => {
@@ -1085,10 +1086,13 @@ function drawThreads() {
     const seen = new Set();
     prob.ev.forEach((e) => {
       const ev = S.D.evidence[e];
-      if (!ev || ev.t !== S.trace || ev.m == null || seen.has(ev.m)) return;
-      const msg = $(`#m-${S.trace}-${ev.m}`, root);
+      const key = ev && `${ev.t}:${ev.m}`;
+      // 消息 id 自带轮次（m-<trace>-<index>），session 总评把多轮消息铺在同一条时间线上，
+      // 所以按证据自己的轮次找，而不是当前选中轮；找不到（该轮这类消息没进总评）就跳过。
+      if (!ev || ev.m == null || seen.has(key)) return;
+      const msg = $(`#m-${ev.t}-${ev.m}`, root);
       if (!msg) return;
-      seen.add(ev.m);
+      seen.add(key);
       const r = ($(".msg-body", msg) || msg).getBoundingClientRect();
       const start = toLocal(r.right, r.top + Math.min(26 * scale, r.height / 2));
       const x1 = start.x;

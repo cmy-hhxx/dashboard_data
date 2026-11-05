@@ -59,9 +59,9 @@ main#main { max-width: 1480px; padding: 8px var(--gutter) 12px; }
     grid-template-columns: 24% minmax(0, 1fr) 88px 24%;
     column-gap: clamp(16px, 1.2vw, 36px);
   }
-  /* session 总评是两栏：对话 + 问题（这里没有链路栏和连线） */
+  /* session 总评是「对话 + 连线 + 问题」三栏：左侧轨迹栏不要，连线栏和单轮一样保留 */
   #root .bench .anatomy.is-session {
-    grid-template-columns: minmax(0, 1fr) minmax(300px, 22%);
+    grid-template-columns: minmax(0, 1fr) 88px minmax(300px, 22%);
     column-gap: clamp(16px, 1.2vw, 36px);
   }
   /* 顶部信息也分两栏：Overview 在左、Trace 点评在右，长段落不至于横跨整屏 */
