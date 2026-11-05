@@ -418,3 +418,12 @@
   .headline .idline { justify-content: flex-start; }
   .sp-box { padding-left: 0; }
 }
+
+/* ---------------------------------------------------------------- 超宽屏
+   ≥1800px 时看板不再无限拉宽：中间一栏会把余量全吃掉，回答又卡在 104ch 上，
+   于是右边留一条死白、归因栏被顶到很远。宽度封在 2100（与独立详情页同一口径），
+   回答/用户气泡铺满所在栏，三栏重新成比例。 */
+@media (min-width: 1800px) {
+  html[data-view="samples"] main { max-width: 2100px; }
+  .msg.k-user .msg-body, .msg.k-answer .msg-body { max-width: none; }
+}
