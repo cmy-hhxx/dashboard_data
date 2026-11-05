@@ -780,6 +780,7 @@ const CHAIN_KINDS = new Set(["user", "answer"]);
 function timelineHTML(t, messages) {
   const out = [];
   let run = [];
+  let pending = [];   // 出现在第一条对话消息之前的 system 之类：挂起来，等问句出来后并入它下面的链路
   const flush = () => {
     if (!run.length) return;
     out.push(`<div class="chain-box">
@@ -792,10 +793,18 @@ function timelineHTML(t, messages) {
     if (CHAIN_KINDS.has(m.k)) {
       flush();
       out.push(msgHTML(t, i, m));
+      // 系统提示原本在问句之前：挪到问句下面，作为这条链路的第一段
+      if (pending.length) {
+        run = pending;
+        pending = [];
+      }
+    } else if (!out.length) {
+      pending.push(i);
     } else {
       run.push(i);
     }
   });
+  if (pending.length) run = pending.concat(run);
   flush();
   return out.join("");
 }
@@ -1076,24 +1085,19 @@ function markChainScroll() {
   });
 }
 
-/* 右栏不跟着用户问句起：把 timeline 第一条非用户消息的位置量出来，差值补到 .aprobs 的 padding 上。 */
+/* 右栏和 timeline 上下对齐：顶部和第一条消息自然齐平，底部落到最后一条消息的底边
+   （卡片之间均分空档，别让右栏下半截空着）。只量一个内容高度，用 --ap-h 交给 CSS。 */
 function alignAprobs() {
   const box = $("#sattr", root);
   const card = box && $(".pcard", box);
-  // 和第一条「非用户」内容对齐（单轮是中间链路的盒子顶，session 总评是第一条回答），不跟用户问句起。
-  const first = $("#stl .chain-box, #stl .msg:not(.k-user)", root);
   if (!box) return;
-  const cur = parseFloat(box.style.getPropertyValue("--ap-off")) || 0;
-  if (!card || !first) {
-    if (cur) box.style.setProperty("--ap-off", "0px");
-    return;
-  }
-  // 外部分享页整页 zoom 过：rect 量到的是放大后的物理像素，而 --ap-off 是 CSS px。
-  // 不除这个缩放，补偿就会过冲（2.1× 屏上会来回震荡、最后停在 0）。
+  const msgs = $$("#stl .msg", root);
+  const last = msgs[msgs.length - 1];
+  // 外部分享页整页 zoom 过：rect 量到的是放大后的物理像素，而 --ap-h 是 CSS px。
   const zoom = box.offsetWidth ? box.getBoundingClientRect().width / box.offsetWidth : 1;
-  const delta = (first.getBoundingClientRect().top - card.getBoundingClientRect().top) / (zoom || 1);
-  const next = Math.max(0, Math.round(cur + delta));
-  if (Math.abs(next - cur) > 0.5) box.style.setProperty("--ap-off", `${next}px`);
+  const scale = zoom || 1;
+  const h = card && last ? (last.getBoundingClientRect().bottom - card.getBoundingClientRect().top) / scale : 0;
+  box.style.setProperty("--ap-h", `${Math.max(0, Math.round(h))}px`);
 }
 
 function drawThreads() {
