@@ -165,6 +165,10 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 @container (max-width: 530px) {
   #evChart .evday:not(:nth-child(3n + 1)):not(:last-child) .evdate { visibility: hidden; }
 }
+/* 15 个日期都显示时（约 530-600px），字号收一档，相邻日期之间留出 4px 左右的均匀空隙。 */
+@container (min-width: 531px) and (max-width: 600px) {
+  #evChart .evdate { font-size: 10px; }
+}
 /* Paired desktop cards share chart columns and a bottom-aligned stats row. */
 @media (min-width: 861px) {
   .card:has(> #vol), .card:has(> .eval-content) { display: flex; flex-direction: column; height: 456px; overflow: hidden; }
