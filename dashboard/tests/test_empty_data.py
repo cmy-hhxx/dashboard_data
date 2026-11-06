@@ -24,7 +24,7 @@ def write_jsonl(path, *rows):
 
 def seed(root):
     """One wencai a_fast session: input + attribution (one P1 problem) + compact."""
-    meta = {"session_id": "s1", "request_time": REQ, "question": "茅台今天收盘价",
+    meta = {"session_id": "s1", "request_time": REQ, "question": "茅台今天收盘价", "user_id": "598960105",
             "usage": {"input_tokens": 100, "output_tokens": 50}}
     write_jsonl(root / "0_wencai/eval_input/a_fast/2026-11-01.jsonl", {
         "request_time": REQ, "case_id": "c1", "trace_id": "t1", "version": "a", "meta": meta,
@@ -95,6 +95,9 @@ class BuildTests(unittest.TestCase):
             self.assertEqual((daily["sessions"], daily["traces"], daily["tokens"], daily["sids"]), (1, 1, 150, [0]))
             row = index["products"]["wencai"]["rows"][0]
             self.assertEqual((row["w"], row["n"], row["m"]), ("P1", 1, "a_fast"))
+            # 用户 ID 与类型（十位以下数字 = 真实用户）随样本行下发。
+            self.assertEqual((row.get("uid"), row.get("ut")), ("598960105", "real"))
+            self.assertNotIn("ul", row)
             from detail_builder import DetailBuilder
             builder = DetailBuilder(datasets, static.parent / "cache" / "build.sqlite3",
                                     static / "samples", static.parent / "cache")
@@ -121,6 +124,30 @@ class BuildTests(unittest.TestCase):
             self.assertEqual(index["products"], {})
             self.assertEqual(list((static / "samples").iterdir()), [])
             self.assertEqual([p.name for p in static.iterdir() if p.name.startswith(".samples")], [])
+
+    def test_user_rules_reach_index_and_trigger_rebuild(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            datasets, static = root / "datasets", root / "static"
+            seed(datasets)
+            _, _, index = self.build(datasets, static)
+            row = index["products"]["wencai"]["rows"][0]
+            self.assertEqual((row.get("uid"), row.get("ut")), ("598960105", "real"))
+            self.assertNotIn("ul", row)
+
+            # 名单改了就重建：类型/流失标记立刻反映到索引行。
+            (datasets / "user_rules.json").write_text(json.dumps({
+                "test": {"ids": ["598960105"]},
+                "lost": {"ids": ["598960105"]},
+            }), encoding="utf-8")
+            summary, _, index = self.build(datasets, static)
+            self.assertNotIn("reused", summary)
+            row = index["products"]["wencai"]["rows"][0]
+            self.assertEqual((row.get("ut"), row.get("ul")), ("test", 1))
+
+            # 规则没变时不会重复构建。
+            summary, _, _ = self.build(datasets, static)
+            self.assertEqual(summary.get("reused"), 1)
 
 
 if __name__ == "__main__":

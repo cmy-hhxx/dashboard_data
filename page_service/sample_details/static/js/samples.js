@@ -14,10 +14,18 @@ const F = () => {
   const q = params();
   return {
     q: q.get("q") || "", w: q.get("w") || "", split: q.get("split") || "", model: q.get("model") || "",
+    ut: q.get("ut") || "",
     scene: q.get("scene") || "", sub: q.get("sub") || "", stage: q.get("stage") || "", mech: q.get("mech") || "", pattern: q.get("pattern") || "", sort: q.get("sort") || "sev",
   };
 };
 const dirty = () => Object.entries(F()).some(([k, v]) => k !== "sort" && v);
+/* 用户类型：构建时按 dashboard/user_rules.py 的规则写进样本行的 ut（real / test / internal / unknown），
+   流失是独立标记 ul（流失目录或流失 uid 名单）。 */
+const USER_TYPES = [["real", "真实用户"], ["test", "测试用户"], ["internal", "内部用户"], ["unknown", "未知"]];
+const USER_TYPE_NAME = Object.fromEntries(USER_TYPES);
+const USER_TYPE_SHORT = { real: "真实", test: "测试", internal: "内部", unknown: "未知" };
+const utOf = (r) => (r && USER_TYPE_SHORT[r.ut] ? r.ut : "unknown");
+const isLostRow = (r) => !!(r && (r.ul || r.sp === "lost"));
 // `sc` is the scene the matrix filed the sample under when it differs from task / skill (问财 B versions).
 const sceneOf = (r) => r.sc || r.task || r.skill || "未标注";
 const subOf = (r) => r.sub || "";
@@ -38,6 +46,7 @@ function groupSessions(rows) {
         key, s: key, rows: [], sid: r.sid, m: r.m, sp: r.sp,
         w: "none", n: 0, tr: 0, pt: new Set(), st: new Set(), tg: new Set(), lb: new Set(),
         q: "", d: "", tid: "", case: "", task: "", sub: "", skill: "", sc: "", lang: r.lang,
+        uid: "", ut: "", ul: 0,
       };
       groups.set(key, g);
     }
@@ -55,6 +64,9 @@ function groupSessions(rows) {
     g.sub = g.sub || r.sub || "";
     g.skill = g.skill || r.skill || "";
     g.sc = g.sc || r.sc || "";
+    g.uid = g.uid || r.uid || "";
+    g.ut = g.ut || r.ut || "";
+    if (r.ul) g.ul = 1;
   });
   return [...groups.values()].map((g) => {
     const rowsByDate = g.rows.slice().sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0));
@@ -64,6 +76,7 @@ function groupSessions(rows) {
       q: last.q, d: last.d, w: g.w, n: g.n, tr: g.tr,
       pt: [...g.pt], st: [...g.st], tg: [...g.tg], lb: [...g.lb].join("｜"),
       tid: g.tid, case: g.case, task: g.task, sub: g.sub, skill: g.skill, sc: g.sc,
+      uid: g.uid, ut: g.ut, ul: g.ul,
     };
   });
 }
@@ -165,7 +178,7 @@ function skeleton() {
   });
   $("#ssort", root).addEventListener("change", (e) => setFilter({ sort: e.target.value }));
   $("#sreset", root).addEventListener("click", () =>
-    setFilter({ q: "", w: "", split: "", model: "", scene: "", sub: "", stage: "", mech: "", pattern: "", sort: "sev" }),
+    setFilter({ q: "", w: "", split: "", model: "", ut: "", scene: "", sub: "", stage: "", mech: "", pattern: "", sort: "sev" }),
   );
   $("#sf", root).addEventListener("click", (e) => {
     const b = e.target.closest("button[data-k]");
@@ -344,6 +357,7 @@ function syncFilters() {
       });
     const opt = (v, label, on) => `<option value="${esc(v)}"${on ? " selected" : ""}>${esc(label)}</option>`;
     html += `<div class="cascade">
+      <select data-k="ut" aria-label="用户类型" class="wide"><option value="">全部用户类型</option>${USER_TYPES.map(([id, label]) => opt(id, label, f.ut === id)).join("")}</select>
       <select data-k="scene" aria-label="场景"><option value="">全部场景</option>${scenes.map((s) => opt(s, s, f.scene === s)).join("")}</select>
       <select data-k="sub" aria-label="子场景"><option value="">全部子场景</option>${subs.map((s) => opt(s, s, f.sub === s)).join("")}</select>
       <select data-k="stage" aria-label="阶段"><option value="">全部阶段</option>${stages.map((s) => opt(s.id, `${s.id} ${s.name}`, f.stage === s.id)).join("")}</select>
@@ -363,7 +377,8 @@ function renderList() {
     r.rows.some((x) => [x.q, x.sid, x.tid, x.case, x.task, x.sub, x.skill].some((v) => v && String(v).toLowerCase().includes(needle)));
   S.rows = S.all.filter(
     (r) =>
-      (!f.w || r.w === f.w) && (!f.split || r.sp === f.split) && (!f.model || r.m === f.model) &&
+      (!f.w || r.w === f.w) && (!f.split || (f.split === "lost" ? isLostRow(r) : r.sp === f.split)) && (!f.model || r.m === f.model) &&
+      (!f.ut || utOf(r) === f.ut) &&
       (!f.scene || sceneOf(r) === f.scene) &&
       (!f.sub || subOf(r) === f.sub) &&
       problemHit(r, f) &&
@@ -382,14 +397,14 @@ function renderList() {
           (r) => `<button type="button" class="srow" data-s="${r.s}" style="--c:${sevColor(r.w)}" aria-current="${r.s === S.slug}">
       <span class="bar"></span><span class="srow-body"><span class="q">${esc(r.q || "（无提问）")}</span>
       <span class="m num"><span class="srow-model">${esc(label(r.m))}</span><span>${r.d.slice(5)}</span>${r.tr > 1 ? `<span>${r.tr} 轮</span>` : ""}<span class="srow-sev" style="color:${r.w === "none" ? "var(--muted)" : sevColor(r.w)}">${r.n ? `${r.w} · ${r.n}` : "无问题"}</span>${
-            r.sp === "lost" ? '<span class="tag-lost">流失</span>' : ""
+            isLostRow(r) ? '<span class="tag-lost">流失</span>' : ""
           }</span></span></button>`,
         )
         .join("")
     : `<div class="empty">没有符合条件的会话<br><button type="button" class="link" id="sclear">清除筛选</button></div>`;
   renderPager(pages);
   const clear = $("#sclear", root);
-  clear && clear.addEventListener("click", () => setFilter({ q: "", w: "", split: "", model: "", scene: "", sub: "", stage: "", mech: "", pattern: "" }));
+  clear && clear.addEventListener("click", () => setFilter({ q: "", w: "", split: "", model: "", ut: "", scene: "", sub: "", stage: "", mech: "", pattern: "" }));
 }
 
 function renderPager(pages) {
@@ -736,6 +751,12 @@ function renderIn() {
   const scale = [m.tokens_in ? `${compact((m.tokens_in || 0) + (m.tokens_out || 0))} tokens` : null,
     m.finish_ms ? `${fmt(m.finish_ms / 1000, 1)} s` : null].filter(Boolean);
   const ids = [["会话 ID", D.ids.session], ["Trace ID", D.ids.trace], ["Case ID", D.ids.case]].filter((x) => x[1]);
+  const session = S.all.find((x) => x.key === S.sessionKey) || S.session || {};
+  const uid = String(session.uid || "");
+  const ut = utOf(session);
+  const userItem = uid
+    ? `<button type="button" class="copy" data-copy="${esc(uid)}" title="用户类型：${esc(USER_TYPE_NAME[ut] || "未知")}">用户 ID <span class="num">${esc(uid.length > 18 ? `${uid.slice(0, 8)}…${uid.slice(-6)}` : uid)}</span><span class="utag is-${ut}">${USER_TYPE_SHORT[ut] || "未知"}</span></button>`
+    : `<span class="id-miss" title="评测输入 meta 里没有 user_id">用户 ID <span class="num">—</span><span class="utag is-unknown">未知</span></span>`;
   const rounds = D.rounds || [];
   const group = (k, cls, vals) =>
     vals.length
@@ -743,14 +764,14 @@ function renderIn() {
       : "";
   const fullQ = D.question || "（无提问）";
   const shortQ = fullQ.length > 80 ? `${fullQ.slice(0, 80)}…` : fullQ;
-  const idline = `<div class="idline">${ids.map(([k, v]) => `<button type="button" class="copy" data-copy="${esc(v)}">${k} <span class="num">${esc(v.length > 18 ? `${v.slice(0, 8)}…${v.slice(-6)}` : v)}</span></button>`).join("")}</div>`;
+  const idline = `<div class="idline">${userItem}${ids.map(([k, v]) => `<button type="button" class="copy" data-copy="${esc(v)}">${k} <span class="num">${esc(v.length > 18 ? `${v.slice(0, 8)}…${v.slice(-6)}` : v)}</span></button>`).join("")}</div>`;
   $("#shead", root).innerHTML = `<div class="sample-head">
       <div class="headline">
         <h2 title="${esc(fullQ)}">${esc(shortQ)}</h2>
         ${idline}
       </div>
       <div class="chip-groups">
-        ${D.split === "lost" ? `<span class="cg"><span class="pill lost">流失用户</span></span>` : ""}
+        ${isLostRow(session) ? `<span class="cg"><span class="pill lost">流失用户</span></span>` : ""}
         ${group("模型", "is-model", [label])}
         ${group("日期", "is-plain", [D.date])}
         ${group("场景", "is-scene", scene)}

@@ -44,6 +44,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 import build_store as bs
+import user_rules
 from filelist import TreeCache
 
 DASHBOARD = Path(__file__).resolve().parent
@@ -51,7 +52,7 @@ REPO = DASHBOARD.parent
 STATIC = DASHBOARD / "static"
 PRODUCTION_DATASETS = Path("/mnt/fin_bench/code_and_clean_data/datasets")
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-03.7"
+PAYLOAD_VERSION = "2026-11-06.1"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 2
 
@@ -68,7 +69,8 @@ WORST_KEYS = SEVERITIES + ["none"]
 # Only fields the recall list and its filters/search actually read. Keeping the
 # index lean matters more than the full aggregate row: it is fetched by every
 # 具体数据 view and can be several MB.
-INDEX_FIELDS = ("s", "q", "m", "sp", "d", "sid", "tid", "w", "n", "tr", "r", "pt", "st", "lb", "case", "task", "sub", "skill", "sc")
+INDEX_FIELDS = ("s", "q", "m", "sp", "d", "sid", "tid", "w", "n", "tr", "r", "pt", "st", "lb", "case", "task", "sub", "skill", "sc",
+                "uid", "ut", "ul")
 
 PRODUCTS = {
     "wencai": {"label": "问财", "models": ["a_fast", "a_expert", "b_fast", "b_expert"]},
@@ -1305,6 +1307,16 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
         )
     first_meta = raw_traces[0][0] if raw_traces else {}
     imeta = (inp or {}).get("meta") or {}
+    # 样本页的「用户 ID / 用户类型」：输入顶层 meta 优先，其次各轮 trace meta，最后归因 session_meta。
+    uid = imeta.get("user_id")
+    if uid in (None, ""):
+        for tmeta, _ in raw_traces:
+            if tmeta.get("user_id") not in (None, ""):
+                uid = tmeta.get("user_id")
+                break
+    if uid in (None, ""):
+        uid = smeta.get("user_id")
+    uid = str(uid) if uid not in (None, "") else None
     detail = {
         "product": product, "split": pair["split"], "model": model, "date": pair["date"],
         "question": question, "question_zh": first_meta.get("question_zh"),
@@ -1351,6 +1363,8 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
                        ("skill", imeta.get("skill_name") or None), ("case", case if product == "wencai" else None)):
         if value:
             row[key] = value
+    if uid:
+        row["uid"] = uid
 
     facts = {
         "messages": row["mc"], "tool_calls": tool_calls, "traces": row["tr"],
@@ -2401,6 +2415,8 @@ def input_signature(product_metas):
 
 def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs: int = 0):
     started = time.time()
+    rules = user_rules.load(datasets)
+    rules_sig = rules.signature()
     if not datasets.is_dir():
         return empty_payloads("missing"), {}
     store = bs.BuildStore(out_dir.parent / "cache" / "build.sqlite3")
@@ -2444,6 +2460,7 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
                 and pairing_info.get("pair_misses", 0) == 0 and marker
                 and marker.get("build") == bs.BUILD_VERSION
                 and marker.get("payload") == PAYLOAD_VERSION
+                and marker.get("rules") == rules_sig
                 and marker.get("pairs_sig") == pairs_sig
                 and marker.get("cluster") == cluster_sig
                 and marker.get("feed") == feed_sig
@@ -2470,6 +2487,17 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
         samples, golden_pool, stats = build_samples(
             pairs, datasets, out_dir, store, reader, cluster_index, cluster_sig, log, jobs)
         timers["samples"] = round(time.time() - t0, 1)
+
+        # 用户类型在样本缓存之后统一打标：规则/名单变了不用重读输入，也能让每个样本拿到新类型。
+        all_rows = [row for rows in samples.values() for _, _, row, _ in rows]
+        user_stats = rules.question_stats((row.get("uid"), row.get("q")) for row in all_rows)
+        for rows in samples.values():
+            for _, _, row, _ in rows:
+                row["ut"] = rules.classify(row.get("uid"), user_stats)
+                if row["sp"] == "lost" or rules.is_lost(row.get("uid")):
+                    row["ul"] = 1
+                else:
+                    row.pop("ul", None)
 
         t0 = time.time()
         all_samples = [s for rows in samples.values() for s in rows]
@@ -2581,6 +2609,7 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
         store.delete_samples_not(slugs)
         store.set_meta("complete", {
             "build": bs.BUILD_VERSION, "payload": PAYLOAD_VERSION, "pairs": len(pairs),
+            "rules": rules_sig,
             "pairs_sig": pairs_sig, "cluster": cluster_sig, "feed": feed_sig, "input": input_sig,
             "at": generated,
         })

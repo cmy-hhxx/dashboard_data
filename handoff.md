@@ -145,7 +145,13 @@ system.goldens[product][] = { slug, date, question, model, problems[], messages[
 q 问题 · m 模型 · sp daily/lost · d 日期 · w 最严重等级 · n 问题数
 sv 严重度构成 · r 环节 · st 阶段 · pt 模式 · tg 标签 · lb 问题标签
 tr 轮数 · mc 消息数 · lang · case · s 短 slug
+uid 用户 ID（输入 meta.user_id）· ut 用户类型 real/test/internal/unknown · ul 流失标记（1 才有）
 ```
+
+用户类型由 `dashboard/user_rules.py` 判定，规则/名单放在 `<datasets>/user_rules.json`
+（`EVAL_USER_RULES` 可覆盖）：名单优先，然后「十位及以上数字 ID = 测试用户、十位以下 = 真实用户」、
+非数字 = 内部用户，重复问句占比高再改判测试；流失 = 流失目录或流失 uid 名单。规则 hash 进构建完成标记，
+改名单后下一次构建自动重建，不需要改代码。
 
 选中样本后再请求 `/samples/<slug>.json`（由 `detail_builder.py` 按需生成并缓存），主要字段：
 `input.traces[]`、`attribution.problems[]`、`compact`、`evidence[]`；证据的
@@ -177,6 +183,8 @@ tr 轮数 · mc 消息数 · lang · case · s 短 slug
    `build_store.BUILD_VERSION`，否则旧样本缓存会被误用；改完删 `cache/` 跑一次全量验证。
 6. **改样本筛选**：`samples.js` 的 `F()`、`skeleton()`、`syncFilters()` 和列表
    过滤逻辑；筛选字段来自 `samples-<product>.json` 行，保持 URL 可分享。
+   用户类型筛选走 `ut`（`?ut=test`），流失筛选走 `split=lost`（会同时认 uid 流失名单）。
+   只改分类规则时改 `<datasets>/user_rules.json`，不要改前端。
 7. **改样式**：改 `css/` 下对应页面的文件（样本页只在 `samples.css`），优先复用现有 token 和类。不用硬边框，用 1%~3% 的
    微差灰阶分层、同心圆角、16pt 横向 / 16–24pt 纵向间距、数字 `tabular-nums`。
 
