@@ -74,7 +74,11 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .ev-legend .ev-done { background: var(--accent); }
 .ev-legend .ev-in { background: var(--well-2); }
 .evrows { display: grid; gap: 10px; margin-top: 10px; }
-#evChart { flex: 1 1 0; display: flex; align-items: center; min-height: 0; overflow: hidden; }
+#evChart {
+  flex: 1 1 0; display: flex; align-items: center; min-height: 0; overflow: hidden;
+  /* 日期/数字按自身宽度居中在柱子上，左右各留 10px，最外侧一列也不会被 overflow 裁掉。 */
+  padding-inline: 10px;
+}
 #evChart .evrows { width: 100%; }
 #evStats { flex: 0 0 auto; margin-top: auto; padding-top: 16px; }
 #evStats .stats { margin-top: 0; padding-top: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); min-height: 50px; }
@@ -82,8 +86,11 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
   display: grid; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); gap: 5px;
   width: min(100%, calc(var(--n) * 64px)); justify-self: center; align-items: end;
 }
-.evday { display: grid; grid-template-rows: auto var(--bar-h, 52px) auto; gap: 5px; min-width: 0; }
-.evnums { display: grid; gap: 1px; align-content: end; text-align: center; min-height: 28px; }
+/* 显式 minmax(0,1fr) 轨道：隐式轨道会按 max-content 撑宽，数字/日期就被塞进 33px 的盒子里
+   在更窄的柱子上“居中”，整列视觉右偏；显式轨道 + 居中后再给 #evChart 留边，四边都不裁字。 */
+.evday { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto var(--bar-h, 52px) auto; gap: 5px; min-width: 0; }
+.evday > * { min-width: 0; }
+.evnums { display: grid; justify-self: center; gap: 1px; align-content: end; text-align: center; min-height: 28px; }
 .evnums b { font-size: 11.5px; line-height: 1.2; font-weight: var(--w-medium); color: var(--ink); }
 .evnums small { font-size: 11px; line-height: 1.2; color: var(--muted); }
 .evbar {
@@ -93,9 +100,7 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 }
 .evbar i { display: block; width: 100%; min-height: 0; background: var(--accent); opacity: 0.82; border-radius: 2px 2px 0 0; }
 .evbar:hover i { opacity: 1; }
-.evdate { text-align: center; font-size: 11px; color: var(--faint); white-space: nowrap; overflow: visible; text-overflow: clip; }
-.evday:first-child .evdate { text-align: left; }
-.evday:last-child .evdate { text-align: right; }
+.evdate { justify-self: center; text-align: center; font-size: 11px; color: var(--faint); white-space: nowrap; overflow: visible; text-overflow: clip; }
 
 /* ------------------------------------------------------------------ drill-down sunburst */
 .duo.sbx { display: block; container-type: inline-size; }
@@ -156,9 +161,8 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .ev-tools .seg-knob { top: 2px; bottom: 2px; }
 .eval-content { container-type: inline-size; }
 .eval-content .stats { margin-top: var(--py); grid-template-columns: repeat(4, minmax(0, 1fr)); }
-/* A narrow eval card cannot fit one date under each of 15 bars: keep every third label so the
-   row stays readable instead of the labels running into each other (or past the card edge). */
-@container (max-width: 480px) {
+/* 卡片不够宽时 15 个日期放不下（约 530px 起就会互相挤）：只留每 3 个一个，保持均匀留白。 */
+@container (max-width: 530px) {
   #evChart .evday:not(:nth-child(3n + 1)):not(:last-child) .evdate { visibility: hidden; }
 }
 /* Paired desktop cards share chart columns and a bottom-aligned stats row. */
