@@ -337,6 +337,9 @@ def input_files(datasets: Path, top: Path, product: str):
     ``eval_input/1_lost_user_eval`` copy is excluded so days are not counted
     twice while that evaluation is in flight.  A root without the archive (the
     弗吉尼亚 copy) keeps the full lost-user input in that eval folder, so it counts.
+    AIME back-test staging (``eval_input/2_task_eval``) is excluded as well: its
+    rows are published into ``eval_input/0_daily_eval_input`` first, and the sync
+    loop keeps the staging copy, so counting both would double the volume.
     Wencai marks lost users inside the task-eval input with ``meta.lost_user``
     instead of a separate directory.
     """
@@ -344,7 +347,10 @@ def input_files(datasets: Path, top: Path, product: str):
     # 只有 mtime 变过的目录才重新 readdir，数据没变时就是几十次 stat。
     tree = TreeCache(DASHBOARD / "cache")
     base = top / "eval_input"
-    files = [base / rel for rel in tree.walk(base, f"in-{product}-eval", skip_parts=("1_lost_user_eval",))]
+    skip = ("1_lost_user_eval", "2_task_eval") if product == "aime" else ("1_lost_user_eval",)
+    # 缓存键带上 skip 口径，口径变了不会复用旧的目录清单。
+    files = [base / rel for rel in tree.walk(base, f"in-{product}-eval-" + "-".join(skip),
+                                             skip_parts=skip)]
     if product == "aime":
         archive = top / ".archive" / "1_lost_user_input"
         lost = archive if archive.is_dir() else top / "eval_input" / "1_lost_user_eval"

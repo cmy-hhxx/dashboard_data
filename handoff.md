@@ -221,6 +221,8 @@ tr 轮数 · mc 消息数 · lang · case · s 短 slug
   cluster 快速签名在 `cache/cluster-signature.json`，映射 pickle 在 `cache/clusters-<sig>.pkl`；
   `datasets/stats.json` 是 stats worker 的旁路统计，删除后 build 会局部重扫。
 - **流失口径**：AIME 用 `.archive/1_lost_user_input` 目录；问财用输入 `meta.lost_user`。
+  AIME 回测暂存目录 `eval_input/2_task_eval` 不计入输入量（`build.input_files` 已跳过），
+  回测数据以追加行的方式发布到 `eval_input/0_daily_eval_input` 后才算日常输入。
   改口径时同时改 `build_store.split_from_rel` / `_aggregate_line` 和前端 `volTree`。
 - **服务没有守护进程**：容器/环境重启后需要手动 `start.sh`；端口、刷新间隔和是否起统计旁路可用
   `PORT` / `REFRESH_SECONDS` / `STATS_WORKER` 覆盖（`deploy.sh` 会把本地设置的这三个变量带到远端）。
