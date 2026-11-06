@@ -225,7 +225,12 @@ def q(path):
 # 清单 / 过滤
 # --------------------------------------------------------------------------- #
 
+EXTRA_EXCLUDES = []   # 运行时附加排除（子串匹配），用于反向同步时跳过 .delivery/provenance 等
+
+
 def is_excluded(rel):
+    if any(x and x in rel for x in EXTRA_EXCLUDES):
+        return True
     parts = rel.split("/")
     if ".runs" in parts:
         return True
@@ -786,16 +791,25 @@ def preflight():
     problems = []
     for host, zstd in ((ULAN_HOST, ULAN_ZSTD), (VA_HOST, VA_ZSTD)):
         try:
-            out = run_ssh(host, f"command -v {q(zstd)} || echo MISSING", retries=3, timeout=30)
+            out = run_ssh(host, f"command -v {q(zstd)} || echo MISSING", retries=8, timeout=45)
             if "MISSING" in out:
-                problems.append(f"{host}: 找不到 zstd({zstd})")
+                # 容器重建后 zstd 可能缺失：尝试自动装一次（仅 Ubuntu 系 apt 可用时）
+                log(f"  {host}: 缺 zstd({zstd})，尝试 apt-get install zstd …")
+                try:
+                    run_ssh(host, "DEBIAN_FRONTEND=noninteractive timeout 180 apt-get install -y zstd",
+                            retries=2, timeout=240)
+                except Exception:  # noqa: BLE001
+                    pass
+                out = run_ssh(host, f"command -v {q(zstd)} || echo MISSING", retries=2, timeout=30)
+            if "MISSING" in out:
+                problems.append(f"{host}: 找不到 zstd({zstd})，且自动安装失败")
         except Exception as exc:  # noqa: BLE001
             problems.append(f"{host}: 不可达（{exc}）")
     try:
         dirs = [pair[3] for pair in active_pairs()]
         out = run_ssh(VA_HOST, "; ".join(
             f"mkdir -p {q(d)} && test -w {q(d)} && echo WRITABLE" for d in dirs),
-            retries=3, timeout=60)
+            retries=8, timeout=90)
         if out.count("WRITABLE") < len(dirs):
             problems.append(f"目标目录不可写：{out.strip()[:200]}")
     except Exception as exc:  # noqa: BLE001
@@ -828,8 +842,15 @@ def main():
     parser.add_argument("--no-meta", action="store_true", help="跳过评测进度读取")
     parser.add_argument("--direction", choices=["forward", "reverse"], default="forward",
                         help="forward=乌兰->弗吉尼亚（默认）；reverse=弗吉尼亚->乌兰")
+    parser.add_argument("--skip", default="",
+                        help="逗号分隔的 task/kind，例如 daily/cluster")
+    parser.add_argument("--exclude", default="",
+                        help="逗号分隔的路径子串，运行时跳过，例如 .delivery/provenance")
     args = parser.parse_args()
     apply_direction(args.direction)
+    global EXTRA_EXCLUDES
+    EXTRA_EXCLUDES = [x.strip() for x in args.exclude.split(",") if x.strip()]
+    skip_pairs = {x.strip() for x in args.skip.split(",") if x.strip()}
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     log_path = STATE_DIR / "sync.log"
@@ -855,7 +876,10 @@ def main():
     try:
         preflight()
         selected = [p for p in active_pairs()
-                    if args.only == "all" or p[0] == args.only]
+                    if (args.only == "all" or p[0] == args.only)
+                    and f"{p[0]}/{p[1]}" not in skip_pairs]
+        if skip_pairs:
+            logfile(f"跳过：{', '.join(sorted(skip_pairs))}")
         seen_task = set()
         for task_key, kind, src_dir, dst_dir, mode in selected:
             task = TASKS[task_key]
