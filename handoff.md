@@ -149,7 +149,7 @@ uid 用户 ID（输入 meta.user_id）· ut 用户类型 real/test/internal/unkn
 ```
 
 用户类型由 `dashboard/user_rules.py` 判定，规则/名单放在 `<datasets>/user_rules.json`
-（`EVAL_USER_RULES` 可覆盖）：名单优先，然后「十位及以上数字 ID = 测试用户、十位以下 = 真实用户」、
+（`EVAL_USER_RULES` 可覆盖）：名单优先，然后「超过十位（11 位及以上）的数字 ID = 测试用户、十位及以内 = 真实用户」、
 非数字 = 内部用户，重复问句占比高再改判测试；流失 = 流失目录或流失 uid 名单。规则 hash 进构建完成标记，
 改名单后下一次构建自动重建，不需要改代码。
 

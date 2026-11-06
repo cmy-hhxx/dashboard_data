@@ -11,7 +11,7 @@
       "test":     {"ids": ["694137811"], "patterns": []},
       "lost":     {"ids": []},
       "heuristics": {
-        "numeric_test_min_digits": 10,
+        "numeric_test_min_digits": 11,
         "dup_min": 3,
         "dup_ratio": 0.5,
         "min_samples": 10
@@ -35,8 +35,8 @@ SPACES = re.compile(r"[\s\u3000]+")
 SENTENCE_PUNCT = re.compile(r"[，。！？；：、·…—\-－（）()\[\]【】《》\"'“”‘’,.!?;:]+")
 
 DEFAULT_HEURISTICS = {
-    # 十位及以上数字 ID 是测试用户，十位以下才是真实用户（业务方 2026-11-06 口径）。
-    "numeric_test_min_digits": 10,
+    # 超过十位（11 位及以上）的数字 ID 是测试用户，十位及以内才是真实用户（业务方 2026-11-06 口径）。
+    "numeric_test_min_digits": 11,
     # 同一 uid 的样本里，同一问句至少出现 dup_min 次，且重复占比 >= dup_ratio、样本数 >= min_samples
     # 时判为测试用户；用于抓“回放题/模板题”的测试账号。
     "dup_min": 3,
@@ -84,7 +84,7 @@ class Rules:
         self.lost_ids, self.lost_patterns = _section(data, "lost")
         heuristics = data.get("heuristics") if isinstance(data.get("heuristics"), dict) else {}
         self.heuristics = {**DEFAULT_HEURISTICS, **heuristics}
-        self.min_digits = _int(self.heuristics.get("numeric_test_min_digits"), 10)
+        self.min_digits = _int(self.heuristics.get("numeric_test_min_digits"), 11)
         self.dup_min = _int(self.heuristics.get("dup_min"), 3)
         self.min_samples = _int(self.heuristics.get("min_samples"), 10)
         try:

@@ -14,9 +14,10 @@ import user_rules  # noqa: E402
 class RulesTests(unittest.TestCase):
     def test_default_digit_rule(self):
         rules = user_rules.Rules({})
-        # 十位以下数字 ID = 真实用户；十位及以上 = 测试用户。
+        # 十位及以内的数字 ID = 真实用户；超过十位（11 位及以上）= 测试用户。
         self.assertEqual(rules.classify("598960105"), "real")
-        self.assertEqual(rules.classify("1843531608"), "test")
+        self.assertEqual(rules.classify("1843531608"), "real")
+        self.assertEqual(rules.classify("10000000000"), "test")
         self.assertEqual(rules.classify("805517693996534533"), "test")
         # 非数字 ID 是内部员工账号；空 ID 未知。
         self.assertEqual(rules.classify("duansiyuan"), "internal")
@@ -51,6 +52,7 @@ class RulesTests(unittest.TestCase):
     def test_config_heuristics_are_configurable(self):
         rules = user_rules.Rules({"heuristics": {"numeric_test_min_digits": 12}})
         self.assertEqual(rules.classify("1843531608"), "real")
+        self.assertEqual(rules.classify("10000000000"), "real")
         self.assertEqual(rules.classify("805517693996534533"), "test")
 
     def test_load_uses_file_and_signature_changes(self):
@@ -77,7 +79,8 @@ class RulesTests(unittest.TestCase):
             datasets = Path(folder)
             (datasets / "user_rules.json").write_text("{not json", encoding="utf-8")
             rules = user_rules.load(datasets)
-            self.assertEqual(rules.classify("1843531608"), "test")
+            self.assertEqual(rules.classify("1843531608"), "real")
+            self.assertEqual(rules.classify("10000000000"), "test")
             self.assertEqual(rules.classify("598960105"), "real")
 
 
