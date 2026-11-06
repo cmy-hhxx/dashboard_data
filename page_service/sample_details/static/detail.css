@@ -49,9 +49,11 @@ main#main { max-width: 1480px; padding: 8px var(--gutter) 12px; }
 @media (min-width: 1800px) {
   #main { zoom: var(--ext-zoom); }
   main#main { max-width: var(--ext-w); padding: 8px 24px 12px; }
-  #root { min-height: calc((100vh - 20px) / var(--ext-zoom)); }
+  /* main 的上下 padding（8+12）也会被 zoom 放大，所以这里按缩放后的高度折算，
+     否则整页比视口高 20*(zoom-1) 像素，外层会多一条纵向滚动条。 */
+  #root { min-height: calc(100vh / var(--ext-zoom) - 20px); }
   #root .bench {
-    height: calc((100vh - 20px) / var(--ext-zoom));
+    height: calc(100vh / var(--ext-zoom) - 20px);
     min-height: calc(560px / var(--ext-zoom));
   }
   /* 四栏只调列宽 token（网格本身在 samples.css）：轨迹 / 问题两侧各 24%，连线固定，对话吃剩余；

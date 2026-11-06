@@ -5,7 +5,7 @@ import { threadFlow } from "./particles.js";
 
 const FOLD_OPEN = new Set(["user", "answer"]);
 const PAGE = 50;
-const S = { product: null, all: [], rows: [], pageRows: [], page: 1, slug: null, sessionKey: null, D: null, round: 0, trace: 0, turn: 0, cturn: 0, sessionView: false, open: new Set(), active: null, cache: new Map() };
+const S = { product: null, all: [], rows: [], pageRows: [], page: 1, slug: null, sessionKey: null, D: null, round: 0, trace: 0, turn: 0, cturn: 0, sessionView: false, open: new Set(), active: null, cache: new Map(), loadSeq: 0, refocusList: false };
 let ctx;
 let root;
 
@@ -146,7 +146,7 @@ function skeleton() {
       <div class="pager" id="spager" hidden></div>
     </aside>
     <section class="pane pane-out pane-sticky" aria-label="数据详情">
-      <div class="pane-scroll" id="sbody">
+      <div class="pane-scroll" id="sbody" tabindex="0" aria-label="样本详情">
         <div id="shead"></div>
         <div class="anatomy" id="sanatomy">
           <div class="traj" id="sout"></div>
@@ -206,12 +206,24 @@ function skeleton() {
     e.preventDefault();
     const i = S.rows.findIndex((x) => x.s === S.slug);
     const next = S.rows[Math.max(0, Math.min(S.rows.length - 1, i + (e.key === "ArrowDown" ? 1 : -1)))];
-    if (next) ctx.navigate({ case: next.s, p: null }, { replace: true }) || render(root, ctx);
+    if (!next) return;
+    S.refocusList = true;   // 换样本会整表重画，焦点要还回新的当前行，否则只能按一次
+    ctx.navigate({ case: next.s, p: null }, { replace: true }) || render(root, ctx);
   });
   $("#sbody", root).addEventListener("click", onInputClick);
   $("#shead", root).addEventListener("click", onOutClick);
   $("#sout", root).addEventListener("click", onOutClick);
+  // 轨迹行本身可点，键盘也要能用：Enter / 空格和鼠标点击走同一条路径
+  $("#sout", root).addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const cf = e.target.closest(".cf");
+    if (!cf || e.target !== cf) return;
+    e.preventDefault();
+    cf.click();
+  });
   $("#sattr", root).addEventListener("click", onOutClick);
+  // 归因卡片的「现象 / 证据」展开会改这一列的内容高度，三列矩形要重新量一次。
+  $("#sattr", root).addEventListener("toggle", () => scheduleThreadsCompensate(), true);
   wireCmapPan($("#shead", root));
   bindTips($("#shead", root), (t) => {
     if ((!t.closest(".cmap") && !t.closest(".sp")) || !t.dataset.tip) return null;
@@ -404,6 +416,7 @@ function markCurrent() {
     const r = cur.getBoundingClientRect();
     const lr = list.getBoundingClientRect();
     if (r.top < lr.top || r.bottom > lr.bottom) cur.scrollIntoView({ block: "nearest" });
+    if (S.refocusList) { S.refocusList = false; cur.focus({ preventScroll: true }); }
   }
 }
 
@@ -546,6 +559,9 @@ function mergeSessionDetails(parts, session) {
 }
 
 async function loadSession(session, focusSlug, focusTrace) {
+  // 连点样本时详情是异步拉的：先发起的旧请求可能后到，晚到的旧数据会把新样本的界面盖掉。
+  // 每次进入都领一个序号，await 回来后发现已经不是最新一次就整段丢掉。
+  const token = ++S.loadSeq;
   S.slug = session.key;
   S.sessionKey = session.key;
   S.session = session;
@@ -558,6 +574,7 @@ async function loadSession(session, focusSlug, focusTrace) {
   try {
     parts = await Promise.all(session.rows.map(async (row) => ({ slug: row.s, detail: await fetchDetail(row.s) })));
   } catch (e) {
+    if (token !== S.loadSeq) return;   // 失败的旧请求不该覆盖新样本
     $("#shead", root).innerHTML = `<div class="empty">会话详情读取失败（${esc(e.message)}）。运行 local_dev/refresh.sh 重新生成。</div>`;
     $("#stl", root).innerHTML = "";
     $("#sout", root).innerHTML = "";
@@ -565,6 +582,7 @@ async function loadSession(session, focusSlug, focusTrace) {
     scheduleThreadsCompensate();
     return;
   }
+  if (token !== S.loadSeq) return;   // 期间用户又点了别的样本：这一份晚到的数据不要写进界面
   parts.sort((a, b) => String(a.detail.meta?.request_time || a.detail.date || "").localeCompare(String(b.detail.meta?.request_time || b.detail.date || "")));
   const kept = dropSubsetParts(parts);
   const D = kept.length === 1 ? withRounds(kept[0]) : mergeSessionDetails(kept, session);
@@ -611,11 +629,18 @@ function roundWithSev(D, sev) {
   return at >= 0 ? at : Math.min(turnAt, (D.rounds || []).length - 1);
 }
 
-function scrollRound(i) {
-  const el = $(`#round-${i}`, root);
-  if (!el) return;
-  el.scrollIntoView({ block: "nearest", behavior: REDUCED ? "auto" : "smooth" });
-  flash(el);
+/* 切轮次只保证「看的还是这一轮的开头」：以前会去 scrollIntoView 归因卡片，
+   而那一步发生在三列重排之前——卡片那时还是自然高度，点第 4 轮能被甩到几百上千像素外，
+   标签栏直接滚出视口。现在只在整条带已经滚到视口上方时才把它拉回来。 */
+function revealRound() {
+  const sbody = $("#sbody", root);
+  const band = $("#sanatomy", root);
+  if (!sbody || !band) return;
+  if (band.getBoundingClientRect().top >= sbody.getBoundingClientRect().top) return;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (!band.isConnected) return;
+    sbody.scrollTop += band.getBoundingClientRect().top - sbody.getBoundingClientRect().top;
+  }));
 }
 
 function selectRound(i, { scroll = true } = {}) {
@@ -637,7 +662,7 @@ function selectRound(i, { scroll = true } = {}) {
   S.cturn = r?.compact ?? round;
   renderTrace();
   renderOut();
-  if (scroll) scrollRound(round);
+  if (scroll) revealRound();
 }
 
 function selectTraceRound(trace) {
@@ -695,7 +720,7 @@ function renderOverviewItems() {
   if (!box || !S.D) return;
   const items = overviewItems(S.D);
   box.innerHTML = items.length
-    ? `<span class="sp-k">Overview</span><div class="ov-list">${items
+    ? `<span class="sp-k">概览</span><div class="ov-list">${items
         .map((x, i) => `<div class="ov-item" title="${esc(x)}"><p><span class="ov-n" aria-hidden="true">${String(i + 1).padStart(2, "0")}</span><span class="ov-t">${esc(x)}</span></p></div>`)
         .join("")}</div>`
     : "";
@@ -731,21 +756,38 @@ function renderIn() {
         ${group("场景", "is-scene", scene)}
         ${group("规模", "is-scale", scale)}
       </div>
-      ${rounds.length || D.attribution.summary || D.attribution.session_problems?.length ? `<div class="trace-tabs" id="ttabs">${rounds.map((r, i) => {
-        const t = D.input.traces[r.trace];
+      ${hasChat(D) || rounds.length > 1 ? `<div class="trace-tabs" id="ttabs">${rounds.map((r, i) => {
+        const t = D.input.traces?.[r.trace];
         return `<button type="button" class="pill" data-t="${i}" aria-pressed="${!S.sessionView && i === S.round}"${t?.agent ? ` title="${esc(t.agent)}"` : ""}>第 ${i + 1} 轮</button>`;
-      }).join("")}<button type="button" class="pill" data-t="session" aria-pressed="${S.sessionView}">session 总评</button></div>` : ""}
+      }).join("")}${hasChat(D) ? `<button type="button" class="pill" data-t="session" aria-pressed="${S.sessionView}">session 总评</button>` : ""}</div>` : ""}
       <div id="ovBox" class="ov-box"></div>
       <div id="sumBox">${summaryInner(D)}</div>
       <div id="ov" class="ov-grid"></div>
     </div>`;
   if (D.input.missing) {
-    $("#stl", root).innerHTML = `<div class="empty">这一组没有找到对应的评测输入。</div>`;
-    $("#ov", root).innerHTML = "";
-    scheduleThreadsCompensate();
+    renderMissingState();
     return;
   }
   renderTrace();
+}
+
+/* 中间列没有链路盒子时（空输入 / 该轮没有消息 / 这一轮没有中间步骤），
+   「展开全部」要落在中间列末尾：轨迹列或归因列被收起时，它是唯一的展开入口。 */
+const bandToggleHTML = () => `<button type="button" class="band-more band-toggle" data-band hidden>展开全部</button>`;
+
+/* 没有评测输入（这一组只评测过、输入没落盘）时中间列的空态。
+   换轮 / 从 session 总评切回来都要回到它，不能把上一屏的内容留在那儿。 */
+function renderMissingState() {
+  $("#stl", root).innerHTML = `<div class="empty">这一组没有找到对应的评测输入，仅能查看评测输出与归因。</div>${bandToggleHTML()}`;
+  $("#ov", root).innerHTML = "";
+  $("#ovBox", root).innerHTML = "";
+  enter();
+  scheduleThreadsCompensate();
+}
+
+/* 这一组有没有可以铺成「问 → 答」的对话：没有的话 session 总评只会是空页，不该给入口。 */
+function hasChat(D) {
+  return (D.input?.traces || []).some((tr) => (tr.messages || []).some((m) => m.k === "user" || m.k === "answer"));
 }
 
 function renderTrace() {
@@ -756,6 +798,7 @@ function renderTrace() {
   // 重画会把卡片和连线换成新的，旧的聚焦状态要一起清掉，不然新内容一上来就是淡的。
   hoverPid = null;
   S.active = null;
+  S.bandOpen = false;   // 换轮 / 换样本：长内容重新收起来
   $("#sanatomy", root)?.classList.remove("is-focus");
   $("#sanatomy", root)?.classList.toggle("is-session", session);
   $("#shead", root)?.classList.toggle("is-session", session);
@@ -771,10 +814,11 @@ function renderTrace() {
     scheduleThreadsCompensate();
     return;
   }
-  const tr = D.input.traces[S.trace];
-  if (!tr) return;
+  const tr = D.input.traces?.[S.trace];
+  if (!tr) return renderMissingState();   // 切回这一轮时恢复空态，别把上一屏留在中间列
   renderOverview();
   $("#stl", root).innerHTML = timelineHTML(S.trace, tr.messages || []) || `<div class="empty">该轮没有消息</div>`;
+  if (!$(".chain-box", $("#stl", root))) $("#stl", root).insertAdjacentHTML("beforeend", bandToggleHTML());
   markProse($("#stl", root));
   enter();
   scheduleThreadsCompensate();
@@ -802,8 +846,13 @@ function timelineHTML(t, messages) {
   const flush = () => {
     if (!run.length) return;
     out.push(`<div class="chain-box">
-      <div class="chain-head"><span class="chain-k">中间链路</span><span class="num faint">${run.length} 步</span></div>
+      <div class="chain-head"><span class="chain-k">中间链路</span><span class="num faint">${run.length} 步</span>
+        <span class="chain-acts">
+          <button type="button" class="band-more band-toggle" data-band hidden>展开全部</button>
+          <button type="button" class="band-more fold-all" data-fold-all hidden>全部收起</button>
+        </span></div>
       <div class="chain-body">${run.map((i) => msgHTML(t, i, messages[i])).join("")}</div>
+      <button type="button" class="band-more band-toggle" data-band hidden>展开全部</button>
     </div>`);
     run = [];
   };
@@ -844,7 +893,9 @@ function qaHTML(D) {
 function msgHTML(t, i, m) {
   const D = S.D;
   const key = `${t}:${i}`;
-  const chat = m.k === "user" || m.k === "answer";
+  // 单轮视图里只有问句是气泡：回答和链路步骤共用一条轨道，读作「链路 → 回答」；
+  // session 总评本来就是 Q→A 对话，回答继续按对话气泡排。
+  const chat = m.k === "user" || (m.k === "answer" && S.sessionView);
   const sevs = [...new Set((m.ev || []).map((e) => D._ix.sev.get(e)).filter(Boolean))]
     .sort((a, b) => SEV.indexOf(b) - SEV.indexOf(a));
   const folded = !FOLD_OPEN.has(m.k) && !S.open.has(key);
@@ -1040,7 +1091,51 @@ async function copyText(text) {
   }
 }
 
+/* 记录整条带在屏幕上的位置，重排（展开 / 收起）后把它还原，不把人甩到别处。 */
+function keepBand() {
+  const sbody = $("#sbody", root);
+  const band = $("#sanatomy", root);
+  if (!sbody || !band) return () => {};
+  const offset = band.getBoundingClientRect().top - sbody.getBoundingClientRect().top;
+  const y = sbody.scrollTop + offset;
+  return () => requestAnimationFrame(() => requestAnimationFrame(() => { sbody.scrollTop = y - offset; }));
+}
+
 function onInputClick(e) {
+  const more = e.target.closest("[data-band]");
+  if (more) {
+    const sbody = $("#sbody", root);
+    const band = $("#sanatomy", root);
+    // 收起时如果人已经在链路中段（标题行在视口上方），收完要把带子拉回视口顶，
+    // 否则会停在链路尾巴 / 回答那一屏，看不到收起来的样子。
+    const deep = !!(sbody && band && band.getBoundingClientRect().top < sbody.getBoundingClientRect().top + 4);
+    const restore = keepBand();
+    S.bandOpen = !S.bandOpen;
+    scheduleThreadsCompensate();
+    if (deep && !S.bandOpen && sbody && band) {
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        sbody.scrollTop += band.getBoundingClientRect().top - sbody.getBoundingClientRect().top;
+      }));
+    } else {
+      restore();
+    }
+    return;
+  }
+  // 点证据会逐个展开链路步骤，展开散了一地时一键收回：不用一条一条点「收起」。
+  const foldAll = e.target.closest("[data-fold-all]");
+  if (foldAll) {
+    const keys = $$("#stl .toggle", root).filter((b) => b.textContent === "收起").map((b) => b.dataset.fold);
+    if (!keys.length) return;
+    const restore = keepBand();
+    keys.forEach((k) => S.open.delete(k));
+    keys.forEach((k) => {
+      const [t, i] = k.split(":").map(Number);
+      rerenderMsg(t, i);
+    });
+    scheduleThreadsCompensate();
+    restore();
+    return;
+  }
   const fold = e.target.closest("[data-fold]");
   if (fold) {
     const [t, i] = fold.dataset.fold.split(":").map(Number);
@@ -1077,8 +1172,9 @@ function onInputClick(e) {
 function jump(eid) {
   const ev = S.D.evidence[eid];
   if (!ev || ev.m == null) return;
-  const wasSession = S.sessionView;
-  S.sessionView = false;
+  // session 总评本来就是「问 → 答」的全景，点证据不该把人踢回某一轮：
+  // 留在这一页，能定位到那条消息就滚过去。
+  if (S.sessionView) return jumpInSession(eid, ev);
   if (ev.t !== S.trace) {
     const at = S.D.rounds?.findIndex((r) => r.trace === ev.t) ?? -1;
     const rr = at >= 0 ? S.D.rounds[at] : null;
@@ -1090,9 +1186,6 @@ function jump(eid) {
     }
     renderTrace();
     renderOut();
-  } else if (wasSession) {
-    renderTrace();
-    renderOut();
   }
   const prev = S.active;
   S.active = eid;
@@ -1100,12 +1193,53 @@ function jump(eid) {
   S.open.add(`${ev.t}:${ev.m}`);
   rerenderMsg(ev.t, ev.m);
   const el = $(`#m-${ev.t}-${ev.m}`, root);
+  if (!el) { threadFocus?.(hoverPid); return; }   // 数据里点到一条这一轮没渲染出来的消息
+  // 证据落在被「收起」的渐隐里时，先展开整条带：否则跳过去看到的是被遮住的步骤。
+  if (underClip(el)) S.bandOpen = true;
   $$("mark.on", root).forEach((m) => m.classList.remove("on"));
   $$(`mark[data-e~="${eid}"]`, el).forEach((m) => m.classList.add("on"));
-  focus(hoverPid);
-  const target = $(`mark[data-e~="${eid}"]`, el) || el;
-  target.scrollIntoView({ block: "center", behavior: REDUCED ? "auto" : "smooth" });
-  flash(el);
+  threadFocus?.(hoverPid);
+  // 展开会让三列重排，等重排落地再滚，落点才是最终的。
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const target = $(`mark[data-e~="${eid}"]`, el) || el;
+    if (!target || !target.isConnected) return;
+    target.scrollIntoView({ block: "center", behavior: REDUCED ? "auto" : "smooth" });
+    flash(el);
+  }));
+}
+
+/* 元素是否被某个「收起」容器的渐隐线挡在下面（看不见）。 */
+function underClip(el) {
+  if (!el) return false;
+  const box = $("#sanatomy", root);
+  for (let p = el.parentElement; p && p !== box; p = p.parentElement) {
+    if (p.classList.contains("is-clip") && el.getBoundingClientRect().top >= p.getBoundingClientRect().bottom - 0.5) return true;
+  }
+  return false;
+}
+
+/* session 总评里点证据：只在这一页里定位。总评只铺了问答消息，证据落在中间步骤时
+   退到同一轮最近的那条问答，至少让人知道是哪一轮。 */
+function jumpInSession(eid, ev) {
+  const msgs = S.D.input.traces?.[ev.t]?.messages || [];
+  const pick = (i) => {
+    const m = msgs[i];
+    return m && (m.k === "user" || m.k === "answer") ? $(`#m-${ev.t}-${i}`, root) : null;
+  };
+  let el = pick(ev.m);
+  for (let i = ev.m - 1; i >= 0 && !el; i -= 1) el = pick(i);
+  for (let i = ev.m + 1; i < msgs.length && !el; i += 1) el = pick(i);
+  S.active = eid;
+  $$("mark.on", root).forEach((m) => m.classList.remove("on"));
+  if (el) {
+    $$(`mark[data-e~="${eid}"]`, el).forEach((m) => m.classList.add("on"));
+    flash(el);
+    // 回答动辄几千像素，按整条消息居中会落到它的中段；直接滚到被引用的那句话。
+    const target = $(`mark[data-e~="${eid}"]`, el) || el;
+    target.scrollIntoView({ block: "center", behavior: REDUCED ? "auto" : "smooth" });
+  }
+  threadFocus?.(hoverPid);
+  scheduleThreadsCompensate();
 }
 
 function flash(el, scroll) {
@@ -1118,9 +1252,11 @@ function flash(el, scroll) {
 
 /* ---------------------------------------------------------------- evidence threads */
 let threadFrame = 0;
+let threadRealign = false;
 let threadTimers = [];
 let threadObs = null;
 let hoverPid = null;   // 当前指针压在哪个问题卡上
+let threadFocus = null;   // 高亮某张卡对应的连线 / 消息；跳到证据后要重新点一次
 
 function wireThreads() {
   const box = $("#sanatomy", root);
@@ -1142,6 +1278,7 @@ function wireThreads() {
     $$("mark.ev", box).forEach((m) => m.classList.toggle("on", m.dataset.e.split(" ").some((e) => evs.has(e))));
     $$("path", svg).forEach((p) => p.classList.toggle("on", p.dataset.p === String(pid)));
   };
+  threadFocus = focus;
   const trackHover = (e) => {
     const c = e.target.closest(".pcard");
     const pid = c ? Number(c.id.replace("pc-", "")) : null;
@@ -1157,6 +1294,7 @@ function wireThreads() {
     focus(null);
   });
   // 滚动时卡片从指针下面走开，pointermove 不会再触发：同样主动清掉。
+  // 只有一个滚动面（#sbody），滚动只是整体位移，连线坐标相对容器不变，不用重画。
   $("#sbody", root)?.addEventListener("scroll", () => {
     if (hoverPid == null) return;
     hoverPid = null;
@@ -1184,12 +1322,17 @@ function scheduleThreadsCompensate() {
   scheduleThreads();
 }
 
-function scheduleThreads() {
+function scheduleThreads(realign = true) {
+  // 盒内滚动（长链封顶后）只挪了消息半径内，重画连线就够；重排才需要重新量列。
+  if (realign !== false) threadRealign = true;
   if (threadFrame) return;
   threadFrame = requestAnimationFrame(() => {
     threadFrame = 0;
-    drawThreads();
-    // 首屏的字号、折叠状态、上方 Overview/点评的高度都会在下一拍才稳定；
+    const align = threadRealign;
+    threadRealign = false;
+    drawThreads(align);
+    syncFoldAll();
+    // 首屏的字号、折叠状态、上方概览/点评的高度都会在下一拍才稳定；
     // 位置一变连线就得重画，否则出入点会落在旧位置上。
     // 首屏与后续重排（滚动条出现、折叠态、字体）都会让消息位置变；跑一串补偿重画，
     // 每次都很便宜（几十条 path），比监听所有祖先元素稳。
@@ -1200,44 +1343,117 @@ function scheduleThreads() {
   });
 }
 
-/* 轨迹栏只描述「中间链路」：上沿对齐 chain-box、下沿对齐回答消息。行数比链路少时由竖线补足，
-   行数更多时自然往下长，不裁切。 */
-function alignTraj() {
+/* 轨迹 / 中间链路 / 归因卡片合成一个矩形：三列上沿都落在链路第一步
+   （这一轮没有链路时退回到对话第一条），下沿落在同一条线上。
+   三列内容量天生不同，所以定高时给每列留一点拉伸余量（自然高度的 20%，上限 160px），
+   谁比这条线高就谁自己滚动：既不会用大片留白换对齐，也不会让某一列拖出几千像素的长条。 */
+function alignColumns() {
   const box = $("#sanatomy", root);
-  const out = $("#sout > .out", root);
-  const flow = $("#sout .cflow", root);
   const stl = $("#stl", root);
-  if (!box || !out || !flow || !stl) return;
-  const clear = () => {
-    flow.style.marginTop = "";
-    flow.style.minHeight = "";
-    out.style.paddingTop = "";
-  };
-  // 单栏（窄屏）与 session 总评没有并排的轨迹栏，保持自然流。
-  if (box.classList.contains("is-session") || !matchMedia("(min-width: 1181px)").matches) return clear();
-  const chain = $(".chain-box", stl);
-  const ans = $(".msg.k-answer", stl);
-  if (!chain || !ans) return clear();
-  const sr = stl.getBoundingClientRect();
-  const k = sr.height / (stl.offsetHeight || 1) || 1;   // 整页 zoom 时 rect 是放大后的像素
-  const top = (chain.getBoundingClientRect().top - sr.top) / k;
-  const bot = (ans.getBoundingClientRect().top - sr.top) / k;
-  const span = Math.max(0, bot - top);
-  out.style.paddingTop = "0px";
-  flow.style.marginTop = `${Math.max(0, top)}px`;
-  // 行数比链路多时逐级压行：3 行 → 2 行 → 1 行（更紧的行距、证据角标并到行内），
-  // 取第一个能收进链路高度的档位；全文仍在 title 里。
-  flow.style.minHeight = "0px";
-  for (const n of [3, 2, 1]) {
-    flow.style.setProperty("--cf-lines", String(n));
-    flow.classList.toggle("is-tight", n < 3);
-    if (flow.scrollHeight <= span + 2) break;
+  const outT = $("#sout > .out", root);
+  const flow = $("#sout .cflow", root);
+  const outP = $("#sattr > .out", root);
+  const group = $("#sattr .tgroup", root);
+  const body = stl ? $(".chain-body", stl) : null;
+  const lists = [flow, group, body].filter(Boolean);
+  const bands = $$(".band-toggle", root);
+  // 先回到自然高度再量，否则上一轮撑出来的高度会被当成内容高度。
+  for (const el of lists) {
+    el.style.height = "";
+    el.classList.remove("is-band", "is-clip", "is-dense");
   }
-  flow.style.minHeight = `${span}px`;
+  bands.forEach((b) => { b.hidden = true; });
+  if (flow) {
+    flow.style.marginTop = "";
+    flow.classList.remove("is-tight");
+    flow.style.removeProperty("--cf-lines");
+  }
+  if (group) group.style.marginTop = "";
+  if (outT) outT.style.paddingTop = "";
+  if (outP) outP.style.paddingTop = "";
+  if (!box || !stl) return;
+  // 展开后链路可能几千像素：标题行吸顶，滚到中段也点得到「收起 / 全部收起」。
+  $$(".chain-box", root).forEach((b) => b.classList.toggle("is-open", S.bandOpen));
+  const zoom = stl.offsetHeight ? stl.getBoundingClientRect().height / stl.offsetHeight : 1;   // 整页 zoom 时 rect 是放大后的像素
+  // 窄屏是单栏堆叠，对齐关闭。
+  if (!matchMedia("(min-width: 1181px)").matches) return;
+  // Session 总评：左列是「问 → 答」的全景，没有链路也没有轨迹列。右列归因卡片仍然要对齐
+  // 到第一段模型回答的顶部（和单轮视图里对齐链路第一步是一个意思），而不是跟着用户问句走。
+  if (box.classList.contains("is-session")) {
+    const answer = $(".msg.k-answer", stl);
+    if (answer && group) group.style.marginTop = `${(answer.getBoundingClientRect().top - group.getBoundingClientRect().top) / zoom}px`;
+    return;
+  }
+  if (!flow || !group) return;
+  // 上沿的锚点：链路第一步 → 对话第一条 → 该轮没有输入时的空态。
+  const anchorEl = (body && $(".msg", body)) || $(".msg", stl) || stl.firstElementChild;
+  if (!anchorEl) return;
+  const anchor = anchorEl.getBoundingClientRect().top;
+  const pane = $("#sbody", root);
+  const cap = Math.max(720, pane ? pane.clientHeight : 900);
+  // 自然高度：cflow / tgroup 都是 grid，scrollHeight 就是内容高度。
+  const nat = { flow: flow.scrollHeight, group: group.scrollHeight, body: body ? body.scrollHeight : 0 };
+  const tallest = Math.max(nat.flow, nat.group, nat.body);
+  // 每列最多比自然高度多 stretch 这么多（20%，上限 160px）：矮的一列靠行距补，不能靠留白。
+  const stretch = (n) => Math.min(160, Math.round(n * 0.2));
+  // 只有一项的列没法靠行距补高，不参与定高，否则一张卡就能把整条带压扁。
+  const room = (el, n) => (n && el && el.children.length > 1 ? n + stretch(n) : Infinity);
+  const folded = Math.min(tallest, cap, room(flow, nat.flow), room(group, nat.group), body ? room(body, nat.body) : Infinity);
+  // 一条滚轴：默认把整条带收在一屏内，超出部分先藏进渐隐里；点「展开全部」再把带放开。
+  const H = S.bandOpen ? tallest : folded;
+  // 链路比这一列高时先收紧行距，收得进去就都不裁。
+  const dense = !!(body && nat.body > H + 2);
+  if (dense) body.classList.add("is-dense");
+  // 轨迹行数多于这一列能分到的高度时逐级压行（3 → 2 → 1 行），能收进去就不用藏。
+  if (nat.flow > H) {
+    for (const n of [3, 2, 1]) {
+      flow.style.setProperty("--cf-lines", String(n));
+      flow.classList.toggle("is-tight", n < 3);
+      if (flow.scrollHeight <= H) break;
+    }
+  }
+  const toBand = (el, out) => {
+    out.style.paddingTop = "0px";
+    el.style.marginTop = `${(anchor - el.getBoundingClientRect().top) / zoom}px`;
+  };
+  toBand(flow, outT);
+  toBand(group, outP);
+  let clipped = 0;
+  const fit = (el, natural) => {
+    if (natural > H + 2) {
+      el.style.height = `${H}px`;
+      el.classList.add("is-clip");
+      clipped += 1;
+      return;
+    }
+    // 展开后不再把矮的列摊成一片空白：保持自然高度，顶边照旧对齐。
+    if (S.bandOpen) {
+      if (natural) el.style.height = `${natural}px`;
+      return;
+    }
+    el.style.height = `${H}px`;
+    el.classList.add("is-band");
+  };
+  fit(flow, flow.scrollHeight);
+  fit(group, nat.group);
+  if (body) fit(body, body.scrollHeight);
+  // 只有当「收起来」真的藏了内容时才出现；展开后变成「收起」。顶部和底部各一个，长链路不用滚到底才点得到。
+  const canFold = clipped > 0 || (S.bandOpen && folded < tallest);
+  bands.forEach((b) => {
+    b.hidden = !canFold;
+    b.textContent = S.bandOpen ? "收起" : "展开全部";
+    b.setAttribute("aria-expanded", String(S.bandOpen));
+  });
 }
 
-function drawThreads() {
-  alignTraj();
+/* 「全部收起」只在链路上有步骤被展开时才出现。 */
+function syncFoldAll() {
+  const on = $$("#stl .toggle", root).some((b) => b.textContent === "收起");
+  $$("[data-fold-all]", root).forEach((b) => { b.hidden = !on; });
+}
+
+function drawThreads(realign = true) {
+  if (realign) alignColumns();
   const box = $("#sanatomy", root);
   const svg = box && $(".threads svg", box);
   if (!svg) return;
@@ -1260,12 +1476,23 @@ function drawThreads() {
     return probe.matrixTransform(inv);
   };
   const byId = new Map(S.D.attribution.problems.map((p) => [p.id, p]));
+  // 内容被「收起」时，裁掉的部分看不见，连线也不要再画过去。但「裁到哪儿」是每个容器自己的事：
+  // 链路盒子和两列各有一条渐隐线，以前统一用链路盒子的下沿，结果链路盒子外面的最终回答
+  // （以及比链路盒子更高的那列的卡片）全被顺手裁掉，连线就时有时无。
+  const clippedBottom = (el) => {
+    let limit = Infinity;
+    for (let p = el.parentElement; p && p !== box; p = p.parentElement) {
+      if (p.classList.contains("is-clip")) limit = Math.min(limit, p.getBoundingClientRect().bottom);
+    }
+    return limit;
+  };
   let paths = "";
   $$("#sattr .pcard", root).forEach((card) => {
     const pid = Number(card.id.replace("pc-", ""));
     const prob = byId.get(pid);
     if (!prob) return;
     const pr = card.getBoundingClientRect();
+    if (pr.top >= clippedBottom(card)) return;   // 被收进渐隐里的卡片
     const end = toLocal(pr.left, pr.top + 22 * scale);
     const x2 = end.x;
     const y2 = end.y;
@@ -1279,8 +1506,17 @@ function drawThreads() {
       const msg = $(`#m-${ev.t}-${ev.m}`, root);
       if (!msg) return;
       seen.add(key);
-      const r = ($(".msg-body", msg) || msg).getBoundingClientRect();
-      const y = r.top + Math.min(26 * scale, r.height / 2);
+      const body = $(".msg-body", msg) || msg;
+      const r = body.getBoundingClientRect();
+      const clip = clippedBottom(msg);
+      if (r.top >= clip) return;   // 被收进渐隐里的步骤
+      // 长回答里证据挂在很靠下的句子：线端跟着被引用的那句话走，不再永远钉在消息顶部。
+      const mark = $$("mark.ev", msg).find((m) => m.dataset.e.split(" ").includes(String(e)));
+      const mr = mark ? mark.getBoundingClientRect() : null;
+      // 折叠着的步骤里 mark 是 display:none，rect 全 0：这种退回消息顶部，别把线画到页面顶上。
+      const onMark = !!(mr && mr.width > 1 && mr.height > 1);
+      const y = onMark ? mr.top + Math.min(mr.height / 2, 10 * scale) : r.top + Math.min(26 * scale, r.height / 2);
+      if (y >= clip) return;   // 指向的那句话被收起来了
       const start = toLocal(r.right, y);
       const x1 = start.x;
       const y1 = start.y;
@@ -1336,7 +1572,7 @@ function attrHTML(D) {
   const turn = D.rounds?.[S.round]?.turn ?? S.turn ?? S.round;
   const current = A.turns[Math.max(0, Math.min(turn, A.turns.length - 1))];
   let body = S.sessionView ? group(A.session_problems || []) : (current ? group(current.problems, S.round) : "");
-  return body || `<div class="empty">未发现 跨trace 问题 👍</div>`;
+  return body || `<div class="empty">${S.sessionView ? "未发现跨 trace 问题" : "本轮未发现问题"}</div>`;
 }
 
 function renderOverview() {
@@ -1409,7 +1645,7 @@ function compactFlowHTML(D, t, multi) {
     .map((n, k) => {
       const tag = !k || nodes[k - 1].cls !== n.cls ? n.name : "";
       const refs = n.ev.length > 1 ? `<span class="refs">${n.ev.map((e) => `<button type="button" data-e="${e}">${evAt(D.evidence[e], multi)}</button>`).join("")}</span>` : "";
-      return `<div class="cf ${n.cls}" id="cf-${t.turn}-${k}"${n.ev.length ? ` data-e="${n.ev[0]}"` : ""}><span class="cf-dot"></span>
+      return `<div class="cf ${n.cls}" id="cf-${t.turn}-${k}" tabindex="0"${n.ev.length ? ` data-e="${n.ev[0]}"` : ""}><span class="cf-dot"></span>
         <span class="cf-tag">${tag}</span><div class="cf-body"><span class="cf-at num">${at(n.pos)}</span><span class="cf-text" title="${esc(n.x.c)}">${esc(n.x.c)}</span>${refs}</div></div>`;
     })
     .join("");

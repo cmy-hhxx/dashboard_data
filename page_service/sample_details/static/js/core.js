@@ -4,6 +4,8 @@ export const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel
 export const REDUCED =
   new URLSearchParams(location.search).has("still") ||
   (window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches);
+// 让 CSS 也走同一套「不要动效」：?still=1 时把标记挂到 <html> 上（见 base.css）。
+if (new URLSearchParams(location.search).has("still")) document.documentElement.dataset.still = "";
 
 export const SEV = ["P0", "P1", "P2", "P3", "P4"];
 export const WORST = [...SEV, "none"];
