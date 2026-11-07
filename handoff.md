@@ -95,7 +95,7 @@ server.py（标准库 HTTP，:5001，定时 build）──> app.js
 
 顶部右侧是全局产品切换（问财 / AIME），也是数据源指示；不要在每个卡片里重复放切换。
 图表都在页内下钻；会话场格子跳到该条样本，聚类矩阵格子在本卡里就地展开「场景 × 问题聚类」的
-P0-P4 时间趋势（「其他场景」折叠行的格子先展开），卡片头「← 返回矩阵」回到原表。
+P0-P4 多折线趋势（来源 / 模型 / 等级可多选合并成一条线，最多 4 条，可删到 0 条显示空状态，同等级模型之间标差距；「其他场景」折叠行的格子先展开），卡片头「← 返回矩阵」回到原表。
 「聚类体系」卡头的「AB 测试记录」（仅当该产品有 `ab_test/` 轮次时出现）在页面底部展开一张整宽卡：
 同一批固定问句发版前 / 后的聚类树并集、叶子前/后计数与 Δ、A/B/C 总账和跨期趋势。
 
@@ -163,13 +163,16 @@ uid 用户 ID（输入 meta.user_id）· ut 用户类型 real/test/internal/unkn
 { schema, generated_at, product, models[], releases[{date,label}],
   dates[], uts[], scenes[[task,sub]…], nodes["S1","S1.M2",…],
   base[[day,scene,model,ut,sessions]…],
-  cells[[day,scene,node,model,ut,p0…p4,h0…h4,hAny]…] }
+  cells[[day,scene,node,model,ut,p0…p4,h0…h4,hAny, mask,count, …]…] }
 ```
 
 - `nodes` 是聚类路径的全部前缀（环节 / 机制 / 模式 / 子模式），格子的列节点按精确匹配取一层，
   四层都能点；`base` 是该日该场景该模型该来源的已评测记录数，是比例的分母；
   `cells` 里的 `pK` 是 P K 问题条数、`hK` 是出现该等级问题的去重会话数，比例 = hK / sessions；
-  末尾 `hAny` 是这些会话的并集（`ΣhK` 会把同一会话在多个等级上重复计数，合计口径必须用 `hAny`）。
+  `hAny` 是这些会话的并集（`ΣhK` 会把同一会话在多个等级上重复计数，合计口径必须用 `hAny`）。
+  `hAny` 后面是 `(等级 mask, 会话数)` 稀疏直方图：mask 第 k 位表示会话命中 Pk；多选等级（如
+  P0+P1+P2）时，把 mask 与选中位有交集的会话数相加，就是精确的命中会话并集（schema 2 起提供；
+  schema 1 的老文件没有这段，前端对多等级比例会退化成按等级相加后再截断）。
 - 合计算 P0-P4 全部问题，与矩阵格子「问题合计」同口径；矩阵本身仍只画 P0-P1 的着色。
 - 发版日期读 `<datasets>/releases.json`（问财 / AIME 分开写，支持 `"YYYY-MM-DD"` 或
   `{"date","label"}`），文件变了构建会自动重写 trends payload。

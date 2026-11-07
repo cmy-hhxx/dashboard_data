@@ -1814,10 +1814,13 @@ def trend_payload(product, samples, releases=(), generated=None):
     clean and unclustered included, so a cell always has a denominator.  ``cells``
     repeats each clustered problem at every prefix of its cluster path, one column
     per severity including P4; the ``h*`` sets dedupe slugs per severity, so they
-    count hit sessions, not problems; the trailing column is that session set's
+    count hit sessions, not problems; the trailing ``any`` column is that session set's
     union, because summing per-severity hit sessions double counts a session that
-    shows the same problem at several levels.  Models keep the same order as the
-    aggregate.
+    shows the same problem at several levels.  After ``any`` comes a sparse
+    ``levelMask, sessionCount, ...`` histogram: a mask has bit ``k`` set when the
+    session hit Pk, so the hit-session union of any level combination can be summed
+    exactly (多选 P0+P1+P2 只算同时命中其中任一等级的会话一次). Models keep the same
+    order as the aggregate.
     """
     scene = scene_votes(product, samples)
 
@@ -1863,22 +1866,26 @@ def trend_payload(product, samples, releases=(), generated=None):
             parts = p["cl"]["path"].split(".")
             for n in range(1, len(parts) + 1):
                 key = (day, scene_i, node_idx[".".join(parts[:n])], model, ut)
-                cell = cells.setdefault(key, [0, 0, 0, 0, 0, set(), set(), set(), set(), set(), set()])
+                cell = cells.setdefault(key, [0, 0, 0, 0, 0, set(), set(), set(), set(), set(), set(), {}])
                 cell[sev] += 1
                 cell[5 + sev].add(slug)
                 # 合计口径要的是「出现过任意等级问题的会话」，各级命中会话并集不能相加。
                 cell[10].add(slug)
+                # 同一会话可能命中多个等级；记录 mask，任意等级组合的命中会话并集都能精确算。
+                cell[11][slug] = cell[11].get(slug, 0) | (1 << sev)
 
     base_out = sorted([day_idx[day], scene_idx[pair], model_idx[model], ut_idx[ut], n]
                       for (day, pair, model, ut), n in base.items())
     cells_out = []
     for key in sorted(cells):
-        counts, hits, any_hit = cells[key][:5], cells[key][5:10], cells[key][10]
+        counts, hits, any_hit, mask_of = cells[key][:5], cells[key][5:10], cells[key][10], cells[key][11]
         if any(counts):
-            cells_out.append([*key, *counts, *(len(slugs) for slugs in hits), len(any_hit)])
+            hist = sorted(Counter(mask_of.values()).items())
+            cells_out.append([*key, *counts, *(len(slugs) for slugs in hits), len(any_hit),
+                              *(v for pair in hist for v in pair)])
 
     return {
-        "schema": 1, "generated_at": generated or iso_now(), "product": product,
+        "schema": 2, "generated_at": generated or iso_now(), "product": product,
         "releases": [dict(entry) for entry in releases],
         "dates": dates, "uts": uts, "models": models,
         "scenes": [[task, sub] for task, sub in scenes],

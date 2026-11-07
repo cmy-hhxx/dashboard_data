@@ -17,9 +17,9 @@ const ui = (product) =>
     field: { w: null, pages: [] }, vol: {}, clu: {}, pred: "vol",
     mx: {
       rows: [], cols: [], trail: [],
-      // 聚类矩阵格子的就地趋势图：口径 / 时间 / 来源 / 模型 / 等级 + 是否打开都活在这里，
+      // 聚类矩阵格子的就地趋势图：口径 / 时间 / 场景 + 来源·模型·等级的折线组 + 是否打开都活在这里，
       // 就地刷新或切换产品再回来仍是同一张图。rowKeys/colKeys 是行列路径，刷新后用来重新定位。
-      trend: { open: false, measure: "count", range: "30", ut: "all", scope: "row", model: "all", level: "all", rowKeys: null, colKeys: null },
+      trend: { open: false, measure: "count", range: "30", scope: "row", lines: [], active: 0, seeded: false, rowKeys: null, colKeys: null },
     },
   });
 const SPLIT_SHORT = { daily: "日常", lost: "流失" };
@@ -1500,7 +1500,7 @@ function matrixTable(view) {
   const totals = rows.map((_, ri) => sum(cells[ri].map((x) => x.n)));
   cells.forEach((row) => row.forEach((x) => (max = Math.max(max, x.n))));
   totals.forEach((n) => (maxTot = Math.max(maxTot, n)));
-  let html = `<span></span>${cols
+  const heads = cols
     .map((c, ci) => {
       const title = `${c.id ? `${c.id} · ` : ""}${c.name}`;
       const label = `<span class="mx-lab">${esc(c.name)}</span>`;
@@ -1508,23 +1508,43 @@ function matrixTable(view) {
         ? `<button type="button" class="mh" data-col="${ci}" title="${esc(title)}" aria-label="下钻 ${esc(c.name)}">${label}<i class="mx-caret" aria-hidden="true"></i></button>`
         : `<span class="mh" title="${esc(title)}">${label}</span>`;
     })
-    .join("")}<span class="rowtot-head" title="该场景在各问题聚类上的问题数合计">问题合计</span>`;
+    .join("");
+  let rowLabels = "", gridCells = "", tots = "";
   rows.forEach((r, ri) => {
     const drill = r.children.length;
     const label = `<span class="mx-lab">${esc(r.name)}</span>${drill ? `<i class="mx-caret" aria-hidden="true"></i>` : ""}`;
-    html += drill
+    rowLabels += drill
       ? `<button type="button" class="rh" data-row="${ri}" title="${esc(r.name)}" aria-label="下钻 ${esc(r.name)}">${label}</button>`
       : `<span class="rh" title="${esc(r.name)}">${label}</span>`;
     cols.forEach((_, ci) => {
       const cell = cells[ri][ci];
       const v = cell.n ? 0.08 + 0.72 * Math.sqrt(cell.n / max) : 0;
-      html += cell.n
+      gridCells += cell.n
         ? `<span class="cell num${v > 0.5 ? " hot" : ""}" style="--v:${v.toFixed(3)}" data-mx="${ri}:${ci}">${fmt(cell.n)}</span>`
         : `<span class="cell is-empty" data-mx="${ri}:${ci}"></span>`;
     });
-    html += `<span class="rowtot num"><i style="width:${(72 * totals[ri]) / maxTot}px"></i>${fmt(totals[ri])}</span>`;
+    tots += `<span class="rowtot num"><i style="width:${(72 * totals[ri]) / maxTot}px"></i>${fmt(totals[ri])}</span>`;
   });
-  return `<div class="matrix" style="--cols:${cols.length}">${html}</div>`;
+  return `<div class="matrix" style="--cols:${cols.length};--rows:${rows.length}">
+    <div class="mx-rows"><span class="mx-corner" aria-hidden="true"></span>${rowLabels}</div>
+    <div class="mx-scroll"><div class="mx-grid">${heads}${gridCells}</div></div>
+    <div class="mx-tots"><span class="rowtot-head" title="该场景在各问题聚类上的问题数合计">问题合计</span>${tots}</div>
+  </div>`;
+}
+
+/* One line per title: the column pane never gets narrower than its widest title, so a narrow
+   card scrolls the pane sideways instead of ending a label in an ellipsis. */
+function fitMatrix(m) {
+  if (!m) return;
+  const labs = $$(".mh .mx-lab", m);
+  if (!labs.length) return;
+  const need = Math.ceil(Math.max(...labs.map((l) => l.scrollWidth))) + 9; // 4px gap + 5px caret
+  m.style.setProperty("--mx-colw", `${need}px`);
+  const pane = m.querySelector(".mx-scroll");
+  if (pane) {
+    pane.classList.toggle("is-overflow", pane.scrollWidth > pane.clientWidth + 1);
+    pane.classList.toggle("is-at-end", pane.scrollLeft + pane.clientWidth >= pane.scrollWidth - 2);
+  }
 }
 
 /* Swap one matrix for the next: the old table leaves first, then the new one fades in while the block
@@ -1539,6 +1559,7 @@ function swapMatrix(shell, html, animate) {
   shell.style.height = "";
   if (!animate || REDUCED || !prev || busy) {
     shell.innerHTML = html;
+    fitMatrix(shell.querySelector(".matrix"));
     return;
   }
   prev.classList.remove("is-out", "is-in", "is-on");
@@ -1555,6 +1576,7 @@ function swapMatrix(shell, html, animate) {
       shell.style.height = "";
       return;
     }
+    fitMatrix(next);
     next.classList.add("is-in");
     shell.style.height = `${next.offsetHeight}px`;
     void next.offsetWidth;
@@ -1583,23 +1605,23 @@ function crumbPath(path, axis, still = false) {
 const crumbs = (rowPath, colPath) =>
   `<span class="mx-crumb-group"><span class="mx-crumb-label">场景</span>${crumbPath(rowPath, "rp")}</span>
    <span class="mx-crumb-group"><span class="mx-crumb-label">问题</span>${crumbPath(colPath, "cp")}</span>`;
-// 趋势图里的路径只读：返回矩阵由卡片头的按钮负责，路径本身不再当第二套导航用。
-const trendCrumbs = (rowPath, colPath) =>
-  `<span class="mx-crumb-group"><span class="mx-crumb-label">场景</span>${crumbPath(rowPath, "rp", true)}</span>
-   <span class="mx-crumb-group"><span class="mx-crumb-label">问题</span>${crumbPath(colPath, "cp", true)}</span>`;
+// 趋势图里只保留问题路径并加重强调；场景名挪到上面的「本场景」开关里，返回矩阵由卡片头按钮负责。
+const trendCrumbs = (colPath) =>
+  `<span class="mx-crumb-group is-key"><span class="mx-crumb-label">问题</span>${crumbPath(colPath, "cp", true)}</span>`;
 
 /* ---------------------------------------------------------------- 聚类矩阵格子: 就地 P0-P4 时间趋势
-   点格子不再跳具体数据：同一个「场景 × 问题聚类」在一张按时间轴的折线图上看 P0-P4 的
+   点格子不再跳具体数据：同一个「场景 × 问题聚类」在一张按时间轴的多折线图上看 P0-P4 的
    出现数或出现比例（当日同场景会话里出现该等级问题的会话占比），发版日期画成竖线。
    四层聚类都能点：列节点的任何前缀都在 payload 的 nodes 里。
-   只有一张图、一根纵轴：线只画模型（AIME 的 Fast / Expert），等级用「等级」切换，
-   所以同一个量级的线才同图，不会把 P0 和 P2 压到一起。 */
+   口径 / 时间 / 场景是单选；来源 / 模型 / 等级是多选，每条线 = 三个多选值的一组组合：
+   颜色 = 等级、虚线 = 模型、明度 = 来源，右侧端点直接标最新值，同等级的两个模型之间
+   画差距带并在右端标差值（领导汇报时不用对照 legend）。 */
 const TREND_SEV = ["P0", "P1", "P2", "P3", "P4"];
 const TREND_MEASURE = { count: "出现数", ratio: "出现比例" };
-const TREND_UT_NAME = { real: "真实", test: "测试", internal: "内部", unknown: "未知" };
-const TREND_TW = 1000;   // 宽屏的上限；实际 viewBox 宽度按容器量出来的像素走，字才不会被缩
-const TREND_TH = 250;
-const TREND_PAD = { l: 52, r: 14, t: 14, b: 26 };
+const TREND_UT_NAME = { all: "全部来源", real: "真实", test: "测试", internal: "内部", unknown: "未知" };
+const TREND_TW = 1200;   // 宽屏的上限；实际 viewBox 宽度按容器量出来的像素走，字才不会被缩
+const TREND_TH = 260;    // 最小绘图高度；线多时按条数长高，给右侧端点标签留位置
+const TREND_PAD = { l: 56, r: 170, t: 16, b: 28 };
 const TREND_CACHE = new Map();
 
 /* One payload per (product, build); a rebuild invalidates it through generated_at. */
@@ -1649,84 +1671,49 @@ function trendWindow(trend, range) {
   return days;
 }
 
-/* 一次遍历把窗口内的条数、命中会话和会话分母摊开；模型和等级是筛选，图上只有一条线。 */
-function trendModel(trend, spec) {
-  const win = trendWindow(trend, spec.range);
-  const models = Array.isArray(trend.models) && trend.models.length ? trend.models : [""];
-  const M = models.length;
-  const node = trend.nodes.indexOf(spec.node);
-  const ut = spec.ut === "all" ? -1 : trend.uts.indexOf(spec.ut);
-  const pick = spec.model === "all" ? -1 : models.indexOf(spec.model);
-  const inModel = (m) => pick < 0 || m === pick;
-  const S = TREND_SEV.length;
-  const blank = () => ({
-    p: Array.from({ length: M }, () => new Array(S).fill(0)),
-    h: Array.from({ length: M }, () => new Array(S).fill(0)),
-    any: new Array(M).fill(0),
-    n: new Array(M).fill(0),
-  });
-  const cells = win.map(() => null);
-  if (node >= 0 && spec.scenes.size) {
-    const byDay = new Map();
-    for (const [d, s, n, m, u, ...rest] of trend.cells) {
-      if (n !== node || !spec.scenes.has(s) || (ut >= 0 && u !== ut) || m >= M || !inModel(m)) continue;
-      let e = byDay.get(d);
-      if (!e) byDay.set(d, (e = blank()));
-      for (let k = 0; k < TREND_SEV.length; k++) {
-        e.p[m][k] += rest[k] || 0;
-        e.h[m][k] += rest[k + TREND_SEV.length] || 0;
-      }
-      e.any[m] += rest[TREND_SEV.length * 2] || 0;
-    }
-    for (const [d, s, m, u, n] of trend.base) {
-      if (!spec.scenes.has(s) || (ut >= 0 && u !== ut) || m >= M || !inModel(m)) continue;
-      let e = byDay.get(d);
-      if (!e) byDay.set(d, (e = blank()));
-      e.n[m] += n;
-    }
-    win.forEach((w, i) => {
-      if (w.idx < 0) return;
-      cells[i] = byDay.get(w.idx) || blank();
-    });
-  }
-  const k = spec.level === "all" ? -1 : TREND_SEV.indexOf(spec.level);
-  const sum = (list) => list.reduce((a, b) => a + b, 0);
-  const totals = cells.map((c) => {
-    if (!c) return null;
-    const modelsUsed = pick < 0 ? [...Array(M).keys()] : [pick];
-    return {
-      sessions: sum(modelsUsed.map((m) => c.n[m] || 0)),
-      count: sum(modelsUsed.map((m) => (k < 0 ? sum(c.p[m]) : c.p[m][k]))),
-      hits: sum(modelsUsed.map((m) => (k < 0 ? c.any[m] : c.h[m][k]))),
-    };
-  });
-  const vals = totals.map((t) => {
-    if (!t) return null;
-    if (spec.measure !== "ratio") return t.count;
-    return t.sessions ? (100 * t.hits) / t.sessions : null;
-  });
-  const peak = vals.reduce((x, y) => (y != null && y > x ? y : x), 0);
-  const top = spec.measure === "ratio" ? trendRatioCeil(peak) : trendCeil(peak);
-  const totalSessions = sum(totals.map((t) => (t ? t.sessions : 0)));
-  const label = spec.model === "all"
-    ? (models.length > 1 ? "全部模型" : (trendModelName(trend, models[0]) || "全部模型"))
-    : (trendModelName(trend, spec.model) || spec.model);
-  const color = k < 0 ? "var(--accent)" : sevColor(k);
-  const levelLabel = k < 0 ? "P0-P4" : TREND_SEV[k];
-  return { win, cells, totals, vals, top, peak, label, levelLabel, color, totalSessions, empty: !cells.some(Boolean) };
-}
-
+/* 一条折线 = 一组「来源 · 模型 · 等级」条件；来源和模型可多选合并，等级单选。
+   条件池编辑当前选中的折线，点折线卡片切换编辑对象，拖条件到卡片也能改；最多 4 条，
+   可以删到 0 条（图表显示空状态），不把多选条件拆成多条线。 */
+const trendUtName = (u) => (u === "all" ? "全部来源" : TREND_UT_NAME[u] || u || "全部");
+const trendLevelName = (l) => (l === "all" ? "全部问题" : l);
+const TREND_UT_SHORT = { all: "全", real: "真", test: "测", internal: "内", unknown: "?" };
+const trendUtShort = (u) => TREND_UT_SHORT[u] || trendUtName(u).slice(0, 1);
+const trendValue = (v, measure) => {
+  if (v == null) return "—";
+  return measure === "ratio" ? `${fmt(v, Math.abs(v) >= 10 ? 1 : 2)}%` : fmt(Math.round(v));
+};
 const trendModelName = (trend, id) => {
   if (!id) return "";
   const m = (trend.modelLabels || []).find((x) => x.id === id);
   return (m && m.label) || id;
+};
+const TREND_MAX_GROUPS = 4;
+const trendGroupColor = (i) => `var(--mx-c${Math.min(i, 3) + 1})`;
+const trendLineSourceName = (trend, line) => {
+  const all = Array.isArray(trend.uts) ? trend.uts : [];
+  const sel = line.uts && line.uts.length ? line.uts : all;
+  if (!all.length || sel.length === all.length) return "全部来源";
+  return sel.map(trendUtName).join("+");
+};
+const trendLineModelName = (trend, line) => {
+  const all = Array.isArray(trend.models) && trend.models.length ? trend.models : [""];
+  const sel = line.models && line.models.length ? line.models : all;
+  if (!all.length || sel.length === all.length) return "全部模型";
+  return sel.map((m) => trendModelName(trend, m) || m).filter(Boolean).join("+");
+};
+const trendLevelsName = (levels) => (levels && levels.length ? levels.join("+") : "全部问题");
+const trendLevelKey = (levels) => (levels && levels.length ? levels.slice().sort().join(",") : "*");
+const trendLineName = (trend, line) => `${trendLineSourceName(trend, line)} · ${trendLineModelName(trend, line)} · ${trendLevelsName(line.levels)}`;
+const trendSourceKey = (line) => ((line.uts && line.uts.length) ? line.uts.slice().sort().join(",") : "*");
+const trendSortValues = (kind, list, data) => {
+  const order = kind === "ut" ? (data.uts || []) : (data.models || []);
+  return order.filter((v) => list.includes(v));
 };
 
 /* 纵轴上限：四格刻度（含 0），刻度走 1/2/4/5/10 阶梯，标签永远是整数（计数）
    或整齐的百分数（比例），不会出现 0/67/133 这种读不出来的刻度。 */
 function trendTop(v, ratio) {
   if (!(v > 0)) return ratio ? 1 : 4;
-  // 计数轴固定四格整数刻度：上限必须是 4 的倍数，否则 0.5 的刻度会被格式化成重复的整数。
   if (!ratio && v <= 4) return 4;
   const raw = v / 4;
   const mag = 10 ** Math.floor(Math.log10(raw));
@@ -1737,121 +1724,349 @@ function trendTop(v, ratio) {
 }
 const trendCeil = (v) => trendTop(v, false);
 const trendRatioCeil = (v) => trendTop(v, true);
+const trendSigned = (v, measure) => {
+  const a = Math.abs(v);
+  const text = measure === "ratio" ? `${fmt(a, a >= 10 ? 1 : 2)}pp` : fmt(Math.round(a));
+  return `${v > 0 ? "+" : v < 0 ? "−" : ""}${text}`;
+};
 
-function trendSVG(spec, model, title, releases, width) {
-  const n = model.win.length;
-  const TW = Math.max(280, Math.min(TREND_TW, Math.round(width || TREND_TW)));
-  const narrow = TW < 560;
-  const PAD = { ...TREND_PAD, l: narrow ? 40 : TREND_PAD.l, r: narrow ? 8 : TREND_PAD.r };
+function trendSeries(trend, spec) {
+  const win = trendWindow(trend, spec.range);
+  const n = win.length;
+  const models = Array.isArray(trend.models) && trend.models.length ? trend.models : [""];
+  const uts = Array.isArray(trend.uts) ? trend.uts : [];
+  const lines = (Array.isArray(spec.lines) ? spec.lines : []).slice(0, TREND_MAX_GROUPS);
+  const series = lines.map((line, gi) => {
+    const utsSel = (line.uts && line.uts.length ? line.uts : uts).filter((u) => uts.includes(u));
+    const modelsSel = (line.models && line.models.length ? line.models : models).filter((m) => models.includes(m));
+    const lineLevels = line.levels && line.levels.length ? line.levels.filter((l) => TREND_SEV.includes(l)) : [];
+    const levelsSel = lineLevels.length ? lineLevels : TREND_SEV;
+    const levelIdxs = levelsSel.map((l) => TREND_SEV.indexOf(l));
+    const levelMask = levelIdxs.reduce((m, k) => m | (1 << k), 0);
+    return {
+      gi, uts: utsSel, models: modelsSel, levels: lineLevels,
+      utSet: new Set(utsSel.map((u) => uts.indexOf(u))),
+      modelSet: new Set(modelsSel.map((m) => models.indexOf(m))),
+      levelIdxs, levelMask, levelAll: levelIdxs.length === TREND_SEV.length,
+      levelName: trendLevelsName(lineLevels),
+      modelName: modelsSel.length === 1 ? (trendModelName(trend, modelsSel[0]) || modelsSel[0]) : "",
+      name: trendLineName(trend, { uts: utsSel, models: modelsSel, levels: lineLevels }),
+      shortName: `${utsSel.length === uts.length ? "全源" : utsSel.length === 1 ? trendUtShort(utsSel[0]) : "多源"}·${modelsSel.length === models.length ? "全模型" : modelsSel.length === 1 ? (trendModelName(trend, modelsSel[0]) || modelsSel[0]) : "多模型"}·${levelIdxs.length === TREND_SEV.length ? "全部" : levelsSel.join("+")}`,
+      color: trendGroupColor(gi),
+      count: new Array(n).fill(0),
+      hits: new Array(n).fill(0),
+      sessions: new Array(n).fill(0),
+      vals: new Array(n).fill(null),
+      last: -1,
+    };
+  });
+  const node = trend.nodes.indexOf(spec.node);
+  if (node >= 0 && spec.scenes.size && series.length) {
+    const winAt = new Map();
+    win.forEach((w, i) => { if (w.idx >= 0) winAt.set(w.idx, i); });
+    for (const [d, sc, nd, m, u, ...rest] of trend.cells) {
+      if (nd !== node || !spec.scenes.has(sc)) continue;
+      const wi = winAt.get(d);
+      if (wi == null) continue;
+      const p = rest.slice(0, TREND_SEV.length);
+      const h = rest.slice(TREND_SEV.length, TREND_SEV.length * 2);
+      const any = rest[TREND_SEV.length * 2] || 0;
+      const hist = [];
+      for (let j = TREND_SEV.length * 2 + 1; j + 1 < rest.length; j += 2) hist.push([rest[j], rest[j + 1]]);
+      const total = p.reduce((a, b) => a + b, 0);
+      for (const s of series) {
+        if (!s.utSet.has(u) || !s.modelSet.has(m)) continue;
+        s.count[wi] += s.levelAll ? total : s.levelIdxs.reduce((sum, k) => sum + (p[k] || 0), 0);
+        let hits;
+        if (hist.length) {
+          hits = 0;
+          for (const [mask, count] of hist) if (mask & s.levelMask) hits += count;
+        } else if (s.levelAll) {
+          hits = any;
+        } else if (s.levelIdxs.length === 1) {
+          hits = h[s.levelIdxs[0]] || 0;
+        } else {
+          // 旧 schema 没有 mask 直方图：多等级命中会话取逐级和与 all-level 并集的较小值近似。
+          hits = Math.min(any, s.levelIdxs.reduce((sum, k) => sum + (h[k] || 0), 0));
+        }
+        s.hits[wi] += hits;
+      }
+    }
+    for (const [d, sc, m, u, nx] of trend.base) {
+      if (!spec.scenes.has(sc)) continue;
+      const wi = winAt.get(d);
+      if (wi == null) continue;
+      for (const s of series) if (s.utSet.has(u) && s.modelSet.has(m)) s.sessions[wi] += nx;
+    }
+    series.forEach((s) => {
+      for (let i = 0; i < n; i++) {
+        if (win[i].idx < 0) { s.vals[i] = null; continue; }
+        s.vals[i] = spec.measure === "ratio"
+          ? (s.sessions[i] > 0 ? (100 * Math.min(s.hits[i], s.sessions[i])) / s.sessions[i] : null)
+          : s.count[i];
+        if (s.vals[i] != null) s.last = i;
+      }
+    });
+  }
+  const peak = series.reduce((mx, s) => s.vals.reduce((m, v) => (v != null && v > m ? v : m), mx), 0);
+  const top = spec.measure === "ratio" ? trendRatioCeil(peak) : trendCeil(peak);
+  const empty = !series.length || !series.some((s) => s.vals.some((v) => v != null));
+  return { win, series, top, measure: spec.measure, empty };
+}
+
+/* 两条折线只差模型、其他条件一致时，画差距带并在右端标最新差值。 */
+function trendPairs(view) {
+  const pairs = [];
+  for (let i = 0; i < view.series.length; i++) {
+    for (let j = i + 1; j < view.series.length; j++) {
+      const a = view.series[i];
+      const b = view.series[j];
+      if (trendLevelKey(a.levels) !== trendLevelKey(b.levels)) continue;
+      if (trendSourceKey(a) !== trendSourceKey(b)) continue;
+      if (a.models.length !== 1 || b.models.length !== 1 || a.models[0] === b.models[0]) continue;
+      let last = -1;
+      for (let k = view.win.length - 1; k >= 0; k--) {
+        if (a.vals[k] != null && b.vals[k] != null) { last = k; break; }
+      }
+      if (last < 0) continue;
+      const gap = a.vals[last] - b.vals[last];
+      pairs.push({
+        a, b, i: last, gap,
+        hi: gap >= 0 ? a : b,
+        color: `color-mix(in oklab, ${a.color} 50%, ${b.color})`,
+      });
+    }
+  }
+  return pairs;
+}
+
+function trendSVG(view, title, releases, width) {
+  const n = view.win.length;
+  const series = view.series;
+  const pairs = trendPairs(view);
+  const TW = Math.max(320, Math.min(TREND_TW, Math.round(width || TREND_TW)));
+  const narrow = TW < 640;
+  const PAD = {
+    l: narrow ? 40 : TREND_PAD.l,
+    r: narrow ? 140 : Math.round(Math.max(160, Math.min(220, TW * 0.18))),
+    t: TREND_PAD.t,
+    b: TREND_PAD.b,
+  };
+  const TH = Math.max(TREND_TH, Math.min(900, PAD.t + PAD.b + 70 + series.length * 17));
   const innerW = TW - PAD.l - PAD.r;
-  const innerH = TREND_TH - PAD.t - PAD.b;
+  const innerH = TH - PAD.t - PAD.b;
   const xOf = (i) => PAD.l + (n > 1 ? (i * innerW) / (n - 1) : innerW / 2);
-  const yOf = (v) => PAD.t + innerH - (Math.max(0, Math.min(model.top, v)) / model.top) * innerH;
-  const fmtAxis = (v) => (spec.measure === "ratio"
-    ? `${fmt(v, model.top < 1 ? 2 : model.top < 10 && v % 1 ? 1 : 0)}%`
+  const yOf = (v) => PAD.t + innerH - (Math.max(0, Math.min(view.top, v)) / view.top) * innerH;
+  const fmtAxis = (v) => (view.measure === "ratio"
+    ? `${fmt(v, view.top < 1 ? 2 : view.top < 10 && v % 1 ? 1 : 0)}%`
     : fmt(Math.round(v)));
 
   let grid = "";
   for (let g = 0; g <= 4; g++) {
-    const v = (model.top * g) / 4;
+    const v = (view.top * g) / 4;
     const y = yOf(v).toFixed(1);
     grid += `<line x1="${PAD.l}" x2="${TW - PAD.r}" y1="${y}" y2="${y}"${g ? "" : ' class="is-base"'} />`;
-    grid += `<text class="mxt-ylab" x="${PAD.l - 6}" y="${y}">${fmtAxis(v)}</text>`;
+    grid += `<text class="mxt-ylab" x="${PAD.l - 8}" y="${y}">${fmtAxis(v)}</text>`;
   }
   const want = narrow ? 4 : 7;
   const ticks = [...new Set(Math.min(n, want) <= 1 ? [0] : Array.from({ length: Math.min(n, want) }, (_, k) => Math.round((k * (n - 1)) / (Math.min(n, want) - 1))))];
-  const xlab = ticks.map((i) => `<text class="mxt-xlab" x="${xOf(i).toFixed(1)}" y="${TREND_TH - 7}">${esc(model.win[i].d.slice(5))}</text>`).join("");
+  const xlab = ticks.map((i) => `<text class="mxt-xlab" x="${xOf(i).toFixed(1)}" y="${TH - 8}">${esc(view.win[i].d.slice(5))}</text>`).join("");
 
-  // 折线：缺数据的日期断开，单点画圆点，不把断口连成假趋势。
-  let run = [];
-  const runs = [];
-  model.vals.forEach((v, i) => {
-    if (v == null) {
-      if (run.length) runs.push(run);
-      run = [];
-      return;
-    }
-    run.push([xOf(i), yOf(v)]);
+  // 差距带：只连接两边都有值的日期；没有评测的日期直接跨过去，不把带子切碎。
+  let bands = "";
+  pairs.forEach((p) => {
+    const both = [];
+    for (let i = 0; i < n; i++) if (p.a.vals[i] != null && p.b.vals[i] != null) both.push(i);
+    if (both.length < 2) return;
+    const hi = both.map((k) => `${xOf(k).toFixed(1)},${yOf(Math.max(p.a.vals[k], p.b.vals[k])).toFixed(1)}`);
+    const lo = both.slice().reverse().map((k) => `${xOf(k).toFixed(1)},${yOf(Math.min(p.a.vals[k], p.b.vals[k])).toFixed(1)}`);
+    bands += `<path class="mxt-band" d="M${hi.join("L")}L${lo.join("L")}Z" style="fill:${p.color};fill-opacity:.075"/>`;
   });
-  if (run.length) runs.push(run);
-  const lines = runs.map((points) => (points.length > 1
-    ? `<path class="mxt-line" pathLength="1" d="${points.map(([x, y], j) => `${j ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`).join("")}" style="stroke:${model.color}"/>`
-    : `<circle class="mxt-dot" cx="${points[0][0].toFixed(1)}" cy="${points[0][1].toFixed(1)}" r="2.4" style="fill:${model.color}"/>`)).join("");
 
-  const winAt = new Map(model.win.map((w, i) => [w.d, i]));
+  // 折线默认只连有值的日期：没有评测的日期跨过去，避免趋势被切成一段一段。
+  let lines = "", dots = "";
+  series.forEach((s) => {
+    const points = [];
+    s.vals.forEach((v, i) => { if (v != null) points.push([xOf(i), yOf(v)]); });
+    if (points.length > 1) {
+      lines += `<path class="mxt-line" d="${points.map(([x, y], j) => `${j ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`).join("")}" style="stroke:${s.color}"/>`;
+    } else if (points.length === 1) {
+      dots += `<circle class="mxt-dot" cx="${points[0][0].toFixed(1)}" cy="${points[0][1].toFixed(1)}" r="2.4" style="fill:${s.color}"/>`;
+    }
+    if (s.last >= 0) dots += `<circle class="mxt-dot" cx="${xOf(s.last).toFixed(1)}" cy="${yOf(s.vals[s.last]).toFixed(1)}" r="2.8" style="fill:${s.color}"/>`;
+  });
+
+  // 发版日参照线。
+  const winAt = new Map(view.win.map((w, i) => [w.d, i]));
   const rel = (releases || [])
     .filter((r) => r && r.date && winAt.has(r.date))
     .map((r, k) => {
       const x = xOf(winAt.get(r.date)).toFixed(1);
-      return `<g class="mxt-rel"><line x1="${x}" x2="${x}" y1="${PAD.t}" y2="${PAD.t + innerH}"/><text x="${x}" y="${PAD.t + 9 + (k % 2) * 11}">${esc(r.label || "发版")}</text></g>`;
+      return `<g class="mxt-rel"><line x1="${x}" x2="${x}" y1="${PAD.t}" y2="${PAD.t + innerH}"/><text x="${x}" y="${PAD.t + 10 + (k % 2) * 11}">${esc(r.label || "发版")}</text></g>`;
     }).join("");
 
-  const cursor = `<g class="mxt-cursor"><line y1="${PAD.t}" y2="${PAD.t + innerH}"/><circle r="3.2" style="fill:${model.color}"/></g>`;
+  // 端点标签：每条线的最新值直接标在右侧，按行距错开，线上不再用 legend。
+  const endName = (s) => (narrow ? s.shortName : s.name);
+  const ends = series.filter((s) => s.last >= 0).map((s) => ({
+    s, value: s.vals[s.last], x: xOf(s.last), y: yOf(s.vals[s.last]), ly: yOf(s.vals[s.last]),
+    name: endName(s),
+  }));
+  ends.sort((a, b) => a.ly - b.ly);
+  const GAP = 16;
+  ends.forEach((e) => { e.ly = Math.max(e.ly, PAD.t); });
+  for (let i = 1; i < ends.length; i++) ends[i].ly = Math.max(ends[i].ly, ends[i - 1].ly + GAP);
+  const maxY = PAD.t + innerH;
+  if (ends.length && ends[ends.length - 1].ly > maxY) {
+    ends[ends.length - 1].ly = maxY;
+    for (let i = ends.length - 2; i >= 0; i--) ends[i].ly = Math.min(ends[i].ly, ends[i + 1].ly - GAP);
+    if (ends[0].ly < PAD.t) {
+      const shift = PAD.t - ends[0].ly;
+      ends.forEach((e) => { e.ly += shift; });
+    }
+  }
+  const labelX = TW - PAD.r + 10;
+  const endsSvg = ends.map((e) => `<g class="mxt-end">
+      <line class="mxt-end-line" x1="${e.x.toFixed(1)}" y1="${e.y.toFixed(1)}" x2="${(labelX - 7).toFixed(1)}" y2="${e.ly.toFixed(1)}" style="stroke:${e.s.color}"/>
+      <line x1="${(labelX - 1).toFixed(1)}" x2="${(labelX + 8).toFixed(1)}" y1="${e.ly.toFixed(1)}" y2="${e.ly.toFixed(1)}" style="stroke:${e.s.color};stroke-width:2"/>
+      <text x="${(labelX + 13).toFixed(1)}" y="${(e.ly + 3.4).toFixed(1)}"><tspan>${esc(e.name)}</tspan><tspan class="mxt-end-val" dx="6">${esc(trendValue(e.value, view.measure))}</tspan></text>
+    </g>`).join("");
 
-  return `<svg viewBox="0 0 ${TW} ${TREND_TH}" role="img" aria-label="${esc(title)}">
-    <g class="mxt-grid">${grid}${xlab}</g>${rel}${lines}${cursor}</svg>`;
+  // 差距标注：同一等级下两个模型的最新差值，标在差距带右端。
+  const gaps = [];
+  pairs.forEach((p) => {
+    const y1 = yOf(p.a.vals[p.i]);
+    const y2 = yOf(p.b.vals[p.i]);
+    gaps.push({ p, y: (y1 + y2) / 2, x: xOf(p.i), y1, y2, gap: p.gap });
+  });
+  gaps.sort((a, b) => a.y - b.y);
+  let prevY = -Infinity;
+  const gapSvg = gaps.filter((g) => {
+    if (g.y - prevY < 12) return false;
+    prevY = g.y;
+    return true;
+  }).map((g) => {
+    const delta = view.measure === "ratio" ? `${fmt(Math.abs(g.gap), Math.abs(g.gap) >= 10 ? 1 : 2)}pp` : fmt(Math.round(Math.abs(g.gap)));
+    const label = g.gap === 0 ? "持平" : `${g.p.hi.modelName} 高 ${delta}`;
+    return `<g class="mxt-gap-g">
+      <line class="mxt-gap-line" x1="${g.x.toFixed(1)}" x2="${g.x.toFixed(1)}" y1="${g.y1.toFixed(1)}" y2="${g.y2.toFixed(1)}" style="stroke:${g.p.color}"/>
+      <text class="mxt-gap" x="${(g.x - 6).toFixed(1)}" y="${(g.y + 3.2).toFixed(1)}" text-anchor="end" style="fill:var(--ink-2)">${esc(label)}</text>
+    </g>`;
+  }).join("");
+
+  return {
+    html: `<svg viewBox="0 0 ${TW} ${TH}" role="img" aria-label="${esc(title)}" data-n="${n}" data-l="${PAD.l}" data-r="${PAD.r}" data-t="${PAD.t}" data-b="${PAD.b}" data-top="${view.top}">
+      <g class="mxt-grid">${grid}${xlab}</g>${rel}${bands}${lines}${dots}${endsSvg}${gapSvg}
+      <g class="mxt-cursor"><line y1="${PAD.t}" y2="${PAD.t + innerH}"/><g class="mxt-cursor-dots"></g></g></svg>`,
+    geo: { TW, TH, PAD, innerW, innerH },
+  };
 }
 
-/* 悬停：一条竖向游标 + 线上的点 + 提示（日期、会话分母、当前这条线的值）。 */
-function wireTrendHover(plot, spec, model) {
+/* 悬停：一根竖向游标 + 每条线的点 + 一张把当前日期所有线（以及模型差）列清楚的卡片。 */
+function wireTrendHover(plot, view) {
   const svg = $("svg", plot);
   const cursor = svg && $(".mxt-cursor", svg);
-  if (!svg || !cursor) return;
-  const [line] = $$("line", cursor);
-  const [dot] = $$("circle", cursor);
-  const n = model.win.length;
+  const dots = cursor && $(".mxt-cursor-dots", cursor);
+  if (!svg || !cursor || !dots) return;
+  const n = Number(svg.dataset.n) || view.win.length;
+  const left = Number(svg.dataset.l);
+  const right = Number(svg.dataset.r);
+  const topPad = Number(svg.dataset.t);
+  const botPad = Number(svg.dataset.b);
+  const top = Number(svg.dataset.top) || 1;
   const vbw = svg.viewBox.baseVal.width || TREND_TW;
-  const left = vbw < 560 ? 40 : TREND_PAD.l;
-  const innerW = vbw - left - (vbw < 560 ? 8 : TREND_PAD.r);
-  const innerH = TREND_TH - TREND_PAD.t - TREND_PAD.b;
-  const yOf = (v) => TREND_PAD.t + innerH - (Math.max(0, Math.min(model.top, v)) / model.top) * innerH;
-  const tip = (i) => {
-    const t = model.totals[i];
-    const v = model.vals[i];
-    const shown = spec.measure === "ratio" ? (v == null ? "—" : `${fmt(v, 2)}%`) : (v == null ? "—" : `${fmt(v)} 个`);
-    return `<div style="font-weight:var(--w-medium);margin-bottom:6px">${esc(model.win[i].d)}</div>
-      <div class="t-row"><span class="sev" style="--c:${model.color}"><i></i>${esc(model.label)}</span>
-      <b class="num" style="margin-left:auto">${shown}</b></div>
-      <div class="t-row"><span>会话</span><b class="num" style="margin-left:auto">${t == null ? "—" : fmt(t.sessions)}</b></div>
-      ${t != null && spec.measure === "ratio" ? `<div class="t-row"><span>命中会话</span><b class="num" style="margin-left:auto">${fmt(t.hits)}</b></div>` : ""}`;
+  const vbh = svg.viewBox.baseVal.height || TREND_TH;
+  const innerW = vbw - left - right;
+  const innerH = vbh - topPad - botPad;
+  const xOf = (i) => left + (n > 1 ? (i * innerW) / (n - 1) : innerW / 2);
+  const yOf = (v) => topPad + innerH - (Math.max(0, Math.min(top, v)) / top) * innerH;
+  const [line] = $$("line", cursor);
+  const pairs = trendPairs(view);
+  let hovered = -1;
+
+  const tipHTML = (i) => {
+    const rows = view.series.filter((s) => s.vals[i] != null);
+    const shown = rows.slice(0, 10);
+    const label = (s) => s.name;
+    const body = shown.map((s) => {
+      const extra = view.measure === "ratio"
+        ? `<span class="dim">${fmt(s.hits[i])}/${fmt(s.sessions[i])}</span>` : "";
+      return `<div class="t-row"><span class="sev" style="--c:${s.color}"><i></i>${esc(label(s))}</span>
+        <b class="num" style="margin-left:auto">${trendValue(s.vals[i], view.measure)}</b>${extra}</div>`;
+    }).join("");
+    const more = rows.length > shown.length ? `<div class="t-note">还有 ${rows.length - shown.length} 条线</div>` : "";
+    const gaps = pairs.filter((p) => p.a.vals[i] != null && p.b.vals[i] != null).slice(0, 6).map((p) => {
+      const d = p.a.vals[i] - p.b.vals[i];
+      return `<div class="t-row"><span>${esc(`${p.a.levelName} 差`)}</span>
+        <b class="num" style="margin-left:auto">${trendSigned(d, view.measure)}</b></div>`;
+    }).join("");
+    return `<div style="font-weight:var(--w-medium);margin-bottom:6px">${esc(view.win[i].d)}</div>${body}${more}
+      ${rows.length ? "" : `<div class="t-note">当日无评测数据</div>`}
+      ${gaps ? `<div class="t-note" style="margin:6px 0 2px">模型差（同来源同等级）</div>${gaps}` : ""}`;
   };
+
   svg.addEventListener("pointermove", (e) => {
     const box = svg.getBoundingClientRect();
     const vx = ((e.clientX - box.left) / box.width) * vbw;
     const i = n <= 1 ? 0 : Math.max(0, Math.min(n - 1, Math.round(((vx - left) / innerW) * (n - 1))));
-    const x = left + (n > 1 ? (i * innerW) / (n - 1) : innerW / 2);
-    line.setAttribute("x1", x.toFixed(1));
-    line.setAttribute("x2", x.toFixed(1));
-    const v = model.vals[i];
-    if (v == null) dot.setAttribute("r", "0");
-    else {
-      dot.setAttribute("r", "3.2");
-      dot.setAttribute("cx", x.toFixed(1));
-      dot.setAttribute("cy", yOf(v).toFixed(1));
+    const x = xOf(i);
+    if (i !== hovered) {
+      hovered = i;
+      line.setAttribute("x1", x.toFixed(1));
+      line.setAttribute("x2", x.toFixed(1));
+      dots.innerHTML = view.series
+        .filter((s) => s.vals[i] != null)
+        .map((s) => `<circle cx="${x.toFixed(1)}" cy="${yOf(s.vals[i]).toFixed(1)}" r="3" style="fill:${s.color}"/>`)
+        .join("");
     }
     cursor.classList.add("is-on");
-    showTip(tip(i), e.clientX, e.clientY);
+    showTip(tipHTML(i), e.clientX, e.clientY);
   });
   svg.addEventListener("pointerleave", () => {
     cursor.classList.remove("is-on");
+    hovered = -1;
     hideTip();
   });
 }
 
-function trendLegend(model) {
-  const level = model.levelLabel ? `${model.label} · ${model.levelLabel}` : model.label;
-  return `<span><i style="--c:${model.color}"></i>${esc(level)}</span>`
-    + `<span class="mxt-of">会话<b class="num">${fmt(model.totalSessions)}</b></span>`;
+/* 条件池：来源、模型可多选合并，等级单选；这些条件共同组成当前选中的那一条折线。
+   折线卡片最多 4 条，点卡片切换编辑对象；没有折线时显示待添加状态。 */
+function trendChip(kind, value, label, on) {
+  return `<button type="button" class="mxt-chip" draggable="true" data-kind="${kind}" data-value="${esc(value)}" aria-pressed="${on}" aria-label="${esc(label)}">${esc(label)}</button>`;
 }
 
-const TREND_SEG_LABEL = { measure: "口径", range: "时间范围", ut: "数据来源", scope: "场景范围", model: "模型", level: "等级" };
+function trendPalette(data, line) {
+  const uts = data.uts || [];
+  const models = data.models || [];
+  return `<div class="mxt-palette">
+    <span class="mxt-pickgroup" role="group" aria-label="来源">
+      <span class="mxt-pick-label">来源</span>${trendChip("uts", "all", "全部来源", !line.uts.length)}${uts.map((u) => trendChip("uts", u, trendUtName(u), line.uts.includes(u))).join("")}
+    </span>
+    <span class="mxt-pickgroup" role="group" aria-label="模型">
+      <span class="mxt-pick-label">模型</span>${trendChip("models", "all", "全部模型", !line.models.length)}${models.map((m) => trendChip("models", m, trendModelName(data, m) || m, line.models.includes(m))).join("")}
+    </span>
+    <span class="mxt-pickgroup" role="group" aria-label="等级">
+      <span class="mxt-pick-label">等级</span>${[["all", "全部问题"], ...TREND_SEV.map((s) => [s, s])].map(([v]) => trendChip("level", v, v === "all" ? "全部问题" : v, v === "all" ? !line.levels.length : line.levels.includes(v))).join("")}
+    </span>
+  </div>`;
+}
+
+function trendLinesHTML(lines, data, active) {
+  if (!lines.length) {
+    return `<span class="mxt-lines-empty">暂无折线</span><button type="button" class="mxt-line-add" data-add="1" aria-label="添加一条折线">＋ 添加折线</button>`;
+  }
+  const cards = lines.map((line, i) => `<div class="mxt-linecard${i === active ? " is-active" : ""}" data-line="${i}" tabindex="0" role="group" aria-label="折线 ${i + 1}：${esc(trendLineName(data, line))}">
+    <i class="mxt-gdot" style="--c:${trendGroupColor(i)}"></i>
+    <span class="mxt-gname">${esc(trendLineName(data, line))}</span>
+    <button type="button" class="mxt-gdel" data-del="${i}" aria-label="删除这条折线">×</button>
+  </div>`).join("");
+  return `<span class="mxt-lines-label">折线</span>${cards}<button type="button" class="mxt-line-add" data-add="1" aria-label="添加一条折线"${lines.length >= TREND_MAX_GROUPS ? " disabled" : ""}>+</button>`;
+}
+
+const TREND_SEG_LABEL = { measure: "口径", range: "时间范围", scope: "场景范围" };
 const TREND_SEG_TITLE = {
   measure: "出现数 = 该聚类 P0/P1/P2 问题条数；出现比例 = 命中会话占比：当日同场景会话中，出现该聚类该等级问题的会话占比",
-  range: "以最近一天为锚点回看；窗口里没有数据的日期断开，不补 0",
-  ut: "按用户类型区分数据来源：真实 / 测试 / 内部 / 未知",
+  range: "以最近一天为锚点回看；没有评测的日期不补 0，折线按有数据的日期直接相连，避免断裂",
   scope: "本场景 = 点进来的这一行；全部场景 = 整个产品，不按场景拆分",
-  model: "选一个模型，就只看这个模型的问题走势；全部模型 = 各模型相加",
-  level: "画哪一档：合计 = 该聚类 P0-P4 全部问题，与矩阵格子同一口径；也可以只看某一档",
 };
 
 function trendSeg(id, key, items, value) {
@@ -1861,34 +2076,70 @@ function trendSeg(id, key, items, value) {
     .join("")}</div>`;
 }
 
-function trendBodyHTML(trend, spec, title) {
-  const models = trend.models || [];
+function trendBodyHTML(data, spec, title) {
+  const active = spec.lines[spec.active];
   return `<div class="mxt" data-own-tip>
     <div class="mxt-tools">
       ${trendSeg("mxtMeasure", "measure", [["count", TREND_MEASURE.count], ["ratio", TREND_MEASURE.ratio]], spec.measure)}
       ${trendSeg("mxtRange", "range", ["7", "30", "all"].map((v) => [v, RANGE_LABEL[v]]), spec.range)}
-      ${trendSeg("mxtScope", "scope", [["row", "本场景"], ["all", "全部场景"]], spec.scope)}
-      ${trendSeg("mxtUt", "ut", ["all", ...trend.uts].map((u) => [u, u === "all" ? "全部" : TREND_UT_NAME[u] || u]), spec.ut)}
-      ${models.length > 1 ? trendSeg("mxtModel", "model", [["all", "全部模型"], ...models.map((m) => [m, trendModelName(trend, m)])], spec.model) : ""}
-      ${trendSeg("mxtLevel", "level", [["all", "合计"], ...TREND_SEV.map((s) => [s, s])], spec.level)}
+      ${trendSeg("mxtScope", "scope", [["row", `本场景：${spec.rowName || "—"}`], ["all", "全部场景"]], spec.scope)}
     </div>
+    <div class="mxt-palette" id="mxtPalette">${active ? trendPalette(data, active) : ""}</div>
+    <div class="mxt-lines" id="mxtLines">${trendLinesHTML(spec.lines, data, spec.active)}</div>
     <div class="mxt-plot" id="mxtPlot" aria-label="${esc(title)}"></div>
-    <div class="mxt-legend keys" id="mxtLegend"></div>
   </div>`;
 }
 
 const plotWidth = (box) => ($("#mxtPlot", box) || box).clientWidth;
 
 function paintTrendPlot(box, spec, trend, title) {
-  const model = trendModel(trend, spec);
   const plot = $("#mxtPlot", box);
   if (!plot) return;
-  plot.innerHTML = model.empty
-    ? `<div class="empty">暂无趋势数据</div>`
-    : trendSVG(spec, model, title, trend.releases, plot.clientWidth);
-  const legend = $("#mxtLegend", box);
-  if (legend) legend.innerHTML = model.empty ? "" : trendLegend(model);
-  if (!model.empty) wireTrendHover(plot, spec, model);
+  if (!spec.lines.length) {
+    plot.innerHTML = `<div class="empty">暂无折线，添加一条折线后显示趋势</div>`;
+    return;
+  }
+  const view = trendSeries(trend, spec);
+  if (view.empty) {
+    plot.innerHTML = `<div class="empty">暂无趋势数据</div>`;
+    return;
+  }
+  const { html } = trendSVG(view, title, trend.releases, plot.clientWidth);
+  plot.innerHTML = html;
+  wireTrendHover(plot, view);
+}
+
+/* 默认折线：真实来源下每个模型一条（最多 4 条），等级先看全部问题。 */
+function trendDefaultLines(data) {
+  const uts = Array.isArray(data.uts) ? data.uts : [];
+  const models = Array.isArray(data.models) && data.models.length ? data.models : [""];
+  return models.slice(0, TREND_MAX_GROUPS).map((model) => ({
+    uts: uts.includes("real") ? ["real"] : [],
+    models: [model],
+    levels: [],
+  }));
+}
+
+function normalizeTrend(trend, data) {
+  const uts = Array.isArray(data.uts) ? data.uts : [];
+  const models = Array.isArray(data.models) && data.models.length ? data.models : [""];
+  if (!trend.seeded) {
+    trend.lines = trendDefaultLines(data);
+    trend.active = 0;
+    trend.seeded = true;
+  }
+  const fix = (line) => {
+    const levels = Array.isArray(line && line.levels)
+      ? TREND_SEV.filter((l) => line.levels.includes(l))
+      : [];
+    return {
+      uts: Array.isArray(line && line.uts) ? uts.filter((u) => line.uts.includes(u)) : [],
+      models: Array.isArray(line && line.models) ? models.filter((m) => line.models.includes(m)) : [],
+      levels: levels.length === TREND_SEV.length ? [] : levels,
+    };
+  };
+  trend.lines = (Array.isArray(trend.lines) ? trend.lines : []).slice(0, TREND_MAX_GROUPS).map(fix);
+  trend.active = trend.lines.length ? Math.max(0, Math.min(trend.active || 0, trend.lines.length - 1)) : 0;
 }
 
 function matrixCard(p, tax) {
@@ -2488,31 +2739,42 @@ function wire(bento, p, tax, u) {
       if (mh) return hover(-1, $$(".mh", shell).indexOf(mh));
     });
     shell.addEventListener("pointerleave", clearHover);
+    // Keep the column pane's edge fade honest while it scrolls (scroll events do not bubble).
+    shell.addEventListener("scroll", (e) => {
+      const pane = e.target;
+      if (!pane.classList || !pane.classList.contains("mx-scroll")) return;
+      pane.classList.toggle("is-at-end", pane.scrollLeft + pane.clientWidth >= pane.scrollWidth - 2);
+    }, true);
+    // Column titles are kept on one line by sizing the scroll pane; refit whenever the card resizes.
+    fitMatrix(shell.querySelector(".matrix"));
+    if (window.ResizeObserver) {
+      new ResizeObserver(() => {
+        const m = shell.querySelector(".matrix:not(.is-out)");
+        if (m && !shell.classList.contains("is-swapping")) fitMatrix(m);
+      }).observe(shell);
+    }
 
     /* ---- 格子的就地趋势：同一个 shell 里把表换成图，返回时按原来的行列路径重画矩阵 ---- */
     u.mx.trend = u.mx.trend || { open: false, measure: "count", range: "30", ut: "all", scope: "row", model: "all", level: "all" };
     const trend = u.mx.trend;
     let trendToken = 0;
-    const trendTitle = (row, node) => `${row.name} · ${patName(tax, node) || node} 的 P0-P2 时间趋势`;
-    // 点格子不下钻，所以路径要补上被点中的那一行和那一列，否则图里看不出在看谁。
-    // 范围切到「全部场景」时场景一格只写「全部场景」，提醒这不是那一行的数。
-    const trendPath = (row, col) => trendCrumbs(
-      trend.scope === "all" || !row ? [...rowPath, ...(trend.scope === "all" ? [{ name: "全部场景" }] : [])] : [...rowPath, { name: row.name }],
+    const trendTitle = (row, node) => `${row.name} · ${patName(tax, node) || node} 的时间趋势`;
+    // 趋势图只留问题路径；场景名已经写在「本场景」开关里。
+    const trendPath = (col) => trendCrumbs(
       col ? [...colPath, { name: col.name, id: col.prefix || col.pat }] : colPath,
     );
-    const markTrendCrumbs = (row, col) => {
+    const markTrendCrumbs = (col) => {
       const el = $("#mxCrumbs", bento);
-      if (el) el.innerHTML = trendPath(row, col);
+      if (el) el.innerHTML = trendPath(col);
     };
     const trendSpec = (row) => ({
       node: trend.node,
+      rowName: row ? row.name : "",
       // 「全部场景」看整个产品在这个聚类上的问题率，不按点进来的那一行过滤。
       scope: trend.scope === "all" ? "all" : "row",
       scenes: trendScenes(trendData, row, trend.scope === "all" ? "all" : "row"),
       measure: trend.measure, range: trend.range,
-      ut: trend.utsList.includes(trend.ut) ? trend.ut : "all",
-      model: (trend.model && (trend.model === "all" || (trendData.models || []).includes(trend.model))) ? trend.model : "all",
-      level: trend.level === "all" || TREND_SEV.includes(trend.level) ? trend.level : "all",
+      lines: trend.lines, active: trend.active,
     });
     let trendData = null;
     let trendCrumbsOf = null;
@@ -2539,10 +2801,143 @@ function wire(bento, p, tax, u) {
       };
       bind("mxtMeasure", "measure");
       bind("mxtRange", "range");
-      bind("mxtUt", "ut");
       bind("mxtScope", "scope");
-      if ($("#mxtModel", box)) bind("mxtModel", "model");
-      bind("mxtLevel", "level");
+      // 条件池编辑当前选中的折线；点卡片切换，拖条件到卡片也能改；最多 4 条，可删到 0 条。
+      const paletteEl = $("#mxtPalette", box);
+      const linesEl = $("#mxtLines", box);
+      let active = trend.active;
+      const sortList = (kind, list) => {
+        const order = kind === "uts" ? (trendData.uts || []) : (trendData.models || []);
+        return order.filter((v) => list.includes(v));
+      };
+      const renderPalette = () => {
+        const line = trend.lines[active];
+        if (paletteEl) paletteEl.innerHTML = line ? trendPalette(trendData, line) : "";
+      };
+      const renderLines = () => {
+        if (linesEl) linesEl.innerHTML = trendLinesHTML(trend.lines, trendData, active);
+      };
+      const paint = () => paintPlot();
+      const setActive = (i) => {
+        active = i;
+        trend.active = i;
+        renderPalette();
+        renderLines();
+      };
+      const applyChip = (line, kind, value) => {
+        if (!line) return;
+        if (kind === "level") {
+          if (value === "all") {
+            line.levels = [];
+            return;
+          }
+          const list = (line.levels || []).slice();
+          const at = list.indexOf(value);
+          if (at >= 0) list.splice(at, 1);
+          else list.push(value);
+          line.levels = list.length === TREND_SEV.length ? [] : TREND_SEV.filter((l) => list.includes(l));
+          return;
+        }
+        if (value === "all") {
+          line[kind] = [];
+          return;
+        }
+        const list = line[kind].slice();
+        const at = list.indexOf(value);
+        if (at >= 0) list.splice(at, 1);
+        else list.push(value);
+        line[kind] = sortList(kind, list);
+      };
+      const removeLine = (i) => {
+        trend.lines.splice(i, 1);
+        if (i < active) active -= 1;
+        else if (i === active) active = Math.min(active, trend.lines.length - 1);
+        active = trend.lines.length ? Math.max(0, active) : 0;
+        trend.active = active;
+        renderPalette();
+        renderLines();
+        paint();
+      };
+      const addLine = () => {
+        if (trend.lines.length >= TREND_MAX_GROUPS) return;
+        trend.lines.push({ uts: [], models: [], level: "all" });
+        active = trend.lines.length - 1;
+        trend.active = active;
+        renderPalette();
+        renderLines();
+        paint();
+      };
+      box.addEventListener("click", (e) => {
+        const chip = e.target.closest(".mxt-chip");
+        if (chip) {
+          applyChip(trend.lines[active], chip.dataset.kind, chip.dataset.value);
+          renderPalette();
+          renderLines();
+          paint();
+          return;
+        }
+        const del = e.target.closest(".mxt-gdel");
+        if (del) return removeLine(Number(del.dataset.del));
+        if (e.target.closest(".mxt-line-add")) return addLine();
+        const card = e.target.closest(".mxt-linecard");
+        if (card) setActive(Number(card.dataset.line));
+      });
+      box.addEventListener("keydown", (e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        if (e.target.closest("button")) return;
+        const card = e.target.closest(".mxt-linecard");
+        if (!card) return;
+        e.preventDefault();
+        setActive(Number(card.dataset.line));
+      });
+      const payloadOf = (e) => {
+        try { return JSON.parse(e.dataTransfer.getData("text/plain") || "null"); } catch { return null; }
+      };
+      box.addEventListener("dragstart", (e) => {
+        const chip = e.target.closest(".mxt-chip");
+        if (!chip) return;
+        e.dataTransfer.setData("text/plain", JSON.stringify({ kind: chip.dataset.kind, value: chip.dataset.value }));
+        e.dataTransfer.effectAllowed = "copy";
+        chip.classList.add("is-dragging");
+        box.classList.add("is-dragging");
+      });
+      box.addEventListener("dragend", (e) => {
+        const chip = e.target.closest(".mxt-chip");
+        if (chip) chip.classList.remove("is-dragging");
+        box.classList.remove("is-dragging");
+        $$(".mxt-linecard.is-over", box).forEach((el) => el.classList.remove("is-over"));
+      });
+      box.addEventListener("dragover", (e) => {
+        if (!box.classList.contains("is-dragging")) return;
+        const card = e.target.closest(".mxt-linecard");
+        if (!card) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+        $$(".mxt-linecard.is-over", box).forEach((el) => { if (el !== card) el.classList.remove("is-over"); });
+        card.classList.add("is-over");
+      });
+      box.addEventListener("dragleave", (e) => {
+        const card = e.target.closest(".mxt-linecard");
+        if (card && !card.contains(e.relatedTarget)) card.classList.remove("is-over");
+      });
+      box.addEventListener("drop", (e) => {
+        const card = e.target.closest(".mxt-linecard");
+        if (!card) return;
+        e.preventDefault();
+        card.classList.remove("is-over");
+        const payload = payloadOf(e);
+        if (!payload) return;
+        const i = Number(card.dataset.line);
+        applyChip(trend.lines[i], payload.kind, payload.value);
+        if (i !== active) {
+          active = i;
+          trend.active = i;
+        }
+        renderPalette();
+        renderLines();
+        paint();
+      });
+      renderPalette();
       paintPlot();
       if (window.ResizeObserver) {
         let wide = plotWidth(box);
@@ -2564,12 +2959,11 @@ function wire(bento, p, tax, u) {
       trend.node = node;
       trend.rowName = row.name;
       trend.colPrefix = node;
-      trend.utsList = [];
       trend.rowKeys = rowPath.slice(1).map(rowKey);
       trend.colKeys = colPath.slice(1).map(colKey);
       const crumbsEl = $("#mxCrumbs", bento);
-      if (crumbsEl) crumbsEl.innerHTML = trendPath(row, col);
-      trendCrumbsOf = () => markTrendCrumbs(row, col);
+      if (crumbsEl) crumbsEl.innerHTML = trendPath(col);
+      trendCrumbsOf = () => markTrendCrumbs(col);
       const backBtn = $("#mxBack", bento);
       if (backBtn) {
         backBtn.textContent = "← 返回矩阵";
@@ -2586,7 +2980,7 @@ function wire(bento, p, tax, u) {
       }
       trendData = data;
       trendData.modelLabels = data.modelLabels || (p.models || []).map((m) => ({ id: m.id, label: m.label }));
-      trend.utsList = data.uts || [];
+      normalizeTrend(trend, data);
       trendFrame(row);
     }
 
