@@ -1,4 +1,4 @@
-/* 数据: 会话场 · 数据量 · 评测量 · 归因体系 · 聚类体系 · 预测体系 · 聚类矩阵. Titles only; the layout carries the rest.
+/* 数据: 会话场 · 聚类矩阵 · 数据量 · 评测量 · 归因体系 · 聚类体系 · 预测体系. Titles only; the layout carries the rest.
    Charts drill in place; a session tile opens 具体数据 for that case, a matrix cell opens its trend chart in the card. */
 import { $, $$, esc, fmt, pct, sum, compact, WORST, SEV_NAME, KIND, sevColor, counter, runCounters, bindTips, segmented, REDUCED, showTip, hideTip, getJSON } from "./core.js";
 import { renderContent } from "./render.js";
@@ -58,7 +58,7 @@ export async function render(root, c) {
   const tax = c.data.taxonomy;
   const u = ui(c.product);
   if (c.refresh) root.classList.add("is-refresh");
-  root.innerHTML = `<div class="bento">${fieldCard(p, u)}${volumeCard(p)}${evalCard(p)}${attrCard(p)}${clusterCard(p, tax)}${predictCard(p)}${matrixCard(p, tax)}</div>`;
+  root.innerHTML = `<div class="bento">${fieldCard(p, u)}${matrixCard(p, tax)}${volumeCard(p)}${evalCard(p)}${attrCard(p)}${clusterCard(p, tax)}${predictCard(p)}</div>`;
   wire($(".bento", root), p, tax, u);
   if (c.refresh) requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove("is-refresh")));
   else runCounters(root);
@@ -1657,18 +1657,19 @@ function trendScenes(trend, row, scope) {
   return set;
 }
 
-/* Calendar window ending on the last built day; days with no records stay in the window as gaps. */
-function trendWindow(trend, range) {
-  const at = new Map(trend.dates.map((d, i) => [d, i]));
-  if (range === "all") return trend.dates.map((d, idx) => ({ d, idx }));
+/* Calendar window ending on the last built day. Only days that actually carry a cell for the
+   selected scene × cluster are returned, so an empty calendar prefix never becomes a flat
+   baseline full of meaningless date ticks. */
+function trendWindow(trend, range, activeDates) {
+  const present = trend.dates
+    .map((d, idx) => ({ d, idx }))
+    .filter((w) => !activeDates || activeDates.has(w.idx));
+  if (range === "all" || !trend.dates.length) return present;
   const end = dayMs(trend.dates[trend.dates.length - 1]);
   const start = end - (Number(range) - 1) * DAY_MS;
-  const days = [];
-  for (let t = start; t <= end; t += DAY_MS) {
-    const d = isoDay(t);
-    days.push({ d, idx: at.has(d) ? at.get(d) : -1 });
-  }
-  return days;
+  const from = isoDay(start);
+  const to = isoDay(end);
+  return present.filter((w) => w.d >= from && w.d <= to);
 }
 
 /* 一条折线 = 一组「来源 · 模型 · 等级」条件；来源和模型可多选合并，等级单选。
@@ -1731,7 +1732,16 @@ const trendSigned = (v, measure) => {
 };
 
 function trendSeries(trend, spec) {
-  const win = trendWindow(trend, spec.range);
+  const node = trend.nodes.indexOf(spec.node);
+  // The x-axis is stable across line conditions: it contains every date on which this scene ×
+  // cluster has a payload cell, even if the currently selected model has a zero count that day.
+  const activeDates = new Set();
+  if (node >= 0 && spec.scenes.size) {
+    for (const [d, sc, nd] of trend.cells) {
+      if (nd === node && spec.scenes.has(sc)) activeDates.add(d);
+    }
+  }
+  const win = trendWindow(trend, spec.range, activeDates);
   const n = win.length;
   const models = Array.isArray(trend.models) && trend.models.length ? trend.models : [""];
   const uts = Array.isArray(trend.uts) ? trend.uts : [];
@@ -1760,7 +1770,6 @@ function trendSeries(trend, spec) {
       last: -1,
     };
   });
-  const node = trend.nodes.indexOf(spec.node);
   if (node >= 0 && spec.scenes.size && series.length) {
     const winAt = new Map();
     win.forEach((w, i) => { if (w.idx >= 0) winAt.set(w.idx, i); });
@@ -1840,18 +1849,55 @@ function trendPairs(view) {
   return pairs;
 }
 
+const trendTextWidth = (text, size = 10.5) => [...String(text)].reduce((w, ch) => {
+  const cp = ch.codePointAt(0);
+  return w + (cp >= 0x2e80 || "·—".includes(ch) ? size : size * 0.58);
+}, 0);
+
+/* A monotone cubic keeps the line soft without inventing overshoot outside neighbouring values. */
+function trendCurvePath(points) {
+  if (points.length < 2) return "";
+  const secant = points.slice(1).map((p, i) => (p[1] - points[i][1]) / (p[0] - points[i][0] || 1));
+  const slope = new Array(points.length).fill(0);
+  slope[0] = secant[0];
+  slope[slope.length - 1] = secant[secant.length - 1];
+  for (let i = 1; i < points.length - 1; i++) {
+    if (secant[i - 1] * secant[i] <= 0) continue;
+    const h0 = points[i][0] - points[i - 1][0];
+    const h1 = points[i + 1][0] - points[i][0];
+    const w0 = 2 * h1 + h0;
+    const w1 = h1 + 2 * h0;
+    slope[i] = (w0 + w1) / (w0 / secant[i - 1] + w1 / secant[i]);
+  }
+  let d = `M${points[0][0].toFixed(1)},${points[0][1].toFixed(1)}`;
+  for (let i = 0; i < points.length - 1; i++) {
+    const [x1, y1] = points[i];
+    const [x2, y2] = points[i + 1];
+    const h = x2 - x1;
+    d += `C${(x1 + h / 3).toFixed(1)},${(y1 + (slope[i] * h) / 3).toFixed(1)} ${(x2 - h / 3).toFixed(1)},${(y2 - (slope[i + 1] * h) / 3).toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`;
+  }
+  return d;
+}
+
 function trendSVG(view, title, releases, width) {
   const n = view.win.length;
   const series = view.series;
   const pairs = trendPairs(view);
   const TW = Math.max(320, Math.min(TREND_TW, Math.round(width || TREND_TW)));
   const narrow = TW < 640;
+  const labelSize = 10.5;
+  const fullLabelW = series.reduce((m, s) => s.last < 0 ? m : Math.max(
+    m,
+    trendTextWidth(s.name, labelSize) + trendTextWidth(trendValue(s.vals[s.last], view.measure), labelSize) + 16,
+  ), 0);
+  const baseRight = narrow ? 140 : Math.round(Math.max(160, Math.min(220, TW * 0.18)));
   const PAD = {
     l: narrow ? 40 : TREND_PAD.l,
-    r: narrow ? 140 : Math.round(Math.max(160, Math.min(220, TW * 0.18))),
+    r: Math.round(Math.min(TW * 0.42, Math.max(baseRight, fullLabelW + 38))),
     t: TREND_PAD.t,
     b: TREND_PAD.b,
   };
+  const compactEnds = narrow || fullLabelW + 38 > PAD.r;
   const TH = Math.max(TREND_TH, Math.min(900, PAD.t + PAD.b + 70 + series.length * 17));
   const innerW = TW - PAD.l - PAD.r;
   const innerH = TH - PAD.t - PAD.b;
@@ -1868,8 +1914,9 @@ function trendSVG(view, title, releases, width) {
     grid += `<line x1="${PAD.l}" x2="${TW - PAD.r}" y1="${y}" y2="${y}"${g ? "" : ' class="is-base"'} />`;
     grid += `<text class="mxt-ylab" x="${PAD.l - 8}" y="${y}">${fmtAxis(v)}</text>`;
   }
-  const want = narrow ? 4 : 7;
-  const ticks = [...new Set(Math.min(n, want) <= 1 ? [0] : Array.from({ length: Math.min(n, want) }, (_, k) => Math.round((k * (n - 1)) / (Math.min(n, want) - 1))))];
+  const tickMax = Math.max(2, Math.min(narrow ? 4 : 7, Math.floor(innerW / 72) + 1));
+  const tickCount = Math.min(n, tickMax);
+  const ticks = [...new Set(tickCount <= 1 ? [0] : Array.from({ length: tickCount }, (_, k) => Math.round((k * (n - 1)) / (tickCount - 1))))];
   const xlab = ticks.map((i) => `<text class="mxt-xlab" x="${xOf(i).toFixed(1)}" y="${TH - 8}">${esc(view.win[i].d.slice(5))}</text>`).join("");
 
   // 差距带：只连接两边都有值的日期；没有评测的日期直接跨过去，不把带子切碎。
@@ -1883,13 +1930,18 @@ function trendSVG(view, title, releases, width) {
     bands += `<path class="mxt-band" d="M${hi.join("L")}L${lo.join("L")}Z" style="fill:${p.color};fill-opacity:.075"/>`;
   });
 
-  // 折线默认只连有值的日期：没有评测的日期跨过去，避免趋势被切成一段一段。
-  let lines = "", dots = "";
-  series.forEach((s) => {
+  // 平滑曲线 + 极淡的面积，让升降方向比一串折点更快被读出来；标签则沿右侧独立排布。
+  const baseY = PAD.t + innerH;
+  let defs = "", areas = "", lines = "", dots = "";
+  series.forEach((s, gi) => {
     const points = [];
     s.vals.forEach((v, i) => { if (v != null) points.push([xOf(i), yOf(v)]); });
     if (points.length > 1) {
-      lines += `<path class="mxt-line" d="${points.map(([x, y], j) => `${j ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`).join("")}" style="stroke:${s.color}"/>`;
+      const curve = trendCurvePath(points);
+      const area = `${curve}L${points[points.length - 1][0].toFixed(1)},${baseY.toFixed(1)}L${points[0][0].toFixed(1)},${baseY.toFixed(1)}Z`;
+      defs += `<linearGradient id="mxt-area-${gi}" gradientUnits="userSpaceOnUse" x1="0" x2="0" y1="${PAD.t}" y2="${baseY.toFixed(1)}"><stop offset="0" stop-color="${s.color}" stop-opacity=".12"/><stop offset="1" stop-color="${s.color}" stop-opacity="0"/></linearGradient>`;
+      areas += `<path class="mxt-area" d="${area}" fill="url(#mxt-area-${gi})"/>`;
+      lines += `<path class="mxt-line" d="${curve}" style="stroke:${s.color}"/>`;
     } else if (points.length === 1) {
       dots += `<circle class="mxt-dot" cx="${points[0][0].toFixed(1)}" cy="${points[0][1].toFixed(1)}" r="2.4" style="fill:${s.color}"/>`;
     }
@@ -1906,13 +1958,13 @@ function trendSVG(view, title, releases, width) {
     }).join("");
 
   // 端点标签：每条线的最新值直接标在右侧，按行距错开，线上不再用 legend。
-  const endName = (s) => (narrow ? s.shortName : s.name);
+  const endName = (s) => (compactEnds ? s.shortName : s.name);
   const ends = series.filter((s) => s.last >= 0).map((s) => ({
     s, value: s.vals[s.last], x: xOf(s.last), y: yOf(s.vals[s.last]), ly: yOf(s.vals[s.last]),
     name: endName(s),
   }));
   ends.sort((a, b) => a.ly - b.ly);
-  const GAP = 16;
+  const GAP = 18;
   ends.forEach((e) => { e.ly = Math.max(e.ly, PAD.t); });
   for (let i = 1; i < ends.length; i++) ends[i].ly = Math.max(ends[i].ly, ends[i - 1].ly + GAP);
   const maxY = PAD.t + innerH;
@@ -1941,21 +1993,22 @@ function trendSVG(view, title, releases, width) {
   gaps.sort((a, b) => a.y - b.y);
   let prevY = -Infinity;
   const gapSvg = gaps.filter((g) => {
-    if (g.y - prevY < 12) return false;
+    if (g.y - prevY < 16) return false;
     prevY = g.y;
     return true;
   }).map((g) => {
     const delta = view.measure === "ratio" ? `${fmt(Math.abs(g.gap), Math.abs(g.gap) >= 10 ? 1 : 2)}pp` : fmt(Math.round(Math.abs(g.gap)));
     const label = g.gap === 0 ? "持平" : `${g.p.hi.modelName} 高 ${delta}`;
+    const labelX = Math.max(PAD.l + trendTextWidth(label, 10) + 4, g.x - 6);
     return `<g class="mxt-gap-g">
       <line class="mxt-gap-line" x1="${g.x.toFixed(1)}" x2="${g.x.toFixed(1)}" y1="${g.y1.toFixed(1)}" y2="${g.y2.toFixed(1)}" style="stroke:${g.p.color}"/>
-      <text class="mxt-gap" x="${(g.x - 6).toFixed(1)}" y="${(g.y + 3.2).toFixed(1)}" text-anchor="end" style="fill:var(--ink-2)">${esc(label)}</text>
+      <text class="mxt-gap" x="${labelX.toFixed(1)}" y="${(g.y + 3.2).toFixed(1)}" text-anchor="end" style="fill:var(--ink-2)">${esc(label)}</text>
     </g>`;
   }).join("");
 
   return {
     html: `<svg viewBox="0 0 ${TW} ${TH}" role="img" aria-label="${esc(title)}" data-n="${n}" data-l="${PAD.l}" data-r="${PAD.r}" data-t="${PAD.t}" data-b="${PAD.b}" data-top="${view.top}">
-      <g class="mxt-grid">${grid}${xlab}</g>${rel}${bands}${lines}${dots}${endsSvg}${gapSvg}
+      <defs>${defs}</defs><g class="mxt-grid">${grid}${xlab}</g>${areas}${rel}${bands}${lines}${dots}${endsSvg}${gapSvg}
       <g class="mxt-cursor"><line y1="${PAD.t}" y2="${PAD.t + innerH}"/><g class="mxt-cursor-dots"></g></g></svg>`,
     geo: { TW, TH, PAD, innerW, innerH },
   };
@@ -2755,7 +2808,7 @@ function wire(bento, p, tax, u) {
     }
 
     /* ---- 格子的就地趋势：同一个 shell 里把表换成图，返回时按原来的行列路径重画矩阵 ---- */
-    u.mx.trend = u.mx.trend || { open: false, measure: "count", range: "30", ut: "all", scope: "row", model: "all", level: "all" };
+    u.mx.trend = u.mx.trend || { open: false, measure: "count", range: "30", scope: "row", lines: [], active: 0, seeded: false };
     const trend = u.mx.trend;
     let trendToken = 0;
     const trendTitle = (row, node) => `${row.name} · ${patName(tax, node) || node} 的时间趋势`;
@@ -2860,7 +2913,7 @@ function wire(bento, p, tax, u) {
       };
       const addLine = () => {
         if (trend.lines.length >= TREND_MAX_GROUPS) return;
-        trend.lines.push({ uts: [], models: [], level: "all" });
+        trend.lines.push({ uts: [], models: [], levels: [] });
         active = trend.lines.length - 1;
         trend.active = active;
         renderPalette();
@@ -2955,6 +3008,7 @@ function wire(bento, p, tax, u) {
     async function openTrend(row, col) {
       const node = col.prefix || col.pat;
       if (!node) return;
+      hideTip();
       trend.open = true;
       trend.node = node;
       trend.rowName = row.name;

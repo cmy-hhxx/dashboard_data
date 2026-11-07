@@ -321,15 +321,22 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
   display: inline-flex; align-items: center; height: 26px; padding: 0 8px; border-radius: var(--r-chip);
   background: var(--well); color: var(--ink-2); font-size: var(--fs-meta); white-space: nowrap; cursor: grab;
   user-select: none; -webkit-user-drag: element;
-  transition: background var(--snap), color var(--snap), box-shadow var(--snap);
+  box-shadow: inset 0 0 0 1px transparent;
+  transition: background var(--snap), color var(--snap), box-shadow var(--snap), transform 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.mxt-chip::after { content: ""; width: 0; margin-left: 0; overflow: hidden; color: var(--accent); font-size: 10px; transition: width var(--snap), margin var(--snap); }
-.mxt-chip:hover { background: var(--active); color: var(--ink); }
+/* The check slot always occupies the same width; selection changes colour and weight, never layout. */
+.mxt-chip::after {
+  content: "✓"; width: 11px; margin-left: 4px; overflow: hidden; color: var(--accent); font-size: 10px;
+  opacity: 0; transform: scale(0.65); transition: opacity var(--snap), transform var(--snap);
+}
+.mxt-chip:hover { background: var(--active); color: var(--ink); transform: translateY(-0.5px); }
+.mxt-chip:active { transform: scale(0.96); }
+.mxt-chip:focus-visible { outline: 2px solid color-mix(in oklab, var(--accent) 52%, transparent); outline-offset: 2px; }
 .mxt-chip[aria-pressed="true"] {
   background: var(--accent-soft); color: var(--accent);
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 38%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 48%, transparent), 0 1px 2px color-mix(in oklab, var(--accent) 13%, transparent);
 }
-.mxt-chip[aria-pressed="true"]::after { content: "✓"; width: 11px; margin-left: 4px; }
+.mxt-chip[aria-pressed="true"]::after { opacity: 1; transform: none; }
 .mxt-chip.is-dragging { opacity: 0.45; }
 .mxt-lines { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .mxt-lines-label { font-size: var(--fs-meta); color: var(--faint); margin-right: 2px; }
@@ -357,6 +364,7 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .mxt-ylab, .mxt-xlab { fill: var(--faint); font-size: 11px; }
 .mxt-ylab { text-anchor: end; dominant-baseline: middle; }
 .mxt-xlab { text-anchor: middle; }
+.mxt-area { pointer-events: none; }
 .mxt-line { fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .mxt-band { pointer-events: none; }
 .mxt-dot { stroke: var(--card); stroke-width: 1.2; }
@@ -367,8 +375,8 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .mxt-cursor line { stroke: var(--faint); stroke-width: 1; }
 .mxt-cursor circle { stroke: var(--card); stroke-width: 1.5; }
 .mxt-gap-line { stroke-dasharray: 2 3; stroke-opacity: 0.5; stroke-width: 1; }
-.mxt-gap { font-size: 10px; font-weight: var(--w-medium); }
-.mxt-end text { fill: var(--muted); font-size: 10.5px; }
+.mxt-gap { font-size: 10px; font-weight: var(--w-medium); paint-order: stroke; stroke: var(--card); stroke-width: 3px; stroke-linejoin: round; }
+.mxt-end text { fill: var(--muted); font-size: 10.5px; paint-order: stroke; stroke: var(--card); stroke-width: 3px; stroke-linejoin: round; }
 .mxt-end .mxt-end-val { fill: var(--ink); font-weight: var(--w-medium); font-variant-numeric: tabular-nums; }
 .mxt-end-line { stroke-opacity: 0.32; }
 @media (max-width: 640px) {
