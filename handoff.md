@@ -50,7 +50,9 @@ datasets/ ──> stats_worker.py ──> datasets/stats.json（每 1 小时，�
         ├─ static/data-<product>.json(.gz)    单产品 KPI/会话场/聚类/预测
         ├─ static/samples.json(.gz)           产品清单
         ├─ static/samples-<product>.json(.gz) 单产品召回索引（不含 lb）
-        └─ static/labels-<product>.json(.gz)  单产品问题标签，与索引 rows[] 同序
+        ├─ static/labels-<product>.json(.gz)  单产品问题标签，与索引 rows[] 同序
+        ├─ static/trends-<product>.json(.gz)  聚类矩阵格子的趋势数据（日 × 场景 × 模型 × 来源 × 等级）
+        └─ static/abtests-<product>.json(.gz) AB 测试记录：固定题集发版前 / 后的聚类对比（有 ab_test 目录才生成）
                         │
 server.py（标准库 HTTP，:5001，定时 build）──> app.js
         └─ /samples/<slug>.json 按需生成 ──> detail_builder.py
@@ -92,7 +94,10 @@ server.py（标准库 HTTP，:5001，定时 build）──> app.js
 | `?view=data&detail=eval&ed=…&em=…` | `data.js` | 评测量详情：日期 → 模型 → session 三层表格；最后一层进入具体数据的完整输入/输出 |
 
 顶部右侧是全局产品切换（问财 / AIME），也是数据源指示；不要在每个卡片里重复放切换。
-图表都在页内下钻；会话场格子跳到该条样本，聚类矩阵格子跳到「场景 × 问题聚类」预填好的样本筛选（「其他场景」折叠行的格子先展开）。
+图表都在页内下钻；会话场格子跳到该条样本，聚类矩阵格子在本卡里就地展开「场景 × 问题聚类」的
+P0-P4 时间趋势（「其他场景」折叠行的格子先展开），卡片头「← 返回矩阵」回到原表。
+「聚类体系」卡头的「AB 测试记录」（仅当该产品有 `ab_test/` 轮次时出现）在页面底部展开一张整宽卡：
+同一批固定问句发版前 / 后的聚类树并集、叶子前/后计数与 Δ、A/B/C 总账和跨期趋势。
 
 ## 4. 文件地图
 
@@ -106,11 +111,13 @@ server.py（标准库 HTTP，:5001，定时 build）──> app.js
 | `dashboard/server.py` | 静态服务、gzip、定时构建、`/healthz` | 服务行为、缓存、刷新 |
 | `dashboard/static/js/app.js` | 路由、主题、产品切换、模块懒加载、错误兜底 | 页面级状态 |
 | `dashboard/static/js/core.js` | 共享格式化、数字动画、`segmented`、提示等 | 通用交互 |
-| `dashboard/static/js/data.js` | 数据页各卡片、评测量详情与聚类矩阵 | 数据页排版、下钻 |
+| `dashboard/static/js/data.js` | 数据页各卡片、评测量详情、聚类矩阵与格子里的趋势图 | 数据页排版、下钻、趋势 |
 | `dashboard/static/js/system.js` | 评测体系机制图、聚类（阶段 → 环节 → 机制 → 模式）、证据闭环 | 体系页 |
 | `dashboard/static/js/samples.js` | 具体数据两栏工作台（顶部轨迹概览、三列轨迹 / 对话 / 归因、证据连线） | 筛选、样本详情 |
 | `dashboard/static/js/render.js` | 公共内容渲染：Markdown-lite、JSON 高亮、按偏移保留证据高亮 | 文本 / JSON 呈现 |
-| `dashboard/static/js/sunburst.js` | 原生 SVG 可下钻旭日图 | 数据量 / 聚类环 |
+| `dashboard/ab_test.py` | AB 测试轮次读取：清单 / 逐条叶子落点 / 前后并集树 → `abtests-<product>.json` | AB 测试数据接入 |
+| `dashboard/static/js/abtest.js` + `css/abtest.css` | AB 测试记录面板（期次、前后并集树、叶子 Δ、跨期趋势） | AB 测试对比交互 |
+| `dashboard/static/js/sunburst.js` | 原生 SVG 可下钻旭日图 | 数据量 / 聚类环 / AB 并集树 |
 | `dashboard/static/js/galaxy.js` | 星图：一颗星一个 case、按分组成团的 canvas 视图（推拉展开的卡片里） | 星图布局、配色、交互 |
 | `dashboard/static/js/particles.js` | 证据流：沿证据连线流动的低密度粒子（体系页证据闭环、样本页） | 粒子密度、速度 |
 | `dashboard/static/css/*.css` | 样式按页拆分，按 index.html 中的顺序加载：`base`（token / 重置）→ `layout`（外壳 + Bento）→ `content`（消息内容、证据 mark、anatomy 底座）→ `data` → `system` → `samples`（具体数据工作台） | 样式微调、响应式 |
@@ -149,6 +156,47 @@ sv 严重度构成 · r 环节 · st 阶段 · pt 模式 · tg 标签
 tr 轮数 · mc 消息数 · lang · case · s 短 slug
 uid 用户 ID（输入 meta.user_id）· ut 用户类型 real/test/internal/unknown · ul 流失标记（1 才有）
 ```
+
+`static/trends-<product>.json`（懒加载，聚类矩阵格子第一次点开时才拉）：
+
+```text
+{ schema, generated_at, product, models[], releases[{date,label}],
+  dates[], uts[], scenes[[task,sub]…], nodes["S1","S1.M2",…],
+  base[[day,scene,model,ut,sessions]…],
+  cells[[day,scene,node,model,ut,p0…p4,h0…h4,hAny]…] }
+```
+
+- `nodes` 是聚类路径的全部前缀（环节 / 机制 / 模式 / 子模式），格子的列节点按精确匹配取一层，
+  四层都能点；`base` 是该日该场景该模型该来源的已评测记录数，是比例的分母；
+  `cells` 里的 `pK` 是 P K 问题条数、`hK` 是出现该等级问题的去重会话数，比例 = hK / sessions；
+  末尾 `hAny` 是这些会话的并集（`ΣhK` 会把同一会话在多个等级上重复计数，合计口径必须用 `hAny`）。
+- 合计算 P0-P4 全部问题，与矩阵格子「问题合计」同口径；矩阵本身仍只画 P0-P1 的着色。
+- 发版日期读 `<datasets>/releases.json`（问财 / AIME 分开写，支持 `"YYYY-MM-DD"` 或
+  `{"date","label"}`），文件变了构建会自动重写 trends payload。
+
+`static/abtests-<product>.json`（懒加载，点「聚类体系」卡头的 AB 测试记录才拉；只有
+`<datasets>/<n>_<product>/ab_test/` 存在时才生成）：同一批**固定问句**在发版前后各评测 + 聚类一次，
+把两棵树按叶子路径取并集，看问题结构怎么变。
+
+```text
+{ schema, generated_at, product, models[], labels{status,b_reason,sources},
+  rounds[{ id, order, version, label, released_at, generated_at, targets,
+           status{A,B,C}, b_reason{B1,B2}, sources[[name,n]…], dates[first,last],
+           sides{before{traces,hits}, after{traces,hits}|null},
+           leaves[{id,name,before,after|null,model_before,model_after|null,source_before,source_after|null}],
+           nodes[{id,level,parent,name,before,after}] }] }
+```
+
+- 目录约定见 `ab_test/*/README.md`：`00_manifest/{summary.json,coverage.csv}` 是清单（A/B/C 三类状态、
+  评测来源、逐条 trace 的叶子落点），`03_cluster_<ver>/<model>/` 是发版前树快照，
+  `04_retest_after/<model>/item_index.slice.jsonl` 是发版后同批 trace 的新落点（**回填后自动出前后列**），
+  轮次目录名 `0_version1106_test` → 期次 0、版本 v1106；日期用可选 `round.json` 的
+  `{"released_at","label","title"}` 钉住。
+- 口径：`before` / `after` 都数**命中该叶子的 trace 数**（同一批题），前缀节点包含其下所有叶子；
+  分母写清楚是 `targets`（固定题集）还是 `sides.*.traces`（有落点的），不要和「线上大盘」的批次占比混。
+  `A/B/C` 是数据质量总账（C = 无评测记录），必须展示，否则前后对比的分母会被误读。
+- 改 `ab_test/` 下任何文件都会让 reuse marker 失效并重写 payload；删掉整个 `ab_test/` 会连带删掉
+  `abtests-*.json` 并隐藏卡片入口。
 
 问题标签 `lb` 已从索引行拆出（2026-11-07）：`static/labels-<product>.json` = `{schema, product,
 labels:["…",…]}`，与 `rows[]` 同长度、同顺序；前端首屏后再拉，搜索时回填。`samples-<product>.json`
@@ -223,10 +271,11 @@ labels:["…",…]}`，与 `rows[]` 同长度、同顺序；前端首屏后再�
   否则“单输入、多归因轮”的会话会拿不到 `input.traces[S.trace]`，中间对话与顶部 cmap 会空白。
 - **复制**：`navigator.clipboard` 在 HTTP 下不可用，`copyText` 必须有 textarea + `execCommand`
   回退；按钮反馈「已复制 / 复制失败」。
-- **数据页跳样本只有两处**：会话场格子带 `case`，聚类矩阵格子带 `scene/sub/stage/mech/pattern`；旭日图、桑基图、预测页签仍只在页内下钻。
+- **数据页跳样本只有一处**：会话场格子带 `case`；聚类矩阵格子不再跳页，而是在卡片里换成趋势图
+  （`data.js` 的 `openTrend` / `paintTrendPlot`），旭日图、桑基图、预测页签仍只在页内下钻。
   问财的场景在 `build.py` 里来自 skill 投票，索引行用 `sc` 携带与 task/skill 不一致的场景，`samples.js` 的 `sceneOf` 优先读它。
 - **生成物不是源码**：`static/data.json`、`static/data-<product>.json`、`static/samples.json`、
-  `static/samples-<product>.json`、`static/labels-<product>.json` 由构建产生，`static/samples/` 是详情懒加载缓存，都不入库；
+  `static/samples-<product>.json`、`static/labels-<product>.json`、`static/trends-<product>.json` 由构建产生，`static/samples/` 是详情懒加载缓存，都不入库；
   本地刷新/远端部署会自动重建。详情缓存可以安全删除，下一次访问按需补。
 - **部署**：`./dashboard/deploy.sh`；完成后看 `logs/build.log` 和 `/healthz` 的
   `ok`、`build.pairs`。构建失败不会自动回滚，服务可能继续使用旧数据。

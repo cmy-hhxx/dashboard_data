@@ -294,7 +294,8 @@ def outputs_ready():
         return False
     return (all(os.path.exists(os.path.join(STATIC, f"data-{p}.json")) for p in (data.get("products") or {}))
             and all(os.path.exists(os.path.join(STATIC, f"samples-{p}.json")) for p in (samples.get("products") or {}))
-            and all(os.path.exists(os.path.join(STATIC, f"labels-{p}.json")) for p in (samples.get("products") or {})))
+            and all(os.path.exists(os.path.join(STATIC, f"labels-{p}.json")) for p in (samples.get("products") or {}))
+            and all(os.path.exists(os.path.join(STATIC, f"trends-{p}.json")) for p in (data.get("products") or {})))
 
 
 def main():

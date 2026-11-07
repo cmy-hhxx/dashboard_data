@@ -8,8 +8,11 @@ import { esc, fmt, pct, REDUCED, hideTip } from "./core.js";
 
 const S = 220;
 const C = S / 2;
-const IN = [62, 83];
-const OUT = [87, 106];
+/* Three concentric tracks, one language for both cards: a primary ring for the focus's children, a
+   slimmer rail for the open child's children, and a hairline outside both for the severity share
+   (流失 on 数据量, P0·P1 on 聚类体系). Everything stays inside the 220 box, so no mark is clipped. */
+const IN = [64, 84];
+const OUT = [89, 101];
 const TAU = Math.PI * 2;
 const KEEP = 7;
 const NS = "http://www.w3.org/2000/svg";

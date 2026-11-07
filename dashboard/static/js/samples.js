@@ -28,7 +28,7 @@ const USER_TYPE_SHORT = { real: "真实", test: "测试", internal: "内部", un
 const utOf = (r) => (r && USER_TYPE_SHORT[r.ut] ? r.ut : "unknown");
 const isLostRow = (r) => !!(r && (r.ul || r.sp === "lost"));
 // `sc` is the scene the matrix filed the sample under when it differs from task / skill (问财 B versions).
-const sceneOf = (r) => r.sc || r.task || r.skill || "未标注";
+const sceneOf = (r) => r.sc || r.task || r.skill || "未接入分类体系";
 const subOf = (r) => r.sub || "";
 /* One predicate drives both the cascade options and the final list. When an
    upstream option changes, downstream options reset, so option pools omit the

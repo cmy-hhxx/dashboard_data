@@ -156,7 +156,7 @@ def _aggregate_line(stats: dict, payload: dict, product: str, split: str, defaul
             continue
         tm = trace.get("meta") or meta
         model = normalize_model(tm.get("model") or meta.get("model"), product, default_model)
-        task = tm.get("task") or meta.get("task") or "未标注"
+        task = tm.get("task") or meta.get("task") or "未接入分类体系"
         sub = tm.get("subtask") or meta.get("subtask") or ""
         lost = int(base_lost or bool(tm.get("lost_user") or meta.get("lost_user")))
         usage = tm.get("usage") or meta.get("usage") or {}

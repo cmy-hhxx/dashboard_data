@@ -21,6 +21,7 @@ Outputs, each with a ``.gz`` twin::
     static/data-<product>.json      one product's aggregates for the 数据 view
     static/samples.json             product list for the 样本 view
     static/samples-<product>.json   one product's recall index
+    static/trends-<product>.json    lazy per-cell trend data (day × scene × user type × P0-P4 node)
     static/samples/<slug>.json      one sample, generated on first request (detail_builder.py)
 """
 from __future__ import annotations
@@ -43,6 +44,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import unquote
 
+import ab_test
 import build_store as bs
 import user_rules
 from filelist import TreeCache
@@ -52,7 +54,7 @@ REPO = DASHBOARD.parent
 STATIC = DASHBOARD / "static"
 PRODUCTION_DATASETS = Path("/mnt/fin_bench/code_and_clean_data/datasets")
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-07.3"
+PAYLOAD_VERSION = "2026-11-07.7"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 2
 
@@ -64,7 +66,13 @@ def default_datasets():
     return PRODUCTION_DATASETS if PRODUCTION_DATASETS.is_dir() else REPO / "datasets"
 
 SEVERITIES = ["P0", "P1", "P2", "P3", "P4"]
+# 场景没有接入分类体系（输入 meta 缺 task / skill）：矩阵行、趋势场景和数据量列表都用这一句，
+# 和「未聚类」（归因问题没有匹配到模式）不是一回事，别混。
+NO_SCENE = "未接入分类体系"
 WORST_KEYS = SEVERITIES + ["none"]
+# 趋势图统计全部严重度；界面的「合计」就是 P0-P4，与矩阵格子「问题合计」同一口径。
+TREND_SEVERITIES = SEVERITIES
+UT_ORDER = ("real", "test", "internal", "unknown")
 
 # Only fields the recall list and its filters/search actually read. Keeping the
 # index lean matters more than the full aggregate row: it is fetched by every
@@ -535,8 +543,8 @@ def mark_evaluated(payload, rows):
     (model → task → scene), so the ring can tell which branches have nothing to open."""
     seen = Counter()
     for r in rows:
-        task = r.get("task") or "未标注"
-        scene = r.get("sub") or r.get("sc") or r.get("skill") or "未标注"
+        task = r.get("task") or NO_SCENE
+        scene = r.get("sub") or r.get("sc") or r.get("skill") or NO_SCENE
         for model in (r["m"], None):
             seen[(model,)] += 1
             seen[(model, task)] += 1
@@ -1500,7 +1508,7 @@ def scene_votes(product, samples):
 
 def scene_of(brief, scene):
     m = brief["meta"]
-    return m.get("task") or m.get("skill") or scene.get(brief["question"]) or "未标注"
+    return m.get("task") or m.get("skill") or scene.get(brief["question"]) or NO_SCENE
 
 
 def aggregate(product, samples, taxonomy):
@@ -1668,11 +1676,11 @@ def aggregate(product, samples, taxonomy):
         "visual": sum(1 for s in samples if s[3]["has_visual"]),
     }
     if product == "aime":
-        profile["task"] = top(Counter(s[2].get("task") or "未标注" for s in samples), 9)
+        profile["task"] = top(Counter(s[2].get("task") or NO_SCENE for s in samples), 9)
         profile["difficulty"] = dict(Counter(s[2].get("diff") or "未标注" for s in samples))
         profile["entry"] = top(Counter(s[3]["comefrom"] or "未知" for s in samples), 7)
     else:
-        profile["skill"] = top(Counter(s[2].get("skill") or "未标注" for s in samples if s[2]["m"].startswith("a_")), 8)
+        profile["skill"] = top(Counter(s[2].get("skill") or NO_SCENE for s in samples if s[2]["m"].startswith("a_")), 8)
 
     # Compact trajectory shape.
     comp_rows = [s[3]["compact"] for s in samples if s[3]["compact"]]
@@ -1710,7 +1718,7 @@ def aggregate(product, samples, taxonomy):
         for s in rows:
             tree[scene_of(s[1], scene)][s[1]["meta"].get("subtask") or ""] += 1
         return [
-            {"id": t, "n": sum(c.values()), "sub": [{"id": k or "未标注", "n": v} for k, v in c.most_common()] if any(c) else []}
+            {"id": t, "n": sum(c.values()), "sub": [{"id": k or NO_SCENE, "n": v} for k, v in c.most_common()] if any(c) else []}
             for t, c in sorted(tree.items(), key=lambda kv: -sum(kv[1].values()))
         ]
 
@@ -1762,6 +1770,121 @@ def aggregate(product, samples, taxonomy):
     if product == "wencai":
         out["versions"] = version_compare(samples, models)
     return out
+
+
+def release_entries(datasets: Path, product: str):
+    """Dated releases for one product from the optional ``<datasets>/releases.json``.
+
+    Accepts ``{"<product>": [entry, ...]}`` or a bare list applying to every product;
+    each entry is ``"YYYY-MM-DD"`` or ``{"date": "YYYY-MM-DD", "label": "..."}``.
+    Malformed entries are skipped and the result is sorted by date.
+    """
+    try:
+        data = json.loads((datasets / "releases.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if isinstance(data, dict):
+        data = data.get(product)
+    if not isinstance(data, list):
+        return []
+    entries = []
+    for item in data:
+        if isinstance(item, str):
+            item = {"date": item}
+        if not isinstance(item, dict):
+            continue
+        date = item.get("date")
+        if not isinstance(date, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+            continue
+        try:
+            datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            continue
+        entry = {"date": date}
+        if isinstance(item.get("label"), str) and item["label"]:
+            entry["label"] = item["label"]
+        entries.append(entry)
+    return sorted(entries, key=lambda entry: entry["date"])
+
+
+def trend_payload(product, samples, releases=(), generated=None):
+    """Lazy payload behind a cluster-matrix cell's in-card trend chart.
+
+    ``base`` counts every evaluated record per day × scene × model × user type,
+    clean and unclustered included, so a cell always has a denominator.  ``cells``
+    repeats each clustered problem at every prefix of its cluster path, one column
+    per severity including P4; the ``h*`` sets dedupe slugs per severity, so they
+    count hit sessions, not problems; the trailing column is that session set's
+    union, because summing per-severity hit sessions double counts a session that
+    shows the same problem at several levels.  Models keep the same order as the
+    aggregate.
+    """
+    scene = scene_votes(product, samples)
+
+    def scene_pair(detail):
+        return scene_of(detail, scene), detail["meta"].get("subtask") or ""
+
+    dates, uts, models, scenes, base = set(), set(), set(), set(), Counter()
+    for slug, detail, row, facts in samples:
+        ut = row.get("ut") or "unknown"
+        pair = scene_pair(detail)
+        dates.add(row["d"])
+        uts.add(ut)
+        models.add(row["m"])
+        scenes.add(pair)
+        base[(row["d"], pair, row["m"], ut)] += 1
+    dates = sorted(dates)
+    uts = [ut for ut in UT_ORDER if ut in uts] + sorted(uts - set(UT_ORDER))
+    preferred = PRODUCTS[product]["models"] if product in PRODUCTS else []
+    models = [model for model in preferred if model in models] + sorted(models - set(preferred))
+    scenes = sorted(scenes)
+    day_idx = {day: i for i, day in enumerate(dates)}
+    ut_idx = {ut: i for i, ut in enumerate(uts)}
+    model_idx = {model: i for i, model in enumerate(models)}
+    scene_idx = {pair: i for i, pair in enumerate(scenes)}
+
+    nodes = set()
+    for slug, detail, row, facts in samples:
+        for p in detail["attribution"]["problems"]:
+            if p["cl"]:
+                parts = p["cl"]["path"].split(".")
+                nodes.update(".".join(parts[:n]) for n in range(1, len(parts) + 1))
+    nodes = sorted(nodes)
+    node_idx = {node: i for i, node in enumerate(nodes)}
+
+    cells = {}
+    for slug, detail, row, facts in samples:
+        day, scene_i = day_idx[row["d"]], scene_idx[scene_pair(detail)]
+        model, ut = model_idx[row["m"]], ut_idx[row.get("ut") or "unknown"]
+        for p in detail["attribution"]["problems"]:
+            if not p["cl"] or p["sev"] not in TREND_SEVERITIES:
+                continue
+            sev = TREND_SEVERITIES.index(p["sev"])
+            parts = p["cl"]["path"].split(".")
+            for n in range(1, len(parts) + 1):
+                key = (day, scene_i, node_idx[".".join(parts[:n])], model, ut)
+                cell = cells.setdefault(key, [0, 0, 0, 0, 0, set(), set(), set(), set(), set(), set()])
+                cell[sev] += 1
+                cell[5 + sev].add(slug)
+                # 合计口径要的是「出现过任意等级问题的会话」，各级命中会话并集不能相加。
+                cell[10].add(slug)
+
+    base_out = sorted([day_idx[day], scene_idx[pair], model_idx[model], ut_idx[ut], n]
+                      for (day, pair, model, ut), n in base.items())
+    cells_out = []
+    for key in sorted(cells):
+        counts, hits, any_hit = cells[key][:5], cells[key][5:10], cells[key][10]
+        if any(counts):
+            cells_out.append([*key, *counts, *(len(slugs) for slugs in hits), len(any_hit)])
+
+    return {
+        "schema": 1, "generated_at": generated or iso_now(), "product": product,
+        "releases": [dict(entry) for entry in releases],
+        "dates": dates, "uts": uts, "models": models,
+        "scenes": [[task, sub] for task, sub in scenes],
+        "nodes": nodes,
+        "base": base_out, "cells": cells_out,
+    }
 
 
 def version_compare(samples, models):
@@ -2395,7 +2518,7 @@ def cleanup_samples(sample_dir: Path, slugs):
             shutil.rmtree(path, ignore_errors=True)
 
 
-def payload_files_exist(out_dir: Path) -> bool:
+def payload_files_exist(out_dir: Path, ab_products=()) -> bool:
     try:
         data = json.loads((out_dir / "data.json").read_text(encoding="utf-8"))
         samples = json.loads((out_dir / "samples.json").read_text(encoding="utf-8"))
@@ -2403,7 +2526,9 @@ def payload_files_exist(out_dir: Path) -> bool:
         return False
     return (all((out_dir / f"data-{p}.json").exists() for p in (data.get("products") or {}))
             and all((out_dir / f"samples-{p}.json").exists() for p in (samples.get("products") or {}))
-            and all((out_dir / f"labels-{p}.json").exists() for p in (samples.get("products") or {})))
+            and all((out_dir / f"labels-{p}.json").exists() for p in (samples.get("products") or {}))
+            and all((out_dir / f"trends-{p}.json").exists() for p in (data.get("products") or {}))
+            and all((out_dir / f"abtests-{p}.json").exists() for p in ab_products))
 
 
 FORECAST_DIR = "4_forecast"
@@ -2498,6 +2623,18 @@ def feed_signature(datasets: Path):
     return hashlib.sha1(json.dumps(parts, separators=(",", ":")).encode()).hexdigest()
 
 
+def release_signature(datasets: Path):
+    """Cheap fingerprint of the optional releases.json, part of the reuse marker."""
+    parts = []
+    try:
+        stat = (datasets / "releases.json").stat()
+    except OSError:
+        pass
+    else:
+        parts = [stat.st_size, stat.st_mtime_ns]
+    return hashlib.sha1(json.dumps(parts, separators=(",", ":")).encode()).hexdigest()
+
+
 def input_signature(product_metas):
     """Fingerprint of the input files the payload's input aggregates were built from.
 
@@ -2554,6 +2691,9 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
         cluster_sig = cluster_signature(datasets, out_dir.parent / "cache")
         pairs_sig = hashlib.sha1("\x1f".join(p.get("oh") or "" for p in pairs).encode()).hexdigest()
         feed_sig = feed_signature(datasets)
+        release_sig = release_signature(datasets)
+        ab_sig = ab_test.rounds_signature(datasets)
+        ab_expected = {product for product in PRODUCTS if ab_test.ab_round_dirs(datasets, product)}
         scanned = sum(v["scanned"] for v in scan_info.values())
         marker = store.get_meta("complete")
         if (pairing_info.get("mode") == "key" and scanned == 0
@@ -2564,9 +2704,11 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
                 and marker.get("pairs_sig") == pairs_sig
                 and marker.get("cluster") == cluster_sig
                 and marker.get("feed") == feed_sig
+                and marker.get("releases") == release_sig
+                and marker.get("ab") == ab_sig
                 and marker.get("input") == input_sig
                 and (out_dir / "data.json").exists() and (out_dir / "samples.json").exists()
-                and (out_dir / "samples").is_dir() and payload_files_exist(out_dir)):
+                and (out_dir / "samples").is_dir() and payload_files_exist(out_dir, ab_expected)):
             timers["cluster"] = round(time.time() - t0, 1)
             timers["samples"] = 0.0
             timers["aggregate"] = 0.0
@@ -2656,7 +2798,7 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
             scene = scene_votes(product, rows)
             for s in rows_sorted:
                 sc = scene_of(s[1], scene)
-                if sc != (s[2].get("task") or s[2].get("skill") or "未标注"):
+                if sc != (s[2].get("task") or s[2].get("skill") or NO_SCENE):
                     s[2]["sc"] = sc
                 else:
                     s[2].pop("sc", None)
@@ -2687,12 +2829,32 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
         }
 
         t0 = time.time()
+        ab_bytes = 0
+        for product in products:
+            payload = ab_test.ab_payload(datasets, product, generated)
+            if not payload:
+                continue
+            latest = payload["rounds"][-1]
+            # The shell carries only the entry point; the rounds themselves stay lazy.
+            products[product]["ab"] = {
+                "url": f"abtests-{product}.json", "rounds": len(payload["rounds"]),
+                "label": latest["label"], "targets": latest["targets"],
+                "paired": latest["sides"]["after"] is not None,
+            }
+            ab_bytes += write_json(out_dir / f"abtests-{product}.json", payload)
+        for stale in out_dir.glob("abtests-*.json*"):
+            product = stale.name[len("abtests-"):].split(".", 1)[0]
+            if product not in products or product not in ab_expected:
+                stale.unlink(missing_ok=True)
         data_bytes = 0
+        trend_bytes = 0
         for product, payload in products.items():
             data_bytes += write_json(out_dir / f"data-{product}.json", {
                 "schema": 2, "generated_at": generated, "product": product,
                 "products": {product: payload},
             })
+            trend_bytes += write_json(out_dir / f"trends-{product}.json", trend_payload(
+                product, samples[product], release_entries(datasets, product), generated))
         data_bytes += write_json(out_dir / "data.json", shared)
         for stale in out_dir.glob("data-*.json*"):
             product = stale.name[len("data-"):].split(".", 1)[0]
@@ -2711,6 +2873,10 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
             product = stale.name[len("labels-"):].split(".", 1)[0]
             if product not in labels:
                 stale.unlink(missing_ok=True)
+        for stale in out_dir.glob("trends-*.json*"):
+            product = stale.name[len("trends-"):].split(".", 1)[0]
+            if product not in products:
+                stale.unlink(missing_ok=True)
         timers["write"] = round(time.time() - t0, 1)
 
         slugs = [s[0] for rows in samples.values() for s in rows]
@@ -2721,7 +2887,8 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
         store.set_meta("complete", {
             "build": bs.BUILD_VERSION, "payload": PAYLOAD_VERSION, "pairs": len(pairs),
             "rules": rules_sig,
-            "pairs_sig": pairs_sig, "cluster": cluster_sig, "feed": feed_sig, "input": input_sig,
+            "pairs_sig": pairs_sig, "cluster": cluster_sig, "feed": feed_sig,
+            "releases": release_sig, "ab": ab_sig, "input": input_sig,
             "at": generated,
         })
         store.commit()
@@ -2729,6 +2896,8 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
         summary = Counter(stats)
         summary.update({
             "pairs": len(pairs), "data_kb": round(data_bytes / 1024),
+            "trend_kb": round(trend_bytes / 1024),
+            "ab_kb": round(ab_bytes / 1024),
             "index_kb": round(index_bytes / 1024),
             "scan_files": sum(v["files"] for v in scan_info.values()),
             "scan_scanned": sum(v["scanned"] for v in scan_info.values()),
@@ -2777,10 +2946,11 @@ def main(argv=None):
         sample_dir.mkdir(parents=True, exist_ok=True)
         for stale in out.glob(".samples-*"):
             shutil.rmtree(stale, ignore_errors=True)
-        for stale in list(out.glob("data-*.json*")) + list(out.glob("samples-*.json*")) + list(out.glob("labels-*.json*")):
+        for stale in list(out.glob("data-*.json*")) + list(out.glob("samples-*.json*")) + list(out.glob("labels-*.json*")) + list(out.glob("trends-*.json*")) + list(out.glob("abtests-*.json*")):
             stale.unlink(missing_ok=True)
         # build() writes every payload itself; only the empty shell is left to write.
         stats = {**stats, "data_kb": round(write_json(out / "data.json", data) / 1024),
+                 "trend_kb": 0, "ab_kb": 0,
                  "index_kb": round(write_json(out / "samples.json", index) / 1024)}
     summary = {"pairs": data["source"].get("pairs", 0), "pairing": data["source"].get("mode"), **stats}
     print(json.dumps(summary, ensure_ascii=False))

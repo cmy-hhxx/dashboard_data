@@ -256,6 +256,38 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .mx-crumbs b { color: var(--ink-2); font-weight: var(--w-medium); }
 .mx-tip-pats { margin-top: 4px; }
 
+/* 格子 → 就地趋势：矩阵被一张按时间轴的折线替代，工具条沿用评测量卡的 seg 尺寸。 */
+.mxt { display: grid; gap: 12px; min-width: 0; }
+.mxt-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.mxt-tools .seg { height: 30px; padding: 2px; }
+.mxt-tools .seg button { padding: 0 9px; font-size: var(--fs-meta); }
+.mxt-tools .seg-knob { top: 2px; bottom: 2px; }
+.mxt-plot { min-width: 0; }
+.mxt-plot svg { display: block; width: 100%; height: auto; overflow: visible; }
+.mxt-grid line { stroke: var(--well-2); stroke-width: 1; }
+.mxt-grid line.is-base { stroke: var(--well); }
+.mxt-ylab, .mxt-xlab { fill: var(--faint); font-size: 11px; }
+.mxt-ylab { text-anchor: end; dominant-baseline: middle; }
+.mxt-xlab { text-anchor: middle; }
+.mxt-line {
+  fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
+  stroke-dasharray: 1; stroke-dashoffset: 1; animation: mxt-draw var(--ease-out) both;
+}
+@keyframes mxt-draw { to { stroke-dashoffset: 0; } }
+.mxt-dot { stroke: var(--card); stroke-width: 1.2; }
+.mxt-rel line { stroke: var(--faint); stroke-width: 1; stroke-dasharray: 3 3; }
+.mxt-rel text { fill: var(--muted); font-size: 10px; text-anchor: middle; }
+.mxt-cursor { display: none; pointer-events: none; }
+.mxt-cursor.is-on { display: block; }
+.mxt-cursor line { stroke: var(--faint); stroke-width: 1; }
+.mxt-cursor circle { stroke: var(--card); stroke-width: 1.5; }
+.mxt-legend { gap: 6px 16px; margin-top: 0; font-size: var(--fs-small); }
+.mxt-legend b { color: var(--ink-2); font-weight: var(--w-medium); }
+.mxt-legend .mxt-of { margin-left: auto; }
+@media (max-width: 640px) {
+  .mxt-tools { gap: 6px; }
+  .mxt-tools .seg button { padding: 0 7px; }
+}
 @media (max-width: 860px) {
   .duo { grid-template-columns: 1fr; justify-items: center; }
   .duo .list { width: 100%; }

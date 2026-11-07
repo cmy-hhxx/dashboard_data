@@ -37,6 +37,11 @@ dashboard/static/samples.json.gz
 dashboard/static/samples-*.json
 dashboard/static/samples-*.json.gz
 dashboard/static/samples/
+dashboard/static/labels-*.json
+dashboard/static/trends-*.json
+dashboard/static/trends-*.json.gz
+dashboard/static/abtests-*.json
+dashboard/static/abtests-*.json.gz
 
 .taste-skill/
 # 本地数据与服务状态（不入库）
