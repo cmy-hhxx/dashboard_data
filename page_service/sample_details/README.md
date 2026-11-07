@@ -22,7 +22,7 @@ http://<看板主机>:2833/?product=&case=  ──> /api/context（迷你索引�
 | `/`、`/detail` | 页面。带 `?product=wencai&case=daily%7Cb_fast%7Cthread_…`（一个会话，多轮自动合并）或 `?product=wencai&slug=<10位hex>`（一条评测输出）；再加 `&trace=<trace_id>` 可直接定位到会话里的某一轮；不带参数时是使用说明页 |
 | `/api/context?…` | 页面用：只返回这个会话的那几行召回索引 + taxonomy（AIME 全量索引 8.1 MB，不下发浏览器）；带 `trace` 时原样回显（定位在前端做，详情里才有每轮 trace_id） |
 | `/samples/<slug>.json` | 原样透传单条详情（与看板同路径，首次请求会触发看板懒生成，0.5–4 s） |
-| `/samples-<product>.json` | 原样透传召回索引（给同事的系统对接用） |
+| `/samples-<product>.json` | 原样透传召回索引（给同事的系统对接用）。**2026-11-07 起行内不再含 `lb`**，标签改由看板 `labels-<product>.json` 按行号提供（本服务不代理该文件） |
 | `/healthz` | 存活 + 上游探活 |
 
 页面链接的用法：在看板里选中一个样本，复制地址栏的
@@ -99,6 +99,10 @@ curl -sI "http://<看板主机>:2833/samples/<slug>.json"
 ## 已知边界
 
 - **无鉴权**：按约定部署在内部网络，和看板口径一致；不要把这个端口暴露到公网。
+- **不代理 labels 文件**：看板 2026-11-07 把召回索引行里的 `lb`（问题标签）拆成了 `labels-<product>.json`，
+  本服务只透传 `samples-<product>.json`；页面不需要 `lb`，所以页面对该文件的请求会 404（前端已 catch，无影响）。
+  业务方需要标签请走看板 5001（`http://<看板主机>:2768|2221/labels-<product>.json`，与索引 `rows[]` 同序同长度）。
+  若必须经 5002 提供，需另加代理并按行号对齐，不要直接把 labels 贴到 `/api/context` 的子集行上。
 - **首次打开慢**：详情是看板按需生成的。没被访问过的样本首次 0.5–4 s，之后走磁盘缓存；
   AIME 多轮会话（最多 41 条评测输出）第一次打开需要逐条生成，会更久一些。
 - **数据新鲜度**：索引/taxonomy 在进程内缓存 120 s（`DOC_TTL` 可调）；详情每次都走看板，

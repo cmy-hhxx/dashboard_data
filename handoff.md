@@ -48,7 +48,8 @@ datasets/ ──> stats_worker.py ──> datasets/stats.json（每 1 小时，�
         ├─ static/data.json(.gz)              共享 taxonomy/system + 产品元数据
         ├─ static/data-<product>.json(.gz)    单产品 KPI/会话场/聚类/预测
         ├─ static/samples.json(.gz)           产品清单
-        └─ static/samples-<product>.json(.gz) 单产品召回索引
+        ├─ static/samples-<product>.json(.gz) 单产品召回索引（不含 lb）
+        └─ static/labels-<product>.json(.gz)  单产品问题标签，与索引 rows[] 同序
                         │
 server.py（标准库 HTTP，:5001，定时 build）──> app.js
         └─ /samples/<slug>.json 按需生成 ──> detail_builder.py
@@ -143,10 +144,14 @@ system.goldens[product][] = { slug, date, question, model, problems[], messages[
 
 ```text
 q 问题 · m 模型 · sp daily/lost · d 日期 · w 最严重等级 · n 问题数
-sv 严重度构成 · r 环节 · st 阶段 · pt 模式 · tg 标签 · lb 问题标签
+sv 严重度构成 · r 环节 · st 阶段 · pt 模式 · tg 标签
 tr 轮数 · mc 消息数 · lang · case · s 短 slug
 uid 用户 ID（输入 meta.user_id）· ut 用户类型 real/test/internal/unknown · ul 流失标记（1 才有）
 ```
+
+问题标签 `lb` 已从索引行拆出（2026-11-07）：`static/labels-<product>.json` = `{schema, product,
+labels:["…",…]}`，与 `rows[]` 同长度、同顺序；前端首屏后再拉，搜索时回填。`samples-<product>.json`
+与 5002 的透传接口都不再含 `lb`，业务方按行号配对（见 `docs/接口使用指南.md` 四、变更记录）。
 
 用户类型由 `dashboard/user_rules.py` 判定，规则/名单放在 `<datasets>/user_rules.json`
 （`EVAL_USER_RULES` 可覆盖）：名单优先，然后「超过十位（11 位及以上）的数字 ID = 测试用户、十位及以内 = 真实用户」、
@@ -220,7 +225,7 @@ uid 用户 ID（输入 meta.user_id）· ut 用户类型 real/test/internal/unkn
 - **数据页跳样本只有两处**：会话场格子带 `case`，聚类矩阵格子带 `scene/sub/stage/mech/pattern`；旭日图、桑基图、预测页签仍只在页内下钻。
   问财的场景在 `build.py` 里来自 skill 投票，索引行用 `sc` 携带与 task/skill 不一致的场景，`samples.js` 的 `sceneOf` 优先读它。
 - **生成物不是源码**：`static/data.json`、`static/data-<product>.json`、`static/samples.json`、
-  `static/samples-<product>.json` 由构建产生，`static/samples/` 是详情懒加载缓存，都不入库；
+  `static/samples-<product>.json`、`static/labels-<product>.json` 由构建产生，`static/samples/` 是详情懒加载缓存，都不入库；
   本地刷新/远端部署会自动重建。详情缓存可以安全删除，下一次访问按需补。
 - **部署**：`./dashboard/deploy.sh`；完成后看 `logs/build.log` 和 `/healthz` 的
   `ok`、`build.pairs`。构建失败不会自动回滚，服务可能继续使用旧数据。
