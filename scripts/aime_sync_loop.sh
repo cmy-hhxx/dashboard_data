@@ -21,7 +21,7 @@ STATE=tmp/aime_sync
 mkdir -p "$STATE"
 
 echo $$ > "$STATE/loop.pid"
-echo "[$(date '+%F %T')] loop start pid=$$ interval=${INTERVAL}s verify_every=${VERIFY_EVERY} mode=dual(cluster U->V, daily input U<->V, daily output V->U)" >> "$STATE/loop.out"
+echo "[$(date '+%F %T')] loop start pid=$$ interval=${INTERVAL}s verify_every=${VERIFY_EVERY} mode=dual(cluster U->V, daily in/out U<->V)" >> "$STATE/loop.out"
 
 round=0
 while true; do
@@ -31,10 +31,10 @@ while true; do
   # 1) 乌兰 -> 弗吉尼亚：聚类树 + lost/lost_archive（daily 输入输出不在这里跑）
   if [ "$VERIFY_EVERY" -gt 0 ] && [ $((round % VERIFY_EVERY)) -eq 0 ]; then
     python3 scripts/sync_aime_ulan_to_va.py --direction forward --only all \
-      --skip daily/output,lost_archive/input --verify all >> "$STATE/loop.out" 2>&1
+      --skip lost_archive/input --verify all >> "$STATE/loop.out" 2>&1
   else
     python3 scripts/sync_aime_ulan_to_va.py --direction forward --only all \
-      --skip daily/output >> "$STATE/loop.out" 2>&1
+      >> "$STATE/loop.out" 2>&1
   fi
   rc1=$?
 

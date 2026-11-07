@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Eval dashboard server: static files + build.py payloads on :5001, rebuilt on a timer."""
+import gzip
 import json
 import mimetypes
 import os
@@ -126,9 +127,18 @@ class Handler(SimpleHTTPRequestHandler):
     def _send_body(self, status, body, ctype):
         # HTTP/1.1 keep-alive: without Content-Length the client waits for a body
         # that never ends, which is how a failed detail used to hang the page.
+        # Generated JSON has no precompressed twin, so compress it here; the
+        # sample details are the largest payloads the page pulls.
+        encoding = None
+        if len(body) >= 1024 and "gzip" in self.headers.get("Accept-Encoding", ""):
+            body = gzip.compress(body, 6)
+            encoding = "gzip"
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Vary", "Accept-Encoding")
+        if encoding:
+            self.send_header("Content-Encoding", encoding)
         self.end_headers()
         self.wfile.write(body)
 
@@ -283,7 +293,8 @@ def outputs_ready():
     except (OSError, ValueError):
         return False
     return (all(os.path.exists(os.path.join(STATIC, f"data-{p}.json")) for p in (data.get("products") or {}))
-            and all(os.path.exists(os.path.join(STATIC, f"samples-{p}.json")) for p in (samples.get("products") or {})))
+            and all(os.path.exists(os.path.join(STATIC, f"samples-{p}.json")) for p in (samples.get("products") or {}))
+            and all(os.path.exists(os.path.join(STATIC, f"labels-{p}.json")) for p in (samples.get("products") or {})))
 
 
 def main():

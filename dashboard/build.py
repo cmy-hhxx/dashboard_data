@@ -69,8 +69,12 @@ WORST_KEYS = SEVERITIES + ["none"]
 # Only fields the recall list and its filters/search actually read. Keeping the
 # index lean matters more than the full aggregate row: it is fetched by every
 # 具体数据 view and can be several MB.
-INDEX_FIELDS = ("s", "q", "m", "sp", "d", "sid", "tid", "w", "n", "tr", "r", "pt", "st", "lb", "case", "task", "sub", "skill", "sc",
+INDEX_FIELDS = ("s", "q", "m", "sp", "d", "sid", "tid", "w", "n", "tr", "r", "pt", "st", "case", "task", "sub", "skill", "sc",
                 "uid", "ut", "ul")
+# lb (the joined problem labels) is 4.8MB of the AIME index and only ever feeds
+# search, so it ships as its own file the browser fetches on the first keystroke.
+# Split apart the two compress better (2.71 + 1.53) than they do together (4.73).
+LABEL_FIELD = "lb"
 
 PRODUCTS = {
     "wencai": {"label": "问财", "models": ["a_fast", "a_expert", "b_fast", "b_expert"]},
@@ -2303,7 +2307,8 @@ def payload_files_exist(out_dir: Path) -> bool:
     except (OSError, ValueError):
         return False
     return (all((out_dir / f"data-{p}.json").exists() for p in (data.get("products") or {}))
-            and all((out_dir / f"samples-{p}.json").exists() for p in (samples.get("products") or {})))
+            and all((out_dir / f"samples-{p}.json").exists() for p in (samples.get("products") or {}))
+            and all((out_dir / f"labels-{p}.json").exists() for p in (samples.get("products") or {})))
 
 
 FORECAST_DIR = "4_forecast"
@@ -2546,6 +2551,7 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
         }
         available = [product for product in PRODUCTS if product in samples]
         indexes = {}
+        labels = {}
         for product, rows in samples.items():
             rows_sorted = sorted(rows, key=lambda s: (WORST_KEYS.index(s[2]["w"]), -s[2]["n"], s[2]["d"]))
             # The matrix files a sample under its voted scene; carry it where the plain
@@ -2569,6 +2575,8 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
                     "rows": [{k: s[2][k] for k in INDEX_FIELDS if k in s[2]} for s in rows_sorted],
                 }},
             }
+            labels[product] = {"schema": 2, "product": product,
+                               "labels": [s[2].get(LABEL_FIELD) or "" for s in rows_sorted]}
         index = {
             "schema": 2, "generated_at": generated,
             "products": {
@@ -2596,9 +2604,15 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
         index_bytes = write_json(out_dir / "samples.json", index)
         for product, payload in indexes.items():
             index_bytes += write_json(out_dir / f"samples-{product}.json", payload)
+        for product, payload in labels.items():
+            index_bytes += write_json(out_dir / f"labels-{product}.json", payload)
         for stale in out_dir.glob("samples-*.json*"):
             product = stale.name[len("samples-"):].split(".", 1)[0]
             if product not in indexes:
+                stale.unlink(missing_ok=True)
+        for stale in out_dir.glob("labels-*.json*"):
+            product = stale.name[len("labels-"):].split(".", 1)[0]
+            if product not in labels:
                 stale.unlink(missing_ok=True)
         timers["write"] = round(time.time() - t0, 1)
 
@@ -2666,7 +2680,7 @@ def main(argv=None):
         sample_dir.mkdir(parents=True, exist_ok=True)
         for stale in out.glob(".samples-*"):
             shutil.rmtree(stale, ignore_errors=True)
-        for stale in list(out.glob("data-*.json*")) + list(out.glob("samples-*.json*")):
+        for stale in list(out.glob("data-*.json*")) + list(out.glob("samples-*.json*")) + list(out.glob("labels-*.json*")):
             stale.unlink(missing_ok=True)
         # build() writes every payload itself; only the empty shell is left to write.
         stats = {**stats, "data_kb": round(write_json(out / "data.json", data) / 1024),

@@ -10,9 +10,6 @@
    - session 总评没有链路：右列归因卡片的上沿对齐第一段模型回答，而不是用户问句。
    ========================================================================== */
 :root {
-  --fs-meta: 11.5px;   /* labels, ids, counts */
-  --fs-small: 12.5px;  /* secondary text */
-  --fs-body: 13.5px;   /* message and card text */
   --col-traj: clamp(196px, 23%, 400px);
   --col-thread: 56px;
   --col-attr: clamp(220px, 25%, 440px);
@@ -102,7 +99,7 @@
 .srow .bar { border-radius: 2px; background: var(--c); min-height: 100%; opacity: 0.9; }
 .srow-body { min-width: 0; display: grid; gap: 4px; }
 .srow .q {
-  font-size: 14px; line-height: 1.5; font-weight: var(--w-medium); overflow: hidden;
+  font-size: var(--fs-body); line-height: 1.5; font-weight: var(--w-medium); overflow: hidden;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
 }
 .srow .m { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: var(--fs-meta); color: var(--ink-2); }
@@ -111,7 +108,7 @@
 .tag-lost {
   display: inline-flex; align-items: center; height: 17px; padding: 0 5px; border-radius: var(--r-chip);
   background: color-mix(in oklab, var(--sev-2) 16%, transparent); color: var(--sev-1);
-  font-size: 11px; font-weight: var(--w-medium); letter-spacing: 0.02em;
+  font-size: var(--fs-meta); font-weight: var(--w-medium); letter-spacing: 0.02em;
 }
 :root[data-mode="dark"] .tag-lost { background: color-mix(in oklab, var(--sev-1) 22%, transparent); }
 
@@ -152,7 +149,7 @@
 /* 用户类型标签：跟着 idline 的「用户 ID」显示；颜色沿用严重度/强调色的语义，不新开色板。 */
 .utag {
   display: inline-flex; align-items: center; height: 17px; margin-left: 6px; padding: 0 5px;
-  border-radius: var(--r-chip); font-size: 11px; font-weight: var(--w-medium); letter-spacing: 0.02em;
+  border-radius: var(--r-chip); font-size: var(--fs-meta); font-weight: var(--w-medium); letter-spacing: 0.02em;
   background: var(--well-2); color: var(--ink-2);
 }
 .utag.is-real { background: var(--accent-soft); color: var(--accent); }
@@ -355,7 +352,7 @@
 .blk-label { display: block; margin-top: 10px; font-size: var(--fs-meta); color: var(--muted); font-weight: var(--w-medium); }
 .msg.is-folded .blk, .msg.is-folded .blk-label, .msg.is-folded .msg-zh { display: none; }
 .msg-zh { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--t4); color: var(--muted); font-size: var(--fs-small); line-height: 1.65; white-space: pre-wrap; }
-.gap { display: block; margin: 6px 0; color: var(--muted); font: 11px var(--font); text-align: center; letter-spacing: 0.03em; }
+.gap { display: block; margin: 6px 0; color: var(--muted); font-size: var(--fs-meta); font-family: var(--font); text-align: center; letter-spacing: 0.03em; }
 
 /* The think / call / result chain between a question and its answer scrolls in its own box,
    so hundreds of steps never push the answer off screen. */
@@ -451,10 +448,10 @@
 .evbtn:hover:not(:disabled) { background: var(--lift); }
 .evbtn:active:not(:disabled) { transform: scale(0.985); }
 .evbtn:disabled { cursor: default; opacity: 0.7; }
-.evbtn .at { padding-top: 1px; color: var(--accent); font: var(--fs-meta) var(--mono); white-space: nowrap; }
+.evbtn .at { padding-top: 1px; color: var(--accent); font-size: var(--fs-meta); font-family: var(--mono); white-space: nowrap; }
 .evbtn:disabled .at { color: var(--muted); }
 .evbtn .qt {
-  color: var(--ink-2); font: var(--fs-meta) var(--mono); overflow: hidden;
+  color: var(--ink-2); font-size: var(--fs-meta); font-family: var(--mono); overflow: hidden;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
 }
 

@@ -8,6 +8,7 @@ const PAGE = 50;
 const S = { product: null, all: [], rows: [], pageRows: [], page: 1, slug: null, sessionKey: null, D: null, round: 0, trace: 0, turn: 0, cturn: 0, sessionView: false, open: new Set(), active: null, cache: new Map(), loadSeq: 0, refocusList: false };
 let ctx;
 let root;
+let labelsP = null;
 
 const params = () => new URLSearchParams(location.search);
 const F = () => {
@@ -90,9 +91,11 @@ export async function render(r, c) {
     // Fresh index from an in-place refresh: regroup, keep the reader's session and filters.
     S.all = groupSessions(prod.rows);
     S.prod = prod;
+    labelsP = null; // labels are index-aligned; a rebuilt index needs the new file
   }
   if (S.product !== c.product || !$(".bench", root)) {
     S.product = c.product;
+    labelsP = null;
     S.all = prod ? groupSessions(prod.rows) : [];
     S.prod = prod;
     S.slug = null;
@@ -111,6 +114,18 @@ export async function render(r, c) {
   }
   syncFilters();
   renderList();
+  // lb is the only search field paint does not need, so it ships separately (4.8MB of
+  // the AIME index). Search works without it and gets more accurate when it lands.
+  labelsP = labelsP || getJSON(`labels-${c.product}.json`)
+    .then((payload) => {
+      const labels = payload.labels || [];
+      prod.rows.forEach((r, i) => { if (labels[i]) r.lb = labels[i]; });
+      if (S.prod !== prod) return;
+      S.all = groupSessions(prod.rows);
+      renderList();
+    })
+    // A failed fetch must not stick: the next render tries again.
+    .catch(() => { labelsP = null; });
   S.traceMiss = null;
   const focusTrace = params().get("trace") || "";
   const wanted = params().get("case");

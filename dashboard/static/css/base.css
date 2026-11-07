@@ -11,6 +11,12 @@
     "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", sans-serif;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 
+  /* Type scale: four steps instead of the old 7.5/9/10/10.5/11/11.5/12/12.5/13.5px drift. */
+  --fs-meta: 12px;    /* labels, ids, counts */
+  --fs-small: 13px;   /* secondary text */
+  --fs-body: 14px;    /* message and card text */
+  --fs-title: 15px;   /* card and section heads */
+
   --gutter: 24px;
   --gap: 16px;
   --px: 16px;
@@ -35,8 +41,8 @@
   --lift: #fbfbfc;
   --ink: #1b2129;
   --ink-2: #474f5b;
-  --muted: #7a828e;
-  --faint: #a7aeb8;
+  --muted: #697280;   /* 4.6:1 on --card, 4.0 on --well-2 */
+  --faint: #7c8492;   /* 3.3:1: de-emphasis only, never body copy */
   --accent: #3552d8;
   --loc-ulq: #1d7d72;
   --loc-vir: #6a43b8;
@@ -68,7 +74,7 @@
   --ink: #e5e8ec;
   --ink-2: #b3bac4;
   --muted: #858d98;
-  --faint: #5b636e;
+  --faint: #828b98;   /* 5.1:1 on --card */
   --accent: #8ea2ff;
   --loc-ulq: #62c6b6;
   --loc-vir: #b49cff;
@@ -125,7 +131,7 @@ h1, h2, h3, h4, p { margin: 0; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-chip); }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
-.mono { font-family: var(--mono); font-size: 12.5px; }
+.mono { font-family: var(--mono); font-size: var(--fs-small); }
 .skip { position: absolute; left: -999px; }
 .skip:focus { left: 16px; top: 8px; z-index: 50; background: var(--card); padding: 8px 12px; }
 
@@ -147,6 +153,11 @@ html[data-still] *, html[data-still] *::before, html[data-still] *::after {
 }
 
 /* ------------------------------------------------------------------ one surface: neutral tones + tints */
+/* Small severity swatches (9-11px) cannot all clear 3:1 against the card: the ramp is monotone,
+   so P3/P4 have to stay light. A hairline ring carries the shape instead of the fill. */
+:root { --swatch-ring: inset 0 0 0 1px color-mix(in oklab, var(--ink) 16%, transparent); }
+.sev i, .legend button i, .filters button i, .li i, .keys i, .fx-iso i { box-shadow: var(--swatch-ring); }
+
 :root {
   --t0: color-mix(in oklab, var(--ink) 82%, var(--card));
   --t1: color-mix(in oklab, var(--ink) 60%, var(--card));

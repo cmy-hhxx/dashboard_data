@@ -43,7 +43,8 @@ let productSeg;
 let lastView = null;
 
 async function loadProductData(product = state.product) {
-  if (state.productData[product]) return state.data?.products?.[product] || null;
+  // "failed" must not stick: one flaky request used to blank this product until the next build.
+  if (state.productData[product] === true) return state.data?.products?.[product] || null;
   const meta = state.data?.products?.[product];
   if (!meta) return null;
   state.productP[product] = state.productP[product] || getJSON(`data-${product}.json`);

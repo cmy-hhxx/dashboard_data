@@ -1,6 +1,6 @@
 /* Shared message content (render.js): Markdown, JSON, evidence marks, message kinds,
    plus the evidence-anatomy grid both the 体系 golden case and 具体数据 build on. */
-.kind { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.kind { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-meta); color: var(--muted); white-space: nowrap; }
 .kind::before { content: ""; width: 6px; height: 6px; border-radius: 2px; background: var(--kc, var(--faint)); }
 .k-user { --kc: var(--accent); }
 .k-answer { --kc: var(--ink-2); }
@@ -10,42 +10,42 @@
 
 
 /* ---- message content: markdown + json, shared renderer */
-.blk { margin-top: 4px; font-size: 13.5px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; color: var(--ink); }
+.blk { margin-top: 4px; font-size: var(--fs-body); line-height: 1.65; white-space: pre-wrap; word-break: break-word; color: var(--ink); }
 .blk > :first-child { margin-top: 0; }
 .blk > :last-child { margin-bottom: 0; }
 .blk p { margin: 0 0 8px; }
 .blk p:last-child { margin-bottom: 0; }
-.md-h { font-size: 13.5px; font-weight: var(--w-title); margin: 10px 0 4px; color: var(--ink); letter-spacing: -0.002em; }
+.md-h { font-size: var(--fs-body); font-weight: var(--w-title); margin: 10px 0 4px; color: var(--ink); letter-spacing: -0.002em; }
 .md-list { margin: 4px 0 8px; padding-left: 18px; }
 .md-list li { margin: 2px 0; }
 .md-list li::marker { color: var(--muted); }
 .blk blockquote { margin: 6px 0; padding: 2px 0 2px 10px; border-left: 2px solid var(--well-2); color: var(--muted); }
 .blk hr { border: 0; border-top: 1px solid var(--well-2); margin: 10px 0; }
-.blk code { font-family: var(--mono); font-size: 12.5px; padding: 1px 4px; border-radius: 4px; background: var(--well-2); }
+.blk code { font-family: var(--mono); font-size: var(--fs-small); padding: 1px 4px; border-radius: 4px; background: var(--well-2); }
 .blk a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
 .blk del { color: var(--muted); }
 .blk strong { font-weight: var(--w-title); color: var(--ink); }
 .blk pre.code {
   margin: 6px 0; padding: 10px 12px; border-radius: 8px; background: var(--well);
   overflow: visible; max-height: none; white-space: pre-wrap; overflow-wrap: anywhere;
-  font-size: 12.5px; line-height: 1.6;
+  font-size: var(--fs-small); line-height: 1.6;
 }
 .blk pre.code code { background: none; padding: 0; font-size: inherit; }
 .md-table { overflow-x: auto; margin: 6px 0; }
-.md-table table { border-collapse: collapse; font-size: 12.5px; width: 100%; }
+.md-table table { border-collapse: collapse; font-size: var(--fs-small); width: 100%; }
 .md-table th, .md-table td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--well-2); vertical-align: top; }
 .md-table tr:last-child td { border-bottom: 0; }
 
 .json-view {
   margin: 4px 0; padding: 9px 11px; border-radius: 8px; background: var(--well);
-  font-family: var(--mono); font-size: 11.5px; line-height: 1.55; color: var(--ink-2);
+  font-family: var(--mono); font-size: var(--fs-meta); line-height: 1.55; color: var(--ink-2);
   white-space: pre-wrap; overflow-wrap: anywhere; overflow: visible; max-height: none;
 }
 .json-view .k { color: var(--muted); font-style: normal; }
 .json-view .s { color: var(--ink); font-style: normal; }
 .json-view .n { color: var(--accent); font-style: normal; }
 .json-view .l { color: var(--faint); font-style: normal; }
-.cx-img { font-size: 12.5px; color: var(--muted); }
+.cx-img { font-size: var(--fs-small); color: var(--muted); }
 .piece { display: inline; }
 
 /* Evidence marks: one look everywhere — tint + underline in the problem's severity colour.

@@ -70,10 +70,16 @@ export function hideTip() {
   tipEl().classList.remove("is-on");
 }
 export function bindTips(root, resolve) {
-  root.addEventListener("pointermove", (e) => {
+  // Over the session field this fires per tile; one hit-test per frame is enough.
+  let queued = null;
+  let raf = 0;
+  const show = () => {
+    raf = 0;
+    const e = queued;
+    if (!e) return;
     // Canvases (星图) hit-test and place their own tooltip.
-    if (e.target.closest("[data-own-tip]")) return;
-    const t = e.target.closest("[data-tip],[data-cell],[data-mx]");
+    if (e.target.closest && e.target.closest("[data-own-tip]")) return;
+    const t = e.target.closest ? e.target.closest("[data-tip],[data-cell],[data-mx]") : null;
     if (!t || !root.contains(t)) return hideTip();
     const html = resolve ? resolve(t) : null;
     if (html) return showTip(html, e.clientX, e.clientY);
@@ -82,8 +88,15 @@ export function bindTips(root, resolve) {
       const label = SEV_NAME[a] || a;
       showTip(`<div class="t-row">${esc(label)}<b class="num" style="margin-left:auto">${esc(b)}</b></div>${note ? `<div class="t-note">${esc(note)}</div>` : ""}`, e.clientX, e.clientY);
     } else hideTip();
+  };
+  root.addEventListener("pointermove", (e) => {
+    queued = e;
+    if (!raf) raf = requestAnimationFrame(show);
   });
-  root.addEventListener("pointerleave", hideTip);
+  root.addEventListener("pointerleave", () => {
+    queued = null;
+    hideTip();
+  });
 }
 
 /* Segmented control: click springs the knob; dragging tracks the pointer 1:1 and snaps crisply. */
