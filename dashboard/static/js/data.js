@@ -343,7 +343,8 @@ function evalModels(p) {
 
 function evalWindow(p) {
   const byDay = new Map();
-  const blank = () => ({ inputs: 0, evaluated: 0, traces: 0, tokens: 0, sessions: 0, inSessions: 0, hasIns: true, sids: new Set() });
+  const blank = () => ({ inputs: 0, evaluated: 0, traces: 0, tokens: 0, tokenRecords: 0, sessions: 0,
+    inTraces: 0, hasTraces: true, hasIns: true, sids: new Set(), inSids: new Set() });
   evalRows(p)
     .filter((r) => EV.model === "all" || r.m === EV.model)
     .forEach((r) => {
@@ -352,8 +353,11 @@ function evalWindow(p) {
       x.evaluated += r.evaluated || 0;
       x.traces += r.traces ?? r.evaluated ?? 0;
       x.tokens += r.tokens || 0;
-      if (r.in_sessions == null) x.hasIns = false;
-      else x.inSessions += r.in_sessions;
+      x.tokenRecords += r.token_records || 0;
+      if (r.input_traces == null) x.hasTraces = false;
+      else x.inTraces += r.input_traces;
+      if (!Array.isArray(r.in_sids)) x.hasIns = false;
+      else r.in_sids.forEach((sid) => x.inSids.add(`${r.sp}|${r.m}|${sid}`));
       if (Array.isArray(r.sids)) r.sids.forEach((sid) => x.sids.add(`${r.sp}|${r.m}|${sid}`));
       else x.sessions += r.sessions || r.evaluated || 0;
       byDay.set(r.d, x);
@@ -362,7 +366,7 @@ function evalWindow(p) {
   // 「全部」下钻到某一年时，窗口只保留这一年；月份桶怎么切由 evalBuckets 决定。
   if (EV.range === "all" && EV.year) dates = dates.filter((d) => d.startsWith(EV.year));
   if (!dates.length) {
-    return { days: [], totalInputs: 0, totalEval: 0, totalSessions: 0, totalTraces: 0, totalTokens: 0, totalInputSessions: null, peakEval: 0 };
+    return { days: [], totalInputs: 0, totalEval: 0, totalSessions: 0, totalTraces: 0, totalTokens: 0, totalInputSessions: null, totalInputTraces: null, peakEval: 0 };
   }
   const end = dayMs(dates[dates.length - 1]);
   const start = EV.range === "all" ? dayMs(dates[0]) : end - (Number(EV.range) - 1) * DAY_MS;
@@ -376,10 +380,12 @@ function evalWindow(p) {
     days,
     totalInputs: sum(days.map((x) => x.inputs)),
     totalEval: sum(days.map((x) => x.evaluated)),
-    totalSessions: sessions.size || sum(days.map((x) => x.sessions)),
+    totalSessions: sessions.size + sum(days.map((x) => x.sessions)),
     totalTraces: sum(days.map((x) => x.traces)),
     totalTokens: sum(days.map((x) => x.tokens)),
-    totalInputSessions: days.every((x) => x.hasIns) ? sum(days.map((x) => x.inSessions)) : null,
+    totalTokenRecords: sum(days.map((x) => x.tokenRecords)),
+    totalInputSessions: days.every((x) => x.hasIns) ? new Set(days.flatMap((x) => [...x.inSids])).size : null,
+    totalInputTraces: days.every((x) => x.hasTraces) ? sum(days.map((x) => x.inTraces)) : null,
     peakEval: Math.max(0, ...days.map((x) => x.evaluated)),
   };
 }
@@ -424,8 +430,8 @@ function evalChart(p) {
   const max = Math.max(1, ...bars.map((x) => Math.max(x.inputs, x.evaluated)));
   const rows = [];
   for (let i = 0; i < bars.length; i += EV_PER_ROW) rows.push(bars.slice(i, i + EV_PER_ROW));
-  const barH = rows.length === 1 ? 160 : 52;
-  return `<div class="evrows${EV.range === "all" ? " is-buckets" : " is-days"}" style="--bar-h:${barH}px">${rows
+  const barH = rows.length === 1 ? 160 : 44;
+  return `<div class="evrows${EV.range === "all" ? " is-buckets" : ` is-days${EV.range === "7" ? " is-week" : ""}`}" style="--bar-h:${barH}px">${rows
     .map((row) => `<div class="evrow" style="--n:${row.length}">${row
       .map((x) => {
         const total = Math.max(x.inputs, x.evaluated, 1);
@@ -447,11 +453,15 @@ function evalTotals(p) {
   const k = p.kpi;
   const input = p.input || {};
   const scoped = EV.range !== "all" || !!EV.year;
+  const model = EV.model !== "all";
+  const allInput = model ? (input.models?.[EV.model] || {}) : input;
   return {
     scoped,
-    sessions: [scoped ? w.totalSessions : k.unique_sessions, scoped ? (w.totalInputSessions ?? input.sessions) : input.sessions],
-    traces: [scoped ? w.totalTraces : k.traces, scoped ? w.totalInputs : input.traces],
-    tokens: scoped ? w.totalTokens : k.tokens,
+    sessions: [scoped || model ? w.totalSessions : k.unique_sessions, scoped ? w.totalInputSessions : allInput.sessions],
+    traces: [scoped || model ? w.totalTraces : k.traces, scoped ? w.totalInputTraces : allInput.traces],
+    tokens: scoped || model ? w.totalTokens : k.tokens,
+    tokenRecords: scoped || model ? (w.totalTokenRecords || 0) : k.token_records,
+    records: scoped || model ? w.totalEval : k.sessions,
   };
 }
 
@@ -464,7 +474,8 @@ function evalStats(p) {
   const items = [
     ["完成 Session / 输入", ratio(t.sessions)],
     ["完成 Trace / 输入", ratio(t.traces)],
-    ["评测 Tokens", counter(t.tokens, { unit: true, title: `评测输出会话的 tokens 合计 ${fmt(t.tokens)}` })],
+    [t.tokenRecords < t.records ? "评测 Tokens（部分）" : "评测 Tokens",
+      counter(t.tokens, { unit: true, title: `已上报 tokens 合计 ${fmt(t.tokens)} · 覆盖 ${fmt(t.tokenRecords)} / ${fmt(t.records)} 条评测记录` })],
   ];
   return stats(items);
 }
@@ -509,7 +520,6 @@ function repaintEvalCard(bento, p) {
   }
   const compact = $('[data-card="eval"] > .compact', bento);
   if (compact) compact.outerHTML = evalCompact(p);
-}
 }
 function evalCompact(p) {
   const w = evalWindow(p);

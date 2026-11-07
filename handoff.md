@@ -30,7 +30,8 @@ curl -s http://127.0.0.1:5001/healthz   # 必须看 JSON 内容；状态码恒�
 
 cd dashboard
 python3 -I -m unittest discover -s tests -p 'test_*.py'
-for f in static/js/*.js; do node --check "$f"; done
+node tests/test_eval_counts.cjs
+for f in static/js/*.js; do node --input-type=module --check < "$f" || break; done
 ```
 
 验收固定做：三个视图 × 问财 / AIME × 亮暗色 × 1440/1024/390，控制台无报错、

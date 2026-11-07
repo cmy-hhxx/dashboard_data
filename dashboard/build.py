@@ -52,7 +52,7 @@ REPO = DASHBOARD.parent
 STATIC = DASHBOARD / "static"
 PRODUCTION_DATASETS = Path("/mnt/fin_bench/code_and_clean_data/datasets")
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-07.2"
+PAYLOAD_VERSION = "2026-11-07.3"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 2
 
@@ -451,7 +451,7 @@ def _task_nodes(tasks: dict):
     return out
 
 
-def input_sessions(metas, store, product: str = "") -> int | None:
+def input_session_counts(metas, store, product: str = "") -> dict[str, int] | None:
     """去重评测输入的会话数，按 (split, 归一化模型, session_id) 计数。
 
     口径和 ``kpi.unique_sessions``（完成 Session）一致，所以 数据量卡 的
@@ -465,7 +465,7 @@ def input_sessions(metas, store, product: str = "") -> int | None:
         return None
     paths = [m.get("path") for m in metas if m.get("path")]
     if not paths:
-        return 0
+        return {"all": 0}
     keys = store.file_keys(paths)
     if len(keys) < len(set(paths)):
         return None
@@ -475,12 +475,15 @@ def input_sessions(metas, store, product: str = "") -> int | None:
         if not rel:
             continue
         split = meta.get("split") or bs.split_from_rel(rel)
-        model = bs.normalize_model(meta.get("model"), product) or meta.get("model") or "未标注"
+        raw_model = meta.get("model") or bs.stats_model(meta.get("stats"))
+        model = bs.normalize_model(raw_model, product) or raw_model or "未标注"
         for key in keys.get(rel) or ():
             sid = key.split("\x1f", 1)[0]
             if sid:
                 seen.add((split, model, sid))
-    return len(seen)
+    counts = dict(Counter(model for _, model, _ in seen))
+    counts["all"] = len(seen)
+    return counts
 
 
 def input_payload(metas, store=None, product: str = ""):
@@ -519,9 +522,11 @@ def input_payload(metas, store=None, product: str = ""):
         "lost": sum(t.get("lost", 0) for t in top.values()),
         "tasks": _task_nodes(top), "models": models,
     }
-    sessions = input_sessions(metas, store, product)
+    sessions = input_session_counts(metas, store, product)
     if sessions is not None:
-        payload["sessions"] = sessions
+        payload["sessions"] = sessions["all"]
+        for model, value in models.items():
+            value["sessions"] = sessions.get(model, 0)
     return payload
 
 
@@ -563,14 +568,11 @@ def daily_inputs(metas):
     return out
 
 
-def daily_input_sessions(metas, store):
-    """Per-day input session counts, keyed exactly like ``daily_inputs``.
+def daily_input_session_ids(metas, store):
+    """Compact session IDs per day, allowing union across a selected window.
 
-    The eval card unions evaluated sessions across the selected window, so its
-    denominator needs the same per-day shape.  Sessions are deduped within a
-    day/model/split; the rare session that appears on two days counts on both,
-    which is also how the day buckets add up.  ``None`` when the file index is
-    incomplete, so the payload can omit the field instead of lying.
+    IDs are product-local integers; the browser namespaces them by model/split,
+    exactly like evaluated sessions. Missing indexes remain unknown, not zero.
     """
     if store is None:
         return None
@@ -581,6 +583,7 @@ def daily_input_sessions(metas, store):
     if len(keys) < len(set(paths)):
         return None
     seen = defaultdict(set)
+    number = {}
     for meta in metas:
         rel = meta.get("path")
         match = DATE_RE.search(Path(rel).name) if rel else None
@@ -591,31 +594,44 @@ def daily_input_sessions(metas, store):
         for key in keys.get(rel) or ():
             sid = key.split("\x1f", 1)[0]
             if sid:
-                seen[(match.group(1), model, split)].add(sid)
-    return {k: len(v) for k, v in seen.items()}
+                seen[(match.group(1), model, split)].add(number.setdefault(sid, len(number)))
+    return {k: sorted(v) for k, v in seen.items()}
 
 
-def daily_payload(samples, inputs, input_sessions=None):
+def daily_input_traces(metas):
+    """Trace volume from the same file aggregates used by the data-volume card."""
+    out = Counter()
+    for meta in metas:
+        match = DATE_RE.search(Path(meta["path"]).name)
+        if match:
+            for model, stats in (meta.get("stats") or {}).get("by_model", {}).items():
+                out[(match.group(1), model, meta.get("split") or "daily")] += stats["traces"]
+    return out
+
+
+def daily_payload(samples, inputs, input_session_ids=None, input_traces=None):
     """Per-day input volume plus the evaluated session/trace/token totals.
 
     ``sids`` is carried alongside the count so the eval card can union sessions
     across a selected window instead of adding per-day distinct counts.  Only
     identity matters there, so sessions are small per-product integers rather
-    than 40-character ids (about 400 KB of the AIME payload).  ``in_sessions``
-    gives the same per-day shape for the input side (see ``daily_input_sessions``).
+    than 40-character ids (about 400 KB of the AIME payload). ``in_sids`` does
+    the same for inputs; ``input_traces`` is distinct from input JSONL records.
     """
     evaluated = Counter()
     traces = Counter()
     tokens = Counter()
+    token_records = Counter()
     sids = defaultdict(set)
     number = {}
-    for slug, _, row, facts in samples:
+    for slug, detail, row, facts in samples:
         key = (row["d"], row["m"], row["sp"])
         evaluated[key] += 1
         traces[key] += row["tr"]
         tokens[key] += facts["tokens"]
+        token_records[key] += int(any(detail["meta"].get(k) is not None for k in ("tokens_in", "tokens_out")))
         sids[key].add(number.setdefault(row["sid"] or slug, len(number)))
-    keys = set(inputs) | set(evaluated)
+    keys = set(inputs) | set(evaluated) | set(input_traces or {})
     out = []
     for d, m, sp in sorted(keys):
         item = {
@@ -625,10 +641,14 @@ def daily_payload(samples, inputs, input_sessions=None):
             "sessions": len(sids.get((d, m, sp), ())),
             "traces": traces.get((d, m, sp), 0),
             "tokens": tokens.get((d, m, sp), 0),
+            "token_records": token_records.get((d, m, sp), 0),
             "sids": sorted(sids.get((d, m, sp), ())),
         }
-        if input_sessions is not None:
-            item["in_sessions"] = input_sessions.get((d, m, sp), 0)
+        if input_session_ids is not None:
+            item["in_sids"] = input_session_ids.get((d, m, sp), [])
+            item["in_sessions"] = len(item["in_sids"])
+        if input_traces is not None:
+            item["input_traces"] = input_traces.get((d, m, sp), 0)
         out.append(item)
     return out
 
@@ -1723,6 +1743,7 @@ def aggregate(product, samples, taxonomy):
             "clustered": clustered, "unclustered": len(problems_all) - clustered,
             "traces": sum(s[3]["traces"] for s in samples), "messages": sum(msgs), "tool_calls": sum(calls),
             "tokens": sum(tokens),
+            "token_records": sum(any(s[1]["meta"].get(k) is not None for k in ("tokens_in", "tokens_out")) for s in samples),
             "compacted": sum(1 for s in samples if s[3]["compact"]),
             "correct": sum(1 for s in samples if s[3]["correct"] is True),
             "judged": sum(1 for s in samples if s[3]["correct"] is not None),
@@ -2594,7 +2615,8 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
             products[product]["kpi"]["inputs"] = payload["records"]
             products[product]["kpi"]["lost"] = payload["lost"]
             products[product]["daily"] = daily_payload(
-                samples[product], daily_inputs(metas), daily_input_sessions(metas, store))
+                samples[product], daily_inputs(metas), daily_input_session_ids(metas, store),
+                daily_input_traces(metas))
             feed = prediction_feed_path(datasets, product)
             if feed:
                 try:

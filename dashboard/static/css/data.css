@@ -73,7 +73,7 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .ev-legend i { width: 7px; height: 7px; border-radius: 2px; }
 .ev-legend .ev-done { background: var(--accent); }
 .ev-legend .ev-in { background: var(--well-2); }
-.evrows { display: grid; gap: 10px; margin-top: 10px; }
+.evrows { display: grid; gap: 16px; margin-top: 10px; }
 #evChart {
   flex: 1 1 0; display: flex; align-items: center; min-height: 0; overflow: hidden;
   /* 日期/数字按自身宽度居中在柱子上，左右各留 10px，最外侧一列也不会被 overflow 裁掉。 */
@@ -161,18 +161,19 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .ev-tools .seg-knob { top: 2px; bottom: 2px; }
 .eval-content { container-type: inline-size; }
 .eval-content .stats { margin-top: var(--py); grid-template-columns: repeat(4, minmax(0, 1fr)); }
-/* 卡片不够宽时 15 个日期放不下（约 530px 起就会互相挤）：只留每 3 个一个，保持均匀留白。
-   按月的柱子最多 12 根、标签是「9月」，不需要这条。 */
-@container (max-width: 530px) {
-  #evChart .evrows.is-days .evday:not(:nth-child(3n + 1)):not(:last-child) .evdate { visibility: hidden; }
+/* 每行 15 天以一周为刻度，标出首日、中间和末日；完整日期仍在柱子的提示里。 */
+#evChart .evrows.is-days .evdate { visibility: hidden; }
+#evChart .evrows.is-days .evday:nth-child(7n + 1) .evdate,
+#evChart .evrows.is-week .evday:nth-child(3n + 1) .evdate { visibility: visible; }
+@container (min-width: 400px) {
+  #evChart .evrows.is-week .evdate { visibility: visible; }
+}
+@container (max-width: 420px) {
+  #evChart .evrows.is-days:not(.is-week) .evday:nth-child(2n) .evnums { visibility: hidden; }
 }
 /* 全部视图里年份柱是下钻入口（点它看这一年的月份）；返回按钮跟在图例行右端。 */
 .evday.is-drill { cursor: pointer; }
 .ev-legend .ev-back { margin-left: auto; }
-/* 15 个日期都显示时（约 530-600px），字号收一档，相邻日期之间留出 4px 左右的均匀空隙。 */
-@container (min-width: 531px) and (max-width: 600px) {
-  #evChart .evdate { font-size: var(--fs-meta); }
-}
 /* Paired desktop cards share chart columns and a bottom-aligned stats row. */
 @media (min-width: 861px) {
   .card:has(> #vol), .card:has(> .eval-content) { display: flex; flex-direction: column; height: 456px; overflow: hidden; }
@@ -589,8 +590,7 @@ body.is-modal { overflow: hidden; }
   [data-card="vol"].is-deep #vol .sb-view { grid-template-columns: minmax(0, 1fr); }
   [data-card="vol"].is-deep #vol .sb-list { display: none; }
   [data-card="eval"].is-deep { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-  /* Half-width bars keep every third date and only the completed count. */
-  [data-card="eval"].is-deep .evday:not(:nth-child(3n + 1)):not(:last-child) .evdate { visibility: hidden; }
+  /* Half-width bars keep only the completed count; date ticks follow the container. */
   [data-card="eval"].is-deep .evnums small { display: none; }
   [data-card="eval"].is-deep .evnums { min-height: 16px; }
   [data-card="eval"].is-deep > .eval-content { grid-column: 1; grid-row: 2; }

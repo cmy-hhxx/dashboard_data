@@ -9,6 +9,11 @@ HOST="${EVAL_DEPLOY_HOST:-eval_data}"
 REMOTE="${EVAL_DEPLOY_REMOTE:-/opt/eval_dashboard}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
+# Browser scripts are ES modules; explicitly select that mode to catch parse errors.
+for file in "$HERE"/static/js/*.js; do
+  node --input-type=module --check < "$file"
+done
+
 SSH_OPTS=(-o StrictHostKeyChecking=no -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
 if [ -n "${EVAL_DEPLOY_PORT:-}" ]; then SSH_OPTS+=(-p "$EVAL_DEPLOY_PORT"); fi
 if [ -n "${EVAL_DEPLOY_KEY:-}" ]; then SSH_OPTS+=(-i "$EVAL_DEPLOY_KEY"); fi

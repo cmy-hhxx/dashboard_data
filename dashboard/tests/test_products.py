@@ -84,6 +84,43 @@ class ProductSplitTests(unittest.TestCase):
                 stale.unlink()
             build(datasets, static)
             self.assertEqual((volume()["records"], volume()["sessions"]), (2, 1))
+            product = json.loads((static / "data-wencai.json").read_text())["products"]["wencai"]
+            self.assertEqual(product["input"]["models"]["a_fast"]["sessions"], 1)
+            self.assertEqual(product["daily"][0]["in_sids"], product["daily"][1]["in_sids"])
+
+    def test_daily_trace_volume_counts_traces_inside_each_record(self):
+        with tempfile.TemporaryDirectory() as folder:
+            datasets, static = Path(folder) / "datasets", Path(folder) / "static"
+            seed(datasets)
+            write_jsonl(datasets / "0_wencai/eval_input/a_fast/2026-11-02.jsonl", {
+                "meta": {"session_id": "s2", "request_time": "2026-11-02 10:00:00"},
+                "traces": [{"meta": {"model": "a_fast"}, "messages": []},
+                           {"meta": {"model": "a_fast"}, "messages": []}],
+            })
+            build(datasets, static)
+            product = json.loads((static / "data-wencai.json").read_text())["products"]["wencai"]
+            day = next(r for r in product["daily"] if r["d"] == "2026-11-02")
+            self.assertEqual((day["inputs"], day["input_traces"], day["in_sessions"]), (1, 2, 1))
+            self.assertEqual(sum(r["input_traces"] for r in product["daily"]), product["input"]["traces"])
+
+    def test_missing_token_usage_is_distinguished_from_reported_zero(self):
+        with tempfile.TemporaryDirectory() as folder:
+            datasets, static = Path(folder) / "datasets", Path(folder) / "static"
+            seed(datasets)
+            out = datasets / "0_wencai/eval_output/0_daily_eval/a_fast/a_fast_attribution-2026-11-01.jsonl"
+            row = json.loads(out.read_text())
+            row["session_meta"].pop("usage")
+            write_jsonl(out, row)
+            build(datasets, static)
+            product = json.loads((static / "data-wencai.json").read_text())["products"]["wencai"]
+            self.assertEqual((product["kpi"]["tokens"], product["kpi"]["token_records"]), (0, 0))
+            self.assertEqual(product["daily"][0]["token_records"], 0)
+            row["session_meta"]["usage"] = {"input_tokens": 0, "output_tokens": 0}
+            write_jsonl(out, row)
+            build(datasets, static)
+            product = json.loads((static / "data-wencai.json").read_text())["products"]["wencai"]
+            self.assertEqual((product["kpi"]["tokens"], product["kpi"]["token_records"]), (0, 1))
+            self.assertEqual(product["daily"][0]["token_records"], 1)
 
     def test_search_variant_inputs_follow_trace_model(self):
         """目录名报不出模型的输入（b_*_search 变体）按 trace 模型归组，和旭日图/输出模型同一套 key。"""
@@ -104,6 +141,7 @@ class ProductSplitTests(unittest.TestCase):
             self.assertEqual(daily[("2026-11-03", "a_expert")]["inputs"], 1)
             # 评测量卡按窗口对账：输入侧也要有逐日 session 数，口径和每日输入行一致。
             self.assertEqual(daily[("2026-11-03", "a_expert")]["in_sessions"], 1)
+            self.assertEqual(volume["input"]["models"]["a_expert"]["sessions"], 1)
 
     def test_aime_lost_user_input_counts_without_archive(self):
         with tempfile.TemporaryDirectory() as folder:
