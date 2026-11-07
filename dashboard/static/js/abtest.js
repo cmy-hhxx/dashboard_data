@@ -24,6 +24,20 @@ const num = (v) => Number(v) || 0;
 const signed = (v) => (v > 0 ? `+${fmt(v)}` : v < 0 ? `−${fmt(-v)}` : "0");
 const sumOf = (list) => list.reduce((s, v) => s + num(v), 0);
 const pathRelated = (a, b) => a === b || String(a).startsWith(`${b}.`) || String(b).startsWith(`${a}.`);
+const TAU = Math.PI * 2;
+const ORBIT = { before: [74, 86], after: [57, 69], online: [40, 52] };
+const SIDE_TONE = { before: "var(--t2)", after: "var(--accent)", online: "var(--loc-ulq)" };
+
+function orbitPath(r0, r1, a0, a1) {
+  a1 = Math.min(a1, a0 + TAU - 0.001);
+  const point = (r, a) => [110 + r * Math.cos(a), 110 + r * Math.sin(a)];
+  const [x0, y0] = point(r1, a0);
+  const [x1, y1] = point(r1, a1);
+  const [x2, y2] = point(r0, a1);
+  const [x3, y3] = point(r0, a0);
+  const large = a1 - a0 > Math.PI ? 1 : 0;
+  return `M${x0.toFixed(2)} ${y0.toFixed(2)}A${r1} ${r1} 0 ${large} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}L${x2.toFixed(2)} ${y2.toFixed(2)}A${r0} ${r0} 0 ${large} 0 ${x3.toFixed(2)} ${y3.toFixed(2)}Z`;
+}
 
 function dateRange(dates) {
   if (!Array.isArray(dates) || !dates.length) return "";
@@ -307,47 +321,62 @@ export function mountAB(host, data, state, tax) {
       || (state.metric === "online" && !sideReady(rounds[state.round], "online"))) state.metric = "all";
   if (!state.cell || typeof state.cell !== "object") state.cell = null;
 
-  const stName = (k) => (((labels.status || {})[k] || [])[0]) || k;
-  const stNote = (k) => (((labels.status || {})[k] || [])[1]) || "";
-  const srcName = (k) => ((labels.sources || {})[k]) || k;
   const resetMatrix = () => { state.rows = []; state.cols = []; state.cell = null; };
 
   function roundBar(rnd) {
     const items = rounds.map((r, i) => {
-      const online = sideReady(r, "online") ? `线上 ${fmt(r.sides.online.traces)}` : "线上待回填";
-      const paired = sideReady(r, "after") ? "固定题集已配对" : "固定题集待回填";
-      return `<button type="button" class="ab-round" data-act="round" data-i="${i}" aria-pressed="${i === state.round}" title="${esc(`${roundLabel(r, i)} · ${paired} · ${online}`)}">
-        <b>${esc(roundLabel(r, i))}</b><small>${esc(r.released_at || dateRange(r.dates) || "")}</small><span>${esc(paired)} · ${esc(online)}</span>
+      const meta = r.released_at || dateRange(r.dates) || "";
+      return `<button type="button" class="ab-round" data-act="round" data-i="${i}" aria-pressed="${i === state.round}" title="${esc(roundLabel(r, i))}">
+        <b>${esc(roundLabel(r, i))}</b>${meta ? `<small>${esc(meta)}</small>` : ""}
       </button>`;
     }).join("");
     return `<div class="ab-rounds" role="group" aria-label="AB 测试对比记录">${items}</div>`;
   }
 
-  function batchCard(rnd, side) {
-    const s = rnd.sides && rnd.sides[side];
-    const count = side === "online" ? (s ? s.traces : null) : (s ? rnd.targets : null);
-    const details = !s
-      ? (side === "online" ? "发版后线上数据待回填" : "发版后重评测待回填")
-      : side === "online"
-        ? `${fmt(s.hits)} 个问题落点 · ${s.from || ""}${s.to ? `～${s.to}` : ""}`
-        : `固定题集 · ${fmt(s.traces)} 条有落点 · ${fmt(s.hits)} 个落点`;
-    return `<article class="ab-batch${side === "online" ? " is-online" : ""}${s ? "" : " is-pending"}">
-      <header><span>${esc(sideLabel(data, side))}</span>${side === "online" && s ? '<i class="ab-live" title="真实用户"></i>' : ""}</header>
-      <b class="num">${count == null ? DASH : fmt(count)}</b>
-      <small>${count == null ? (side === "online" && !rnd.released_at ? "缺少发版日期" : "待回填") : (side === "online" ? "条真实用户评测" : "道固定问题")}</small>
-      <p>${esc(details)}</p>
-    </article>`;
+  function batchParts(rnd, side) {
+    const names = new Map((Array.isArray(rnd.nodes) ? rnd.nodes : []).map((n) => [n.id, n.name]));
+    const groups = new Map();
+    (Array.isArray(rnd.leaves) ? rnd.leaves : []).forEach((leaf) => {
+      const n = num(leaf[side]);
+      if (!n) return;
+      const id = String(leaf.id || "").split(".")[0] || "other";
+      const item = groups.get(id) || { id, name: names.get(id) || id, n: 0 };
+      item.n += n;
+      groups.set(id, item);
+    });
+    return [...groups.values()].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
   }
 
-  function ledger(rnd) {
-    const st = rnd.status || {};
-    const sources = Array.isArray(rnd.sources) ? rnd.sources : [];
-    const srcSum = sumOf(sources.map((x) => x[1]));
-    const srcs = sources.map(([k, n]) => `<span class="ab-src" title="${esc(`${srcName(k)}：${fmt(n)} 句`)}">${esc(srcName(k))} <b class="num">${fmt(n)}</b></span>`).join("");
-    return `<ul class="ab-ledger">
-      ${["A", "B", "C"].map((k) => `<li class="ab-stat" title="${esc(`${k} · ${stName(k)} · ${stNote(k)}`)}"><b class="num">${fmt(st[k])}</b><small><i class="ab-k">${k}</i>${esc(stName(k))}</small></li>`).join("")}
-      ${srcs ? `<li class="ab-srcs" title="${esc(`来源分布只统计有评测记录的 ${fmt(srcSum)} 句`)}"><small class="ab-srcs-lab">来源分布 <b class="num">${fmt(srcSum)}</b> 句</small>${srcs}</li>` : ""}
-    </ul>`;
+  function batchOrbit(rnd) {
+    const rings = SIDES.map((side) => {
+      const [r0, r1] = ORBIT[side];
+      const track = `<circle class="ab-orbit-track${sideReady(rnd, side) ? "" : " is-pending"}" cx="110" cy="110" r="${(r0 + r1) / 2}" style="--ring:${r1 - r0}"/>`;
+      if (!sideReady(rnd, side)) return track;
+      const parts = batchParts(rnd, side);
+      const total = sumOf(parts.map((part) => part.n));
+      if (!total) return track;
+      let angle = -Math.PI / 2;
+      const gap = parts.length > 1 ? Math.min(0.035, 0.14 / parts.length) : 0;
+      const paths = parts.map((part, i) => {
+        const span = (TAU * part.n) / total;
+        const d = orbitPath(r0, r1, angle + gap / 2, angle + span - gap / 2);
+        angle += span;
+        const opacity = parts.length === 1 ? 0.86 : 0.94 - (i * 0.44) / (parts.length - 1);
+        return `<path class="ab-orbit-seg" d="${d}" style="fill:${SIDE_TONE[side]};opacity:${opacity.toFixed(2)}"><title>${esc(`${sideLabel(data, side)} · ${part.name} · ${fmt(part.n)}`)}</title></path>`;
+      }).join("");
+      return track + paths;
+    }).join("");
+    const side = (key) => {
+      const s = rnd.sides && rnd.sides[key];
+      const detail = !s ? "待回填" : key === "online" ? `${fmt(s.traces)} 条评测` : `${fmt(s.traces)} / ${fmt(rnd.targets)} 有落点`;
+      return `<div class="ab-side${s ? "" : " is-pending"}"><i style="--c:${SIDE_TONE[key]}"></i><span>${esc(sideLabel(data, key))}</span><b class="num">${s ? fmt(s.hits) : DASH}</b><small>${esc(detail)}</small></div>`;
+    };
+    return `<section class="ab-overview" aria-label="A/B Test 三批问题落点概览">
+      <div class="ab-orbit"><svg viewBox="0 0 220 220" role="img" aria-label="按聚类阶段分解的三批问题落点">${rings}</svg>
+        <div class="ab-orbit-core"><small>固定题集</small><b class="num">${fmt(rnd.targets)}</b></div>
+      </div>
+      <div class="ab-sides"><div class="ab-sides-title">问题落点</div>${SIDES.map(side).join("")}</div>
+    </section>`;
   }
 
   function changes(rnd) {
@@ -375,24 +404,12 @@ export function mountAB(host, data, state, tax) {
     const max = Math.max(1, ...changesNow.map((x) => Math.abs(x.d)));
     const resolved = improved.filter((x) => x.after === 0).length;
     const added = worsened.filter((x) => x.before === 0).length;
-    const onlineReady = sideReady(rnd, "online");
     const onlineRows = (Array.isArray(rnd.leaves) ? rnd.leaves : []).filter((leaf) => num(leaf.online) > 0);
     changesNow.forEach((row) => { row.onlineMatched = onlineRows.some((leaf) => pathRelated(row.leaf.id, leaf.id)); });
-    const overlap = changesNow.filter((x) => x.d !== 0 && x.onlineMatched);
-    const online = onlineReady
-      ? `<section class="ab-online">
-          <div><b class="num">${fmt(rnd.sides.online.traces)}</b><small>线上真实用户评测</small></div>
-          <div><b class="num">${fmt(rnd.sides.online.hits)}</b><small>线上问题落点</small></div>
-          <div><b class="num">${fmt(onlineRows.length)}</b><small>线上命中问题聚类</small></div>
-          <p>线上命中的聚类中，<b class="num">${fmt(overlap.length)}</b> 个与固定题集的变化重合。</p>
-        </section>`
-      : `<section class="ab-online is-pending"><p>${rnd.released_at ? "线上真实用户评测待回填。" : "缺少发版日期，无法切线上验证窗口。"}</p></section>`;
     return `<section class="ab-summary">
-      <div class="ab-batches">${batchCard(rnd, "before")}${batchCard(rnd, "after")}${batchCard(rnd, "online")}</div>
-      ${ledger(rnd)}
+      ${batchOrbit(rnd)}
       <div class="ab-change-head"><span>问题变化</span><span class="ab-change-pills"><i class="is-better"></i>改善 <b class="num">${fmt(improved.length)}</b><i class="is-worse"></i>变差 <b class="num">${fmt(worsened.length)}</b><small>消除 ${fmt(resolved)} · 新增 ${fmt(added)}</small></span></div>
       <div class="ab-summary-grid">${rankPanel("变好的问题", improved.slice(0, 5), "is-better", max, improved.length, rnd)}${rankPanel("变差的问题", worsened.slice(0, 5), "is-worse", max, worsened.length, rnd)}</div>
-      ${online}
       <div class="ab-summary-foot"><button type="button" class="link ab-next" data-act="matrix">下一步：查看聚类矩阵 →</button></div>
     </section>`;
   }

@@ -2158,15 +2158,9 @@ function paintTrendPlot(box, spec, trend, title) {
   wireTrendHover(plot, view);
 }
 
-/* 默认折线：真实来源下每个模型一条（最多 4 条），等级先看全部问题。 */
+/* 默认折线先看总盘：全部来源 × 全部模型 × 全部问题合成一条线。 */
 function trendDefaultLines(data) {
-  const uts = Array.isArray(data.uts) ? data.uts : [];
-  const models = Array.isArray(data.models) && data.models.length ? data.models : [""];
-  return models.slice(0, TREND_MAX_GROUPS).map((model) => ({
-    uts: uts.includes("real") ? ["real"] : [],
-    models: [model],
-    levels: [],
-  }));
+  return [{ uts: [], models: [], levels: [] }];
 }
 
 function normalizeTrend(trend, data) {
@@ -2192,18 +2186,27 @@ function normalizeTrend(trend, data) {
 }
 
 function matrixCard(p, tax) {
-  const abBtn = p.ab
-    ? `<button type="button" class="link mx-ab" id="mxAB" aria-expanded="false" aria-controls="abCard" title="固定题集改版前后对比 + 线上真实用户验证">A/B Test<small>${esc(p.ab.label || "")}</small></button>`
+  const abBtn = p.ab && tax
+    ? `<button type="button" class="link mx-ab" id="mxAB" aria-expanded="false" aria-controls="mxABFace" title="固定题集改版前后对比 + 线上真实用户验证">A/B Test<small>${esc(p.ab.label || "")}</small></button>`
     : "";
-  if (!tax) return card(12, "聚类矩阵", `<div class="empty">缺少聚类体系文件</div>`, abBtn);
+  const matrix = (body, end = abBtn) => `<article class="card mx-card" id="mxCard" style="--span:12">
+    <div class="mx-face mx-matrix-face" id="mxMatrixFace">
+      <header class="card-head"><h2>聚类矩阵</h2>${end}</header>
+      ${body}
+    </div>
+    <div class="mx-face mx-ab-face" id="mxABFace" hidden>
+      <header class="card-head"><h2>A/B Test</h2>
+        <button type="button" class="link ab-close" id="abClose" aria-label="返回聚类矩阵">← 返回矩阵</button></header>
+      <div class="ab-body" id="abBody"><div class="empty">正在读取 AB 测试数据…</div></div>
+    </div>
+  </article>`;
+  if (!tax) return matrix(`<div class="empty">缺少聚类体系文件</div>`);
   const sceneRoot = { name: "全部", children: capScenes(sceneTree(p)) };
   const clusterRoot = clusterTree(p, tax);
   if (!sceneRoot.children.length || !clusterRoot.children.length) {
-    return card(12, "聚类矩阵", `<div class="empty">暂无聚类数据</div>`, abBtn);
+    return matrix(`<div class="empty">暂无聚类数据</div>`);
   }
-  return card(
-    12,
-    "聚类矩阵",
+  return matrix(
     `<div id="mxShell">${matrixTable(matrixView(p, sceneRoot.children, clusterRoot.children))}</div>`,
     `${abBtn}<button type="button" class="link mx-back" id="mxBack" hidden aria-label="返回上一级">← 返回</button>
      <div class="mx-crumbs" id="mxCrumbs">${crumbs([sceneRoot], [clusterRoot])}</div>`,
@@ -3164,51 +3167,96 @@ function wire(bento, p, tax, u) {
       <span>${esc(groupName(p, p.field[g]))}</span>${c[4] ? `<span class="dim">流失用户</span>` : ""}<b class="num" style="margin-left:auto">${c[2]} 个问题</b></div>`;
   });
 
-  /* A/B Test: 聚类矩阵卡头的入口，点开在页面底部长出一张整宽的对比卡。
+  /* A/B Test: 聚类矩阵卡原位翻转成背面的对比面板，返回时再翻回矩阵。
      数据按需拉一次；展开状态活在 u.ab 上，就地刷新后还停在原来那一期、步骤和格子。 */
   const abBtn = $("#mxAB", bento);
-  if (abBtn && p.ab) {
+  const mxCard = $("#mxCard", bento);
+  const matrixFace = $("#mxMatrixFace", bento);
+  const abFace = $("#mxABFace", bento);
+  const abBody = $("#abBody", bento);
+  if (abBtn && mxCard && matrixFace && abFace && abBody && p.ab) {
     u.ab = u.ab || { open: false, round: -1, step: "summary", metric: "", rows: [], cols: [], cell: null };
-    let abCard = null;
-    const closeAB = () => {
-      u.ab.open = false;
-      abBtn.setAttribute("aria-expanded", "false");
-      if (abCard) abCard.remove();
-      abCard = null;
+    let targetBack = !abFace.hidden;
+    let flipping = false;
+    let loading = false;
+    let loaded = false;
+    const setFace = (back) => {
+      matrixFace.hidden = back;
+      abFace.hidden = !back;
+      mxCard.classList.toggle("is-ab", back);
+      abBtn.setAttribute("aria-expanded", String(back));
     };
-    const openAB = async (scroll) => {
-      if (abCard) return;
-      u.ab.open = true;
-      abBtn.setAttribute("aria-expanded", "true");
-      abCard = document.createElement("article");
-      abCard.className = "card ab";
-      abCard.id = "abCard";
-      abCard.dataset.card = "ab";
-      abCard.style.setProperty("--span", "12");
-      abCard.innerHTML = `<header class="card-head"><h2>A/B Test</h2><span class="ab-meta" id="abMeta"></span>
-        <button type="button" class="link ab-close" id="abClose" aria-label="收起 A/B Test">收起</button></header>
-        <div class="ab-body" id="abBody"><div class="empty">正在读取 AB 测试数据…</div></div>`;
-      bento.appendChild(abCard);
-      const body = $("#abBody", abCard);
+    const wait = (anim) => (anim && anim.finished ? anim.finished.catch(() => {}) : Promise.resolve());
+    const flipOnce = async (back) => {
+      if (REDUCED || !mxCard.animate) return setFace(back);
+      const oldH = mxCard.getBoundingClientRect().height;
+      const out = mxCard.animate([
+        { transform: "perspective(1500px) rotateY(0deg)", opacity: 1 },
+        { transform: "perspective(1500px) rotateY(-90deg)", opacity: 0.94 },
+      ], { duration: 180, easing: "cubic-bezier(0.55, 0.06, 0.68, 0.19)", fill: "forwards" });
+      await wait(out);
+      out.cancel();
+      setFace(back);
+      const newH = mxCard.getBoundingClientRect().height;
+      mxCard.style.height = `${oldH}px`;
+      mxCard.style.overflow = "hidden";
+      const enter = mxCard.animate([
+        { transform: "perspective(1500px) rotateY(90deg)", opacity: 0.94 },
+        { transform: "perspective(1500px) rotateY(0deg)", opacity: 1 },
+      ], { duration: 360, easing: "cubic-bezier(0.16, 1, 0.3, 1)", fill: "forwards" });
+      const resize = Math.abs(newH - oldH) > 1
+        ? mxCard.animate([{ height: `${oldH}px` }, { height: `${newH}px` }], { duration: 360, easing: "cubic-bezier(0.16, 1, 0.3, 1)", fill: "forwards" })
+        : null;
+      await Promise.all([wait(enter), wait(resize)]);
+      enter.cancel();
+      if (resize) resize.cancel();
+      mxCard.style.height = "";
+      mxCard.style.overflow = "";
+    };
+    const requestFace = async (back) => {
+      targetBack = back;
+      if (flipping) return;
+      flipping = true;
+      mxCard.classList.add("is-flipping");
+      try {
+        while (targetBack !== !abFace.hidden) await flipOnce(targetBack);
+      } finally {
+        flipping = false;
+        mxCard.classList.remove("is-flipping");
+      }
+    };
+    const hydrateAB = async () => {
+      if (loaded || loading) return;
+      loading = true;
       const data = await loadAB(ctx, p.ab.url);
-      if (!u.ab.open || !abCard || !abCard.isConnected) return;
       if (!data || !data.rounds || !data.rounds.length) {
-        body.innerHTML = `<div class="empty">暂无 AB 测试数据</div>`;
+        abBody.innerHTML = `<div class="empty">暂无 AB 测试数据</div>`;
+        loaded = true;
+        loading = false;
         return;
       }
-      mountAB(body, data, u.ab, tax);
-      const meta = $("#abMeta", abCard);
-      const last = data.rounds[data.rounds.length - 1];
-      // 期次 / 题量 / 配对状态由面板自己讲，卡头只留一句摘要，别重复两遍。
-      if (meta) {
-        meta.innerHTML = `${data.rounds.length} 期 · ${last.sides.after ? "固定题集已配对" : "固定题集待回填"} · ${last.sides.online ? "含线上验证" : "线上待回填"}`;
-      }
-      if (scroll && !REDUCED) abCard.scrollIntoView({ block: "start", behavior: "smooth" });
+      mountAB(abBody, data, u.ab, tax);
+      loaded = true;
+      loading = false;
     };
-    abBtn.addEventListener("click", () => (u.ab.open ? closeAB() : openAB(true)));
-    bento.addEventListener("click", (e) => {
-      if (e.target.closest("#abClose")) closeAB();
+    const closeAB = () => {
+      u.ab.open = false;
+      requestFace(false);
+    };
+    const openAB = async () => {
+      u.ab.open = true;
+      await requestFace(true);
+      if (u.ab.open) hydrateAB();
+    };
+    abBtn.addEventListener("click", () => (u.ab.open ? closeAB() : openAB()));
+    $("#abClose", mxCard).addEventListener("click", closeAB);
+    mxCard.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && u.ab.open) closeAB();
     });
-    if (u.ab.open) openAB(false);
+    if (u.ab.open) {
+      setFace(true);
+      targetBack = true;
+      hydrateAB();
+    }
   }
 }
