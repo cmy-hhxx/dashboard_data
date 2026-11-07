@@ -91,6 +91,8 @@ class BuildTests(unittest.TestCase):
             kpi = data["products"]["wencai"]["kpi"]
             self.assertEqual(kpi["problems"], 1)
             self.assertEqual((kpi["unique_sessions"], kpi["traces"], kpi["tokens"]), (1, 1, 150))
+            # 数据量卡的「评测输入 Session」= 去重 session×模型×split，和完成 Session 同口径。
+            self.assertEqual(data["products"]["wencai"]["input"]["sessions"], 1)
             daily = data["products"]["wencai"]["daily"][0]
             self.assertEqual((daily["sessions"], daily["traces"], daily["tokens"], daily["sids"]), (1, 1, 150, [0]))
             row = index["products"]["wencai"]["rows"][0]

@@ -140,6 +140,21 @@ class InputLister:
             except Exception:  # noqa: BLE001
                 continue
 
+    def _model_of(self, rel: str) -> str:
+        """输入文件归属的模型：目录名报不出时用行级 trace 模型（和看板同一套 key）。
+
+        问财的 b_*_search 变体目录名不在模型白名单里，但文件里的 trace meta 有模型；
+        构建索引把归一化后的模型存在 files.stats.by_model，这里直接取。
+        """
+        model = bs.model_from_rel(rel)
+        if model:
+            return model
+        try:
+            meta = self._open().file_meta(rel)
+        except Exception:  # noqa: BLE001 - 索引读不到就按目录名兜底
+            return model
+        return bs.stats_model((meta or {}).get("stats"))
+
     def _files_for(self, product: str, day: str, model: str, split: str):
         out = []
         for path in self._all_files(product):
@@ -148,7 +163,7 @@ class InputLister:
             rel = path.relative_to(self.datasets).as_posix()
             if bs.split_from_rel(rel) != split:
                 continue
-            if bs.model_from_rel(rel) != model:
+            if self._model_of(rel) != model:
                 continue
             out.append((rel, path))
         return out

@@ -25,20 +25,31 @@ export const fmt = (n, d = 0) =>
     ? "—"
     : Number(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
 export const pct = (a, b, d = 0) => (b ? fmt((100 * a) / b, d) + "%" : "—");
-export const compact = (n) =>
-  n >= 1e9 ? fmt(n / 1e9, 1) + "B" : n >= 1e6 ? fmt(n / 1e6, 1) + "M" : n >= 1e4 ? fmt(n / 1e3, 0) + "K" : fmt(n);
+/* K/M/B is the board's only big-number unit: K from 1e3 (1 decimal), M 1, B 2,
+   dropping a meaningless `.0`. Every card uses this instead of its own tiering. */
+export const compact = (n) => {
+  if (n == null || !Number.isFinite(Number(n))) return "—";
+  const v = Number(n);
+  const size = Math.abs(v);
+  const [base, unit, d] = size >= 1e9 ? [1e9, "B", 2] : size >= 1e6 ? [1e6, "M", 1] : size >= 1e3 ? [1e3, "K", 1] : [];
+  return base ? fmt(v / base, d).replace(/\.0+$/, "") + unit : fmt(v);
+};
 export const sum = (a) => a.reduce((x, y) => x + y, 0);
 
-/* Counters: width reserved in ch for the final string, so refreshes never shift layout. */
-export function counter(value, { d = 0, suffix = "", cls = "" } = {}) {
-  const final = fmt(value, d) + suffix;
-  return `<span class="num ${cls}" data-count="${value}" data-d="${d}" data-suffix="${esc(suffix)}" style="min-width:${final.length}ch">${final}</span>`;
+/* Counters: width reserved in ch for the final string, so refreshes never shift layout.
+   `unit` animates the raw number and renders it through compact(); `title` carries the
+   exact value so rounded K/M/B strings stay inspectable. */
+export function counter(value, { d = 0, suffix = "", cls = "", unit = false, title = "" } = {}) {
+  const final = (unit ? compact(value) : fmt(value, d)) + suffix;
+  return `<span class="num ${cls}"${title ? ` title="${esc(title)}"` : ""} data-count="${value}" data-d="${d}" data-suffix="${esc(suffix)}"${unit ? ' data-unit="1"' : ""} style="min-width:${final.length}ch">${final}</span>`;
 }
 export function runCounters(root) {
   $$("[data-count]", root).forEach((el) => {
     const end = Number(el.dataset.count);
     const d = Number(el.dataset.d || 0);
     const suffix = el.dataset.suffix || "";
+    const unit = el.dataset.unit === "1";
+    const show = (v) => (unit ? compact(v) : fmt(v, d)) + suffix;
     if (REDUCED || !Number.isFinite(end)) return;
     const t0 = performance.now();
     const token = (el._tok = (el._tok || 0) + 1);
@@ -46,7 +57,7 @@ export function runCounters(root) {
       if (el._tok !== token) return;
       const p = Math.min(1, (now - t0) / 900);
       const e = 1 - Math.pow(1 - p, 4);
-      el.textContent = fmt(p >= 1 ? end : end * e, d) + suffix;
+      el.textContent = show(p >= 1 ? end : end * e);
       if (p < 1) requestAnimationFrame(step);
     };
     requestAnimationFrame(step);

@@ -1,6 +1,6 @@
 /* 数据: 会话场 · 数据量 · 评测量 · 归因体系 · 聚类体系 · 预测体系 · 聚类矩阵. Titles only; the layout carries the rest.
    Charts drill in place; a session tile or a matrix cell opens 具体数据 with that case / filter set. */
-import { $, $$, esc, fmt, pct, sum, WORST, SEV_NAME, KIND, sevColor, counter, runCounters, bindTips, segmented, REDUCED, showTip, hideTip } from "./core.js";
+import { $, $$, esc, fmt, pct, sum, compact, WORST, SEV_NAME, KIND, sevColor, counter, runCounters, bindTips, segmented, REDUCED, showTip, hideTip } from "./core.js";
 import { renderContent } from "./render.js";
 import { sunburst } from "./sunburst.js";
 import { galaxy } from "./galaxy.js";
@@ -243,22 +243,27 @@ function volumeCard(p) {
   const tout = input.tokens_out;
   // Input tokens lead; the output side rides along small, so the cell never truncates.
   const tokens = tin != null || tout != null
-    ? `${tokenNum(tin || 0)}<span class="stat-of"> / ${tokenNum(tout || 0)}</span>`
+    ? `${compact(tin || 0)}<span class="stat-of"> / ${compact(tout || 0)}</span>`
     : pending;
   const lost = input.lost;
+  const records = input.records ?? k.inputs;
+  // Session 是去重会话数（session×模型×split，和「完成 Session」同口径），Trace 是输入快照里的
+  // trace 条数；两者正好做评测量卡「完成 / 输入」的分母，两张卡的合计因此逐位对得上。
+  const sessions = input.sessions;
+  const num = (v) => counter(v, { unit: true, title: fmt(v) });
   const items = [
-    ["评测输入记录", counter(input.records ?? k.inputs)],
-    ["轨迹", counter(input.traces ?? k.traces)],
-    ...(lost != null ? [["流失轨迹", counter(lost)]] : []),
-    ["工具调用", input.tool_calls != null ? counter(input.tool_calls) : pending],
+    ["评测输入 Session", sessions != null ? num(sessions) : counter(records)],
+    ["评测输入 Trace", num(input.traces ?? k.traces)],
+    ...(lost != null ? [["流失轨迹", num(lost)]] : []),
+    ["工具调用", input.tool_calls != null ? num(input.tool_calls) : pending],
     ["Tokens 输入/输出", tokens],
   ];
   const note = lost ? `<div class="sb-keys"><span class="sb-key" title="外圈细环是该分支里流失用户 trace 的占比，列表红字是流失 trace 数"><i></i>流失</span></div>` : "";
   const segs = volMiniSegs(p);
   const segTotal = sum(segs.map((x) => x.n)) || 1;
   const folded = miniView(miniRing(segs), [
-    [counter(input.traces ?? k.traces), "评测输入轨迹"], [fmt(input.records ?? k.inputs), "记录"],
-    lost != null ? [fmt(lost), "流失轨迹"] : null, tin != null ? [tokenNum(tin), "输入 Tokens"] : null,
+    [compact(sessions ?? records), "评测输入 Session"], [compact(input.traces ?? k.traces), "评测输入 Trace"],
+    lost != null ? [compact(lost), "流失轨迹"] : null, tin != null ? [compact(tin), "输入 Tokens"] : null,
   ], "", [...segs].sort((a, b) => b.n - a.n).slice(0, 8).map((x) => ({ name: x.name, value: fmt(x.n), share: x.n / segTotal, c: x.c })));
   return card(6, "数据量", `<div class="duo" id="vol"></div>${note}${stats(items, items.length > 4 ? 5 : 4)}${GX}${folded}`, "", "vol");
 }
@@ -393,13 +398,6 @@ function evalBuckets(days) {
   return out;
 }
 
-const barNum = (v) => (v >= 1000 ? `${fmt(v / 1000, v >= 10000 ? 0 : 1)}k` : fmt(v));
-const tokenNum = (v) => {
-  const n = Number(v) || 0;
-  const [base, unit, digits] = n >= 1e9 ? [1e9, "B", 2] : n >= 1e6 ? [1e6, "M", 1] : n >= 1e3 ? [1e3, "K", 1] : [];
-  return base ? fmt(n / base, digits).replace(/\.0+$/, "") + unit : fmt(n);
-};
-
 function evalChart(p) {
   const bars = evalBuckets(evalWindow(p).days);
   if (!bars.length) return `<div class="empty">暂无评测日期</div>`;
@@ -414,7 +412,7 @@ function evalChart(p) {
         const height = Math.max(3, (barH * total) / max);
         const done = x.evaluated ? Math.min(100, (100 * x.evaluated) / Math.max(x.inputs, x.evaluated)) : 0;
         const tip = `${x.tip || x.d}|输入 ${fmt(x.inputs)} · 已完成 ${fmt(x.evaluated)} · ${pct(x.evaluated, x.inputs, 1)}`;
-        return `<div class="evday${x.evaluated ? " is-live" : ""}" data-d0="${x.d0 || x.d}" data-d1="${x.d1 || x.d}"><div class="evnums"><b class="num">${barNum(x.evaluated)}</b><small class="num">${barNum(x.inputs)}</small></div>
+        return `<div class="evday${x.evaluated ? " is-live" : ""}" data-d0="${x.d0 || x.d}" data-d1="${x.d1 || x.d}"><div class="evnums"><b class="num">${compact(x.evaluated)}</b><small class="num">${compact(x.inputs)}</small></div>
           <div class="evbar" style="height:${height}px" data-tip="${esc(tip)}"><i style="height:${done}%"></i></div>
           <small class="evdate num">${esc(x.label)}</small></div>`;
       })
@@ -422,17 +420,19 @@ function evalChart(p) {
     .join("")}</div>`;
 }
 
+/* 评测量是「全量输出 / 全量输入」：不跟图表的时间窗和模型筛选走，固定在两张卡之间对账。
+   分子 = 已评测样本去重后的 session / trace；分母 = 数据量卡的 评测输入 Session / Trace。 */
 function evalStats(p) {
-  const w = evalWindow(p);
-  const ratio = (a, b) => `${counter(a)}<span class="stat-of"> / ${fmt(b)}</span>`;
-  const tin = p.kpi.tokens_in;
-  const tout = p.kpi.tokens_out;
+  const k = p.kpi;
+  const input = p.input || {};
+  const ratio = (a, b) =>
+    b == null
+      ? counter(a, { unit: true, title: fmt(a) })
+      : `${counter(a, { unit: true, title: `已完成 ${fmt(a)}` })}<span class="stat-of"> / ${counter(b, { unit: true, title: `输入 ${fmt(b)}` })}</span>`;
   const items = [
-    ["完成 Session / 总量", ratio(w.totalSessions, p.kpi.unique_sessions)],
-    ["完成 Trace / 总量", ratio(w.totalTraces, p.kpi.traces)],
-    ["评测 Tokens 输入/输出", tin != null || tout != null
-      ? `${tokenNum(tin || 0)}<span class="stat-of"> / ${tokenNum(tout || 0)}</span>`
-      : tokenNum(w.totalTokens)],
+    ["完成 Session / 输入", ratio(k.unique_sessions, input.sessions)],
+    ["完成 Trace / 输入", ratio(k.traces, input.traces)],
+    ["评测 Tokens", counter(k.tokens, { unit: true, title: `评测输出会话的 tokens 合计 ${fmt(k.tokens)}` })],
   ];
   return stats(items);
 }
@@ -476,7 +476,15 @@ function evalCompact(p) {
     .sort((a, b) => b.done - a.done || b.inputs - a.inputs)
     .slice(0, 8)
     .map((x) => ({ name: x.m === "all" ? "全部" : modelName(p, x.m), value: `${fmt(x.done)}<span class="stat-of"> / ${fmt(x.inputs)}</span>`, share: x.inputs ? x.done / x.inputs : 0 }));
-  return miniView("", [[counter(w.totalSessions), "完成 Session"], [pct(w.totalEval, w.totalInputs, 1), "完成率"], [fmt(w.totalTraces), "完成 Trace"]], "", rank, foot);
+  // 图和展开态一样按窗口/模型走；底部三个数保持全量口径，和展开后的卡片逐位一致。
+  const k = p.kpi;
+  const input = p.input || {};
+  const ratio = (a, b) => `${compact(a)}${b == null ? "" : `<span class="stat-of"> / ${compact(b)}</span>`}`;
+  return miniView("", [
+    [ratio(k.unique_sessions, input.sessions), "完成 Session / 输入"],
+    [pct(k.unique_sessions, input.sessions, 1), "Session 完成率"],
+    [ratio(k.traces, input.traces), "完成 Trace / 输入"],
+  ], "", rank, foot);
 }
 
 /* ---------------------------------------------------------------- 评测量详情: day → model → session */

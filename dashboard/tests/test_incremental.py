@@ -95,6 +95,7 @@ class IncrementalTests(unittest.TestCase):
             wencai = data["products"]["wencai"]
             self.assertEqual(wencai["input"]["lost"], 1)
             self.assertEqual(wencai["input"]["records"], 2)
+            self.assertEqual(wencai["input"]["sessions"], 2)
             tasks = {t["task"]: t for t in wencai["input"]["models"]["a_expert"]["tasks"]}
             self.assertEqual(tasks["事件解读"]["lost"], 1)
             rows = json.loads((static / "samples-wencai.json").read_text())["products"]["wencai"]["rows"]
@@ -130,6 +131,8 @@ class IncrementalTests(unittest.TestCase):
             self.assertTrue((static / "samples" / f"{new_slug}.json").exists())
             builder.close()
             self.assertEqual(json.loads((static / "data-wencai.json").read_text())["products"]["wencai"]["kpi"]["sessions"], 2)
+            rebuilt = json.loads((static / "data-wencai.json").read_text())["products"]["wencai"]
+            self.assertEqual(rebuilt["input"]["sessions"], 3)
 
 
 if __name__ == "__main__":

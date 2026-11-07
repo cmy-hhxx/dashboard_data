@@ -103,6 +103,18 @@ def normalize_model(raw, product: str, default: str = "") -> str:
     return default
 
 
+def stats_model(stats: dict | None) -> str:
+    """The single trace model behind one input file, ``""`` when mixed or unknown.
+
+    Search-variant directories (``b_expert_only_doubao_search`` …) carry no model in
+    their path, but their lines do name one; the file index already normalised those
+    per trace, so the daily input counts and the detail listing can use the same key
+    as the volume sunburst and the output models.
+    """
+    models = set((stats or {}).get("by_model") or ())
+    return next(iter(models)) if len(models) == 1 else ""
+
+
 def empty_stats() -> dict:
     return {"records": 0, "traces": 0, "tool_calls": 0, "tokens_in": 0,
             "tokens_out": 0, "cache_read": 0, "by_model": {}}
@@ -363,6 +375,20 @@ class BuildStore:
         return {"path": row[0], "size": row[1], "mtime_ns": row[2], "prefix": row[3],
                 "lines": row[4], "committed": row[5], "ends_nl": bool(row[6]),
                 "stats": json.loads(row[7]), "product": row[8], "model": row[9], "split": row[10]}
+
+    def file_keys(self, paths) -> dict[str, list[str]]:
+        """Line join keys (``session_id\\x1frequest_time``) for a batch of indexed files.
+
+        Only the two columns the caller needs are decoded; ``get_file`` would also
+        bring back offsets, digests and hashes.
+        """
+        out, paths = {}, [p for p in paths if p]
+        for start in range(0, len(paths), 500):
+            chunk = paths[start:start + 500]
+            marks = ",".join("?" * len(chunk))
+            for rel, keys in self.db.execute(f"SELECT path, keys FROM files WHERE path IN ({marks})", chunk):
+                out[rel] = json.loads(keys)
+        return out
 
     def get_file(self, rel: str) -> dict | None:
         row = self.db.execute(

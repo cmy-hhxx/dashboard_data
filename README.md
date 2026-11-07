@@ -99,8 +99,8 @@ tokens / task-subtask / lost 统计写到 `<datasets>/stats.json`；`build.py` �
 **1. 数据板块**：顶部是会话场，中间是 2+3 Bento（数据量 / 评测量，归因 / 聚类 / 预测），底部是聚类矩阵。
 问财与 AIME 共用同一套卡片。
 
-- 数据量与聚类：共用 `sunburst.js` 下钻旭日图。数据量的层级是模型 → task → subtask（问财的 task 来自输入侧 meta，缺失时记「未标注」），圆心是评测输入轨迹数；聚类固定在左图右列表，层级是阶段 → 环节 → 机制 → 模式。默认展开最大的分支：内圈是一整圈，外圈是其中一段。点击内圈展开或下钻，点击外圈下钻，点击圆心返回上一级。数据量底部统计与聚类右侧列表都限制在固定卡片高度内，内容过高时内部滚动。流失用户与 task/subtask 合在同一张图：每个扇区外侧的细环表示该分支的流失轨迹占比，列表里的红色数字是流失轨迹数；AIME 从 `.archive/1_lost_user_input` 识别流失，问财从输入 `meta.lost_user` 识别。会话场卡片里的「流失会话」是已产出的流失 split 样本数，和数据量的「流失轨迹」不是同一口径，标签已区分。
-- 评测量：按天展示「评测输入 / 已完成」双色柱，支持近 7 天 / 近 30 天 / 全部与全部 / 单模型筛选；全部区间最多聚合 12 段，柱顶数字用 `k` 缩写，精确值在 tooltip。底部固定展示完成 Session、完成 Trace 与评测 Tokens（`K / M / B`）。严重度已在会话场表达，这里不再重复。卡片右上角「详情」进入按日期倒序的每日输入 / 输出 / 完成率明细。
+- 数据量与聚类：共用 `sunburst.js` 下钻旭日图。数据量的层级是模型 → task → subtask（问财的 task 来自输入侧 meta，缺失时记「未标注」），圆心是评测输入轨迹数；聚类固定在左图右列表，层级是阶段 → 环节 → 机制 → 模式。默认展开最大的分支：内圈是一整圈，外圈是其中一段。点击内圈展开或下钻，点击外圈下钻，点击圆心返回上一级。数据量底部统计与聚类右侧列表都限制在固定卡片高度内，内容过高时内部滚动。底部五个数：评测输入 Session（按 session×模型×split 去重）、评测输入 Trace、流失轨迹、工具调用、Tokens 输入/输出，单位统一 `K / M / B`。流失用户与 task/subtask 合在同一张图：每个扇区外侧的细环表示该分支的流失轨迹占比，列表里的红色数字是流失轨迹数；AIME 从 `.archive/1_lost_user_input` 识别流失，问财从输入 `meta.lost_user` 识别。会话场卡片里的「流失会话」是已产出的流失 split 样本数，和数据量的「流失轨迹」不是同一口径，标签已区分。
+- 评测量：按天展示「评测输入 / 已完成」双色柱，支持近 7 天 / 近 30 天 / 全部与全部 / 单模型筛选；全部区间最多聚合 12 段，柱顶数字用 `K / M / B`，精确值在 tooltip。底部固定展示完成 Session / 输入 Session、完成 Trace / 输入 Trace 与评测 Tokens：这一行是全量口径（不随上方时间窗 / 模型筛选变化），分母逐位等于数据量卡的评测输入 Session / Trace，两张卡因此可以直接对账。严重度已在会话场表达，这里不再重复。卡片右上角「详情」进入按日期倒序的每日输入 / 输出 / 完成率明细。
 - 归因体系：两列桑基图 `版本 → 归因环节`，悬停版本或环节会高亮对应连线，不显示严重度。
 - 预测体系：一个卡片内三张页签——题量（已揭晓 / 待揭晓 / 不可核验 / 其他题）、能力（各版本准确率与正确 / 错误构成）、归因（模型 → 错因的小型桑基图）。数据来自 `datasets/4_forecast/<产品>/prediction.json`，题库按预测侧自己扫过的题计；没有文件的产品显示「暂无预测数据」，数据协议见 [预测卡片数据接口](docs/prediction-data.md)。
 - 会话场与聚类矩阵：会话场每格是一条评测记录，按最严重的问题着色，不再合并相邻记录；按可用宽高计算每页容量，超过后分页，并把各严重度均匀分摊到每一页，每个模型/分组下方各自显示页码，悬停显示该条记录的问题数，点击跳到该条样本。聚类矩阵纵轴是场景（Task → Subtask，长列表折叠为「其他场景」），横轴是问题聚类（环节 → 机制 → 模式），最右侧「问题合计」是该场景在各问题聚类上的问题数合计；点行或列标题在原表就地换一层的表，两条面包屑分别返回；点格子跳到按该场景 × 问题聚类预填筛选的具体数据页（「其他场景」先展开）。
@@ -164,7 +164,7 @@ AIME 日常输出以 `1_aime/eval_output/0_daily_eval/<model>/<model>_attributio
 `0_wencai/eval_input/<model>/<date>.jsonl`。
 `cluster_tree` 仍按现有 `eval_output/**/cluster/` 快照读取，没有聚类的样本在聚类卡片中计为未聚类。
 
-口径：输入 = 数据集中的 `*_input.jsonl`，以及 AIME / 问财新布局的 `<date>.jsonl`；输入侧同时统计 records / traces / tool_calls / tokens、按 `meta.task` / `meta.subtask` 的分布，以及流失轨迹（AIME `1_lost_user_input` 目录、问财 `meta.lost_user`）。已评测 = 输出侧回答记录数（问财四个版本 answer 合计，
+口径：输入 = 数据集中的 `*_input.jsonl`，以及 AIME / 问财新布局的 `<date>.jsonl`；输入侧同时统计 records / traces / tool_calls / tokens、按 `meta.task` / `meta.subtask` 的分布，以及流失轨迹（AIME `1_lost_user_input` 目录、问财 `meta.lost_user`）；另按 `(split, 归一化模型, session_id)` 去重得到「输入 Session」，作为评测量卡「完成 Session」的分母（「完成 Trace」分母用输入 traces）。已评测 = 输出侧回答记录数（问财四个版本 answer 合计，
 不含 comparison / compact 汇总记录；AIME 统计 `*_attribution-YYYY-MM-DD.jsonl`）；待评测 = 输入 − 已评测。
 问财 / AIME 都按 `meta.task` 展示任务分布：问财不展示「其他/其它」，AIME 把「其它」并进「其他」。
 样本 = demo_data 的 attribution + compact 按 session_id 配对；输入按 trace_id/session_id 回接，不补造缺失内容。

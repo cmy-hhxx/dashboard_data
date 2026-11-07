@@ -52,7 +52,7 @@ REPO = DASHBOARD.parent
 STATIC = DASHBOARD / "static"
 PRODUCTION_DATASETS = Path("/mnt/fin_bench/code_and_clean_data/datasets")
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-06.1"
+PAYLOAD_VERSION = "2026-11-07.1"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 2
 
@@ -451,7 +451,39 @@ def _task_nodes(tasks: dict):
     return out
 
 
-def input_payload(metas):
+def input_sessions(metas, store, product: str = "") -> int | None:
+    """去重评测输入的会话数，按 (split, 归一化模型, session_id) 计数。
+
+    口径和 ``kpi.unique_sessions``（完成 Session）一致，所以 数据量卡 的
+    「评测输入 Session」可以直接当评测量卡的分母。``files`` 表里每行都存了
+    join key（``session_id\\x1frequest_time``），这里直接复用，不重读输入文件。
+
+    索引里只要缺一个文件就返回 ``None``（例如 sidecar 由另一份 store 生成）：
+    payload 不带该字段，前端退回旧的记录数，不拿错误数字冒充。
+    """
+    if store is None:
+        return None
+    paths = [m.get("path") for m in metas if m.get("path")]
+    if not paths:
+        return 0
+    keys = store.file_keys(paths)
+    if len(keys) < len(set(paths)):
+        return None
+    seen = set()
+    for meta in metas:
+        rel = meta.get("path")
+        if not rel:
+            continue
+        split = meta.get("split") or bs.split_from_rel(rel)
+        model = bs.normalize_model(meta.get("model"), product) or meta.get("model") or "未标注"
+        for key in keys.get(rel) or ():
+            sid = key.split("\x1f", 1)[0]
+            if sid:
+                seen.add((split, model, sid))
+    return len(seen)
+
+
+def input_payload(metas, store=None, product: str = ""):
     """Volume + task/subtask + lost counts for one product, from cached file stats."""
     agg = bs.empty_stats()
     records = 0
@@ -480,13 +512,17 @@ def input_payload(metas):
                 sub_dst["n"] += value["n"]
                 sub_dst["lost"] += value.get("lost", 0)
 
-    return {
+    payload = {
         "records": records, "traces": agg["traces"], "tool_calls": agg["tool_calls"],
         "tokens_in": agg["tokens_in"], "tokens_out": agg["tokens_out"],
         "cache_read": agg["cache_read"],
         "lost": sum(t.get("lost", 0) for t in top.values()),
         "tasks": _task_nodes(top), "models": models,
     }
+    sessions = input_sessions(metas, store, product)
+    if sessions is not None:
+        payload["sessions"] = sessions
+    return payload
 
 
 def mark_evaluated(payload, rows):
@@ -520,7 +556,9 @@ def daily_inputs(metas):
         match = DATE_RE.search(Path(meta["path"]).name)
         if not match:
             continue
-        model = meta.get("model") or Path(meta["path"]).parent.name
+        # 目录名报不出模型的文件（问财的 b_*_search 变体）用行级 trace 模型补上，
+        # 这样按天的输入量和旭日图 / 输出模型用的是同一套模型 key。
+        model = meta.get("model") or bs.stats_model(meta.get("stats")) or Path(meta["path"]).parent.name
         out[(match.group(1), model, meta.get("split") or "daily")] += int(meta.get("lines") or 0)
     return out
 
@@ -2515,7 +2553,7 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
         for product, metas in product_metas.items():
             if product not in products:
                 continue
-            payload = input_payload(metas)
+            payload = input_payload(metas, store, product)
             products[product]["input"] = payload
             products[product]["kpi"]["inputs"] = payload["records"]
             products[product]["kpi"]["lost"] = payload["lost"]
