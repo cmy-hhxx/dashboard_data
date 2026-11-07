@@ -161,10 +161,14 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .ev-tools .seg-knob { top: 2px; bottom: 2px; }
 .eval-content { container-type: inline-size; }
 .eval-content .stats { margin-top: var(--py); grid-template-columns: repeat(4, minmax(0, 1fr)); }
-/* 卡片不够宽时 15 个日期放不下（约 530px 起就会互相挤）：只留每 3 个一个，保持均匀留白。 */
+/* 卡片不够宽时 15 个日期放不下（约 530px 起就会互相挤）：只留每 3 个一个，保持均匀留白。
+   按月的柱子最多 12 根、标签是「9月」，不需要这条。 */
 @container (max-width: 530px) {
-  #evChart .evday:not(:nth-child(3n + 1)):not(:last-child) .evdate { visibility: hidden; }
+  #evChart .evrows.is-days .evday:not(:nth-child(3n + 1)):not(:last-child) .evdate { visibility: hidden; }
 }
+/* 全部视图里年份柱是下钻入口（点它看这一年的月份）；返回按钮跟在图例行右端。 */
+.evday.is-drill { cursor: pointer; }
+.ev-legend .ev-back { margin-left: auto; }
 /* 15 个日期都显示时（约 530-600px），字号收一档，相邻日期之间留出 4px 左右的均匀空隙。 */
 @container (min-width: 531px) and (max-width: 600px) {
   #evChart .evdate { font-size: var(--fs-meta); }

@@ -320,7 +320,8 @@ const dayMs = (d) => Date.parse(`${d}T00:00:00Z`);
 const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
 const EV_PER_ROW = 15;
 const RANGE_LABEL = { 7: "近 7 天", 30: "近 30 天", all: "全部" };
-const EV = { range: "30", model: "all" };
+// year: 「全部」柱状图超过 12 个月时切到年份，点某一年再下钻成该年的月份。
+const EV = { range: "30", model: "all", year: null };
 
 function evalRows(p) {
   if (Array.isArray(p.daily) && p.daily.length) return p.daily;
@@ -342,7 +343,7 @@ function evalModels(p) {
 
 function evalWindow(p) {
   const byDay = new Map();
-  const blank = () => ({ inputs: 0, evaluated: 0, traces: 0, tokens: 0, sessions: 0, sids: new Set() });
+  const blank = () => ({ inputs: 0, evaluated: 0, traces: 0, tokens: 0, sessions: 0, inSessions: 0, hasIns: true, sids: new Set() });
   evalRows(p)
     .filter((r) => EV.model === "all" || r.m === EV.model)
     .forEach((r) => {
@@ -351,12 +352,18 @@ function evalWindow(p) {
       x.evaluated += r.evaluated || 0;
       x.traces += r.traces ?? r.evaluated ?? 0;
       x.tokens += r.tokens || 0;
+      if (r.in_sessions == null) x.hasIns = false;
+      else x.inSessions += r.in_sessions;
       if (Array.isArray(r.sids)) r.sids.forEach((sid) => x.sids.add(`${r.sp}|${r.m}|${sid}`));
       else x.sessions += r.sessions || r.evaluated || 0;
       byDay.set(r.d, x);
     });
-  const dates = [...byDay.keys()].sort();
-  if (!dates.length) return { days: [], totalInputs: 0, totalEval: 0, totalSessions: 0, totalTraces: 0, totalTokens: 0, peakEval: 0 };
+  let dates = [...byDay.keys()].sort();
+  // 「全部」下钻到某一年时，窗口只保留这一年；月份桶怎么切由 evalBuckets 决定。
+  if (EV.range === "all" && EV.year) dates = dates.filter((d) => d.startsWith(EV.year));
+  if (!dates.length) {
+    return { days: [], totalInputs: 0, totalEval: 0, totalSessions: 0, totalTraces: 0, totalTokens: 0, totalInputSessions: null, peakEval: 0 };
+  }
   const end = dayMs(dates[dates.length - 1]);
   const start = EV.range === "all" ? dayMs(dates[0]) : end - (Number(EV.range) - 1) * DAY_MS;
   const days = [];
@@ -372,30 +379,43 @@ function evalWindow(p) {
     totalSessions: sessions.size || sum(days.map((x) => x.sessions)),
     totalTraces: sum(days.map((x) => x.traces)),
     totalTokens: sum(days.map((x) => x.tokens)),
+    totalInputSessions: days.every((x) => x.hasIns) ? sum(days.map((x) => x.inSessions)) : null,
     peakEval: Math.max(0, ...days.map((x) => x.evaluated)),
   };
 }
 
+/* 全部：最多 12 根柱子。有数据的月份 ≤12 就按月（只画有数据的月）；超过 12 个月按年，
+   点某年再回到那一年的月份。近 7/30 天保持按天，和以前一样。 */
 function evalBuckets(days) {
   if (EV.range !== "all") {
     return days.map((x) => ({ ...x, label: x.d.slice(5), tip: x.d }));
   }
-  // The full history gets at most 12 buckets, keeping the card height fixed.
-  const size = Math.max(1, Math.ceil(days.length / 12));
-  const out = [];
-  for (let i = 0; i < days.length; i += size) {
-    const chunk = days.slice(i, i + size);
-    const start = chunk[0].d.slice(5);
-    const end = chunk[chunk.length - 1].d.slice(5);
-    out.push({
-      d: chunk[0].d, d0: chunk[0].d, d1: chunk[chunk.length - 1].d,
-      inputs: sum(chunk.map((x) => x.inputs)),
-      evaluated: sum(chunk.map((x) => x.evaluated)),
-      label: start,
-      tip: `${start}–${end}`,
-    });
+  const months = new Map();
+  days.forEach((x) => {
+    if (!x.inputs && !x.evaluated) return;
+    const key = x.d.slice(0, 7);
+    let b = months.get(key);
+    if (!b) months.set(key, (b = { d: x.d, d0: x.d, d1: x.d, inputs: 0, evaluated: 0 }));
+    b.d0 = b.d0 < x.d ? b.d0 : x.d;
+    b.d1 = b.d1 > x.d ? b.d1 : x.d;
+    b.inputs += x.inputs;
+    b.evaluated += x.evaluated;
+  });
+  const keys = [...months.keys()].sort();
+  const monthBar = (k) => ({ ...months.get(k), label: `${Number(k.slice(5))}月`, tip: k });
+  if (EV.year || keys.length <= 12) {
+    return keys.filter((k) => !EV.year || k.startsWith(EV.year)).map(monthBar);
   }
-  return out;
+  const years = new Map();
+  keys.forEach((k) => {
+    const y = k.slice(0, 4);
+    const m = months.get(k);
+    let b = years.get(y);
+    if (!b) years.set(y, (b = { year: y, d: `${y}-01-01`, d0: `${y}-01-01`, d1: `${y}-12-31`, inputs: 0, evaluated: 0 }));
+    b.inputs += m.inputs;
+    b.evaluated += m.evaluated;
+  });
+  return [...years.keys()].sort().map((y) => ({ ...years.get(y), label: y, tip: `${y} · 点击看月份` }));
 }
 
 function evalChart(p) {
@@ -405,14 +425,14 @@ function evalChart(p) {
   const rows = [];
   for (let i = 0; i < bars.length; i += EV_PER_ROW) rows.push(bars.slice(i, i + EV_PER_ROW));
   const barH = rows.length === 1 ? 160 : 52;
-  return `<div class="evrows" style="--bar-h:${barH}px">${rows
+  return `<div class="evrows${EV.range === "all" ? " is-buckets" : " is-days"}" style="--bar-h:${barH}px">${rows
     .map((row) => `<div class="evrow" style="--n:${row.length}">${row
       .map((x) => {
         const total = Math.max(x.inputs, x.evaluated, 1);
         const height = Math.max(3, (barH * total) / max);
         const done = x.evaluated ? Math.min(100, (100 * x.evaluated) / Math.max(x.inputs, x.evaluated)) : 0;
         const tip = `${x.tip || x.d}|输入 ${fmt(x.inputs)} · 已完成 ${fmt(x.evaluated)} · ${pct(x.evaluated, x.inputs, 1)}`;
-        return `<div class="evday${x.evaluated ? " is-live" : ""}" data-d0="${x.d0 || x.d}" data-d1="${x.d1 || x.d}"><div class="evnums"><b class="num">${compact(x.evaluated)}</b><small class="num">${compact(x.inputs)}</small></div>
+        return `<div class="evday${x.evaluated ? " is-live" : ""}${x.year ? " is-drill" : ""}"${x.year ? ` data-year="${esc(x.year)}"` : ""} data-d0="${x.d0 || x.d}" data-d1="${x.d1 || x.d}"><div class="evnums"><b class="num">${compact(x.evaluated)}</b><small class="num">${compact(x.inputs)}</small></div>
           <div class="evbar" style="height:${height}px" data-tip="${esc(tip)}"><i style="height:${done}%"></i></div>
           <small class="evdate num">${esc(x.label)}</small></div>`;
       })
@@ -420,26 +440,48 @@ function evalChart(p) {
     .join("")}</div>`;
 }
 
-/* 评测量是「全量输出 / 全量输入」：不跟图表的时间窗和模型筛选走，固定在两张卡之间对账。
-   分子 = 已评测样本去重后的 session / trace；分母 = 数据量卡的 评测输入 Session / Trace。 */
-function evalStats(p) {
+/* 评测量是「输出 / 输入」对账：口径跟 ev-range 走，近 7/30 天用窗口合计，
+   全部（以及年份下钻）用全量/该年合计。 */
+function evalTotals(p) {
+  const w = evalWindow(p);
   const k = p.kpi;
   const input = p.input || {};
-  const ratio = (a, b) =>
+  const scoped = EV.range !== "all" || !!EV.year;
+  return {
+    scoped,
+    sessions: [scoped ? w.totalSessions : k.unique_sessions, scoped ? (w.totalInputSessions ?? input.sessions) : input.sessions],
+    traces: [scoped ? w.totalTraces : k.traces, scoped ? w.totalInputs : input.traces],
+    tokens: scoped ? w.totalTokens : k.tokens,
+  };
+}
+
+function evalStats(p) {
+  const t = evalTotals(p);
+  const ratio = ([a, b]) =>
     b == null
       ? counter(a, { unit: true, title: fmt(a) })
       : `${counter(a, { unit: true, title: `已完成 ${fmt(a)}` })}<span class="stat-of"> / ${counter(b, { unit: true, title: `输入 ${fmt(b)}` })}</span>`;
   const items = [
-    ["完成 Session / 输入", ratio(k.unique_sessions, input.sessions)],
-    ["完成 Trace / 输入", ratio(k.traces, input.traces)],
-    ["评测 Tokens", counter(k.tokens, { unit: true, title: `评测输出会话的 tokens 合计 ${fmt(k.tokens)}` })],
+    ["完成 Session / 输入", ratio(t.sessions)],
+    ["完成 Trace / 输入", ratio(t.traces)],
+    ["评测 Tokens", counter(t.tokens, { unit: true, title: `评测输出会话的 tokens 合计 ${fmt(t.tokens)}` })],
   ];
   return stats(items);
+}
+
+/* 图例行右侧的「‹ 2026 年」只在年份下钻时出现，点它回到全部年份。 */
+function evalLegend() {
+  const back = EV.range === "all" && EV.year
+    ? `<button type="button" class="link ev-back" id="evYearBack" aria-label="返回全部年份">‹ ${esc(EV.year)} 年</button>`
+    : "";
+  return `<div class="ev-legend"><span><i class="ev-done"></i>已完成</span><span><i class="ev-in"></i>评测输入</span>${back}</div>`;
 }
 
 function evalCard(p) {
   const models = evalModels(p);
   if (!models.some((m) => m.id === EV.model)) EV.model = "all";
+  // 产品/数据变了以后旧的下钻年份可能已经没有数据，退回全部年份。
+  if (EV.year && !evalRows(p).some((r) => r.d.startsWith(EV.year))) EV.year = null;
   return card(6, "评测量", `<div class="eval-content">
     <div class="ev-tools">
       <div class="seg ev-range" id="evRange"><span class="seg-knob" aria-hidden="true"></span>
@@ -449,10 +491,25 @@ function evalCard(p) {
         ${models.map((m) => `<button type="button" data-value="${esc(m.id)}">${esc(m.label)}</button>`).join("")}
       </div>
     </div>
-    <div class="ev-legend"><span><i class="ev-done"></i>已完成</span><span><i class="ev-in"></i>评测输入</span></div>
+    <div id="evLegend">${evalLegend()}</div>
     <div id="evChart">${evalChart(p)}</div>
     <div id="evStats">${evalStats(p)}</div></div>${GX}${evalCompact(p)}`,
     `<button type="button" class="link end" id="evDetail" aria-label="查看评测数据详情">详情</button>`, "eval");
+}
+/* 换窗口 / 换模型 / 年份下钻都只重画这一张卡：图、图例（含返回按钮）、三个数、折叠态。 */
+function repaintEvalCard(bento, p) {
+  const chart = $("#evChart", bento);
+  if (chart) chart.innerHTML = evalChart(p);
+  const legend = $("#evLegend", bento);
+  if (legend) legend.innerHTML = evalLegend();
+  const box = $("#evStats", bento);
+  if (box) {
+    box.innerHTML = evalStats(p);
+    runCounters(box);
+  }
+  const compact = $('[data-card="eval"] > .compact', bento);
+  if (compact) compact.outerHTML = evalCompact(p);
+}
 }
 function evalCompact(p) {
   const w = evalWindow(p);
@@ -476,14 +533,13 @@ function evalCompact(p) {
     .sort((a, b) => b.done - a.done || b.inputs - a.inputs)
     .slice(0, 8)
     .map((x) => ({ name: x.m === "all" ? "全部" : modelName(p, x.m), value: `${fmt(x.done)}<span class="stat-of"> / ${fmt(x.inputs)}</span>`, share: x.inputs ? x.done / x.inputs : 0 }));
-  // 图和展开态一样按窗口/模型走；底部三个数保持全量口径，和展开后的卡片逐位一致。
-  const k = p.kpi;
-  const input = p.input || {};
-  const ratio = (a, b) => `${compact(a)}${b == null ? "" : `<span class="stat-of"> / ${compact(b)}</span>`}`;
+  // 图和展开态一样按窗口/模型走；底部三个数也跟 ev-range 同一口径。
+  const t = evalTotals(p);
+  const ratio = ([a, b]) => `${compact(a)}${b == null ? "" : `<span class="stat-of"> / ${compact(b)}</span>`}`;
   return miniView("", [
-    [ratio(k.unique_sessions, input.sessions), "完成 Session / 输入"],
-    [pct(k.unique_sessions, input.sessions, 1), "Session 完成率"],
-    [ratio(k.traces, input.traces), "完成 Trace / 输入"],
+    [ratio(t.sessions), "完成 Session / 输入"],
+    [pct(t.sessions[0], t.sessions[1], 1), "Session 完成率"],
+    [ratio(t.traces), "完成 Trace / 输入"],
   ], "", rank, foot);
 }
 
@@ -1862,8 +1918,21 @@ function pushPull(bento, p, tax, u) {
       close(ROW[folded.dataset.card]);
       return;
     }
+    if (e.target.closest("#evYearBack")) {
+      EV.year = null;
+      close(ROW.eval);
+      repaintEvalCard(bento, p);
+      return;
+    }
     const day = e.target.closest('[data-card="eval"] .evday');
     if (day) {
+      // 年份柱是下钻入口（点它看这一年的月份），月份/日柱才是打开当天。
+      if (day.dataset.year) {
+        EV.year = day.dataset.year;
+        close(ROW.eval);
+        repaintEvalCard(bento, p);
+        return;
+      }
       toggle({ card: "eval", id: `eval|${day.dataset.d0}|${day.dataset.d1}|${EV.model}`, d0: day.dataset.d0, d1: day.dataset.d1, model: EV.model });
       return;
     }
@@ -1979,16 +2048,10 @@ function wire(bento, p, tax, u) {
   const evRange = $("#evRange", bento);
   const evModel = $("#evModel", bento);
   if (evRange && evModel) {
-    const repaint = () => {
-      $("#evChart", bento).innerHTML = evalChart(p);
-      const s = $("#evStats", bento);
-      s.innerHTML = evalStats(p);
-      runCounters(s);
-      $('[data-card="eval"] > .compact', bento).outerHTML = evalCompact(p);
-    };
-    // A new window or model invalidates the picked day's star map.
-    const range = segmented(evRange, (v) => { EV.range = v; push.closeEval(); repaint(); });
-    const model = segmented(evModel, (v) => { EV.model = v; push.closeEval(); repaint(); });
+    // A new window or model invalidates the picked day's star map; a new window also
+    // drops the year drill (it belongs to 「全部」).
+    const range = segmented(evRange, (v) => { EV.range = v; EV.year = null; push.closeEval(); repaintEvalCard(bento, p); });
+    const model = segmented(evModel, (v) => { EV.model = v; push.closeEval(); repaintEvalCard(bento, p); });
     range.set(EV.range, { silent: true });
     model.set(EV.model, { silent: true });
   }

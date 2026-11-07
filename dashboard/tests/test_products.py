@@ -102,6 +102,8 @@ class ProductSplitTests(unittest.TestCase):
             self.assertIn(("2026-11-03", "a_expert"), daily)
             self.assertNotIn(("2026-11-03", "b_expert_only_doubao_search"), daily)
             self.assertEqual(daily[("2026-11-03", "a_expert")]["inputs"], 1)
+            # 评测量卡按窗口对账：输入侧也要有逐日 session 数，口径和每日输入行一致。
+            self.assertEqual(daily[("2026-11-03", "a_expert")]["in_sessions"], 1)
 
     def test_aime_lost_user_input_counts_without_archive(self):
         with tempfile.TemporaryDirectory() as folder:

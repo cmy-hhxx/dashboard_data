@@ -52,7 +52,7 @@ REPO = DASHBOARD.parent
 STATIC = DASHBOARD / "static"
 PRODUCTION_DATASETS = Path("/mnt/fin_bench/code_and_clean_data/datasets")
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-07.1"
+PAYLOAD_VERSION = "2026-11-07.2"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 2
 
@@ -563,13 +563,46 @@ def daily_inputs(metas):
     return out
 
 
-def daily_payload(samples, inputs):
+def daily_input_sessions(metas, store):
+    """Per-day input session counts, keyed exactly like ``daily_inputs``.
+
+    The eval card unions evaluated sessions across the selected window, so its
+    denominator needs the same per-day shape.  Sessions are deduped within a
+    day/model/split; the rare session that appears on two days counts on both,
+    which is also how the day buckets add up.  ``None`` when the file index is
+    incomplete, so the payload can omit the field instead of lying.
+    """
+    if store is None:
+        return None
+    paths = [m.get("path") for m in metas if m.get("path")]
+    if not paths:
+        return {}
+    keys = store.file_keys(paths)
+    if len(keys) < len(set(paths)):
+        return None
+    seen = defaultdict(set)
+    for meta in metas:
+        rel = meta.get("path")
+        match = DATE_RE.search(Path(rel).name) if rel else None
+        if not match:
+            continue
+        model = meta.get("model") or bs.stats_model(meta.get("stats")) or Path(rel).parent.name
+        split = meta.get("split") or "daily"
+        for key in keys.get(rel) or ():
+            sid = key.split("\x1f", 1)[0]
+            if sid:
+                seen[(match.group(1), model, split)].add(sid)
+    return {k: len(v) for k, v in seen.items()}
+
+
+def daily_payload(samples, inputs, input_sessions=None):
     """Per-day input volume plus the evaluated session/trace/token totals.
 
     ``sids`` is carried alongside the count so the eval card can union sessions
     across a selected window instead of adding per-day distinct counts.  Only
     identity matters there, so sessions are small per-product integers rather
-    than 40-character ids (about 400 KB of the AIME payload).
+    than 40-character ids (about 400 KB of the AIME payload).  ``in_sessions``
+    gives the same per-day shape for the input side (see ``daily_input_sessions``).
     """
     evaluated = Counter()
     traces = Counter()
@@ -583,8 +616,9 @@ def daily_payload(samples, inputs):
         tokens[key] += facts["tokens"]
         sids[key].add(number.setdefault(row["sid"] or slug, len(number)))
     keys = set(inputs) | set(evaluated)
-    return [
-        {
+    out = []
+    for d, m, sp in sorted(keys):
+        item = {
             "d": d, "m": m, "sp": sp,
             "inputs": inputs.get((d, m, sp), 0),
             "evaluated": evaluated.get((d, m, sp), 0),
@@ -593,8 +627,10 @@ def daily_payload(samples, inputs):
             "tokens": tokens.get((d, m, sp), 0),
             "sids": sorted(sids.get((d, m, sp), ())),
         }
-        for d, m, sp in sorted(keys)
-    ]
+        if input_sessions is not None:
+            item["in_sessions"] = input_sessions.get((d, m, sp), 0)
+        out.append(item)
+    return out
 
 
 def debug(message):
@@ -2557,7 +2593,8 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
             products[product]["input"] = payload
             products[product]["kpi"]["inputs"] = payload["records"]
             products[product]["kpi"]["lost"] = payload["lost"]
-            products[product]["daily"] = daily_payload(samples[product], daily_inputs(metas))
+            products[product]["daily"] = daily_payload(
+                samples[product], daily_inputs(metas), daily_input_sessions(metas, store))
             feed = prediction_feed_path(datasets, product)
             if feed:
                 try:
