@@ -1198,16 +1198,12 @@ function clusterCard(p, tax) {
     : "";
   const phases = (cluTree(p, tax).children || []).filter((c) => c.n > 0).sort((a, b) => b.n - a.n);
   const phaseTotal = sum(phases.map((c) => c.n)) || 1;
-  // AB 测试记录: 入口只在对这个产品有 AB 轮次时出现，点击展开到卡片下方的一张整宽卡。
-  const abBtn = p.ab
-    ? `<button type="button" class="link clu-ab" id="cluAB" aria-expanded="false" aria-controls="abCard" title="同一批固定问句在发版前后的聚类对比">AB 测试记录<small>${esc(p.ab.label || "")}</small></button>`
-    : "";
   return card(4, "聚类体系", `<div class="duo sm" id="clu"></div>
     <div class="sb-keys"><span class="sb-key" title="外圈细环是该分支里 P0·P1 问题的占比，列表红字是 P0+P1 数"><i></i>P0·P1</span>${note}</div>${GX}${miniView(miniRing([
       { n: p.kpi.clustered || 0, c: "var(--accent)" }, { n: p.kpi.unclustered || 0, c: "var(--t4)" },
     ]), [
       [counter(p.kpi.problems), "问题"], [pct(p.kpi.clustered, p.kpi.problems), "已聚类"],
-    ], "", phases.slice(0, 6).map((c, i) => ({ name: c.name, value: fmt(c.n), share: c.n / phaseTotal, c: leadTone(i) })))}`, abBtn, "clu");
+    ], "", phases.slice(0, 6).map((c, i) => ({ name: c.name, value: fmt(c.n), share: c.n / phaseTotal, c: leadTone(i) })))}`, "", "clu");
 }
 
 const sevPair = (s) => [(s && s.P0) || 0, (s && s.P1) || 0];
@@ -2143,17 +2139,20 @@ function normalizeTrend(trend, data) {
 }
 
 function matrixCard(p, tax) {
-  if (!tax) return "";
+  const abBtn = p.ab
+    ? `<button type="button" class="link mx-ab" id="mxAB" aria-expanded="false" aria-controls="abCard" title="固定题集改版前后对比 + 线上真实用户验证">A/B Test<small>${esc(p.ab.label || "")}</small></button>`
+    : "";
+  if (!tax) return card(12, "聚类矩阵", `<div class="empty">缺少聚类体系文件</div>`, abBtn);
   const sceneRoot = { name: "全部", children: capScenes(sceneTree(p)) };
   const clusterRoot = clusterTree(p, tax);
   if (!sceneRoot.children.length || !clusterRoot.children.length) {
-    return card(12, "聚类矩阵", `<div class="empty">暂无聚类数据</div>`);
+    return card(12, "聚类矩阵", `<div class="empty">暂无聚类数据</div>`, abBtn);
   }
   return card(
     12,
     "聚类矩阵",
     `<div id="mxShell">${matrixTable(matrixView(p, sceneRoot.children, clusterRoot.children))}</div>`,
-    `<button type="button" class="link mx-back" id="mxBack" hidden aria-label="返回上一级">← 返回</button>
+    `${abBtn}<button type="button" class="link mx-back" id="mxBack" hidden aria-label="返回上一级">← 返回</button>
      <div class="mx-crumbs" id="mxCrumbs">${crumbs([sceneRoot], [clusterRoot])}</div>`,
   );
 }
@@ -3111,11 +3110,11 @@ function wire(bento, p, tax, u) {
       <span>${esc(groupName(p, p.field[g]))}</span>${c[4] ? `<span class="dim">流失用户</span>` : ""}<b class="num" style="margin-left:auto">${c[2]} 个问题</b></div>`;
   });
 
-  /* AB 测试记录: 聚类体系卡片头上的入口，点开在卡片下方长出一张整宽的对比卡。
-     数据按需拉一次；展开状态活在 u.ab 上，就地刷新后还停在原来那一期和那个节点。 */
-  const abBtn = $("#cluAB", bento);
+  /* A/B Test: 聚类矩阵卡头的入口，点开在页面底部长出一张整宽的对比卡。
+     数据按需拉一次；展开状态活在 u.ab 上，就地刷新后还停在原来那一期、步骤和格子。 */
+  const abBtn = $("#mxAB", bento);
   if (abBtn && p.ab) {
-    u.ab = u.ab || { open: false, round: -1, path: null };
+    u.ab = u.ab || { open: false, round: -1, step: "summary", metric: "", rows: [], cols: [], cell: null };
     let abCard = null;
     const closeAB = () => {
       u.ab.open = false;
@@ -3132,8 +3131,8 @@ function wire(bento, p, tax, u) {
       abCard.id = "abCard";
       abCard.dataset.card = "ab";
       abCard.style.setProperty("--span", "12");
-      abCard.innerHTML = `<header class="card-head"><h2>AB 测试记录</h2><span class="ab-meta" id="abMeta"></span>
-        <button type="button" class="link ab-close" id="abClose" aria-label="收起 AB 测试记录">收起</button></header>
+      abCard.innerHTML = `<header class="card-head"><h2>A/B Test</h2><span class="ab-meta" id="abMeta"></span>
+        <button type="button" class="link ab-close" id="abClose" aria-label="收起 A/B Test">收起</button></header>
         <div class="ab-body" id="abBody"><div class="empty">正在读取 AB 测试数据…</div></div>`;
       bento.appendChild(abCard);
       const body = $("#abBody", abCard);
@@ -3143,12 +3142,12 @@ function wire(bento, p, tax, u) {
         body.innerHTML = `<div class="empty">暂无 AB 测试数据</div>`;
         return;
       }
-      mountAB(body, data, u.ab);
+      mountAB(body, data, u.ab, tax);
       const meta = $("#abMeta", abCard);
       const last = data.rounds[data.rounds.length - 1];
       // 期次 / 题量 / 配对状态由面板自己讲，卡头只留一句摘要，别重复两遍。
       if (meta) {
-        meta.innerHTML = `${data.rounds.length} 期 · ${last.sides.after ? "发版后已配对" : "发版后待回填"}`;
+        meta.innerHTML = `${data.rounds.length} 期 · ${last.sides.after ? "固定题集已配对" : "固定题集待回填"} · ${last.sides.online ? "含线上验证" : "线上待回填"}`;
       }
       if (scroll && !REDUCED) abCard.scrollIntoView({ block: "start", behavior: "smooth" });
     };

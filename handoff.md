@@ -52,7 +52,7 @@ datasets/ ──> stats_worker.py ──> datasets/stats.json（每 1 小时，�
         ├─ static/samples-<product>.json(.gz) 单产品召回索引（不含 lb）
         ├─ static/labels-<product>.json(.gz)  单产品问题标签，与索引 rows[] 同序
         ├─ static/trends-<product>.json(.gz)  聚类矩阵格子的趋势数据（日 × 场景 × 模型 × 来源 × 等级）
-        └─ static/abtests-<product>.json(.gz) AB 测试记录：固定题集发版前 / 后的聚类对比（有 ab_test 目录才生成）
+        └─ static/abtests-<product>.json(.gz) A/B Test：固定题集发版前 / 后 + 线上真实用户验证（有 ab_test 目录才生成）
                         │
 server.py（标准库 HTTP，:5001，定时 build）──> app.js
         └─ /samples/<slug>.json 按需生成 ──> detail_builder.py
@@ -96,8 +96,9 @@ server.py（标准库 HTTP，:5001，定时 build）──> app.js
 顶部右侧是全局产品切换（问财 / AIME），也是数据源指示；不要在每个卡片里重复放切换。
 图表都在页内下钻；会话场格子跳到该条样本，聚类矩阵格子在本卡里就地展开「场景 × 问题聚类」的
 P0-P4 多折线趋势（来源 / 模型 / 等级可多选合并成一条线，最多 4 条，可删到 0 条显示空状态，同等级模型之间标差距；「其他场景」折叠行的格子先展开），卡片头「← 返回矩阵」回到原表。
-「聚类体系」卡头的「AB 测试记录」（仅当该产品有 `ab_test/` 轮次时出现）在页面底部展开一张整宽卡：
-同一批固定问句发版前 / 后的聚类树并集、叶子前/后计数与 Δ、A/B/C 总账和跨期趋势。
+「聚类矩阵」标题旁的「A/B Test」（仅当该产品有 `ab_test/` 轮次时出现）在页面底部展开一张整宽卡：
+先列出对比记录，再展示固定题集改版前 / 后与线上真实用户三批汇总；点「下一步」进入与外部矩阵同逻辑的
+场景 × 问题聚类矩阵，可切换三批合计 / 变化 / 单批口径，点格子看跨期趋势。
 
 ## 4. 文件地图
 
@@ -115,8 +116,8 @@ P0-P4 多折线趋势（来源 / 模型 / 等级可多选合并成一条线，�
 | `dashboard/static/js/system.js` | 评测体系机制图、聚类（阶段 → 环节 → 机制 → 模式）、证据闭环 | 体系页 |
 | `dashboard/static/js/samples.js` | 具体数据两栏工作台（顶部轨迹概览、三列轨迹 / 对话 / 归因、证据连线） | 筛选、样本详情 |
 | `dashboard/static/js/render.js` | 公共内容渲染：Markdown-lite、JSON 高亮、按偏移保留证据高亮 | 文本 / JSON 呈现 |
-| `dashboard/ab_test.py` | AB 测试轮次读取：清单 / 逐条叶子落点 / 前后并集树 → `abtests-<product>.json` | AB 测试数据接入 |
-| `dashboard/static/js/abtest.js` + `css/abtest.css` | AB 测试记录面板（期次、前后并集树、叶子 Δ、跨期趋势） | AB 测试对比交互 |
+| `dashboard/ab_test.py` | A/B Test 轮次读取：清单 / 逐条叶子落点 / 前后并集树 / 线上真实用户 → `abtests-<product>.json` | A/B Test 数据接入 |
+| `dashboard/static/js/abtest.js` + `css/abtest.css` | A/B Test 面板（记录列表、三批汇总、聚类矩阵、跨期趋势） | A/B Test 对比交互 |
 | `dashboard/static/js/sunburst.js` | 原生 SVG 可下钻旭日图 | 数据量 / 聚类环 / AB 并集树 |
 | `dashboard/static/js/galaxy.js` | 星图：一颗星一个 case、按分组成团的 canvas 视图（推拉展开的卡片里） | 星图布局、配色、交互 |
 | `dashboard/static/js/particles.js` | 证据流：沿证据连线流动的低密度粒子（体系页证据闭环、样本页） | 粒子密度、速度 |
@@ -177,17 +178,19 @@ uid 用户 ID（输入 meta.user_id）· ut 用户类型 real/test/internal/unkn
 - 发版日期读 `<datasets>/releases.json`（问财 / AIME 分开写，支持 `"YYYY-MM-DD"` 或
   `{"date","label"}`），文件变了构建会自动重写 trends payload。
 
-`static/abtests-<product>.json`（懒加载，点「聚类体系」卡头的 AB 测试记录才拉；只有
+`static/abtests-<product>.json`（懒加载，点「聚类矩阵」标题旁的 A/B Test 才拉；只有
 `<datasets>/<n>_<product>/ab_test/` 存在时才生成）：同一批**固定问句**在发版前后各评测 + 聚类一次，
-把两棵树按叶子路径取并集，看问题结构怎么变。
+再叠一批发版后的线上真实用户评测做验证；三批在 UI 内先汇总、再进入聚类矩阵。
 
 ```text
 { schema, generated_at, product, models[], labels{status,b_reason,sources},
   rounds[{ id, order, version, label, released_at, generated_at, targets,
            status{A,B,C}, b_reason{B1,B2}, sources[[name,n]…], dates[first,last],
-           sides{before{traces,hits}, after{traces,hits}|null},
-           leaves[{id,name,before,after|null,model_before,model_after|null,source_before,source_after|null}],
-           nodes[{id,level,parent,name,before,after}] }] }
+           sides{before{traces,hits}, after{traces,hits}|null,
+                 online{traces,hits,from,to,user_type}|null},
+           leaves[{id,name,before,after|null,online|null,model_*,source_*}],
+           nodes[{id,level,parent,name,before,after|null,online|null}],
+           matrix{before[[task,sub,[[path,n]…]]…], after|null, online|null}}] }
 ```
 
 - 目录约定见 `ab_test/*/README.md`：`00_manifest/{summary.json,coverage.csv}` 是清单（A/B/C 三类状态、
@@ -198,6 +201,8 @@ uid 用户 ID（输入 meta.user_id）· ut 用户类型 real/test/internal/unkn
 - 口径：`before` / `after` 都数**命中该叶子的 trace 数**（同一批题），前缀节点包含其下所有叶子；
   分母写清楚是 `targets`（固定题集）还是 `sides.*.traces`（有落点的），不要和「线上大盘」的批次占比混。
   `A/B/C` 是数据质量总账（C = 无评测记录），必须展示，否则前后对比的分母会被误读。
+- `online` = `round.json.released_at` 起、下一期 `released_at` 前（最后一期到当前）的 `用户类型=real` 评测；
+  排除固定题集 trace。它是另一批总体，只用于验证问题是否继续出现，不能和 `before` / `after` 直接相减。
 - 改 `ab_test/` 下任何文件都会让 reuse marker 失效并重写 payload；删掉整个 `ab_test/` 会连带删掉
   `abtests-*.json` 并隐藏卡片入口。
 
