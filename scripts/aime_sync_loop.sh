@@ -42,10 +42,10 @@ while true; do
   # 2) 弗吉尼亚 -> 乌兰：全部任务（双向互补；append 类目标更大就跳过）
   if [ "$VERIFY_EVERY" -gt 0 ] && [ $((round % VERIFY_EVERY)) -eq 0 ]; then
     python3 scripts/sync_aime_ulan_to_va.py --direction reverse --only all \
-      --skip daily/input,daily/cluster,lost_archive/input --verify all >> "$STATE/loop.out" 2>&1
+      --skip daily/input,daily/cluster,lost_archive/input,ab_test/data --verify all >> "$STATE/loop.out" 2>&1
   else
     python3 scripts/sync_aime_ulan_to_va.py --direction reverse --only all \
-      >> "$STATE/loop.out" 2>&1
+      --skip ab_test/data >> "$STATE/loop.out" 2>&1
   fi
   rc2=$?
 

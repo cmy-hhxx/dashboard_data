@@ -76,11 +76,21 @@ TASKS = {
              f"{VA_BASE}/eval_output/0_daily_eval", "append"),
             ("cluster", f"{ULAN_BASE}/eval_output/cluster",
              f"{VA_BASE}/eval_output/cluster", "exact"),
+            # 投递台账 provenance 是整份重写的，append 会在两边互相覆盖；用 exact 让新的一方胜出
+            ("provenance", f"{ULAN_BASE}/eval_output/0_daily_eval/.delivery/provenance",
+             f"{VA_BASE}/eval_output/0_daily_eval/.delivery/provenance", "exact"),
         ],
         "status_files": {
             "aime_expert": f"{ULAN_BASE}/eval_input/0_daily_eval_input/aime_expert/status.json",
             "aime_fast": f"{ULAN_BASE}/eval_input/0_daily_eval_input/aime_fast/status.json",
         },
+    },
+    "ab_test": {
+        "label": "A/B 测试（ab_test/0_version1106_test 等版本目录）",
+        # 2026-11-07 起要求随同步一起带过去：目前是空的版本目录骨架，内容会陆续落盘。
+        "pairs": [
+            ("data", f"{ULAN_BASE}/ab_test", f"{VA_BASE}/ab_test", "append"),
+        ],
     },
 }
 
@@ -236,7 +246,12 @@ def is_excluded(rel):
         return True
     if rel.startswith(".delivery/claims/"):
         return True
+    if rel.startswith(".delivery/provenance/"):
+        # 投递台账会整份重写（不是 append-only），单独用 exact pair 按 mtime 同步
+        return True
     name = parts[-1]
+    if name.startswith(".") or name.endswith(".tmp"):
+        return True
     if (name.endswith(".lock") or name.endswith(".run-lock")
             or name.startswith(".run-lock") or name.endswith(PART_SUFFIX)):
         return True
@@ -244,7 +259,36 @@ def is_excluded(rel):
 
 
 FIND_TMPL = (r"cd {d} && find . -type d \( -name .runs -o -name claims \) -prune "
-             r"-o -type f -printf '%s\t%P\n'")
+             r"-o -type f ! -name '.*' ! -name '*.tmp' ! -name '*.lock' -printf '%s\t%P\n'")
+
+# 目录骨架：空目录（如刚建好的新版本测试目录）也要求在目标端存在，只建不删
+FIND_DIRS_TMPL = (r"cd {d} && find . -mindepth 1 "
+                  r"\( -name '.?*' -o -name .runs -o -name claims \) -prune "
+                  r"-o -type d -printf '%P\n'")
+
+
+def remote_dirs(host, abs_dir):
+    """源端子目录相对路径（跳过隐藏目录 / .runs / claims）。"""
+    out = run_ssh(host, FIND_DIRS_TMPL.format(d=q(abs_dir)))
+    return [ln.strip() for ln in out.splitlines() if ln.strip()]
+
+
+def ensure_dir_skeleton(src_host, dst_host, src_dir, dst_dir, batch=200):
+    """把源端已有子目录在目标端补齐（幂等、只增不删），让空的版本目录也保持一致。"""
+    try:
+        dirs = remote_dirs(src_host, src_dir)
+    except Exception:  # noqa: BLE001
+        return 0
+    made = 0
+    for i in range(0, len(dirs), batch):
+        chunk = dirs[i:i + batch]
+        cmd = "; ".join(f"mkdir -p {q(os.path.join(dst_dir, rel))}" for rel in chunk)
+        try:
+            run_ssh(dst_host, cmd, retries=3, timeout=120)
+            made += len(chunk)
+        except Exception:  # noqa: BLE001
+            pass
+    return made
 
 
 def remote_manifest(host, abs_dir):
@@ -432,7 +476,7 @@ def full_transfer(abs_src, abs_dst, mtime=None):
 # --------------------------------------------------------------------------- #
 
 FIND_META_TMPL = (r"cd {d} && find . -type d \( -name .runs -o -name claims \) -prune "
-                  r"-o -type f -printf '%s\t%T@\t%P\n'")
+                  r"-o -type f ! -name '.*' ! -name '*.tmp' ! -name '*.lock' -printf '%s\t%T@\t%P\n'")
 
 
 def remote_manifest_meta(host, abs_dir):
@@ -554,7 +598,18 @@ def sync_append_pair(task_key, kind, src_dir, dst_dir, dry_run=False):
         "raw_new_bytes": 0, "raw_append_bytes": 0, "sent_bytes": 0,
         "dst_only": [], "vanished": [], "ahead": [], "errors": [],
     }
-    src = remote_manifest(ULAN_HOST, src_dir)
+    if not dry_run:
+        ensure_dir_skeleton(ULAN_HOST, VA_HOST, src_dir, dst_dir)
+    try:
+        src = remote_manifest(ULAN_HOST, src_dir)
+    except Exception as exc:  # noqa: BLE001
+        if "No such file or directory" in str(exc):
+            # 对端目录还没建（如反向同步时弗吉尼亚的 ab_test 尚未产出）：跳过，不算故障
+            log(f"  [{task_key}/{kind}] 源目录不存在，跳过（{src_dir}）")
+            stats.update({"src_files": 0, "dst_files": 0,
+                          "src_bytes": 0, "dst_bytes": 0})
+            return stats
+        raise
     dst = remote_manifest(VA_HOST, dst_dir)
     stats["src_files"] = len(src)
     stats["dst_files"] = len(dst)
@@ -849,7 +904,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dry-run", action="store_true", help="只打印同步计划，不做任何传输")
-    parser.add_argument("--only", choices=["lost", "lost_archive", "daily", "all"], default="all")
+    parser.add_argument("--only", choices=["lost", "lost_archive", "daily", "ab_test", "all"], default="all")
     parser.add_argument("--verify", choices=["none", "synced", "all"], default="none",
                         help="对账范围：不校验 / 只校验本轮传过的 / 校验全部")
     parser.add_argument("--no-meta", action="store_true", help="跳过评测进度读取")
