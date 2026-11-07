@@ -30,10 +30,30 @@ const isLostRow = (r) => !!(r && (r.ul || r.sp === "lost"));
 // `sc` is the scene the matrix filed the sample under when it differs from task / skill (问财 B versions).
 const sceneOf = (r) => r.sc || r.task || r.skill || "未标注";
 const subOf = (r) => r.sub || "";
-const problemHit = (r, f) =>
-  (!f.stage || r.st.includes(f.stage)) &&
-  (!f.mech || r.pt.some((x) => x.split(".")[1] === f.mech && (!f.stage || x.startsWith(`${f.stage}.`)))) &&
-  (!f.pattern || r.pt.some((x) => x === f.pattern || x.startsWith(f.pattern + ".")));
+/* One predicate drives both the cascade options and the final list. When an
+   upstream option changes, downstream options reset, so option pools omit the
+   field being populated and everything below it (comma-separated in `omit`). */
+const cascadeHit = (r, f, omit = "") => {
+  const skip = new Set(omit ? omit.split(",") : []);
+  return (skip.has("scene") || !f.scene || sceneOf(r) === f.scene) &&
+    (skip.has("sub") || !f.sub || subOf(r) === f.sub) &&
+    (skip.has("stage") || !f.stage || (r.st || []).includes(f.stage)) &&
+    (skip.has("mech") || !f.mech || (r.pt || []).some((x) => x.split(".")[1] === f.mech && (!f.stage || x.startsWith(`${f.stage}.`)))) &&
+    (skip.has("pattern") || !f.pattern || (r.pt || []).some((x) => x === f.pattern || x.startsWith(f.pattern + ".")));
+};
+const severityHit = (r, w) => {
+  if (!w) return true;
+  const hasCounts = Array.isArray(r.sv) && r.sv.length >= SEV.length;
+  if (w === "none") return hasCounts ? !r.sv.some((n) => Number(n) > 0) : r.w === "none";
+  const i = SEV.indexOf(w);
+  return hasCounts ? i >= 0 && Number(r.sv[i] || 0) > 0 : r.w === w;
+};
+const listHit = (r, f, omit = "") =>
+  severityHit(r, f.w) &&
+  (!f.split || (f.split === "lost" ? isLostRow(r) : r.sp === f.split)) &&
+  (!f.model || r.m === f.model) &&
+  (!f.ut || utOf(r) === f.ut) &&
+  cascadeHit(r, f, omit);
 
 /* One list row is one session (per model); traces that were evaluated separately stay
    as rounds of that session instead of separate rows. */
@@ -45,7 +65,7 @@ function groupSessions(rows) {
     if (!g) {
       g = {
         key, s: key, rows: [], sid: r.sid, m: r.m, sp: r.sp,
-        w: "none", n: 0, tr: 0, pt: new Set(), st: new Set(), tg: new Set(), lb: new Set(),
+        w: "none", n: 0, tr: 0, sv: [0, 0, 0, 0, 0], hasSv: true, pt: new Set(), st: new Set(), tg: new Set(), lb: new Set(),
         q: "", d: "", tid: "", case: "", task: "", sub: "", skill: "", sc: "", lang: r.lang,
         uid: "", ut: "", ul: 0,
       };
@@ -54,6 +74,9 @@ function groupSessions(rows) {
     g.rows.push(r);
     g.n += r.n || 0;
     g.tr += r.tr || 1;
+    if (Array.isArray(r.sv) && r.sv.length >= SEV.length) {
+      r.sv.slice(0, SEV.length).forEach((n, i) => { g.sv[i] += Number(n) || 0; });
+    } else g.hasSv = false;
     if (WORST.indexOf(r.w) >= 0 && (g.w === "none" || WORST.indexOf(r.w) < WORST.indexOf(g.w))) g.w = r.w;
     (r.pt || []).forEach((x) => g.pt.add(x));
     (r.st || []).forEach((x) => g.st.add(x));
@@ -72,9 +95,10 @@ function groupSessions(rows) {
   return [...groups.values()].map((g) => {
     const rowsByDate = g.rows.slice().sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0));
     const last = rowsByDate[rowsByDate.length - 1];
+    const countedW = g.hasSv ? (SEV.find((s, i) => g.sv[i] > 0) || "none") : g.w;
     return {
       ...last, key: g.key, s: g.key, rows: g.rows,
-      q: last.q, d: last.d, w: g.w, n: g.n, tr: g.tr,
+      q: last.q, d: last.d, w: countedW, n: g.n, tr: g.tr, sv: g.hasSv ? g.sv : (Array.isArray(last.sv) ? last.sv : null),
       pt: [...g.pt], st: [...g.st], tg: [...g.tg], lb: [...g.lb].join("｜"),
       tid: g.tid, case: g.case, task: g.task, sub: g.sub, skill: g.skill, sc: g.sc,
       uid: g.uid, ut: g.ut, ul: g.ul,
@@ -352,19 +376,15 @@ function syncFilters() {
   const tax = ctx.data.taxonomy;
   if (tax) {
     const byNum = (a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1));
-    const scenePool = S.all.filter((r) => (!f.scene || sceneOf(r) === f.scene) && (!f.sub || subOf(r) === f.sub));
-    const scenes = [...new Set([...S.all.filter((r) => problemHit(r, f) && (!f.sub || subOf(r) === f.sub)).map(sceneOf), f.scene].filter(Boolean))]
+    const scenes = [...new Set([...S.all.filter((r) => listHit(r, f, "scene,sub,stage,mech,pattern")).map(sceneOf), f.scene].filter(Boolean))]
       .sort((a, b) => a.localeCompare(b, "zh"));
-    const subs = [...new Set([...S.all.filter((r) => problemHit(r, f) && (!f.scene || sceneOf(r) === f.scene)).map(subOf), f.sub].filter(Boolean))]
+    const subs = [...new Set([...S.all.filter((r) => listHit(r, f, "sub,stage,mech,pattern")).map(subOf), f.sub].filter(Boolean))]
       .sort((a, b) => a.localeCompare(b, "zh"));
-    const stages = tax.stages.filter((s) => scenePool.some((r) => r.st.includes(s.id))).sort(byNum);
-    const mechs = tax.mechanisms
-      .filter((m) => scenePool.some((r) => r.pt.some((x) => x.split(".")[1] === m.id && (!f.stage || x.startsWith(`${f.stage}.`)))))
-      .sort(byNum);
+    const stages = tax.stages.filter((s) => S.all.some((r) => listHit(r, f, "stage,mech,pattern") && (r.st || []).includes(s.id))).sort(byNum);
+    const mechs = tax.mechanisms.filter((m) => S.all.some((r) => listHit(r, f, "mech,pattern") && (r.pt || []).some((x) => x.split(".")[1] === m.id && (!f.stage || x.startsWith(`${f.stage}.`))))).sort(byNum);
     const pats = Object.keys(tax.patterns)
       .filter((id) => {
-        const [s, m] = id.split(".");
-        return (!f.stage || s === f.stage) && (!f.mech || m === f.mech) && scenePool.some((r) => r.pt.includes(id));
+        return S.all.some((r) => listHit(r, f, "pattern") && (r.pt || []).some((x) => x === id || x.startsWith(id + ".")));
       })
       .sort((a, b) => {
         const pa = a.split(".").map((x) => Number(x.replace(/\D/g, "")) || 0);
@@ -396,11 +416,7 @@ function renderList() {
     r.rows.some((x) => [x.q, x.sid, x.tid, x.case, x.task, x.sub, x.skill].some((v) => v && String(v).toLowerCase().includes(needle)));
   S.rows = S.all.filter(
     (r) =>
-      (!f.w || r.w === f.w) && (!f.split || (f.split === "lost" ? isLostRow(r) : r.sp === f.split)) && (!f.model || r.m === f.model) &&
-      (!f.ut || utOf(r) === f.ut) &&
-      (!f.scene || sceneOf(r) === f.scene) &&
-      (!f.sub || subOf(r) === f.sub) &&
-      problemHit(r, f) &&
+      listHit(r, f) &&
       hit(r),
   );
   if (f.sort === "n") S.rows = S.rows.slice().sort((a, b) => b.n - a.n);
@@ -415,7 +431,7 @@ function renderList() {
         .map(
           (r) => `<button type="button" class="srow" data-s="${r.s}" style="--c:${sevColor(r.w)}" aria-current="${r.s === S.slug}">
       <span class="bar"></span><span class="srow-body"><span class="q">${esc(r.q || "（无提问）")}</span>
-      <span class="m num"><span class="srow-model">${esc(label(r.m))}</span><span>${r.d.slice(5)}</span>${r.tr > 1 ? `<span>${r.tr} 轮</span>` : ""}<span class="srow-sev" style="color:${r.w === "none" ? "var(--muted)" : sevColor(r.w)}">${r.n ? `${r.w} · ${r.n}` : "无问题"}</span>${
+      <span class="m num"><span class="srow-model">${esc(label(r.m))}</span><span>${r.d.slice(5)}</span>${r.tr > 1 ? `<span>${r.tr} 轮</span>` : ""}<span class="srow-sev" style="color:${r.w === "none" ? "var(--muted)" : sevColor(r.w)}">${r.w === "none" ? "无问题" : r.w}</span>${
             isLostRow(r) ? '<span class="tag-lost">流失</span>' : ""
           }</span></span></button>`,
         )
@@ -1395,7 +1411,9 @@ function alignColumns() {
   const outP = $("#sattr > .out", root);
   const group = $("#sattr .tgroup", root);
   const body = stl ? $(".chain-body", stl) : null;
-  const lists = [flow, group, body].filter(Boolean);
+  // Attribution cards stay fully addressable: only the trace/chain columns use
+  // the shared collapsed band and its "展开全部" control.
+  const lists = [flow, body].filter(Boolean);
   const bands = $$(".band-toggle", root);
   // 先回到自然高度再量，否则上一轮撑出来的高度会被当成内容高度。
   for (const el of lists) {
@@ -1433,12 +1451,12 @@ function alignColumns() {
   const cap = Math.max(720, pane ? pane.clientHeight : 900);
   // 自然高度：cflow / tgroup 都是 grid，scrollHeight 就是内容高度。
   const nat = { flow: flow.scrollHeight, group: group.scrollHeight, body: body ? body.scrollHeight : 0 };
-  const tallest = Math.max(nat.flow, nat.group, nat.body);
+  const tallest = Math.max(nat.flow, nat.body);
   // 每列最多比自然高度多 stretch 这么多（20%，上限 160px）：矮的一列靠行距补，不能靠留白。
   const stretch = (n) => Math.min(160, Math.round(n * 0.2));
   // 只有一项的列没法靠行距补高，不参与定高，否则一张卡就能把整条带压扁。
   const room = (el, n) => (n && el && el.children.length > 1 ? n + stretch(n) : Infinity);
-  const folded = Math.min(tallest, cap, room(flow, nat.flow), room(group, nat.group), body ? room(body, nat.body) : Infinity);
+  const folded = Math.min(tallest, cap, room(flow, nat.flow), body ? room(body, nat.body) : Infinity);
   // 一条滚轴：默认把整条带收在一屏内，超出部分先藏进渐隐里；点「展开全部」再把带放开。
   const H = S.bandOpen ? tallest : folded;
   // 链路比这一列高时先收紧行距，收得进去就都不裁。
@@ -1475,7 +1493,6 @@ function alignColumns() {
     el.classList.add("is-band");
   };
   fit(flow, flow.scrollHeight);
-  fit(group, nat.group);
   if (body) fit(body, body.scrollHeight);
   // 只有当「收起来」真的藏了内容时才出现；展开后变成「收起」。顶部和底部各一个，长链路不用滚到底才点得到。
   const canFold = clipped > 0 || (S.bandOpen && folded < tallest);

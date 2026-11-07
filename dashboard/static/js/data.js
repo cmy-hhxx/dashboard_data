@@ -474,7 +474,7 @@ function evalStats(p) {
   const items = [
     ["完成 Session / 输入", ratio(t.sessions)],
     ["完成 Trace / 输入", ratio(t.traces)],
-    [t.tokenRecords < t.records ? "评测 Tokens（部分）" : "评测 Tokens",
+    ["评测 Tokens",
       counter(t.tokens, { unit: true, title: `已上报 tokens 合计 ${fmt(t.tokens)} · 覆盖 ${fmt(t.tokenRecords)} / ${fmt(t.records)} 条评测记录` })],
   ];
   return stats(items);
