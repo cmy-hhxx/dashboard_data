@@ -32,7 +32,7 @@ def free_port():
 def row(slug, sid, model="b_fast", split="daily", question="问题"):
     return {
         "s": slug, "sid": sid, "m": model, "sp": split, "q": question, "d": "2026-10-01",
-        "n": 1, "w": "P1", "tr": 1, "pt": [], "st": [], "tg": [], "lb": "", "lang": "zh",
+        "n": 1, "w": "P1", "tr": 1, "pt": [], "st": [], "tg": [], "lang": "zh",
         "tid": "", "case": "", "task": "", "sub": "", "skill": "", "sc": "",
     }
 
@@ -52,6 +52,8 @@ INDEX = {
         "products": {"aime": {"label": "AIME", "models": [], "splits": ["lost"], "rows": []}},
     },
     "/data.json": {"schema": 1, "taxonomy": {"patterns": {"S1.M1": {"name": "模式"}}, "stages": []}},
+    "/labels-wencai.json": {"schema": 2, "product": "wencai", "labels": ["标签一", "标签二", ""]},
+    "/labels-aime.json": {"schema": 2, "product": "aime", "labels": ["标签一", "标签二", ""]},
     "/samples/aaaaaaaaaa.json": {"slug": "aaaaaaaaaa", "product": "wencai", "model": "b_fast",
                                  "input": {"traces": [], "missing": True},
                                  "attribution": {"problems": [], "turns": []},
@@ -194,15 +196,38 @@ class SampleDetailsTest(unittest.TestCase):
         status, headers, body = fetch(self.base + "/samples-wencai.json", gzip_ok=True)
         self.assertEqual(headers.get("Content-Encoding"), "gzip")
 
+    def test_labels_proxy(self):
+        status, _, body = fetch(self.base + "/labels-wencai.json")
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertEqual(payload["product"], "wencai")
+        self.assertEqual(payload["labels"], ["标签一", "标签二", ""])
+        # 与 /samples-<product>.json 的 rows 同序同长度：调用方按下标配对
+        _, _, index_body = fetch(self.base + "/samples-wencai.json")
+        rows = json.loads(index_body)["products"]["wencai"]["rows"]
+        self.assertEqual(len(payload["labels"]), len(rows))
+        status, headers, _ = fetch(self.base + "/labels-wencai.json", gzip_ok=True)
+        self.assertEqual(headers.get("Content-Encoding"), "gzip")
+        # aime 同样可透传（各自部署只服务自己的产品，标签文件不随产品变）
+        status, _, body = fetch(self.base + "/labels-aime.json")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["product"], "aime")
+
     def test_static_assets(self):
         for path in ("/js/samples.js", "/js/core.js", "/css/samples.css", "/detail.css", "/entry.js"):
             status, _, body = fetch(self.base + path)
             self.assertEqual(status, 200, path)
             self.assertTrue(body)
+        # 单样本页要显式告诉快照「索引是子集」，否则它会去拉全量 labels 并错位
+        _, _, entry = fetch(self.base + "/entry.js")
+        self.assertIn(b"oneSession", entry)
 
     def test_unknown_api_paths(self):
         with self.assertRaises(urllib.error.HTTPError) as caught:
             fetch(self.base + "/api/nope")
+        self.assertEqual(caught.exception.code, 404)
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            fetch(self.base + "/labels-nope.json")
         self.assertEqual(caught.exception.code, 404)
 
 

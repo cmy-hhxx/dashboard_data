@@ -60,6 +60,8 @@ async function boot() {
   const ctx = {
     product: payload.product,
     data: { taxonomy: payload.taxonomy },
+    // 单样本页只渲染一个会话，索引是子集（行号对不上全量 labels）：快照别去拉 labels。
+    oneSession: true,
     loadIndex: async () => payload.index,
     navigate: (patch, { replace = false } = {}) => {
       const url = new URL(location.href);

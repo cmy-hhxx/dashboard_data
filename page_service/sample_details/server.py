@@ -14,6 +14,7 @@ Routes
     GET /api/context?…                 mini sample index + taxonomy for the page
     GET /samples/<slug>.json           raw detail, dashboard-compatible path
     GET /samples-<product>.json        raw recall index, dashboard-compatible path
+    GET /labels-<product>.json         raw problem labels (index-aligned with the recall index)
     GET /healthz                       liveness + upstream probe
 """
 from __future__ import annotations
@@ -40,6 +41,7 @@ PRODUCTS = ("wencai", "aime")
 SLUG_RE = re.compile(r"^[0-9a-f]{10}$")
 DETAIL_RE = re.compile(r"^/samples/([0-9a-f]{10})\.json$")
 INDEX_RE = re.compile(r"^/samples-(wencai|aime)\.json$")
+LABELS_RE = re.compile(r"^/labels-(wencai|aime)\.json$")
 DOC_TTL = float(os.environ.get("DOC_TTL", "120"))  # payloads rebuild every ~10 min
 UPSTREAM_TIMEOUT = 60.0
 
@@ -80,22 +82,33 @@ class DocCache:
 
 DOCS = DocCache()
 RAW_INDEX = {}
+RAW_LABELS = {}
 RAW_LOCK = threading.Lock()
 
 
-def _index_bytes(product):
-    """Recall index body (and its gzip) cached briefly; it is several MB."""
-    item = RAW_INDEX.get(product)
+def _raw_bytes(cache, path):
+    """Raw payload body (and its gzip) cached briefly; these files are several MB."""
+    item = cache.get(path)
     if item and time.time() - item[0] < DOC_TTL:
         return item[1], item[2]
     with RAW_LOCK:
-        item = RAW_INDEX.get(product)
+        item = cache.get(path)
         if item and time.time() - item[0] < DOC_TTL:
             return item[1], item[2]
-        _, _, body = _upstream("/samples-%s.json" % product)
+        _, _, body = _upstream(path)
         packed = (time.time(), body, gzip.compress(body, 5))
-        RAW_INDEX[product] = packed
+        cache[path] = packed
         return packed[1], packed[2]
+
+
+def _index_bytes(product):
+    """Recall index body; it is several MB."""
+    return _raw_bytes(RAW_INDEX, "/samples-%s.json" % product)
+
+
+def _labels_bytes(product):
+    """Problem labels, index-aligned with the recall index rows; AIME is ~5 MB."""
+    return _raw_bytes(RAW_LABELS, "/labels-%s.json" % product)
 
 
 def session_key(row):
@@ -203,6 +216,9 @@ class Handler(SimpleHTTPRequestHandler):
             match = INDEX_RE.match(path)
             if match:
                 return self._index(match.group(1))
+            match = LABELS_RE.match(path)
+            if match:
+                return self._labels(match.group(1))
             if path.startswith("/api/") or path.startswith("/samples"):
                 return self._error(404, "not found")
             return super().do_GET()
@@ -270,6 +286,17 @@ class Handler(SimpleHTTPRequestHandler):
             body, packed = _index_bytes(product)
         except urllib.error.HTTPError as exc:
             return self._error(exc.code, "index unavailable", product=product)
+        if self._accepts_gzip():
+            return self._write(200, packed, "application/json; charset=utf-8", encoding="gzip")
+        return self._write(200, body, "application/json; charset=utf-8")
+
+    def _labels(self, product):
+        # Forwarded verbatim: callers pair labels[i] with the same row of
+        # /samples-<product>.json, so both must stay index-aligned.
+        try:
+            body, packed = _labels_bytes(product)
+        except urllib.error.HTTPError as exc:
+            return self._error(exc.code, "labels unavailable", product=product)
         if self._accepts_gzip():
             return self._write(200, packed, "application/json; charset=utf-8", encoding="gzip")
         return self._write(200, body, "application/json; charset=utf-8")

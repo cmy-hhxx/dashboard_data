@@ -116,16 +116,20 @@ export async function render(r, c) {
   renderList();
   // lb is the only search field paint does not need, so it ships separately (4.8MB of
   // the AIME index). Search works without it and gets more accurate when it lands.
-  labelsP = labelsP || getJSON(`labels-${c.product}.json`)
-    .then((payload) => {
-      const labels = payload.labels || [];
-      prod.rows.forEach((r, i) => { if (labels[i]) r.lb = labels[i]; });
-      if (S.prod !== prod) return;
-      S.all = groupSessions(prod.rows);
-      renderList();
-    })
-    // A failed fetch must not stick: the next render tries again.
-    .catch(() => { labelsP = null; });
+  // 5002 单样本页的索引只含该会话那几行（子集），行号对不上全量 labels，由 entry 传
+  // oneSession 跳过；那边的调用方要标签直接取 /labels-<product>.json 按行号配对。
+  if (!c.oneSession) {
+    labelsP = labelsP || getJSON(`labels-${c.product}.json`)
+      .then((payload) => {
+        const labels = payload.labels || [];
+        prod.rows.forEach((r, i) => { if (labels[i]) r.lb = labels[i]; });
+        if (S.prod !== prod) return;
+        S.all = groupSessions(prod.rows);
+        renderList();
+      })
+      // A failed fetch must not stick: the next render tries again.
+      .catch(() => { labelsP = null; });
+  }
   S.traceMiss = null;
   const focusTrace = params().get("trace") || "";
   const wanted = params().get("case");
