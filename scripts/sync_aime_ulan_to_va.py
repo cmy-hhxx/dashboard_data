@@ -415,12 +415,15 @@ def append_transfer(abs_src, abs_dst, offset):
     raise RuntimeError(f"追加失败：{last}")
 
 
-def full_transfer(abs_src, abs_dst):
-    """整文件传输：先写 .part-sync，再原子 mv 覆盖。"""
+def full_transfer(abs_src, abs_dst, mtime=None):
+    """整文件传输：先写 .part-sync，再原子 mv 覆盖。mtime 给定时保留源文件修改时间。"""
     parent = os.path.dirname(abs_dst)
     src_cmd = f"{ULAN_ZSTD} -{ZSTD_LEVEL} -q -c -- {q(abs_src)}"
+    tail = ""
+    if mtime is not None:
+        tail = f" && touch -d @{int(mtime)} {q(abs_dst)}"
     dst_cmd = (f"mkdir -p {q(parent)} && {VA_ZSTD} -d -q -c > {q(abs_dst + PART_SUFFIX)}"
-               f" && mv -f {q(abs_dst + PART_SUFFIX)} {q(abs_dst)}")
+               f" && mv -f {q(abs_dst + PART_SUFFIX)} {q(abs_dst)}{tail}")
     return stream_transfer(src_cmd, dst_cmd)
 
 
@@ -490,6 +493,16 @@ def sync_exact_pair(task_key, kind, src_dir, dst_dir, dry_run=False):
         size, mtime = src[rel]
         have = dst.get(rel)
         prev = state.get(rel)
+        if have is not None:
+            # 两边内容一致（大小 + mtime 相同）直接跳过
+            if have[0] == size and abs(float(have[1]) - mtime) < 1e-6:
+                stats["skipped"] += 1
+                continue
+            # 目标端更新 -> 这一侧不覆盖，交给反方向同步
+            if float(have[1]) > mtime + 1e-6:
+                stats["skipped"] += 1
+                stats.setdefault("dst_newer", []).append(rel)
+                continue
         unchanged = (prev and int(prev[0]) == size
                      and abs(float(prev[1]) - mtime) < 1e-6
                      and have is not None and have[0] == size)
@@ -511,7 +524,7 @@ def sync_exact_pair(task_key, kind, src_dir, dst_dir, dry_run=False):
         abs_src = os.path.join(src_dir, rel)
         abs_dst = os.path.join(dst_dir, rel)
         try:
-            sent = full_transfer(abs_src, abs_dst)
+            sent = full_transfer(abs_src, abs_dst, mtime=mtime)
             stats["sent_bytes"] += sent
             state[rel] = [size, mtime]
             log(f"  [{task_key}/{kind}] 聚类整传({action}) {rel} {size / 1e6:.1f}MB "

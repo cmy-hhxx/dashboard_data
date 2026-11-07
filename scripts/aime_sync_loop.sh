@@ -21,30 +21,31 @@ STATE=tmp/aime_sync
 mkdir -p "$STATE"
 
 echo $$ > "$STATE/loop.pid"
-echo "[$(date '+%F %T')] loop start pid=$$ interval=${INTERVAL}s verify_every=${VERIFY_EVERY} mode=dual(cluster U->V, daily in/out U<->V)" >> "$STATE/loop.out"
+echo "[$(date '+%F %T')] loop start pid=$$ interval=${INTERVAL}s verify_every=${VERIFY_EVERY} mode=mutual(cluster newer-wins, daily/lost U<->V)" >> "$STATE/loop.out"
 
 round=0
 while true; do
   round=$((round + 1))
   echo "[$(date '+%F %T')] ---- round #${round} begin ----" >> "$STATE/loop.out"
 
-  # 1) 乌兰 -> 弗吉尼亚：聚类树 + lost/lost_archive（daily 输入输出不在这里跑）
+  # 1) 乌兰 -> 弗吉尼亚：全部任务（daily 输入/输出、cluster、lost、lost_archive）
+  #    双向节奏：forward 负责"乌兰更新"的部分；append 类目标更大就跳过，cluster 谁 mtime 新用谁。
   if [ "$VERIFY_EVERY" -gt 0 ] && [ $((round % VERIFY_EVERY)) -eq 0 ]; then
     python3 scripts/sync_aime_ulan_to_va.py --direction forward --only all \
-      --skip lost_archive/input --verify all >> "$STATE/loop.out" 2>&1
+      --skip daily/input,daily/output,lost_archive/input --verify all >> "$STATE/loop.out" 2>&1
   else
     python3 scripts/sync_aime_ulan_to_va.py --direction forward --only all \
       >> "$STATE/loop.out" 2>&1
   fi
   rc1=$?
 
-  # 2) 弗吉尼亚 -> 乌兰：日常输入/输出（聚类树不在这里跑）
+  # 2) 弗吉尼亚 -> 乌兰：全部任务（双向互补；append 类目标更大就跳过）
   if [ "$VERIFY_EVERY" -gt 0 ] && [ $((round % VERIFY_EVERY)) -eq 0 ]; then
-    python3 scripts/sync_aime_ulan_to_va.py --direction reverse --only daily \
-      --skip daily/cluster --verify all >> "$STATE/loop.out" 2>&1
+    python3 scripts/sync_aime_ulan_to_va.py --direction reverse --only all \
+      --skip daily/input,daily/cluster,lost_archive/input --verify all >> "$STATE/loop.out" 2>&1
   else
-    python3 scripts/sync_aime_ulan_to_va.py --direction reverse --only daily \
-      --skip daily/cluster >> "$STATE/loop.out" 2>&1
+    python3 scripts/sync_aime_ulan_to_va.py --direction reverse --only all \
+      >> "$STATE/loop.out" 2>&1
   fi
   rc2=$?
 
