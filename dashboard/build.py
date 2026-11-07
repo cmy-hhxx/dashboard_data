@@ -54,7 +54,7 @@ REPO = DASHBOARD.parent
 STATIC = DASHBOARD / "static"
 PRODUCTION_DATASETS = Path("/mnt/fin_bench/code_and_clean_data/datasets")
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-07.7"
+PAYLOAD_VERSION = "2026-11-07.8"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 2
 
@@ -2838,7 +2838,7 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
         t0 = time.time()
         ab_bytes = 0
         for product in products:
-            payload = ab_test.ab_payload(datasets, product, generated)
+            payload = ab_test.ab_payload(datasets, product, generated, samples[product])
             if not payload:
                 continue
             latest = payload["rounds"][-1]
@@ -2847,6 +2847,7 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
                 "url": f"abtests-{product}.json", "rounds": len(payload["rounds"]),
                 "label": latest["label"], "targets": latest["targets"],
                 "paired": latest["sides"]["after"] is not None,
+                "online": latest["sides"]["online"] is not None,
             }
             ab_bytes += write_json(out_dir / f"abtests-{product}.json", payload)
         for stale in out_dir.glob("abtests-*.json*"):
