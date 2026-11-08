@@ -241,8 +241,8 @@ test("AB cell trends remove duplicate captions and use a labelled, full-height c
     assert.ok(mounted, "the AB chart must use the shared sample drawer mount");
     assert.equal(mounted[0], chartHost);
     const picks = mounted[1].chart.series[0].samples;
-    assert.deepEqual(picks.map((pick) => pick.sides), [["before"], ["after"]]);
-    assert.equal(mounted[1].chart.series[0].values[1], null, "without a retest the paired change has no second point");
+    assert.deepEqual(picks.map((pick) => pick.sides), [["before"], ["after", "online"]]);
+    assert.equal(mounted[1].chart.series[0].values[1], null, "without a released side the comparison has no second point");
 
     const released = { ...rnd, sides: { ...rnd.sides, after: { hits: 60 }, online: { hits: 40 } },
       matrix: { ...rnd.matrix, after: [[row.task, "", [["S4.M1.1", 60]]]], online: [[row.task, "", [["S4.M1.1", 40]]]] },
@@ -255,8 +255,8 @@ test("AB cell trends remove duplicate captions and use a labelled, full-height c
       mountCellTrend: (...args) => { mounted = args; },
     });
     assert.equal(mounted[1].chart.series.length, 1);
-    assert.deepEqual(mounted[1].chart.series[0].values, [95, 60], "the paired change must not fold the online batch in");
-    assert.deepEqual(mounted[1].chart.series[0].samples.map((pick) => pick.sides), [["before"], ["after"]]);
+    assert.deepEqual(mounted[1].chart.series[0].values, [95, 100], "变化 compares 发版前 with 发版后 = 复测 + 线上真实");
+    assert.deepEqual(mounted[1].chart.series[0].samples.map((pick) => pick.sides), [["before"], ["after", "online"]]);
     assert.deepEqual(mounted[1].chart.xLabels, ["改版前", "改版后"]);
     assert.match(host.innerHTML, /改版前样本/);
     assert.match(host.innerHTML, /线上真实样本/);
@@ -297,12 +297,17 @@ test("AB matrix offers change / pre-release / post-release metrics and sums rete
     assert.match(host.innerHTML, /data-metric="post"/);
     assert.doesNotMatch(host.innerHTML, /data-metric="(all|after|online)"/);
     assert.match(host.innerHTML, /发版后（同题回测\+线上真实）/);
+    // The shared session-matrix tooltip resolver owns [data-mx]; AB cells must opt out of it and
+    // carry their own metric-aware data-tip instead.
+    assert.doesNotMatch(host.innerHTML, /data-mx="/);
+    assert.match(host.innerHTML, /data-tip="[^"]*变化 \+5/);
+    assert.match(host.innerHTML, /同题基线 95 → 发版后 100/);
   } finally {
     globalThis.window = previousWindow;
     globalThis.requestAnimationFrame = previousRAF;
   }
   const cell = { before: 95, after: 60, online: 40 };
-  assert.equal(metricValue(cell, "delta", post), -35);
+  assert.equal(metricValue(cell, "delta", post), 5);
   assert.equal(metricValue(cell, "before", post), 95);
   assert.equal(metricValue(cell, "post", post), 100);
   assert.equal(metricValue(cell, "post", { sides: { after: {} } }), 60);
@@ -315,9 +320,8 @@ test("AB cell tooltips explain the printed number with the same sides and arithm
   const released = { sides: { before: {}, after: {}, online: {} } };
   const s1 = { before: 0, after: 0, online: 547 };
   const delta = metricTip(s1, "delta", released);
-  assert.equal(delta.value, "变化 0");
-  assert.match(delta.note, /同题基线 0 → 同题复测 0/);
-  assert.match(delta.note, /线上真实 547 不计入变化/, "the online batch must not silently disappear from the 0");
+  assert.equal(delta.value, "变化 +547");
+  assert.match(delta.note, /同题基线 0 → 发版后 547（同题复测 0 \+ 线上真实 547）/, "变化 must compare 发版前 with 复测 + 线上真实");
   const post = metricTip(s1, "post", released);
   assert.equal(post.value, "发版后 547");
   assert.equal(post.note, "同题复测 0 + 线上真实 547");

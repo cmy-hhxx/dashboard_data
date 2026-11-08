@@ -31,7 +31,7 @@ const SIDE_TONE = { before: "var(--t2)", after: "var(--accent)", online: "var(--
 
 const sideReady = (rnd, side) => !!(rnd.sides && rnd.sides[side]);
 const postReady = (rnd) => sideReady(rnd, "after") || sideReady(rnd, "online");
-const defaultMetric = (rnd) => (sideReady(rnd, "after") ? "delta" : "before");
+const defaultMetric = (rnd) => (postReady(rnd) ? "delta" : "before");
 const roundLabel = (rnd, i) => rnd.label || rnd.release_label || `第 ${i + 1} 期`;
 
 /* Reuse 评测量 bars, grouping the two post-release populations without mixing them. */
@@ -84,26 +84,31 @@ export function metricValue(cell, metric, rnd) {
     const online = sideReady(rnd, "online") ? cell.online : null;
     return after == null && online == null ? null : num(after) + num(online);
   }
-  if (metric === "delta") return sideReady(rnd, "after") ? cell.after - cell.before : null;
+  if (metric === "delta") {
+    const post = metricValue(cell, "post", rnd);
+    return sideReady(rnd, "before") && post != null ? post - cell.before : null;
+  }
   return null;
 }
 
 /* The tooltip must explain the number that is printed in the cell, with the same sides and the
-   same arithmetic. In particular a 0 change is not missing data: the online batch is a separate
-   population, so it is spelled out as "not counted in the change" instead of being mixed in. */
+   same arithmetic. 变化 compares the pre-release evaluation with the post-release side as a
+   whole: same-question retest plus the post-release real-user batch. */
 export function metricTip(cell, metric, rnd) {
-  const afterReady = sideReady(rnd, "after");
   if (metric === "before") return { value: `发版前 ${fmt(cell.before)}`, note: "同题基线" };
+  const afterReady = sideReady(rnd, "after");
+  const onlineReady = sideReady(rnd, "online");
+  const post = metricValue(cell, "post", rnd);
   if (metric === "post") {
-    const value = metricValue(cell, "post", rnd);
-    const note = `同题复测 ${afterReady ? fmt(cell.after) : DASH} + 线上真实 ${sideReady(rnd, "online") ? fmt(cell.online) : DASH}`;
-    return { value: `发版后 ${value == null ? DASH : fmt(value)}`, note };
+    return {
+      value: `发版后 ${post == null ? DASH : fmt(post)}`,
+      note: `同题复测 ${afterReady ? fmt(cell.after) : DASH} + 线上真实 ${onlineReady ? fmt(cell.online) : DASH}`,
+    };
   }
   const value = metricValue(cell, "delta", rnd);
-  const online = sideReady(rnd, "online") && cell.online > 0 ? `；线上真实 ${fmt(cell.online)} 不计入变化` : "";
-  const note = afterReady
-    ? `同题基线 ${fmt(cell.before)} → 同题复测 ${fmt(cell.after)}${online}`
-    : "同题复测缺失，无法计算变化";
+  const note = post == null
+    ? "发版后缺失，无法计算变化"
+    : `同题基线 ${fmt(cell.before)} → 发版后 ${fmt(post)}（同题复测 ${afterReady ? fmt(cell.after) : DASH} + 线上真实 ${onlineReady ? fmt(cell.online) : DASH}）`;
   return { value: value == null ? `变化 ${DASH}` : `变化 ${signed(value)}`, note };
 }
 
@@ -235,8 +240,8 @@ function matrixTableAb(view, rnd, metric, selected) {
       const tipParts = metricTip(cell, metric, rnd);
       const tip = `${r.name} · ${c.name}|${tipParts.value}|${tipParts.note}`;
       gridCells += v == null || zero
-        ? `<span class="cell is-empty" data-mx="${ri}:${ci}"></span>`
-        : `<span class="cell num${tone}${on ? " is-sel" : ""}" style="--v:${(0.08 + 0.62 * Math.sqrt(Math.abs(v) / max)).toFixed(3)}" data-act="cell" data-ri="${ri}" data-ci="${ci}" data-mx="${ri}:${ci}" data-tip="${esc(tip)}">${metric === "delta" ? signed(v) : fmt(v)}</span>`;
+        ? `<span class="cell is-empty" data-abmx="${ri}:${ci}"></span>`
+        : `<span class="cell num${tone}${on ? " is-sel" : ""}" style="--v:${(0.08 + 0.62 * Math.sqrt(Math.abs(v) / max)).toFixed(3)}" data-act="cell" data-ri="${ri}" data-ci="${ci}" data-abmx="${ri}:${ci}" data-tip="${esc(tip)}">${metric === "delta" ? signed(v) : fmt(v)}</span>`;
     });
     tots += `<span class="rowtot num"><i class="${metric === "delta" && totals[ri] < 0 ? "is-better" : metric === "delta" && totals[ri] > 0 ? "is-worse" : ""}" style="width:${(72 * Math.abs(totals[ri])) / maxTot}px"></i>${metric === "delta" ? signed(totals[ri]) : fmt(totals[ri])}</span>`;
   });
@@ -304,8 +309,7 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
   state.orbitSide = state.orbitSide === "after" ? "after" : "before";
   state.metric = METRICS.some(([k]) => k === state.metric) ? state.metric : defaultMetric(rounds[state.round]);
   const current = rounds[state.round];
-  if ((state.metric === "delta" && !sideReady(current, "after"))
-      || (state.metric === "post" && !postReady(current))) state.metric = defaultMetric(current);
+  if ((state.metric === "delta" || state.metric === "post") && !postReady(current)) state.metric = defaultMetric(current);
   if (!state.cell || typeof state.cell !== "object") state.cell = null;
   let cellTrendChart = null;
   let cellTrendDrawer = null;
@@ -452,14 +456,14 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
   function trend(rnd, selectedCell, metric) {
     if (!selectedCell) return "";
     const { row, col } = selectedCell;
-    const postMode = metric === "post";
     const before = treeCount(rnd, "before", row, col.prefix);
     const fixedAfter = treeCount(rnd, "after", row, col.prefix);
     const online = treeCount(rnd, "online", row, col.prefix);
+    // 变化矩阵 compares 发版前 with 发版后 as a whole: 同题复测 + 线上真实.
     const releaseCount = (r) => {
       const after = treeCount(r, "after", row, col.prefix);
       const live = treeCount(r, "online", row, col.prefix);
-      return postMode ? (after == null && live == null ? null : num(after) + num(live)) : after;
+      return after == null && live == null ? null : num(after) + num(live);
     };
     const rows = rounds.map((r, i) => ({
       label: roundLabel(r, i),
@@ -467,22 +471,25 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
       after: releaseCount(r),
     }));
     const cur = rows[state.round];
-    const afterLabel = postMode ? "发版后" : "改版后";
+    const afterLabel = metric === "post" ? "发版后" : "改版后";
     const cols = rows.length === 1 ? ["改版前", afterLabel] : rows.map((r) => r.label);
     const series = rows.length === 1
-      ? [{ label: col.name, color: "var(--accent)", values: [cur.before, cur.after], samples: [{ round: rnd, sides: ["before"] }, { round: rnd, sides: postMode ? ["after", "online"] : ["after"] }] }]
+      ? [{ label: col.name, color: "var(--accent)", values: [cur.before, cur.after], samples: [{ round: rnd, sides: ["before"] }, { round: rnd, sides: ["after", "online"] }] }]
       : [
           { label: "改版前", color: "var(--t2)", values: rows.map((r) => r.before), samples: rounds.map((r) => ({ round: r, sides: ["before"] })) },
-          { label: afterLabel, color: "var(--accent)", values: rows.map((r) => r.after), samples: rounds.map((r) => ({ round: r, sides: postMode ? ["after", "online"] : ["after"] })) },
+          { label: afterLabel, color: "var(--accent)", values: rows.map((r) => r.after), samples: rounds.map((r) => ({ round: r, sides: ["after", "online"] })) },
         ];
+    const releaseTotal = fixedAfter == null && online == null ? null : num(fixedAfter) + num(online);
     const current = metric === "post"
-      ? (fixedAfter == null && online == null ? null : num(fixedAfter) + num(online))
-      : metric === "before" ? before : (fixedAfter == null || before == null ? null : fixedAfter - before);
+      ? releaseTotal
+      : metric === "before" ? before : (releaseTotal == null || before == null ? null : releaseTotal - before);
     const detail = metric === "post"
       ? `同题复测 ${fmt(fixedAfter)} + 线上真实 ${fmt(online)}`
       : metric === "before"
         ? "同题基线"
-        : `同题基线 ${fmt(before)} → 同题复测 ${fmt(fixedAfter)}${online > 0 ? `；线上真实 ${fmt(online)} 不计入变化` : ""}`;
+        : releaseTotal == null
+          ? "发版后缺失，无法计算变化"
+          : `同题基线 ${fmt(before)} → 发版后 ${fmt(releaseTotal)}（同题复测 ${fmt(fixedAfter)} + 线上真实 ${fmt(online)}）`;
     // Sample recall is per side, not per metric: the cell's samples stay recallable even when the
     // printed number is a paired delta. The retest side has no detail page in 5002, so it only
     // gets a chip when its refs actually carry a slug.
@@ -513,8 +520,7 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
 
   function metricChips(rnd) {
     return METRICS.map(([key, label]) => {
-      const disabled = (key === "delta" && !sideReady(rnd, "after"))
-        || (key === "post" && !postReady(rnd));
+      const disabled = (key === "delta" || key === "post") && !postReady(rnd);
       return `<button type="button" class="ab-chip" data-act="metric" data-metric="${key}" aria-pressed="${state.metric === key}"${disabled ? " disabled" : ""}>${label}</button>`;
     }).join("");
   }
@@ -540,21 +546,26 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     }
     const back = '<button type="button" class="link ab-back" data-act="summary">← 返回汇总</button>'
       + (rowPath.length > 1 || colPath.length > 1 ? '<button type="button" class="link ab-back ab-up" data-act="back">← 上一级</button>' : "");
-    // A stage can exist only in the online batch (取数规划 in 1106). Its paired change is a real 0,
-    // so say why next to the table instead of letting the number look broken.
+    // A stage can exist only in the online batch (取数规划 in 1106). Say so next to the table so a
+    // change driven by real-user samples is not mistaken for a same-question regression.
     const quietCols = state.metric === "post" ? [] : view.cols.map((col, ci) => {
-      let fixed = 0, onlineTotal = 0, shown = 0;
+      let fixed = 0, onlineTotal = 0;
       view.rows.forEach((_, ri) => {
         const cell = view.cells[ri][ci];
         fixed += num(cell.before) + num(cell.after);
         onlineTotal += num(cell.online);
-        shown += Math.abs(num(cell.n));
       });
-      return { col, fixed, onlineTotal, shown };
-    }).filter(({ fixed, onlineTotal, shown }) => fixed === 0 && onlineTotal > 0 && shown === 0);
-    const quietNote = quietCols.length
-      ? `<p class="ab-mxnote">${quietCols.map(({ col, onlineTotal }) => `「${esc(col.name)}」同题两批均无落点（${state.metric === "delta" ? "变化" : "发版前"}为 0），线上真实 ${fmt(onlineTotal)} 只计入「发版后」`).join("；")}</p>`
-      : "";
+      return { col, fixed, onlineTotal };
+    }).filter(({ fixed, onlineTotal }) => fixed === 0 && onlineTotal > 0);
+    const quietNote = quietCols.length ? (() => {
+      const onlineTotal = quietCols.reduce((total, { onlineTotal: n }) => total + n, 0);
+      const names = quietCols.slice(0, 2).map(({ col }) => `「${esc(col.name)}」`).join("");
+      const subject = quietCols.length <= 2 ? names : `${names}等 ${quietCols.length} 个分类`;
+      const tail = state.metric === "delta"
+        ? `变化 ${signed(onlineTotal)} 全部来自线上真实`
+        : `发版前为 0，线上真实 ${fmt(onlineTotal)} 计入变化与发版后`;
+      return `<p class="ab-mxnote">${subject}同题两批均无落点，${tail}</p>`;
+    })() : "";
     return `<section class="ab-matrixstep">
       <div class="ab-matrixhead"><div class="ab-matrix-title">${back}<h3>聚类矩阵</h3></div><div class="ab-metrics" role="group" aria-label="矩阵口径">${metricChips(rnd)}</div><span class="ab-matrixmeta">${esc(roundLabel(rnd, state.round))} · ${esc(rnd.released_at || (rnd.dates || []).join(" ~ ") || "")}</span></div>
       ${quietNote}
@@ -650,7 +661,7 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     if (act === "metric") {
       const next = action.dataset.metric;
       if (!METRICS.some(([key]) => key === next) || action.disabled) return;
-      if ((next === "delta" && !sideReady(rnd, "after")) || (next === "post" && !postReady(rnd))) return;
+      if ((next === "delta" || next === "post") && !postReady(rnd)) return;
       state.metric = next;
       state.cell = null;
       render();
@@ -691,7 +702,7 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
   });
 
   host.addEventListener("pointerover", (e) => {
-    const cell = e.target.closest(".cell[data-mx]");
+    const cell = e.target.closest(".cell[data-abmx]");
     const table = host.querySelector(".abmatrix");
     if (!table) return;
     if (!cell || cell.classList.contains("is-empty")) {
@@ -699,10 +710,10 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
       table.querySelectorAll(".is-hl, .is-cur").forEach((x) => x.classList.remove("is-hl", "is-cur"));
       return;
     }
-    const [ri, ci] = cell.dataset.mx.split(":").map(Number);
+    const [ri, ci] = cell.dataset.abmx.split(":").map(Number);
     table.classList.add("is-hover");
     table.querySelectorAll(".cell").forEach((c) => {
-      const [r, k] = (c.dataset.mx || "").split(":").map(Number);
+      const [r, k] = (c.dataset.abmx || "").split(":").map(Number);
       c.classList.toggle("is-hl", r === ri || k === ci);
       c.classList.toggle("is-cur", r === ri && k === ci);
     });
