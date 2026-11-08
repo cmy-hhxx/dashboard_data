@@ -2297,7 +2297,7 @@ function trendBodyHTML(data, spec, title) {
 
 const plotWidth = (box) => ($("#mxtPlot", box) || box).clientWidth;
 
-function paintTrendPlot(box, spec, trend, title) {
+function paintTrendPlot(box, spec, trend, title, onOpenChange = null) {
   const plot = $("#mxtPlot", box);
   if (!plot) return;
   plot._drawer?.destroy();
@@ -2316,7 +2316,8 @@ function paintTrendPlot(box, spec, trend, title) {
     wireTrendHover(plot, view);
     wireTrendPointPick(plot, chart.geo, (pick) => drawer.open(pick));
   };
-  const drawer = trendSampleDrawer(plot, (pick) => loadTrendSamplePage(trend, spec, pick), draw);
+  const drawer = trendSampleDrawer(plot, (pick) => loadTrendSamplePage(trend, spec, pick), draw,
+    onOpenChange ? { onOpenChange } : {});
   plot._drawer = drawer;
   draw();
 }
@@ -2453,6 +2454,7 @@ function trendSampleDrawer(plot, load, repaint, interaction = {}) {
     cancel();
     const before = map.getBoundingClientRect();
     opened = next;
+    interaction.onOpenChange?.(next);
     side.hidden = false;
     layout.classList.toggle("is-open", next);
     layout.classList.toggle("is-closing", !next);
@@ -2530,7 +2532,13 @@ function trendSampleDrawer(plot, load, repaint, interaction = {}) {
   };
   side.onclick = (event) => { if (event.target.closest("[data-samples-close]")) close(); };
   frame.onkeydown = (event) => { if (event.key === "Escape" && opened) { event.preventDefault(); event.stopPropagation(); close(); } };
-  return { open, destroy: () => { token++; cancel(); opened = false; layout.classList.remove("is-open", "is-closing"); side.hidden = true; side.innerHTML = ""; map.inert = false; map.removeAttribute("aria-hidden"); clear(); } };
+  return {
+    open,
+    // A drawer is a split of the same frame: revealing it narrows the map on purpose, so the
+    // caller must not treat that resize as a reason to rebuild and close it.
+    isOpen: () => opened,
+    destroy: () => { token++; cancel(); opened = false; layout.classList.remove("is-open", "is-closing"); side.hidden = true; side.innerHTML = ""; map.inert = false; map.removeAttribute("aria-hidden"); clear(); },
+  };
 }
 
 async function loadTrendSamplePage(trend, spec, pick) {
@@ -3359,7 +3367,19 @@ function wire(bento, p, tax, u) {
       const title = trendTitle(row, spec.node);
       swapShell(shell, trendBodyHTML(trendData, spec, title), animate, source);
       const box = $(".mxt", shell);
-      const paintPlot = () => paintTrendPlot(box, trendSpec(row), trendData, title);
+      /* Opening the sample drawer splits the frame and narrows the map: that resize is expected
+         and must not rebuild (and thereby close) the drawer. Defer the repaint instead and play
+         it once the drawer is back, so condition changes made meanwhile still land. */
+      let deferred = false;
+      const paintPlot = (force = false) => {
+        const plot = $("#mxtPlot", box);
+        if (!force && plot?._drawer?.isOpen?.()) { deferred = true; return; }
+        deferred = false;
+        paintTrendPlot(box, trendSpec(row), trendData, title, (open) => {
+          if (open) return;
+          setTimeout(() => { if (deferred && box.isConnected) paintPlot(true); }, 280);
+        });
+      };
       const bind = (id, key) => {
         const el = $(`#${id}`, box);
         if (!el) return;
