@@ -24,7 +24,7 @@ fi
 # builds then collide on cache/build.sqlite3 ("database is locked") and on payload writes.
 # argv[0] can be "python3" or an absolute "/usr/local/bin/python3": match its basename.
 for script in server.py build.py; do
-  for pid in $(ps -eo pid=,args= | awk -v s="$script" '{cmd=$2; sub(/.*\//,"",cmd); if (cmd=="python3" && $3==s) print $1}'); do
+  for pid in $(ps -eo pid=,args= | awk -v s="$script" '{a=$2; b=$3; sub(/.*\//,"",a); sub(/.*\//,"",b); if (a=="python3" && b==s) print $1}'); do
     [ "$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)" = "$HERE" ] && terminate "$pid"
   done
 done
@@ -33,7 +33,7 @@ if [ -f stats.pid ]; then
   terminate "$(cat stats.pid)"
   rm -f stats.pid
 fi
-for pid in $(ps -eo pid=,args= | awk '$2=="python3" && $3=="stats_worker.py" {print $1}'); do
+for pid in $(ps -eo pid=,args= | awk '{a=$2; b=$3; sub(/.*\//,"",a); sub(/.*\//,"",b); if (a=="python3" && b=="stats_worker.py") print $1}'); do
   [ "$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)" = "$HERE" ] && terminate "$pid"
 done
 
