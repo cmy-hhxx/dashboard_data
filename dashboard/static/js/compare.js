@@ -245,7 +245,10 @@ async function paintSides(round, pair, online) {
   const before = pair.before || {};
   const after = pair.after || null;
   const gaps = pairGaps(pair);
-  panes.innerHTML = sideHTML("b", "改版前", before, gaps.before) + sideHTML("a", "改版后", after, gaps.after);
+  // 改版前 / 改版后上下两块，用一条发丝线分开；两块都留在首屏里（各自内部滚动）。
+  panes.innerHTML = sideHTML("b", "改版前", before, gaps.before)
+    + '<div class="compare-split" role="separator" aria-hidden="true"></div>'
+    + sideHTML("a", "改版后", after, gaps.after);
   const jobs = [];
   if (!gaps.before) {
     jobs.push(mountDetail(panes.querySelector('[data-side="b"]'), {

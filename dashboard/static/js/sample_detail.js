@@ -1080,7 +1080,8 @@ function alignColumns() {
   if (!anchorEl) return;
   const anchor = anchorEl.getBoundingClientRect().top;
   const pane = $(`#${prefix}sbody`, root);
-  const cap = Math.max(720, pane ? pane.clientHeight : 900);
+  // 版本对比的半屏详情按自己那一屏的一半高度收内容；具体数据页仍保留 720 的舒适下限。
+  const cap = Math.max(root.closest(".bench-compare") ? 240 : 720, pane ? pane.clientHeight : 900);
   // 自然高度：cflow / tgroup 都是 grid，scrollHeight 就是内容高度。
   const nat = { flow: flow.scrollHeight, group: group.scrollHeight, body: body ? body.scrollHeight : 0 };
   const tallest = Math.max(nat.flow, nat.body);
