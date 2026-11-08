@@ -1,35 +1,91 @@
-/* 版本对比 · layout only: 同题列表 + 改版前 / 改版后两块全宽的样本详情，上下对照。
-   详情沿用 samples.css 的原始工作台排版（轨迹 / 中间链路 / 证据连线 / 归因三列 + 折叠），
-   这里只决定它们同屏上下各占一半、中间一条发丝线；不引入新的颜色、图标、标题层级。 */
+/* 版本对比 · layout only: 同题列表 + 改版前 / 改版后两块全宽的样本详情。
+   默认上下对照（各占首屏一半，中间一条发丝线）；收起列表后改成左右并列；
+   任意一侧可折成底部一条，让另一侧占满。所有间距走 4px 网格，颜色只用现有 token。 */
 
 html[data-view="compare"] main { max-width: none; padding-bottom: 24px; }
 
-/* 左侧列表吸顶；右侧两块详情同屏上下排，各自内部滚动。 */
+/* ---------------------------------------------------------------- shell */
 .bench-compare { grid-template-columns: 300px minmax(0, 1fr); height: auto; min-height: 0; align-items: start; }
+.bench-compare.is-list-off { grid-template-columns: 44px minmax(0, 1fr); }
 .bench-compare > .compare-list { position: sticky; top: 72px; height: calc(100vh - 88px); }
-/* 改版前 / 改版后同屏上下排：两块各占一半高度，首屏都能看到，块内各自滚动。 */
+
+.compare-list-head .list-meta { align-items: center; }
+.compare-list .pane-head { padding-bottom: 8px; }
+.compare-list .srow .m { gap: 4px 10px; }
+
+/* 「折叠列表」后的窄轨：只留一个展开入口。 */
+.compare-rail-btn {
+  display: none; flex: 1 1 auto; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  width: 100%; border: 0; border-radius: var(--r-card); background: transparent; color: var(--muted);
+  transition: color var(--snap), background var(--snap);
+}
+.compare-rail-btn:hover { color: var(--ink-2); background: var(--hover); }
+.compare-rail-label { writing-mode: vertical-rl; font-size: var(--fs-meta); letter-spacing: 0.04em; }
+.compare-list.is-collapsed > .compare-list-head,
+.compare-list.is-collapsed > .pane-scroll,
+.compare-list.is-collapsed > .pager { display: none; }
+.compare-list.is-collapsed > .compare-rail-btn { display: flex; }
+
+/* 一枚安静的小图标按钮：折叠列表 / 折叠一侧都用它。 */
+.compare-icon-btn {
+  flex: none; display: inline-grid; place-items: center; width: 26px; height: 26px; padding: 0;
+  border: 0; border-radius: 7px; background: transparent; color: var(--muted);
+  transition: color var(--snap), background var(--snap), transform var(--spring);
+}
+.compare-icon-btn:hover { color: var(--ink-2); background: var(--hover); }
+.compare-icon-btn:active { transform: scale(0.94); }
+.compare-icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ---------------------------------------------------------------- panes */
+/* 默认：上下对照。两块各占一半高度，各自内部滚动，首屏都能看到。 */
 .compare-panes { display: flex; flex-direction: column; gap: var(--gap); min-width: 0; height: calc(100vh - 88px); }
 .compare-panes > .pane { position: static; top: auto; flex: 1 1 0; min-height: 0; min-width: 0; }
 .compare-panes.is-single > .pane { flex: 1 1 0; }
 /* 一条发丝线把两块分开；它和上下 gap 一起把两块压在同一屏里。 */
 .compare-split { flex: none; height: 1px; margin: 0 16px; background: var(--t4); }
-.compare-side > .pane-head { padding: 12px 16px 8px; gap: 4px; }
+.compare-side-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 16px 8px; }
+.compare-side-head > .cg { min-width: 0; }
+
+/* 折叠一侧：留下一条 40px 的标题行到底部，另一侧占满。 */
+.compare-panes.has-fold > .compare-side { order: 0; }
+.compare-panes.has-fold > .compare-side.is-folded { order: 2; flex: 0 0 40px; }
+.compare-panes.has-fold > .compare-split { order: 1; }
+.compare-side.is-folded > .pane-scroll { display: none; }
+.compare-side.is-folded > .compare-side-head { height: 100%; padding: 0 16px; }
+.compare-side.is-folded .compare-fold-btn svg { transform: rotate(180deg); }
+.compare-side.is-folded { cursor: pointer; }
+
+/* 收起列表后：左右并列，两块都占满高度。并列时详情用单列降级，避免三列挤在 700px 里。 */
+.compare-panes.is-split { flex-direction: row; }
+.compare-panes.is-split > .pane { flex: 1 1 0; }
+.compare-panes.is-split > .compare-split { width: 1px; height: auto; margin: 16px 0; align-self: stretch; }
+.compare-panes.is-split .anatomy,
+.compare-panes.is-split .anatomy.is-session { grid-template-columns: minmax(0, 1fr); }
+.compare-panes.is-split .threads { display: none; }
+.compare-panes.is-split .compare-fold-btn { display: none; }
+
 /* 缺详情的一侧只留标题与一句空态，不占半屏。 */
 .compare-panes > .pane.is-gap { flex: 0 0 auto; }
 .compare-side.is-gap > .empty { padding: 24px 16px; }
 .compare-panes .pane-scroll { overscroll-behavior: auto; }
 
-/* 列表是选题器，不是筛选工作台：只留搜索 + 计数。 */
-.compare-list .pane-head { padding-bottom: 8px; }
-.compare-list .srow .m { gap: 4px 10px; }
-
+/* ---------------------------------------------------------------- responsive */
+/* 窄一点就不并列了：两块各占 340px 没法读，回到上下；列表收起状态仍保留。 */
+@media (max-width: 1180px) {
+  .compare-panes.is-split { flex-direction: column; }
+  .compare-panes.is-split > .pane { flex: 1 1 0; }
+  .compare-panes.is-split > .compare-split { width: auto; height: 1px; margin: 0 16px; }
+}
 @media (max-width: 860px) {
   html[data-view="compare"] main { padding-bottom: 48px; }
   .bench-compare { grid-template-columns: minmax(0, 1fr); }
+  .bench-compare.is-list-off { grid-template-columns: 44px minmax(0, 1fr); }
   .bench-compare > .compare-list { position: static; height: auto; max-height: 420px; }
   .compare-panes { height: auto; }
   .compare-panes > .pane { flex: none; height: auto; max-height: 760px; }
-  .compare-side > .pane-head { padding: 12px 12px 8px; }
+  .compare-panes.is-split { flex-direction: column; }
+  .compare-panes.is-split > .compare-split { width: auto; height: 1px; margin: 0 16px; }
+  .compare-side-head { padding: 12px 12px 8px; }
 }
 
 @media (min-width: 1800px) {

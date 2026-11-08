@@ -79,6 +79,9 @@ function wireCmapPan(host) {
 export function createSampleDetail(host, ctxArg, opts = {}) {
   const prefix = opts.prefix || "";
   const loadDetail = opts.loadDetail || ((slug) => getJSON(`samples/${slug}.json`));
+  // 版本对比的一个 case 是一整段会话里的某一轮：标题要显示这一轮的提问，
+  // 而不是会话第一句（否则左右两栏看起来像不同的问题）。
+  const roundQuestion = opts.roundQuestion === true;
   const ctx = ctxArg;
   const root = host;
   const S = {
@@ -90,6 +93,31 @@ export function createSampleDetail(host, ctxArg, opts = {}) {
   let threadsBound = false;
   const onThreadResize = () => scheduleThreads();
   const onThreadLoad = () => scheduleThreads();
+
+  function questionOf(D) {
+    if (roundQuestion && !S.sessionView) {
+      const turn = D.input?.traces?.[S.trace];
+      const user = (turn?.messages || []).find((m) => m.k === "user");
+      const text = (user?.blocks || [])
+        .map((b) => (b.x || []).filter((x) => typeof x === "string").join(""))
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (text) return text;
+    }
+    return D.question || "";
+  }
+
+  /* 轮次切换、session 总评切换只改内容列，标题行也要跟着换。 */
+  function setHeadQuestion() {
+    if (!S.D) return;
+    const fullQ = questionOf(S.D) || "（无提问）";
+    const shortQ = fullQ.length > 80 ? `${fullQ.slice(0, 80)}…` : fullQ;
+    const h = $(`#${prefix}shead h2`, root);
+    if (!h) return;
+    h.textContent = shortQ;
+    h.title = fullQ;
+  }
 
   function markCmapScroll() {
     $$(".cmap", root).forEach((c) => {
@@ -335,6 +363,7 @@ function selectRound(i, { scroll = true } = {}) {
   if (!D) return;
   if (i === "session") {
     S.sessionView = true;
+    setHeadQuestion();
     renderTrace();
     renderOut();
     return;
@@ -347,6 +376,7 @@ function selectRound(i, { scroll = true } = {}) {
   S.trace = r?.trace ?? round;
   S.turn = r?.turn ?? round;
   S.cturn = r?.compact ?? round;
+  setHeadQuestion();
   renderTrace();
   renderOut();
   if (scroll) revealRound();
@@ -437,7 +467,7 @@ function renderIn() {
     vals.length
       ? `<span class="cg${cls ? ` ${cls}` : ""}"><span class="cg-k">${k}</span>${vals.map((v) => `<span class="pill">${esc(v)}</span>`).join("")}</span>`
       : "";
-  const fullQ = D.question || "（无提问）";
+  const fullQ = questionOf(D) || "（无提问）";
   const shortQ = fullQ.length > 80 ? `${fullQ.slice(0, 80)}…` : fullQ;
   const idline = `<div class="idline">${userItem}${ids.map(([k, v]) => `<button type="button" class="copy" data-copy="${esc(v)}">${k} <span class="num">${esc(v.length > 18 ? `${v.slice(0, 8)}…${v.slice(-6)}` : v)}</span></button>`).join("")}</div>`;
   $(`#${prefix}shead`, root).innerHTML = `<div class="sample-head">

@@ -18,6 +18,7 @@ const SAMPLE_VIEW_RESET = {
 const C = {
   root: null, ctx: null, product: null, round: null, pairs: [], list: [], page: 1, query: "",
   online: null, pairId: null, gen: "", skelKey: "", listKey: "", sidesKey: "", token: 0, details: [],
+  listOff: false, fold: { b: false, a: false },
 };
 
 /* ---------------------------------------------------------------- pure helpers (tested) */
@@ -80,13 +81,20 @@ function onlineRef(round, slug) {
   return (round.sample_refs?.online || []).find((ref) => ref.slug === slug) || null;
 }
 
+/* ---------------------------------------------------------------- icons (one 16px chevron set) */
+const ICON = (d) => `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true"><path d="${d}" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const CHEV_LEFT = ICON("M10 3.5 5.5 8 10 12.5");
+const CHEV_RIGHT = ICON("M6 3.5 10.5 8 6 12.5");
+const CHEV_UP = ICON("M3.5 10 8 5.5 12.5 10");
+
 /* ---------------------------------------------------------------- shell */
 function skeleton(root) {
   root.innerHTML = `<div class="bench bench-compare">
     <aside class="pane pane-sticky compare-list" aria-label="同题列表">
-      <div class="pane-head">
+      <button type="button" class="compare-rail-btn" data-act="toggle-list" title="展开同题列表" aria-label="展开同题列表">${CHEV_RIGHT}<span class="compare-rail-label">同题列表</span></button>
+      <div class="pane-head compare-list-head">
         <input class="search" id="cmpq" type="search" placeholder="搜索问题" autocomplete="off">
-        <div class="list-meta"><span id="cmpcount" class="num"></span></div>
+        <div class="list-meta"><span id="cmpcount" class="num"></span><button type="button" class="compare-icon-btn" data-act="toggle-list" title="折叠同题列表" aria-label="折叠同题列表">${CHEV_LEFT}</button></div>
       </div>
       <div class="pane-scroll" id="cmplist" tabindex="0" aria-label="同题"></div>
       <div class="pager" id="cmppager" hidden></div>
@@ -128,6 +136,57 @@ function wireSkeleton(root) {
     if (!C.online && String(row.dataset.pair) === String(C.pairId)) return;
     C.ctx.navigate({ pair: row.dataset.pair, online: null });
   });
+  $(".bench-compare", root).addEventListener("click", (e) => {
+    const act = e.target.closest("[data-act]");
+    if (act?.dataset.act === "toggle-list") {
+      C.listOff = !C.listOff;
+      if (C.listOff) C.fold = { b: false, a: false };
+      applyLayout();
+      return;
+    }
+    if (act?.dataset.act === "fold-side") {
+      const side = act.dataset.side;
+      if (!(side in C.fold)) return;
+      const next = !C.fold[side];
+      C.fold = { b: side === "b" && next, a: side === "a" && next };
+      applyLayout();
+      return;
+    }
+    // A folded bar still opens on click, the small chevron is only the visible affordance.
+    const folded = e.target.closest(".compare-side.is-folded");
+    if (folded?.dataset.side in C.fold) {
+      C.fold[folded.dataset.side] = false;
+      applyLayout();
+    }
+  });
+}
+
+/* stack ⇄ split and folded bars: one place owns every layout class. */
+function applyLayout() {
+  const bench = $(".bench-compare", C.root);
+  const panes = $("#cmppanes", C.root);
+  const list = $(".compare-list", C.root);
+  if (!bench || !panes || !list) return;
+  bench.classList.toggle("is-list-off", C.listOff);
+  list.classList.toggle("is-collapsed", C.listOff);
+  const single = panes.classList.contains("is-single");
+  panes.classList.toggle("is-split", C.listOff && !single);
+  let foldedAny = false;
+  panes.querySelectorAll(".compare-side").forEach((el) => {
+    const side = el.dataset.side;
+    const canFold = side === "b" || side === "a";
+    const folded = canFold && !C.listOff && !!C.fold[side];
+    if (folded) foldedAny = true;
+    el.classList.toggle("is-folded", folded);
+    const btn = el.querySelector(".compare-fold-btn");
+    if (btn) {
+      const name = side === "b" ? "改版前" : "改版后";
+      btn.setAttribute("aria-pressed", String(folded));
+      btn.title = `${folded ? "展开" : "折叠"}${name}`;
+      btn.setAttribute("aria-label", btn.title);
+    }
+  });
+  panes.classList.toggle("has-fold", foldedAny);
 }
 
 function rowHTML(pair) {
@@ -169,15 +228,18 @@ function renderPager(pages) {
 }
 
 /* ---------------------------------------------------------------- detail panes */
-function sideHeadHTML(label, n) {
+function sideHeadHTML(label, n, side, canFold = true) {
   const count = n == null ? "" : `<span class="pill">${fmt(n)} 个落点</span>`;
-  return `<div class="pane-head compare-side"><span class="cg"><span class="cg-k">${esc(label)}</span>${count}</span></div>`;
+  const fold = canFold
+    ? `<button type="button" class="compare-icon-btn compare-fold-btn" data-act="fold-side" data-side="${side}" aria-pressed="false" title="折叠${esc(label)}" aria-label="折叠${esc(label)}">${CHEV_UP}</button>`
+    : "";
+  return `<div class="pane-head compare-side-head"><span class="cg"><span class="cg-k">${esc(label)}</span>${count}</span>${fold}</div>`;
 }
 
 function sideHTML(prefix, label, ref, gap) {
   const n = ref && !gap ? Number(ref.n || 0) : null;
   const body = gap ? `<div class="empty">这一侧没有可用的评测详情</div>` : detailPaneHTML(prefix);
-  return `<section class="pane pane-out pane-sticky compare-side${gap ? " is-gap" : ""}" data-side="${prefix}" aria-label="${esc(label)}">${sideHeadHTML(label, n)}${body}</section>`;
+  return `<section class="pane pane-out pane-sticky compare-side${gap ? " is-gap" : ""}" data-side="${prefix}" aria-label="${esc(label)}">${sideHeadHTML(label, n, prefix, !gap)}${body}</section>`;
 }
 
 function destroyDetails() {
@@ -195,6 +257,9 @@ async function mountDetail(host, spec) {
     prod: ctx.data?.products?.[ctx.product],
     sessions: [spec.session],
     loadDetail: spec.loadDetail,
+    // The compared pair is one question inside a whole session; the pane title must name that
+    // round, not the session's first question.
+    roundQuestion: true,
     // Cluster paths have no filter on this page; 具体数据 already owns that drill.
     onPattern: (path) => ctx.navigate({ ...SAMPLE_VIEW_RESET, view: "samples", product: ctx.product, pattern: path }),
   });
@@ -230,9 +295,10 @@ async function paintSides(round, pair, online) {
     panes.classList.add("is-single");
     const ref = onlineRef(round, online);
     panes.innerHTML = `<section class="pane pane-out pane-sticky compare-side" data-side="o" aria-label="线上真实">
-      ${sideHeadHTML("线上真实", ref && Array.isArray(ref.paths) ? ref.paths.length : null)}
+      ${sideHeadHTML("线上真实", ref && Array.isArray(ref.paths) ? ref.paths.length : null, "o", false)}
       ${detailPaneHTML("o")}
     </section>`;
+    applyLayout();
     await mountDetail(panes.querySelector('[data-side="o"]'), {
       prefix: "o", session: onlineSession(online, ref),
       focus: {},
@@ -249,6 +315,7 @@ async function paintSides(round, pair, online) {
   panes.innerHTML = sideHTML("b", "改版前", before, gaps.before)
     + '<div class="compare-split" role="separator" aria-hidden="true"></div>'
     + sideHTML("a", "改版后", after, gaps.after);
+  applyLayout();
   const jobs = [];
   if (!gaps.before) {
     jobs.push(mountDetail(panes.querySelector('[data-side="b"]'), {
