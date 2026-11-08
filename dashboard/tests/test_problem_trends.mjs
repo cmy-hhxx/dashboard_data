@@ -307,7 +307,8 @@ test("AB matrix offers change / pre-release / post-release metrics and sums rete
     assert.match(host.innerHTML, /data-metric="post"/);
     assert.doesNotMatch(host.innerHTML, /data-metric="(all|after|online)"/);
     assert.match(host.innerHTML, /发版后（同题回测\+线上真实）/);
-    assert.match(host.innerHTML, /模型口径：expert/);
+    assert.match(host.innerHTML, /class="ab-model">expert</);
+    assert.doesNotMatch(host.innerHTML, /ab-mxnote|ab-scope/);
     // The shared session-matrix tooltip resolver owns [data-mx]; AB cells must opt out of it and
     // carry their own metric-aware data-tip instead.
     assert.doesNotMatch(host.innerHTML, /data-mx="/);
@@ -327,6 +328,31 @@ test("AB matrix offers change / pre-release / post-release metrics and sums rete
   assert.equal(metricValue(cell, "post", { sides: {} }), null);
   assert.equal(metricValue(cell, "delta", { sides: {} }), null);
   assert.equal(metricValue(cell, "paired", { sides: { online: {} } }), null);
+});
+
+test("AB round tag maps the model scope to one of expert / fast / fast+expert", () => {
+  const host = { innerHTML: "", getBoundingClientRect: () => ({ width: 720 }),
+    querySelector: () => null, querySelectorAll: () => [], addEventListener() {} };
+  const previousWindow = globalThis.window, previousRAF = globalThis.requestAnimationFrame;
+  globalThis.window = { addEventListener() {} };
+  globalThis.requestAnimationFrame = () => 0;
+  try {
+    const mount = (models) => {
+      const rnd = { label: "v1106", models, sides: { before: { hits: 1 } }, matrix: { before: [] }, nodes: [] };
+      mountAB(host, { rounds: [rnd] }, { round: 0, step: "summary" }, {}, null, {});
+    };
+    mount(["expert"]);
+    assert.match(host.innerHTML, /class="ab-model">expert</);
+    mount(["fast"]);
+    assert.match(host.innerHTML, /class="ab-model">fast</);
+    mount(["fast", "expert"]);
+    assert.match(host.innerHTML, /class="ab-model">fast\+expert</);
+    mount([]);
+    assert.doesNotMatch(host.innerHTML, /class="ab-model"/);
+  } finally {
+    globalThis.window = previousWindow;
+    globalThis.requestAnimationFrame = previousRAF;
+  }
 });
 
 test("AB cell tooltips explain the printed number with the same sides and arithmetic", () => {

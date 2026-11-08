@@ -23,6 +23,17 @@ const METRICS = [
   ["post", "发版后（同题回测+线上真实）"],
 ];
 const NO_SCENE = "未接入分类体系";
+// The round may test one model or both; the page only needs the three pre-defined tags.
+const MODEL_BADGE = { expert: "expert", fast: "fast", both: "fast+expert" };
+const modelBadge = (rnd) => {
+  const models = new Set((Array.isArray(rnd.models) ? rnd.models : []).map((m) => String(m || "").toLowerCase()));
+  const fast = models.has("fast");
+  const expert = models.has("expert");
+  if (fast && expert) return MODEL_BADGE.both;
+  if (expert) return MODEL_BADGE.expert;
+  if (fast) return MODEL_BADGE.fast;
+  return "";
+};
 const DASH = "—";
 const num = (v) => Number(v) || 0;
 const signed = (v) => (v > 0 ? `+${fmt(v)}` : v < 0 ? `−${fmt(-v)}` : "0");
@@ -332,8 +343,9 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
 
   function roundBar() {
     const items = rounds.map((r, i) => {
-      return `<button type="button" class="ab-round" data-act="round" data-i="${i}" aria-pressed="${i === state.round}" title="${esc(roundLabel(r, i))}">
-        <b>${esc(roundLabel(r, i))}</b>
+      const badge = modelBadge(r);
+      return `<button type="button" class="ab-round" data-act="round" data-i="${i}" aria-pressed="${i === state.round}" title="${esc(roundLabel(r, i))}${badge ? ` · ${badge}` : ""}">
+        <b>${esc(roundLabel(r, i))}</b>${badge ? `<small class="ab-model">${esc(badge)}</small>` : ""}
       </button>`;
     }).join("");
     return `<div class="ab-rounds" role="group" aria-label="AB 测试对比记录">${items}</div>`;
@@ -569,31 +581,8 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     }
     const back = '<button type="button" class="link ab-back" data-act="summary">← 返回汇总</button>'
       + (rowPath.length > 1 || colPath.length > 1 ? '<button type="button" class="link ab-back ab-up" data-act="back">← 上一级</button>' : "");
-    // A stage can exist only in the online batch (取数规划 in 1106). Say so next to the table so a
-    // change driven by real-user samples is not mistaken for a same-question regression.
-    const quietCols = state.metric === "post" ? [] : view.cols.map((col, ci) => {
-      let fixed = 0, onlineTotal = 0;
-      view.rows.forEach((_, ri) => {
-        const cell = view.cells[ri][ci];
-        fixed += num(cell.before) + num(cell.after);
-        onlineTotal += num(cell.online);
-      });
-      return { col, fixed, onlineTotal };
-    }).filter(({ fixed, onlineTotal }) => fixed === 0 && onlineTotal > 0);
-    const quietNote = quietCols.length ? (() => {
-      const onlineTotal = quietCols.reduce((total, { onlineTotal: n }) => total + n, 0);
-      const names = quietCols.slice(0, 2).map(({ col }) => `「${esc(col.name)}」`).join("");
-      const subject = quietCols.length <= 2 ? names : `${names}等 ${quietCols.length} 个分类`;
-      const tail = state.metric === "delta"
-        ? `同题+线上变化 ${signed(onlineTotal)} 全部来自线上真实`
-        : state.metric === "paired"
-          ? `同题变化为 0，线上真实 ${fmt(onlineTotal)} 计入「同题+线上变化」和「发版后」`
-          : `发版前为 0，线上真实 ${fmt(onlineTotal)} 计入「同题+线上变化」和「发版后」`;
-      return `<p class="ab-mxnote">${subject}同题两批均无落点，${tail}</p>`;
-    })() : "";
     return `<section class="ab-matrixstep">
       <div class="ab-matrixhead"><div class="ab-matrix-title">${back}<h3>聚类矩阵</h3></div><div class="ab-metrics" role="group" aria-label="矩阵口径">${metricChips(rnd)}</div><span class="ab-matrixmeta">${esc(roundLabel(rnd, state.round))} · ${esc(rnd.released_at || (rnd.dates || []).join(" ~ ") || "")}</span></div>
-      ${quietNote}
       <div class="ab-mxshell" id="abMxShell">${matrixTableAb(view, rnd, state.metric, selectedIdx)}</div>
       ${trend(rnd, state.cell, state.metric)}
     </section>`;
@@ -604,11 +593,7 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     cellTrendDrawer = null;
     cellTrendChart = null;
     const rnd = rounds[state.round];
-    const models = (Array.isArray(rnd.models) ? rnd.models : []).filter(Boolean);
-    const scope = models.length
-      ? `<p class="ab-scope">模型口径：${models.map(esc).join(" / ")} · 同题两批与线上真实样本都只取该模型${models.length === 1 ? "，不含其他模型" : ""}</p>`
-      : "";
-    host.innerHTML = `<div class="abw">${roundBar()}${scope}${state.step === "matrix" ? matrix(rnd) : summary(rnd)}</div>`;
+    host.innerHTML = `<div class="abw">${roundBar()}${state.step === "matrix" ? matrix(rnd) : summary(rnd)}</div>`;
     const sideSwitch = host.querySelector("#abOrbitSides");
     if (sideSwitch) {
       const control = segmented(sideSwitch, (side) => {

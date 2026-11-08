@@ -27,7 +27,10 @@
 .ab-round:hover { background: var(--well-2); }
 .ab-round[aria-pressed="true"] { background: var(--active); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 28%, transparent); }
 .ab-round b { color: var(--ink); font-size: var(--fs-body); font-weight: var(--w-medium); white-space: nowrap; }
-.ab-scope { margin: -4px 0 0; color: var(--muted); font-size: var(--fs-meta); line-height: 1.5; }
+.ab-model {
+  padding: 1px 6px; border-radius: 4px; background: var(--well-2); color: var(--muted);
+  font-size: 11px; line-height: 1.45; font-weight: var(--w-body); font-variant-numeric: tabular-nums;
+}
 
 /* ---------------------------------------------------------------- 三批总览 */
 .ab-summary { display: grid; gap: 14px; min-width: 0; }
@@ -158,7 +161,6 @@
 }
 .ab-samplechip:hover { background: var(--well-2); color: var(--ink-2); }
 .ab-samplechip b { color: var(--ink-2); font-weight: var(--w-medium); }
-.ab-mxnote { margin: -2px 0 0; color: var(--muted); font-size: var(--fs-meta); line-height: 1.5; }
 
 /* ---------------------------------------------------------------- 响应式 */
 @media (max-width: 860px) {
