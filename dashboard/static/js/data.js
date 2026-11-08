@@ -159,7 +159,7 @@ function fieldCard(p, u) {
 /* Every jump into 具体数据 starts from a clean filter set plus what the click pins down. */
 const SAMPLE_RESET = {
   detail: null, ed: null, em: null, ep: null, edp: null, p: null, tab: null, q: null, w: null, split: null,
-  model: null, scene: null, sub: null, stage: null, mech: null, pattern: null, case: null, trace: null,
+  date: null, model: null, scene: null, sub: null, stage: null, mech: null, pattern: null, case: null, trace: null,
 };
 function openSamples(patch) {
   ctx.navigate({ ...SAMPLE_RESET, view: "samples", product: ctx.product, ...patch });
@@ -1549,7 +1549,24 @@ function matrixTable(view) {
 function mxTrendSummary(trend, view, clusterRoot, state) {
   if (!trend?.scenes) return null;
   const scenes = new Set(trend.scenes.map(([task, sub], i) => view.rows.some((row) => sceneMatches(row, task, sub)) ? i : -1).filter((i) => i >= 0));
-  return matrixHeatSummary(trend, clusterRoot, state.heatPath || [], scenes);
+  const summary = matrixHeatSummary(trend, clusterRoot, state.heatPath || [], scenes);
+  return summary ? { ...summary, scenes } : null;
+}
+
+/* A heat cell is a ready-made 具体数据 query: that day × the scene scope × the cluster path.
+   The page's own filters carry the same names, so the chip can be read and cleared there. */
+function heatSamplePatch(summary, trend, node, date) {
+  const patch = { date };
+  const scenes = [...(summary?.scenes || [])].map((i) => trend.scenes[i]).filter(Boolean);
+  if (scenes.length === 1) {
+    patch.scene = scenes[0][0];
+    if (scenes[0][1]) patch.sub = scenes[0][1];
+  }
+  const [stage, mech] = String(node).split(".");
+  if (/^S\d+$/.test(stage || "")) patch.stage = stage;
+  if (/^M\d+$/.test(mech || "")) patch.mech = mech;
+  if (patch.stage && patch.mech && (node.split(".").length >= 3)) patch.pattern = node;
+  return patch;
 }
 
 const mxRateText = (v) => v == null ? "—" : `${fmt(v, 1)}%`;
@@ -1580,9 +1597,11 @@ function mxPerspectiveTimeline(summary, loading) {
       const day = i == null ? null : group.days[i];
       const sessions = i == null ? 0 : daily[i].sessions;
       const rate = day?.observed && sessions > 0 ? 100 * Math.min(day.hits, sessions) / sessions : null;
-      const tip = `${group.name}|${d} · ${mxRateText(rate)}|${day && rate != null ? `${fmt(day.hits)} 命中会话 / ${fmt(sessions)} 会话` : "无观测数据"}`;
+      const hits = rate == null ? 0 : Number(day.hits) || 0;
+      const tip = `${group.name}|${d} · ${mxRateText(rate)}|${day && rate != null ? `${fmt(day.hits)} 命中会话 / ${fmt(sessions)} 会话` : "无观测数据"}${hits ? " · 点击查看当天样本" : ""}`;
       const color = rate == null ? "var(--sev-none)" : `color-mix(in oklab, var(--accent) ${Number(heat(rate)) * 100}%, var(--well))`;
-      return `<span class="${rate == null ? "is-missing" : ""}" style="--c:${color}" data-tip="${esc(tip)}"></span>`;
+      if (!hits) return `<span class="${rate == null ? "is-missing" : ""}" style="--c:${color}" data-tip="${esc(tip)}"></span>`;
+      return `<button type="button" class="mxp-cell" style="--c:${color}" data-tip="${esc(tip)}" data-heat-date="${d}" data-heat-node="${esc(group.node.prefix)}" aria-label="${esc(`${d} ${group.name} ${mxRateText(rate)}，查看当天具体数据`)}"></button>`;
     }).join("");
     return { group, recent, html: `<div class="mxp-heat-row">${group.node.children?.length ? `<button type="button" class="mxp-heat-name" data-heat-node="${esc(group.node.prefix)}" aria-label="下钻 ${esc(group.name)}" title="${esc(group.name)}">${esc(group.name)}<i class="mx-caret" aria-hidden="true"></i></button>` : `<span class="mxp-heat-name" title="${esc(group.name)}">${esc(group.name)}</span>`}<div class="tiles mxp-heat-days">${cells}</div><b class="num">${mxRateText(recent)}</b><span class="mxp-delta num ${delta == null || Math.abs(delta) < 0.05 ? "" : delta > 0 ? "is-up" : "is-down"}" title="较前 7 天变化，单位：百分点">${mxDeltaText(delta)}</span></div>` };
   }).filter(({ group }) => group.days.some((d, i) => d.n > 0 && dayMs(dates[i]) >= end - 29 * DAY_MS))
@@ -2017,26 +2036,27 @@ function trendCurvePath(points) {
   return monotonePath(points);
 }
 
-function trendSVG(view, title, releases, width) {
+function trendSVG(view, title, releases, width, endLabels = true) {
   const n = view.win.length;
   const series = view.series;
   const pairs = trendPairs(view);
   const TW = Math.max(320, Math.min(TREND_TW, Math.round(width || TREND_TW)));
   const narrow = TW < 640;
   const labelSize = 10.5;
-  const fullLabelW = series.reduce((m, s) => s.last < 0 ? m : Math.max(
+  const fullLabelW = endLabels ? series.reduce((m, s) => s.last < 0 ? m : Math.max(
     m,
     trendTextWidth(s.name, labelSize) + trendTextWidth(trendValue(s.vals[s.last], view.measure), labelSize) + 16,
-  ), 0);
+  ), 0) : 0;
   const baseRight = narrow ? 140 : Math.round(Math.max(160, Math.min(220, TW * 0.18)));
   const PAD = {
     l: narrow ? 40 : TREND_PAD.l,
-    r: Math.round(Math.min(TW * 0.42, Math.max(baseRight, fullLabelW + 38))),
+    // 抽屉打开时右端只剩一小段留白：折线本身先拿到空间，样本列表才是主角。
+    r: endLabels ? Math.round(Math.min(TW * 0.42, Math.max(baseRight, fullLabelW + 38))) : (narrow ? 20 : 28),
     // 发版标签要落在绘图区上方，给顶端留一行。
     t: (releases || []).length ? TREND_PAD.t + 14 : TREND_PAD.t,
     b: TREND_PAD.b,
   };
-  const compactEnds = narrow || fullLabelW + 38 > PAD.r;
+  const compactEnds = !endLabels || narrow || fullLabelW + 38 > PAD.r;
   const TH = Math.max(TREND_TH, Math.min(900, PAD.t + PAD.b + 70 + series.length * 17));
   const innerW = TW - PAD.l - PAD.r;
   const innerH = TH - PAD.t - PAD.b;
@@ -2110,10 +2130,10 @@ function trendSVG(view, title, releases, width) {
 
   // 端点标签：每条线的最新值直接标在右侧，按行距错开，线上不再用 legend。
   const endName = (s) => (compactEnds ? s.shortName : s.name);
-  const ends = series.filter((s) => s.last >= 0).map((s) => ({
+  const ends = endLabels ? series.filter((s) => s.last >= 0).map((s) => ({
     s, value: s.vals[s.last], x: xOf(s.last), y: yOf(s.vals[s.last]), ly: yOf(s.vals[s.last]),
     name: endName(s),
-  }));
+  })) : [];
   ends.sort((a, b) => a.ly - b.ly);
   const GAP = 18;
   ends.forEach((e) => { e.ly = Math.max(e.ly, PAD.t); });
@@ -2160,7 +2180,7 @@ function trendSVG(view, title, releases, width) {
   return {
     html: `<svg viewBox="0 0 ${TW} ${TH}" role="img" aria-label="${esc(title)}" data-n="${n}" data-l="${PAD.l}" data-r="${PAD.r}" data-t="${PAD.t}" data-b="${PAD.b}" data-top="${view.top}">
       <defs>${defs}</defs><g class="mxt-grid">${grid}${xlab}</g>${relBands}${areas}${nebulas}${bands}${lines}${dots}${relBars}${relLabels}${endsSvg}${gapSvg}
-      <g class="mxt-cursor"><line y1="${PAD.t}" y2="${PAD.t + innerH}"/><g class="mxt-cursor-dots"></g></g></svg>`,
+      <g class="mxt-cursor"><line y1="${PAD.t}" y2="${PAD.t + innerH}"/><g class="mxt-cursor-dots"></g><circle class="mxt-pick" r="6"/></g></svg>`,
     geo: { W: TW, H: TH, TW, TH, PAD, innerW, innerH, xOf, yOf, xDates: view.win.map((day) => day.d), series: series.map((s) => ({ ...s, label: s.name, values: s.vals })) },
   };
 }
@@ -2184,10 +2204,15 @@ function wireTrendHover(plot, view) {
   const xOf = (i) => left + (n > 1 ? (i * innerW) / (n - 1) : innerW / 2);
   const yOf = (v) => topPad + innerH - (Math.max(0, Math.min(top, v)) / top) * innerH;
   const [line] = $$("line", cursor);
+  const ring = $(".mxt-pick", cursor);
   const pairs = trendPairs(view);
-  let hovered = -1;
+  const points = [];
+  view.series.forEach((s, si) => s.vals.forEach((v, i) => {
+    if (v != null) points.push({ si, i, x: xOf(i), y: yOf(v) });
+  }));
+  let hovered = -1, nearest = null;
 
-  const tipHTML = (i) => {
+  const tipHTML = (i, pick) => {
     const rows = view.series.filter((s) => s.vals[i] != null);
     const shown = rows.slice(0, 10);
     const label = (s) => s.name;
@@ -2204,14 +2229,18 @@ function wireTrendHover(plot, view) {
       return `<div class="t-row"><span>${esc(`${p.a.levelName} 差`)}</span>
         <b class="num" style="margin-left:auto">${trendSigned(d, view.measure)}</b></div>`;
     }).join("");
+    const pickNote = pick
+      ? `<div class="t-note t-pick-note">点击圆点查看 ${esc(view.win[pick.i].d)} · ${esc(view.series[pick.si].name)} 的样本</div>`
+      : "";
     return `<div style="font-weight:var(--w-medium);margin-bottom:6px">${esc(view.win[i].d)}</div>${body}${more}
       ${rows.length ? "" : `<div class="t-note">当日无评测数据</div>`}
-      ${gaps ? `<div class="t-note" style="margin:6px 0 2px">模型差（同来源同等级）</div>${gaps}` : ""}`;
+      ${gaps ? `<div class="t-note" style="margin:6px 0 2px">模型差（同来源同等级）</div>${gaps}` : ""}${pickNote}`;
   };
 
   svg.addEventListener("pointermove", (e) => {
     const box = svg.getBoundingClientRect();
     const vx = ((e.clientX - box.left) / box.width) * vbw;
+    const vy = ((e.clientY - box.top) / box.height) * vbh;
     const i = n <= 1 ? 0 : Math.max(0, Math.min(n - 1, Math.round(((vx - left) / innerW) * (n - 1))));
     const x = xOf(i);
     if (i !== hovered) {
@@ -2223,12 +2252,30 @@ function wireTrendHover(plot, view) {
         .map((s) => `<circle cx="${x.toFixed(1)}" cy="${yOf(s.vals[i]).toFixed(1)}" r="3" style="fill:${s.color}"/>`)
         .join("");
     }
+    // 两条线贴得近时，点哪个圆点才是要看的样本：环出离指针最近的那个点，并在提示里点名。
+    const radius = 26;
+    let best = radius * radius;
+    nearest = null;
+    points.forEach((p) => {
+      const d = (p.x - vx) ** 2 + (p.y - vy) ** 2;
+      if (d < best) { best = d; nearest = p; }
+    });
+    if (ring) {
+      if (nearest) {
+        ring.setAttribute("cx", nearest.x.toFixed(1));
+        ring.setAttribute("cy", nearest.y.toFixed(1));
+        ring.style.stroke = view.series[nearest.si].color;
+      }
+      ring.classList.toggle("is-on", !!nearest);
+    }
     cursor.classList.add("is-on");
-    showTip(tipHTML(i), e.clientX, e.clientY);
+    showTip(tipHTML(i, nearest), e.clientX, e.clientY);
   });
   svg.addEventListener("pointerleave", () => {
     cursor.classList.remove("is-on");
+    ring?.classList.remove("is-on");
     hovered = -1;
+    nearest = null;
     hideTip();
   });
 }
@@ -2311,7 +2358,8 @@ function paintTrendPlot(box, spec, trend, title, onOpenChange = null) {
     return;
   }
   const draw = () => {
-    const chart = trendSVG(view, title, trend.releases, plot.clientWidth);
+    // 样本抽屉打开时右侧的端点图注让位给折线本身（可用宽度全给样本列表）。
+    const chart = trendSVG(view, title, trend.releases, plot.clientWidth, !drawer.isOpen());
     plot.innerHTML = chart.html;
     wireTrendHover(plot, view);
     wireTrendPointPick(plot, chart.geo, (pick) => drawer.open(pick));
@@ -2413,19 +2461,21 @@ const sevIdx = (w) => {
    question and its problem count (or verdict). The head is the slice's size and its severity split. */
 const LEDGER_MAX = 120;
 const predDot = (it) => (it.r === "correct" ? "var(--accent)" : it.r === "wrong" ? "var(--sev-1)" : it.r === "pending" ? "var(--muted)" : "var(--faint)");
-function ledger(groups, pred, unit = null) {
+function ledger(groups, pred, unit = null, rows = null) {
   const all = groups.flatMap((g) => g.items);
-  const items = pred ? all : [...all].sort((a, b) => a.w - b.w || b.n - a.n || (b.d || "").localeCompare(a.d || ""));
+  const ordered = pred ? all : [...all].sort((a, b) => a.w - b.w || b.n - a.n || (b.d || "").localeCompare(a.d || ""));
+  // The summary always speaks about everything found; the list can be one page of it.
+  const items = rows ?? ordered.slice(0, LEDGER_MAX);
   const parts = pred
     ? ["correct", "wrong", "pending", "undetermined"].map((r) => ({ n: all.filter((it) => (r === "undetermined" ? !["correct", "wrong", "pending"].includes(it.r) : it.r === r)).length, c: predDot({ r }) }))
     : WORST.map((_, i) => ({ n: all.filter((it) => it.w === i).length, c: sevColor(i) }));
-  const rows = items.slice(0, LEDGER_MAX).map((it, k) =>
-    `<button type="button" class="gl-r${pred ? " is-inert" : ""}" data-i="${k}" style="--i:${Math.min(k, 14)};--c:${pred ? predDot(it) : sevColor(it.w)}"><i></i><span>${esc(it.q || "（无提问）")}</span><b class="num">${pred ? esc(RESULT[it.r] || "") : it.n ? fmt(it.n) : "—"}</b></button>`);
+  const rowsHtml = items.slice(0, LEDGER_MAX).map((it, k) =>
+    `<button type="button" class="gl-r${pred ? " is-inert" : ""}" data-i="${k}" style="--i:${Math.min(k, 14)};--c:${pred ? predDot(it) : sevColor(it.w)}" title="${esc(it.q || "（无提问）")}"><i></i><span>${esc(it.q || "（无提问）")}</span><b class="num">${pred ? esc(RESULT[it.r] || "") : it.n ? fmt(it.n) : "—"}</b></button>`);
   const body = `<div class="gl-sum"><b class="num">${fmt(all.length)}</b><small>${unit || (pred ? "道预测题" : "个 case")}</small><span class="gl-strip" aria-hidden="true">${parts
     .filter((x) => x.n)
     .map((x) => `<i style="flex:${x.n} 1 0;background:${x.c}"></i>`)
-    .join("")}</span></div><div class="gx-list">${rows.join("")}</div>`;
-  return { items, body, html: `<div class="gx-side">${body}</div>` };
+    .join("")}</span></div><div class="gx-list">${rowsHtml.join("")}</div>`;
+  return { items, all, body, html: `<div class="gx-side">${body}</div>` };
 }
 const caseItem = (r) => ({ s: r.s, w: sevIdx(r.w), n: r.n || 0, q: r.q || "", m: r.m, sp: r.sp, d: r.d || "" });
 function groupCases(rows, keyOf, nameOf = (k) => k) {
@@ -2484,63 +2534,152 @@ function trendSampleDrawer(plot, load, repaint, interaction = {}) {
   const close = () => {
     token++;
     change(false);
+    pickNow = null;
+    current = null;
+    scanNext = null;
     (plot.querySelector(`[data-trend-point="${trigger}"]`) || plot.querySelector("[data-trend-point]"))?.focus({ preventScroll: true });
   };
-  const head = (date, label) => `<header class="mxt-sample-head"><span>${esc(date)} · ${esc(label)}</span><button type="button" class="mx-back" data-samples-close aria-label="返回趋势图">← 返回</button></header>`;
+  /* 抽屉：抬头只写日期（副标题是这条折线的条件），列表按 20 条一页；扫描在后台补页，
+     翻页不再让用户反复点「加载更多」。 */
+  const head = (pick) => `<header class="mxt-sample-head">
+    <span class="mxt-sample-when num">${esc(pick.date)}</span>
+    <button type="button" class="mx-back" data-samples-close aria-label="返回趋势图">← 返回</button>
+    <span class="mxt-sample-what">${esc(pick.series.label || "")}</span>
+  </header>`;
+  const PAGE = 20;
+  let current = null, page = 0, pageItems = [], scanNext = null, pumping = false, busy = false, pickNow = null;
+  const focusKey = () => {
+    const el = document.activeElement;
+    if (!el || !side.contains(el)) return null;
+    if (el.matches("[data-samples-close]")) return "close";
+    if (el.matches("[data-sample-page]")) return `page:${el.dataset.samplePage}`;
+    if (el.matches(".gl-r")) return `row:${el.dataset.i}`;
+    return null;
+  };
+  const restoreFocus = (key) => {
+    if (!key) return;
+    const el = key === "close" ? $("[data-samples-close]", side)
+      : key.startsWith("page:") ? $(`[data-sample-page="${key.slice(5)}"]`, side)
+        : $(`.gl-r[data-i="${key.slice(4)}"]`, side);
+    el?.focus({ preventScroll: true });
+  };
+  const pagesOf = () => Math.max(1, Math.ceil((current?.items.length || 0) / PAGE));
+  const loading = () => `<div class="mxt-sample-loading"><div class="empty">正在读取样本…</div>${current?.note ? `<p class="mxt-sample-note">${esc(current.note)}</p>` : ""}${!busy && current?.canScan ? '<button type="button" class="mx-back" data-sample-scan>继续读取</button>' : ""}</div>`;
+  const render = () => {
+    if (!current || !pickNow) return;
+    const key = focusKey();
+    if (!current.items.length) {
+      side.innerHTML = `${head(pickNow)}${current.done
+        ? `<div class="empty">${esc(current.emptyText || "当前索引中没有匹配样本")}</div>${current.note ? `<p class="mxt-sample-note">${esc(current.note)}</p>` : ""}`
+        : loading()}`;
+      restoreFocus(key);
+      return;
+    }
+    const pages = pagesOf();
+    page = Math.max(0, Math.min(pages - 1, page));
+    const led = ledger([{ items: current.items }], false, current.unit, current.items.slice(page * PAGE, (page + 1) * PAGE));
+    pageItems = led.items;
+    const scanning = busy;
+    const canNext = page + 1 < pages || (current.canScan && !busy);
+    const note = [current.note, current.done && current.items.length >= LEDGER_MAX ? `展示前 ${LEDGER_MAX} 条` : ""].filter(Boolean).join(" · ");
+    const pager = pages > 1 ? `<div class="mxt-sample-pager">
+      <button type="button" data-sample-page="prev" aria-label="上一页"${page === 0 ? " disabled" : ""}>‹</button>
+      <span class="mxt-sample-page num">第 <b>${page + 1}</b> / ${pages} 页${scanning ? '<span class="mxt-sample-reading">读取中…</span>' : ""}</span>
+      <button type="button" data-sample-page="next" aria-label="下一页"${canNext ? "" : " disabled"}>›</button>
+    </div>` : current.canScan && !busy ? '<button type="button" class="mx-back mxt-sample-scan" data-sample-scan>继续读取更多</button>' : "";
+    side.innerHTML = `${head(pickNow)}${led.body}${note ? `<p class="mxt-sample-note">${esc(note)}</p>` : ""}${pager}`;
+    restoreFocus(key);
+  };
+  const scan = async () => {
+    if (!scanNext || !current?.canScan) return false;
+    const snap = await scanNext();
+    if (!pickNow) return false;
+    current = snap;
+    return true;
+  };
+  /* Bounded scan: at most `chunks` candidate chunks, and stop once `need` rows are in hand. A
+     sparse cluster must not drag hundreds of detail requests along just to prefetch one page. */
+  const scanChunks = async (chunks, need = Infinity) => {
+    if (!scanNext || busy) return;
+    busy = true;
+    render();
+    for (let n = 0; n < chunks && current?.canScan && current.items.length < need; n += 1) {
+      if (!(await scan())) break;
+      render();
+    }
+    busy = false;
+    render();
+  };
+  const pump = () => {
+    if (pumping || !scanNext) return;
+    pumping = true;
+    // 预取到当前页的下一页，翻页时基本不用等；再往后的页在用户翻到附近时补。
+    scanChunks(3, (page + 2) * PAGE).finally(() => { pumping = false; });
+  };
+  const flip = async (dir) => {
+    if (!current) return;
+    if (dir === "prev") {
+      if (page > 0) { page -= 1; render(); $(".gx-list", side).scrollTop = 0; }
+      return;
+    }
+    if (page + 1 >= pagesOf() && current.canScan) await scanChunks(8, (page + 2) * PAGE);
+    if (page + 1 < pagesOf()) { page += 1; render(); $(".gx-list", side).scrollTop = 0; }
+  };
+  const openItem = async (item) => {
+    // An AB drawer opens the paired compare view; every other drawer stays on 具体数据.
+    if (interaction.openItem) { interaction.openItem(item); return; }
+    let trace = item.trace;
+    if (!trace && item.turn != null) {
+      try { trace = (await loadSample(item.s)).attribution?.turns?.[item.turn]?.trace_id; }
+      catch { /* The sample page can still open the selected case. */ }
+    }
+    openSamples({ case: item.s, trace: trace || null });
+  };
   const open = async (pick) => {
     const stamp = ++token;
+    pickNow = pick;
     trigger = `${pick.seriesIndex}:${pick.index}`;
-    const title = head(pick.date, pick.series.label);
-    side.innerHTML = `${title}<div class="empty">正在读取样本…</div>`;
+    current = null;
+    page = 0;
+    pageItems = [];
+    scanNext = null;
+    side.innerHTML = `${head(pick)}<div class="empty">正在读取样本…</div>`;
     change(true);
     $("[data-samples-close]", side)?.focus({ preventScroll: true });
     try {
-      const page = await load(pick);
-      const paint = (result) => {
-        if (stamp !== token || !side.isConnected || !opened) return;
-        const led = ledger([{ items: result.items }], false, result.unit);
-        const restoreFocus = side.contains(document.activeElement);
-        const note = [result.note, result.items.length > LEDGER_MAX ? `展示前 ${LEDGER_MAX} 条` : ""].filter(Boolean).join(" · ");
-        side.innerHTML = `${title}${result.items.length ? led.body : `<div class="empty">${esc(result.emptyText || "当前索引中没有匹配样本")}</div>`}${note ? `<p class="mxt-sample-note">${esc(note)}</p>` : ""}${result.more ? '<button type="button" class="mx-back mxt-sample-more" data-samples-more>加载更多</button>' : ""}`;
-        if (restoreFocus) $("[data-samples-close]", side)?.focus({ preventScroll: true });
-        side.querySelectorAll(".gl-r").forEach((row) => {
-          row.title = led.items[Number(row.dataset.i)].q;
-          row.addEventListener("click", async () => {
-            const item = led.items[Number(row.dataset.i)];
-            // An AB drawer opens the paired compare view; every other drawer stays on 具体数据.
-            if (interaction.openItem) { interaction.openItem(item); return; }
-            let trace = item.trace;
-            if (!trace && item.turn != null) {
-              try { trace = (await loadSample(item.s)).attribution?.turns?.[item.turn]?.trace_id; }
-              catch { /* The sample page can still open the selected case. */ }
-            }
-            openSamples({ case: item.s, trace: trace || null });
-          });
-        });
-        $("[data-samples-more]", side)?.addEventListener("click", async (event) => {
-          event.target.disabled = true;
-          try { paint(await result.more()); }
-          catch { if (stamp === token) { event.target.disabled = false; event.target.textContent = "重试"; } }
-        });
-      };
-      paint(page);
+      const first = await load(pick);
+      if (stamp !== token || !side.isConnected || !opened) return;
+      current = first;
+      scanNext = typeof first.scanMore === "function" ? first.scanMore : null;
+      render();
+      pump();
     } catch {
       if (stamp !== token || !side.isConnected || !opened) return;
-      side.innerHTML = `${title}<div class="empty">样本读取失败</div><button type="button" class="mx-back" data-samples-retry>重试</button>`;
+      side.innerHTML = `${head(pickNow)}<div class="empty">样本读取失败</div><button type="button" class="mx-back" data-samples-retry>重试</button>`;
       $("[data-samples-retry]", side)?.addEventListener("click", () => open(pick));
     }
   };
-  side.onclick = (event) => { if (event.target.closest("[data-samples-close]")) close(); };
+  side.onclick = async (event) => {
+    if (event.target.closest("[data-samples-close]")) { close(); return; }
+    if (event.target.closest("[data-sample-scan]")) { await scanChunks(6, (page + 1) * PAGE); return; }
+    const flipBtn = event.target.closest("[data-sample-page]");
+    if (flipBtn) { await flip(flipBtn.dataset.samplePage); return; }
+    const row = event.target.closest(".gl-r");
+    const item = row && pageItems[Number(row.dataset.i)];
+    if (item) await openItem(item);
+  };
   frame.onkeydown = (event) => { if (event.key === "Escape" && opened) { event.preventDefault(); event.stopPropagation(); close(); } };
   return {
     open,
     // A drawer is a split of the same frame: revealing it narrows the map on purpose, so the
     // caller must not treat that resize as a reason to rebuild and close it.
     isOpen: () => opened,
-    destroy: () => { token++; cancel(); opened = false; layout.classList.remove("is-open", "is-closing"); side.hidden = true; side.innerHTML = ""; map.inert = false; map.removeAttribute("aria-hidden"); clear(); },
+    destroy: () => { token++; cancel(); opened = false; pickNow = null; current = null; scanNext = null; layout.classList.remove("is-open", "is-closing"); side.hidden = true; side.innerHTML = ""; map.inert = false; map.removeAttribute("aria-hidden"); clear(); },
   };
 }
 
+/* One chunk of candidates per scan: details arrive in waves, and the first chunk is small enough
+   that the drawer has rows to paint well before a whole page of candidates has been read. */
 async function loadTrendSamplePage(trend, spec, pick) {
   const product = ctx.product;
   const index = await ctx.loadIndex(product);
@@ -2549,31 +2688,47 @@ async function loadTrendSamplePage(trend, spec, pick) {
     date: pick.date, node: spec.node, models: series.models, uts: series.uts,
     scenes: !spec.scenes || spec.scenes.size === trend.scenes.length ? null : [...spec.scenes].map((i) => trend.scenes[i]),
   });
-  let offset = 0, failures = 0;
-  const items = [];
-  const more = async () => {
-    const batch = candidates.slice(offset, offset + 40);
-    offset += batch.length;
-    // Bound detail requests; a large spike must not launch hundreds of fetches at once.
-    for (let start = 0; start < batch.length; start += 8) {
-      const results = await Promise.allSettled(batch.slice(start, start + 8).map(async (row) => {
+  // A session whose worst problem is milder than every selected level cannot match this line;
+  // skipping it up-front avoids most of the detail requests for P0–P4 lines.
+  const mildest = series.levelAll ? -1 : Math.max(...series.levelIdxs);
+  const pool = mildest < 0 ? candidates : candidates.filter((row) => {
+    const worst = WORST.indexOf(row.w);
+    return worst < 0 || worst <= mildest;
+  });
+  const state = { items: [], scanned: 0, failures: 0, done: false };
+  const total = pool.length;
+  const CHUNK = 12;
+  const CONCURRENCY = 8;
+  const snapshot = () => ({
+    items: state.items.slice(), unit: "个 case",
+    // No candidate at all is not the same as candidates that miss the cluster/levels: say which
+    // one happened instead of blaming the index for every empty drawer.
+    emptyText: candidates.length ? "候选样本没有命中该簇的问题" : "",
+    note: [state.scanned ? `已检查 ${fmt(state.scanned)} / ${fmt(total)} 个候选样本` : "", state.failures ? `${fmt(state.failures)} 条读取失败` : ""].filter(Boolean).join(" · "),
+    done: state.done, canScan: !state.done && state.scanned < total && state.items.length < LEDGER_MAX,
+  });
+  const scanMore = async () => {
+    if (state.done || state.scanned >= total || state.items.length >= LEDGER_MAX) {
+      state.done = true;
+      return snapshot();
+    }
+    const batch = pool.slice(state.scanned, state.scanned + CHUNK);
+    state.scanned += batch.length;
+    for (let start = 0; start < batch.length; start += CONCURRENCY) {
+      const results = await Promise.allSettled(batch.slice(start, start + CONCURRENCY).map(async (row) => {
         const detail = await loadSample(row.s);
         const problems = trendSampleProblems(detail, spec.node, series.levelIdxs.map((i) => TREND_SEV[i]));
         if (!problems.length) return null;
         return { ...caseItem(row), n: problems.length, w: Math.min(...problems.map((problem) => sevIdx(problem.sev))) };
       }));
-      results.forEach((result) => { if (result.status === "rejected") failures++; else if (result.value) items.push(result.value); });
+      results.forEach((result) => { if (result.status === "rejected") state.failures++; else if (result.value) state.items.push(result.value); });
+      if (state.items.length >= LEDGER_MAX) break;
     }
-    return {
-      items, unit: "个 case",
-      // No candidate at all is not the same as candidates that miss the cluster/levels: say which
-      // one happened instead of blaming the index for every empty drawer.
-      emptyText: candidates.length ? "候选样本没有命中该簇的问题" : "",
-      note: [offset < candidates.length ? `已检查 ${fmt(offset)} / ${fmt(candidates.length)} 个候选样本` : "", failures ? `${fmt(failures)} 条读取失败` : ""].filter(Boolean).join(" · "),
-      more: offset < candidates.length && items.length < LEDGER_MAX ? more : null,
-    };
+    if (state.scanned >= total || state.items.length >= LEDGER_MAX) state.done = true;
+    return snapshot();
   };
-  return more();
+  await scanMore();
+  return { ...snapshot(), scanMore };
 }
 
 async function loadTraceSamplePage(trend, pick) {
@@ -2585,7 +2740,7 @@ async function loadTraceSamplePage(trend, pick) {
     const row = bySlug.get(slug);
     return row ? { ...caseItem(row), w: level, trace, turn, n: 0, q: `${row.q || "（无提问）"} · 第 ${turn + 1} 轮` } : null;
   }).filter(Boolean);
-  return { items, unit: "条 Trace", note: items.length < refs.length ? `当前索引可查看 ${fmt(items.length)} / ${fmt(refs.length)} 条 Trace` : "", more: null };
+  return { items, unit: "条 Trace", note: items.length < refs.length ? `当前索引可查看 ${fmt(items.length)} / ${fmt(refs.length)} 条 Trace` : "", done: true, canScan: false, scanMore: null };
 }
 
 async function loadABTrendSamplePage(spec, pick) {
@@ -2601,6 +2756,7 @@ async function loadABTrendSamplePage(spec, pick) {
     // hits exist but have no detail to open — never "no samples in the index" for AB data.
     emptyText: refs.length ? "这些样本暂无可打开的评测详情" : "该批次这一格没有命中样本",
     note: unavailable ? `${fmt(unavailable)} 个样本缺少对应评测详情` : "",
+    done: true, canScan: false, scanMore: null,
   };
 }
 
@@ -3307,6 +3463,12 @@ function wire(bento, p, tax, u) {
       wireMatrixAnalysis(perspectiveEl, traceSeverityModel(trendData), u.mx, trendData);
       const heatPanel = $(".mxp-chart-panel", perspectiveEl);
       heatPanel.onclick = (event) => {
+        const cell = event.target.closest("[data-heat-date]");
+        if (cell) {
+          const current = mxTrendSummary(trendData, mxView, clusterRoot, u.mx);
+          openSamples(heatSamplePatch(current, trendData, cell.dataset.heatNode, cell.dataset.heatDate));
+          return;
+        }
         const down = event.target.closest("[data-heat-node]");
         const back = event.target.closest("[data-heat-back]");
         if (!down && !back) return;

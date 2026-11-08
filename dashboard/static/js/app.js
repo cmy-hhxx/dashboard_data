@@ -8,7 +8,7 @@ const VIEW_NAME = { data: "数据看板", system: "评测体系", samples: "具�
 // across views, or a stale deep link would reopen the previous drill on the next page.
 const SAMPLE_PARAMS = {
   detail: null, ed: null, em: null, ep: null, edp: null, p: null, q: null, w: null, split: null,
-  model: null, scene: null, sub: null, stage: null, mech: null, pattern: null, case: null, trace: null,
+  model: null, scene: null, sub: null, stage: null, mech: null, pattern: null, date: null, case: null, trace: null,
 };
 const COMPARE_PARAMS = { pair: null, online: null, round: null };
 // Each product's board runs on its own server; a product with no data here opens its server instead.

@@ -334,11 +334,13 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .mxp-rate-chart svg { height: auto; }
 .mxp-rate-chart .empty { padding: 24px 0; }
 .mxp-chart-panel { min-width: 0; padding-top: 4px; overflow-x: auto; scrollbar-width: thin; }
-.mxp-heat { display: grid; gap: var(--tile-gap); min-width: 684px; }
+/* 问题发生率：30 天 × 聚类。格子只靠颜色读数，所以行高固定、宽度吃满，不跟着卡片无限长高；
+   有命中的格子是按钮，点开就是「当天 × 当前场景 × 该聚类」的具体数据查询。 */
+.mxp-heat { display: grid; gap: var(--tile-gap); min-width: 0; }
 .mxp-heat-head, .mxp-heat-row { display: grid; grid-template-columns: minmax(88px, 120px) minmax(0, 1fr) 60px 48px; gap: 12px; align-items: center; }
-.mxp-heat-head { min-height: 28px; color: var(--muted); font-size: 11px; }
+.mxp-heat-head { min-height: 24px; color: var(--muted); font-size: 11px; }
 .mxp-heat-head > span:nth-last-child(-n+2) { text-align: right; }
-.mxp-heat-dates, .mxp-heat-days.tiles { display: grid; grid-template-columns: repeat(30, minmax(0, 1fr)); gap: var(--tile-gap); grid-auto-rows: auto; }
+.mxp-heat-dates, .mxp-heat-days.tiles { display: grid; grid-template-columns: repeat(30, minmax(0, 1fr)); gap: var(--tile-gap); }
 .mxp-heat-dates { font-size: 11px; white-space: nowrap; }
 .mxp-heat-dates > span { overflow: visible; }
 .mxp-heat-row { min-height: 0; font-size: 12px; line-height: 1; }
@@ -348,7 +350,19 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .mxp-heat-name:is(button):hover { background: var(--hover); color: var(--ink); }
 .mxp-heat-name .mx-caret { flex: none; width: 4px; height: 4px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(-45deg); color: var(--muted); }
 .mxp-heat-nav { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--muted); font-size: var(--fs-meta); }
-.mxp-heat-days.tiles > span { width: 100%; height: auto; aspect-ratio: 1; min-width: 0; cursor: default; }
+/* 20px 行高：12 行从 ~480px 收到 ~290px；格子变成宽条，颜色仍然是最快被读出来的维度。 */
+.mxp-heat-days.tiles { grid-auto-rows: 20px; }
+.mxp-heat-days.tiles > span, .mxp-heat-days.tiles > button {
+  width: 100%; height: 100%; min-width: 0; padding: 0; border-radius: 2px; background: var(--c);
+}
+.mxp-heat-days.tiles > span { cursor: default; }
+.mxp-heat-days.tiles > span:hover, .mxp-heat-days.tiles > span:active { transform: none; box-shadow: none; }
+.mxp-heat-days.tiles > button {
+  cursor: pointer; transition: box-shadow var(--snap);
+}
+.mxp-heat-days.tiles > button:hover { box-shadow: inset 0 0 0 1.5px var(--ink-2); }
+.mxp-heat-days.tiles > button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mxp-heat-days.tiles > .is-missing { background: var(--sev-none); }
 .mxp-delta { text-align: right; color: var(--muted); }
 .mxp-chart-empty { display: grid; place-items: center; min-height: 200px; color: var(--faint); font-size: var(--fs-meta); }
 .mx-trend-loading .empty { min-height: 220px; display: grid; place-items: center; padding: 0; }
@@ -400,6 +414,17 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
   .mpt-toolbar { align-items: flex-start; }
   .mpt-path { order: 3; width: 100%; overflow-x: auto; }
   .mpt-meta { margin-left: 0; }
+}
+
+@media (max-width: 700px) {
+  .mxp-heat { min-width: 520px; }
+  .mxp-heat-days.tiles { grid-auto-rows: 18px; }
+  /* 横向滚动时行名和表头留在左边，滚到 11 月也知道自己在看哪一类问题。 */
+  .mxp-heat-head > span:first-child, .mxp-heat-name {
+    position: sticky; left: 0; z-index: 2; background: var(--card);
+  }
+  .mxp-heat-name:is(button) { background: var(--card); }
+  .mxp-heat-name:is(button):hover { background: color-mix(in oklab, var(--ink) 5%, var(--card)); }
 }
 
 @media (max-width: 600px) {
@@ -485,8 +510,14 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .mxt-cursor.is-on { display: block; }
 .mxt-cursor line { stroke: var(--faint); stroke-width: 1; }
 .mxt-cursor circle { stroke: var(--card); stroke-width: 1.5; }
-.mxt-gap-line { stroke-dasharray: 2 3; stroke-opacity: 0.5; stroke-width: 1; }
-.mxt-gap { font-size: 10px; font-weight: var(--w-medium); paint-order: stroke; stroke: var(--card); stroke-width: 3px; stroke-linejoin: round; }
+/* 两条折线靠近时，环出「点下去会打开哪一条」的点。 */
+.mxt-pick { fill: none; stroke: var(--ink-2); stroke-width: 1.6; opacity: 0; transition: opacity var(--snap); }
+.mxt-pick.is-on { opacity: 0.85; }
+.t-pick-note { margin-top: 6px; color: var(--ink-2); }
+.mxt-gap-line { stroke-dasharray: 2 3; stroke-opacity: 0.5; stroke-width: 1; pointer-events: none; }
+.mxt-gap { font-size: 10px; font-weight: var(--w-medium); paint-order: stroke; stroke: var(--card); stroke-width: 3px; stroke-linejoin: round; pointer-events: none; }
+/* 端点图注压在最后一个点上方：它只负责读数，不能挡住「点圆点看样本」。 */
+.mxt-end { pointer-events: none; }
 .mxt-end text { fill: var(--muted); font-size: 10.5px; paint-order: stroke; stroke: var(--card); stroke-width: 3px; stroke-linejoin: round; }
 .mxt-end .mxt-end-val { fill: var(--ink); font-weight: var(--w-medium); font-variant-numeric: tabular-nums; }
 .mxt-end-line { stroke-opacity: 0.32; }
@@ -747,10 +778,22 @@ body.is-modal { overflow: hidden; }
 .mxt-sample-side.gx-side .empty { position: static; min-height: 80px; flex: 1; }
 .mxt-sample-side .gx-list { overscroll-behavior: contain; scrollbar-width: thin; mask-image: none; margin-right: 0; }
 .mxt-sample-side .gl-sum b { font-size: 18px; }
-.mxt-sample-head { display: flex; align-items: center; justify-content: space-between; gap: 4px; min-width: 0; font-size: var(--fs-meta); }
-.mxt-sample-head > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+/* 抬头不再用省略号：日期一行、条件一行（可换行），返回按钮跟日期同一行。 */
+.mxt-sample-head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; min-width: 0; font-size: var(--fs-meta); }
+.mxt-sample-head > span { min-width: 0; color: var(--ink-2); }
+.mxt-sample-head .mxt-sample-when { flex: none; font-weight: var(--w-medium); }
+.mxt-sample-head .mx-back { flex: none; margin-left: auto; }
+.mxt-sample-head .mxt-sample-what { flex-basis: 100%; color: var(--muted); line-height: 1.35; white-space: normal; overflow-wrap: anywhere; }
+.mxt-sample-loading { display: grid; align-content: start; gap: 6px; }
+.mxt-sample-loading .empty { position: static; min-height: 72px; padding: 0; display: grid; place-items: center; }
 .mxt-sample-note { color: var(--muted); font-size: 11px; line-height: 1.4; margin: 0; }
-.mxt-sample-more { align-self: flex-start; }
+.mxt-sample-pager { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--fs-meta); }
+.mxt-sample-pager button { flex: none; width: 24px; height: 24px; border-radius: 6px; display: grid; place-items: center; color: var(--muted); font-size: 14px; line-height: 1; }
+.mxt-sample-pager button:hover:not([disabled]) { background: var(--hover); color: var(--ink); }
+.mxt-sample-pager button[disabled] { opacity: 0.3; cursor: default; }
+.mxt-sample-page { flex: 1; min-width: 0; overflow: hidden; color: var(--faint); text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+.mxt-sample-page b { color: var(--ink-2); font-weight: var(--w-medium); }
+.mxt-sample-reading { margin-left: 6px; color: var(--faint); }
 .has-sample-picks { cursor: crosshair; }
 .has-sample-picks [data-trend-point] { cursor: pointer; }
 .has-sample-picks [data-trend-point]:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }

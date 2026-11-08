@@ -14,7 +14,7 @@ const F = () => {
   const q = params();
   return {
     q: q.get("q") || "", w: q.get("w") || "", split: q.get("split") || "", model: q.get("model") || "",
-    ut: q.get("ut") || "",
+    ut: q.get("ut") || "", date: q.get("date") || "",
     scene: q.get("scene") || "", sub: q.get("sub") || "", stage: q.get("stage") || "", mech: q.get("mech") || "", pattern: q.get("pattern") || "", sort: q.get("sort") || "sev",
   };
 };
@@ -40,6 +40,12 @@ const severityHit = (r, w) => {
   const i = SEV.indexOf(w);
   return hasCounts ? i >= 0 && Number(r.sv[i] || 0) > 0 : r.w === w;
 };
+/* `date` only comes from the heat-cell jump, so it is an applied condition and not a picker:
+   a session matches when any of its per-date rows is on that day (a session can span dates). */
+const dateHit = (r, f) => !f.date || r.rows.some((x) => x.d === f.date);
+/* A date-filtered list reads as that day's slice, so the row shows the day that matched
+   instead of the session's last date. */
+const rowDate = (r, f) => (f.date && (r.rows.find((x) => x.d === f.date) || {}).d) || r.d;
 const listHit = (r, f, omit = "") =>
   severityHit(r, f.w) &&
   (!f.split || (f.split === "lost" ? isLostRow(r) : r.sp === f.split)) &&
@@ -210,7 +216,7 @@ function skeleton() {
   });
   $("#ssort", root).addEventListener("change", (e) => setFilter({ sort: e.target.value }));
   $("#sreset", root).addEventListener("click", () =>
-    setFilter({ q: "", w: "", split: "", model: "", ut: "", scene: "", sub: "", stage: "", mech: "", pattern: "", sort: "sev" }),
+    setFilter({ q: "", w: "", split: "", model: "", ut: "", date: "", scene: "", sub: "", stage: "", mech: "", pattern: "", sort: "sev" }),
   );
   $("#sf", root).addEventListener("click", (e) => {
     const b = e.target.closest("button[data-k]");
@@ -285,7 +291,8 @@ function syncFilters() {
   const btn = (k, v, label, color) =>
     `<button type="button" data-k="${k}" data-v="${esc(v)}" aria-pressed="${f[k] === v}"${color ? ` style="--c:${color}"` : ""}>${color ? "<i></i>" : ""}${esc(label)}</button>`;
   const row = (cls, items) => `<div class="frow${cls ? ` ${cls}` : ""}">${items}</div>`;
-  let html = row("sev", WORST.map((w, i) => btn("w", w, SEV_NAME[w], sevColor(i))).join(""));
+  let html = f.date ? row("", btn("date", f.date, `日期 ${f.date.slice(5)} ×`)) : "";
+  html += row("sev", WORST.map((w, i) => btn("w", w, SEV_NAME[w], sevColor(i))).join(""));
   if (p.splits.some((s) => s.id === "lost")) html += row("", btn("split", "lost", "仅看流失用户"));
   html += row("", p.models.map((m) => btn("model", m.id, m.label)).join(""));
 
@@ -333,6 +340,7 @@ function renderList() {
   S.rows = S.all.filter(
     (r) =>
       listHit(r, f) &&
+      dateHit(r, f) &&
       hit(r),
   );
   if (f.sort === "n") S.rows = S.rows.slice().sort((a, b) => b.n - a.n);
@@ -347,7 +355,7 @@ function renderList() {
         .map(
           (r) => `<button type="button" class="srow" data-s="${r.s}" style="--c:${sevColor(r.w)}" aria-current="${r.s === S.slug}">
       <span class="bar"></span><span class="srow-body"><span class="q">${esc(r.q || "（无提问）")}</span>
-      <span class="m num"><span class="srow-model">${esc(label(r.m))}</span><span>${r.d.slice(5)}</span>${r.tr > 1 ? `<span>${r.tr} 轮</span>` : ""}<span class="srow-sev" style="color:${r.w === "none" ? "var(--muted)" : sevColor(r.w)}">${r.w === "none" ? "无问题" : r.w}</span>${
+      <span class="m num"><span class="srow-model">${esc(label(r.m))}</span><span>${rowDate(r, f).slice(5)}</span>${r.tr > 1 ? `<span>${r.tr} 轮</span>` : ""}<span class="srow-sev" style="color:${r.w === "none" ? "var(--muted)" : sevColor(r.w)}">${r.w === "none" ? "无问题" : r.w}</span>${
             isLostRow(r) ? '<span class="tag-lost">流失</span>' : ""
           }</span></span></button>`,
         )
@@ -355,7 +363,7 @@ function renderList() {
     : `<div class="empty">没有符合条件的会话<br><button type="button" class="link" id="sclear">清除筛选</button></div>`;
   renderPager(pages);
   const clear = $("#sclear", root);
-  clear && clear.addEventListener("click", () => setFilter({ q: "", w: "", split: "", model: "", ut: "", scene: "", sub: "", stage: "", mech: "", pattern: "" }));
+  clear && clear.addEventListener("click", () => setFilter({ q: "", w: "", split: "", model: "", ut: "", date: "", scene: "", sub: "", stage: "", mech: "", pattern: "" }));
 }
 
 function renderPager(pages) {
