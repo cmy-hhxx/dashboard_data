@@ -100,6 +100,12 @@ MODEL_LABEL = {
 SPLITS = {"0_daily_eval": "daily", "1_lost_user_eval": "lost"}
 SPLIT_LABEL = {"daily": "日常评测", "lost": "流失用户"}
 
+# eval_input/ folders that hold published days but must not be counted as extra
+# input: lost-user input is read from the archive and back-test staging is
+# published into 0_daily_eval_input first, so counting these would double it.
+# See input_files() and snapshot_input_dirs().
+EXCLUSIVE_INPUT_DIRS = ("1_lost_user_eval", "2_task_eval")
+
 # The agent's own order: decide → build the request → run it → deliver.
 ROLE_ORDER = ["planning", "request_generation", "tool", "script", "skill", "delivery"]
 ROLE_LABEL = {
@@ -344,8 +350,52 @@ def input_candidates(root: Path, top: str, split: str, model: str, date: str) ->
     return [p.relative_to(root).as_posix() for p in paths if p.is_file()]
 
 
+def input_roots(top: Path, product: str):
+    """The directories that hold published eval input, newest layout first.
+
+    Only these are scanned.  Anything else a person drops under the data root
+    (a staged snapshot, an export, a backup) is not published input and must not
+    reach the board: a copy of the daily input would silently double every
+    volume number.  Discovery is by *layout*, not by name, so a snapshot folder
+    needs no new exclusion when it appears -- see ``snapshot_input_dirs``.
+    """
+    base = top / "eval_input"
+    if product == "aime":
+        return [base / "0_daily_eval_input", base / "aime_expert", base / "aime_fast"]
+    return [base]  # wencai keeps the flat per-model layout directly under eval_input
+
+
+def snapshot_input_dirs(top: Path, product: str):
+    """Published-looking input trees that sit outside ``input_roots``.
+
+    Reported by the build so an accidental copy is visible instead of silent;
+    they are never scanned.
+    """
+    roots = input_roots(top, product)
+    base = top / "eval_input"
+    if product != "aime":
+        # wencai's published layout *is* one folder per model right under
+        # eval_input, so there is no fixed set of roots to compare against and
+        # nothing can be told apart as a stray; the board has no such case yet.
+        return []
+    # These hold published days but are counted elsewhere (the archive covers
+    # lost-user input), so they are excluded, not reported as strays.
+    accounted = set(EXCLUSIVE_INPUT_DIRS)
+    found = []
+    for candidate in sorted(base.glob("*")):
+        if not candidate.is_dir() or candidate in roots or candidate.name in accounted:
+            continue
+        # ``<model>/<date>.jsonl`` anywhere below the folder marks a copy of the
+        # eval input; an archive without that shape is not one.
+        if next(candidate.rglob("*.jsonl"), None) is not None:
+            found.append(candidate)
+    return found
+
+
 def input_files(datasets: Path, top: Path, product: str):
     """Every input file the volume card reads.
+
+    The scan is limited to ``input_roots``: published eval input only.
 
     AIME lost-user inputs come from the archive; the smaller
     ``eval_input/1_lost_user_eval`` copy is excluded so days are not counted
@@ -360,11 +410,15 @@ def input_files(datasets: Path, top: Path, product: str):
     # rglob 在弗吉尼亚的 ceph 上要 50 秒（目录太多），改成走目录清单缓存：
     # 只有 mtime 变过的目录才重新 readdir，数据没变时就是几十次 stat。
     tree = TreeCache(DASHBOARD / "cache")
-    base = top / "eval_input"
-    skip = ("1_lost_user_eval", "2_task_eval") if product == "aime" else ("1_lost_user_eval",)
-    # 缓存键带上 skip 口径，口径变了不会复用旧的目录清单。
-    files = [base / rel for rel in tree.walk(base, f"in-{product}-eval-" + "-".join(skip),
-                                             skip_parts=skip)]
+    # Directories inside a root that hold published days more than once.
+    skip = EXCLUSIVE_INPUT_DIRS if product == "aime" else ("1_lost_user_eval",)
+    files = []
+    for root in input_roots(top, product):
+        if not root.is_dir():
+            continue
+        key = f"in-{product}-" + root.relative_to(top).as_posix().replace("/", "_") + \
+              ("-" + "-".join(skip) if skip else "")
+        files += [root / rel for rel in tree.walk(root, key, skip_parts=skip)]
     if product == "aime":
         archive = top / ".archive" / "1_lost_user_input"
         lost = archive if archive.is_dir() else top / "eval_input" / "1_lost_user_eval"
@@ -2674,6 +2728,11 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
             metas, info = scan_inputs(datasets, top, product, store, jobs, side_files)
             product_metas[product] = metas
             scan_info[product] = info
+            # A copy of the published input outside input_roots is not scanned;
+            # say so, so an accidental one is noticed instead of silently ignored.
+            for ignored in snapshot_input_dirs(top, product):
+                log(f"[build] ignoring non-published input tree: "
+                    f"{ignored.relative_to(datasets).as_posix()}")
         timers["scan"] = round(time.time() - t0, 1)
         input_sig = input_signature(product_metas)
 

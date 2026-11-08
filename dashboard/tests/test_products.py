@@ -159,5 +159,42 @@ class ProductSplitTests(unittest.TestCase):
             self.assertEqual((volume()["records"], volume()["lost"], volume()["sessions"]), (1, 1, 1))
 
 
+    def test_stray_snapshot_under_eval_input_is_not_scanned(self):
+        """误放在 eval_input/ 下的快照不能进看板：只扫已发布的输入目录。
+
+        2026-11-07：一份快照被放进了 ``eval_input/snapshots/``，被当成正式输入
+        扫进去（scan_files 90 vs 74），体积口径翻倍。
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            datasets, static = Path(folder) / "datasets", Path(folder) / "static"
+            seed(datasets)
+            inp = as_aime(datasets)
+            volume = lambda: json.loads((static / "data-aime.json").read_text())["products"]["aime"]["input"]
+            build(datasets, static, EVAL_PRODUCTS="aime")
+            self.assertEqual(volume()["records"], 1)
+
+            # A copy of the published input dropped under a new folder: same shape, new name.
+            snap = datasets / "1_aime/eval_input/some_export_20261107" / "aime_fast"
+            snap.mkdir(parents=True)
+            shutil.copy(inp, snap / "2026-11-01.jsonl")
+            for stale in (DASHBOARD / "cache").glob("tree-*.json"):
+                stale.unlink()
+            build(datasets, static, EVAL_PRODUCTS="aime")
+            self.assertEqual(volume()["records"], 1, "误放的快照不能让体积翻倍")
+
+    def test_input_roots_do_not_hardcode_product_names(self):
+        """扫描目录由布局推导，新增目录不需要改代码；wencai 仍是平铺。"""
+        import build as build_mod
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "1_aime"
+            roots = build_mod.input_roots(root, "aime")
+            self.assertEqual([r.relative_to(root).as_posix() for r in roots],
+                             ["eval_input/0_daily_eval_input", "eval_input/aime_expert",
+                              "eval_input/aime_fast"])
+            wencai = Path(folder) / "0_wencai"
+            self.assertEqual([r.relative_to(wencai).as_posix() for r in build_mod.input_roots(wencai, "wencai")],
+                             ["eval_input"])
+
+
 if __name__ == "__main__":
     unittest.main()
