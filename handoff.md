@@ -331,6 +331,12 @@ labels:["…",…]}`，与 `rows[]` 同长度、同顺序；前端首屏后再�
 - **数据页跳样本只有一处**：会话场格子带 `case`；聚类矩阵格子不再跳页，而是在卡片里换成趋势图
   （`data.js` 的 `openTrend` / `paintTrendPlot`），旭日图、桑基图、预测页签仍只在页内下钻。
   问财的场景在 `build.py` 里来自 skill 投票，索引行用 `sc` 携带与 task/skill 不一致的场景，`samples.js` 的 `sceneOf` 优先读它。
+- **聚类矩阵卡的样本抽屉**：抽屉展开会让 `.mxt-sample-layout` 分栏、地图变窄，卡片上的 ResizeObserver
+  随即重绘趋势图；`paintTrendPlot` 里的 `plot._drawer?.destroy()` 会把刚打开的抽屉直接关掉
+  （用户看到「点了没反应」）。`trendFrame` 的 `paintPlot` 在抽屉打开时只记 `deferred`、不重绘，
+  关闭之后再按最新口径重绘一次；不要让重绘无条件销毁抽屉。空态文案按真实原因区分
+  （无候选 / 候选未命中簇 / AB 批次这一格无命中 / 有命中但没有可打开详情），
+  不要统一写「当前索引中没有匹配样本」。
 - **生成物不是源码**：`static/data.json`、`static/data-<product>.json`、`static/samples.json`、
   `static/samples-<product>.json`、`static/labels-<product>.json`、`static/trends-<product>.json` 由构建产生，`static/samples/` 是详情懒加载缓存，都不入库；
   本地刷新/远端部署会自动重建。详情缓存可以安全删除，下一次访问按需补。
