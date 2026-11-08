@@ -19,6 +19,8 @@
 
   --gutter: 24px;
   --gap: 16px;
+  --tile-size: 11px;
+  --tile-gap: 2px;
   --px: 16px;
   --py: 16px;
   --py-lg: 24px;

@@ -293,8 +293,16 @@ def build_round(round_dir: Path, order: int, version: str, samples=None,
     meta = meta or round_meta(round_dir, order, version)
     rows = read_rows(round_dir / "00_manifest" / "coverage.csv")
     scenes = sample_scene_map(samples)
+    sample_by_trace = defaultdict(set)
+    for slug, detail, sample_row, _facts in samples or []:
+        model = str(sample_row.get("m") or "").rsplit("_", 1)[-1]
+        traces = {turn.get("trace_id") for turn in (detail.get("attribution") or {}).get("turns", [])}
+        traces.add(sample_row.get("tid"))
+        for trace in traces - {None, ""}:
+            sample_by_trace[(str(trace), model)].add(slug)
     before, before_model, before_source = Counter(), defaultdict(Counter), defaultdict(Counter)
     before_matrix = Counter()
+    sample_refs = {side: [] for side in ("before", "after", "online")}
     for row in rows:
         paths = [p for p in (row.get("cls_paths") or "").split(";") if p]
         if not paths:
@@ -302,6 +310,11 @@ def build_round(round_dir: Path, order: int, version: str, samples=None,
         model = eval_model(str(row.get("eval_store") or ""))
         source = row.get("eval_category") or ""
         scene = coverage_scene(row, scenes)
+        sample_refs["before"].append({"trace": str(row.get("trace_id") or ""), "model": model,
+                                      "task": scene[0], "sub": scene[1], "paths": paths})
+        slugs = sample_by_trace[(str(row.get("trace_id") or ""), model)]
+        if len(slugs) == 1:
+            sample_refs["before"][-1]["slug"] = next(iter(slugs))
         for path in paths:
             before[path] += 1
             before_matrix[(*scene, path)] += 1
@@ -326,6 +339,7 @@ def build_round(round_dir: Path, order: int, version: str, samples=None,
             source = row.get("eval_category") or ""
             scene = coverage_scene(row, scenes)
             by_trace[trace] = paths
+            sample_refs["after"].append({"trace": trace, "model": model, "task": scene[0], "sub": scene[1], "paths": paths})
             for path in paths:
                 after[path] += 1
                 after_matrix[(*scene, path)] += 1
@@ -361,6 +375,9 @@ def build_round(round_dir: Path, order: int, version: str, samples=None,
             online_traces += 1
             online_dates.add(day)
             scene = scene_pair(detail, row)
+            if paths:
+                sample_refs["online"].append({"slug": _slug, "trace": trace, "model": row.get("m") or "",
+                                               "task": scene[0], "sub": scene[1], "paths": paths})
             for path in paths:
                 online[path] += 1
                 online_matrix[(*scene, path)] += 1
@@ -398,6 +415,7 @@ def build_round(round_dir: Path, order: int, version: str, samples=None,
         } if online_available else None),
     }
     meta["leaves"] = leaves
+    meta["sample_refs"] = sample_refs
     meta["matrix"] = {
         "before": matrix_rows(before_matrix),
         "after": matrix_rows(after_matrix) if after_paths else None,

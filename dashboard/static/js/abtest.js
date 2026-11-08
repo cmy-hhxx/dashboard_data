@@ -7,7 +7,10 @@
    - online is a different real-user population and is shown as validation only.
    State lives in data.js's u.ab so an in-place dashboard refresh returns to the same round,
    summary / matrix step, metric and selected cell. */
-import { esc, fmt } from "./core.js";
+import { esc, fmt, REDUCED, sevColor, segmented } from "./core.js";
+import { sunburst } from "./sunburst.js";
+import { lineTrendSVG, wireLineTrendChart } from "./trend_chart.js";
+import { trendSampleFrame } from "./trend_samples.js";
 
 const SIDES = ["before", "after", "online"];
 const SIDE_SHORT = { before: "改版前", after: "改版后", online: "线上" };
@@ -24,86 +27,37 @@ const num = (v) => Number(v) || 0;
 const signed = (v) => (v > 0 ? `+${fmt(v)}` : v < 0 ? `−${fmt(-v)}` : "0");
 const sumOf = (list) => list.reduce((s, v) => s + num(v), 0);
 const pathRelated = (a, b) => a === b || String(a).startsWith(`${b}.`) || String(b).startsWith(`${a}.`);
-const TAU = Math.PI * 2;
-const ORBIT = { before: [74, 86], after: [57, 69], online: [40, 52] };
 const SIDE_TONE = { before: "var(--t2)", after: "var(--accent)", online: "var(--loc-ulq)" };
 
-function orbitPath(r0, r1, a0, a1) {
-  a1 = Math.min(a1, a0 + TAU - 0.001);
-  const point = (r, a) => [110 + r * Math.cos(a), 110 + r * Math.sin(a)];
-  const [x0, y0] = point(r1, a0);
-  const [x1, y1] = point(r1, a1);
-  const [x2, y2] = point(r0, a1);
-  const [x3, y3] = point(r0, a0);
-  const large = a1 - a0 > Math.PI ? 1 : 0;
-  return `M${x0.toFixed(2)} ${y0.toFixed(2)}A${r1} ${r1} 0 ${large} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}L${x2.toFixed(2)} ${y2.toFixed(2)}A${r0} ${r0} 0 ${large} 0 ${x3.toFixed(2)} ${y3.toFixed(2)}Z`;
-}
-
-function dateRange(dates) {
-  if (!Array.isArray(dates) || !dates.length) return "";
-  const [a, b] = dates;
-  if (!b || a === b) return a;
-  return String(a).slice(0, 4) === String(b).slice(0, 4) ? `${a}～${String(b).slice(5)}` : `${a}～${b}`;
-}
-
-function ceilTop(v) {
-  const max = num(v);
-  if (max <= 4) return 4;
-  const raw = max / 4;
-  const mag = 10 ** Math.floor(Math.log10(raw));
-  const step = [1, 2, 4, 5, 10].map((m) => m * mag).find((s) => s >= raw) || 10 * mag;
-  return Math.max(4, Math.round(step * 4));
-}
-
-function plotSVG(width, cols, series, aria) {
-  const n = cols.length;
-  const W = Math.max(280, Math.min(1120, Math.round(num(width) || 640)));
-  const H = 118;
-  const L = 42;
-  const R = 16;
-  const T = 12;
-  const B = 24;
-  const iw = W - L - R;
-  const ih = H - T - B;
-  const vals = [];
-  series.forEach((s) => s.values.forEach((v) => { if (v != null) vals.push(v); }));
-  const top = ceilTop(vals.length ? Math.max(...vals) : 0);
-  const xOf = (i) => L + (n > 1 ? (i * iw) / (n - 1) : iw / 2);
-  const yOf = (v) => T + ih - (v / top) * ih;
-  let grid = "";
-  for (let g = 0; g <= 4; g += 1) {
-    const v = (top * g) / 4;
-    const y = yOf(v).toFixed(1);
-    grid += `<line x1="${L}" x2="${W - R}" y1="${y}" y2="${y}"${g ? "" : ' class="is-base"'}/><text class="mxt-ylab" x="${L - 7}" y="${y}">${fmt(v)}</text>`;
-  }
-  const xlab = cols.map((c, i) => `<text class="mxt-xlab" x="${xOf(i).toFixed(1)}" y="${H - 8}">${esc(c)}</text>`).join("");
-  let lines = "";
-  let dots = "";
-  series.forEach((s) => {
-    let run = [];
-    const flush = () => {
-      if (run.length > 1) {
-        lines += `<path class="mxt-line" pathLength="1" d="${run.map((p, j) => `${j ? "L" : "M"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join("")}" style="stroke:${s.color}"/>`;
-      }
-      run = [];
-    };
-    s.values.forEach((v, i) => {
-      if (v == null) {
-        flush();
-        return;
-      }
-      const p = [xOf(i), yOf(v)];
-      run.push(p);
-      dots += `<circle class="mxt-dot" cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2.8" style="fill:${s.color}"/>`;
-    });
-    flush();
-  });
-  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(aria)}"><g class="mxt-grid">${grid}${xlab}</g>${lines}${dots}</svg>`;
-}
-
 const sideReady = (rnd, side) => !!(rnd.sides && rnd.sides[side]);
+const defaultMetric = (rnd) => (sideReady(rnd, "after") ? "delta" : "all");
 const roundLabel = (rnd, i) => rnd.label || rnd.release_label || `第 ${i + 1} 期`;
-const sideLabel = (data, side) => ((data.labels || {}).sides || {})[side] || SIDE_SHORT[side];
+
+/* Reuse 评测量 bars, grouping the two post-release populations without mixing them. */
+export function abComparisonHTML(rnd) {
+  const before = rnd.sides?.before;
+  const after = rnd.sides?.after;
+  const labels = { before: "同题基线", after: "同题复测", online: "线上真实" };
+  const max = Math.max(1, ...SIDES.map((side) => num(rnd.sides?.[side]?.hits)));
+  const columns = SIDES.map((side) => {
+    const result = rnd.sides?.[side];
+    const n = result ? num(result.hits) : null;
+    const traces = result?.traces == null ? DASH : fmt(result.traces);
+    // Fixed-set extracts count only traces with cluster paths; online counts evaluated records.
+    const volumeLabel = side === "online" ? "评测样本" : "有问题 Trace";
+    const volume = `${traces} ${volumeLabel}`;
+    return `<div class="evday${result ? "" : " is-missing"}">
+      <div class="evnums"><b class="num">${n == null ? DASH : fmt(n)}</b></div>
+      <div class="ab-result-column">${n == null
+        ? '<span class="ab-result-empty">暂无结果</span>'
+        : `<div class="evbar" style="height:${156 * n / max}px;--c:${SIDE_TONE[side]}" data-tip="${SIDE_SHORT[side]} · ${labels[side]}|${fmt(n)} 个问题 · ${volume}"><i style="height:100%"></i></div>`}</div>
+      <span class="evdate">${labels[side]}</span><small class="ab-result-volume"><b class="num">${traces}</b><span>${volumeLabel}</span></small>
+    </div>`;
+  }).join("");
+  const delta = before && after ? num(after.hits) - num(before.hits) : null;
+  const change = delta == null ? "" : `<span class="ab-result-change ${delta > 0 ? "is-worse" : delta < 0 ? "is-better" : ""}">同题${delta === 0 ? "持平" : `${delta < 0 ? "减少" : "增加"} ${fmt(Math.abs(delta))}`}</span>`;
+  return `<div class="ab-results"><header><span>问题数量</span>${change}</header><div class="ab-result-groups"><span>改版前</span><span>改版后</span></div><div class="evrow ab-result-bars" style="--n:3;--bar-h:156px">${columns}</div></div>`;
+}
 
 function crossFor(rnd, side) {
   if (!sideReady(rnd, side)) return null;
@@ -304,7 +258,7 @@ function treeCount(rnd, side, row, colPrefix) {
   return total;
 }
 
-export function mountAB(host, data, state, tax) {
+export function mountAB(host, data, state, tax, product = null, actions = {}) {
   const rounds = data && Array.isArray(data.rounds) ? data.rounds : [];
   if (!rounds.length) {
     host.innerHTML = `<div class="empty">暂无 AB 测试数据</div>`;
@@ -316,73 +270,101 @@ export function mountAB(host, data, state, tax) {
   state.step = state.step === "matrix" ? "matrix" : "summary";
   state.rows = Array.isArray(state.rows) ? state.rows : [];
   state.cols = Array.isArray(state.cols) ? state.cols : [];
-  state.metric = METRICS.some(([k]) => k === state.metric) ? state.metric : (sideReady(rounds[state.round], "after") ? "delta" : "all");
+  state.orbit = state.orbit && typeof state.orbit === "object" && (state.orbit.before || state.orbit.after)
+    ? state.orbit : { before: state.orbit || {}, after: {} };
+  state.orbit.before = state.orbit.before || {};
+  state.orbit.after = state.orbit.after || {};
+  state.orbitSide = state.orbitSide === "after" ? "after" : "before";
+  state.metric = METRICS.some(([k]) => k === state.metric) ? state.metric : defaultMetric(rounds[state.round]);
   if (((state.metric === "after" || state.metric === "delta") && !sideReady(rounds[state.round], "after"))
       || (state.metric === "online" && !sideReady(rounds[state.round], "online"))) state.metric = "all";
   if (!state.cell || typeof state.cell !== "object") state.cell = null;
+  let cellTrendChart = null;
+  let cellTrendDrawer = null;
+  let orbitApi = null;
 
   const resetMatrix = () => { state.rows = []; state.cols = []; state.cell = null; };
 
-  function roundBar(rnd) {
+  function roundBar() {
     const items = rounds.map((r, i) => {
-      const meta = r.released_at || dateRange(r.dates) || "";
       return `<button type="button" class="ab-round" data-act="round" data-i="${i}" aria-pressed="${i === state.round}" title="${esc(roundLabel(r, i))}">
-        <b>${esc(roundLabel(r, i))}</b>${meta ? `<small>${esc(meta)}</small>` : ""}
+        <b>${esc(roundLabel(r, i))}</b>
       </button>`;
     }).join("");
     return `<div class="ab-rounds" role="group" aria-label="AB 测试对比记录">${items}</div>`;
   }
 
-  function batchParts(rnd, side) {
-    const names = new Map((Array.isArray(rnd.nodes) ? rnd.nodes : []).map((n) => [n.id, n.name]));
-    const groups = new Map();
-    (Array.isArray(rnd.leaves) ? rnd.leaves : []).forEach((leaf) => {
-      const n = num(leaf[side]);
-      if (!n) return;
-      const id = String(leaf.id || "").split(".")[0] || "other";
-      const item = groups.get(id) || { id, name: names.get(id) || id, n: 0 };
-      item.n += n;
-      groups.set(id, item);
-    });
-    return [...groups.values()].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+  const patternList = Array.isArray(product && product.patterns) ? product.patterns : [];
+
+  function samplesFor(node) {
+    const exact = patternList.find((pattern) => pattern.id === node.id);
+    if (exact && exact.examples && exact.examples.length) return exact.examples;
+    const child = patternList
+      .filter((pattern) => String(pattern.id).startsWith(`${node.id}.`) && pattern.examples && pattern.examples.length)
+      .sort((a, b) => String(a.id).length - String(b.id).length)[0];
+    return child ? child.examples : [];
+  }
+
+  function samplePane(node) {
+    const rows = samplesFor(node);
+    const parts = ["P0", "P1", "P2", "P3", "P4"].map((severity) => ({
+      n: rows.filter((row) => row.worst === severity).length,
+      c: sevColor(severity),
+    })).filter((part) => part.n);
+    const body = rows.length
+      ? rows.map((row, i) => `<button type="button" class="gl-r" style="--i:${Math.min(i, 8)};--c:${sevColor(row.worst)}" data-sample="${esc(row.slug)}" title="${esc(row.q || row.label || "")}">
+          <i></i><span>${esc(row.q || row.label || "（无提问）")}</span><b class="num">${esc(row.model || row.worst || "")}</b>
+        </button>`).join("")
+      : `<p class="ab-sample-empty">暂无具体样本</p>`;
+    return `<div class="gx-side ab-sample-pane">
+      <div class="ab-sample-head"><span title="${esc(node.name)}">${esc(node.name)}</span><button type="button" class="link" data-act="orbitBack">← 对比概览</button></div>
+      <div class="gl-sum"><b class="num">${fmt(rows.length)}</b><small>个样本</small>${parts.length ? `<span class="gl-strip" aria-hidden="true">${parts.map((part) => `<i style="flex:${part.n} 1 0;background:${part.c}"></i>`).join("")}</span>` : ""}</div>
+      <div class="gx-list ab-sample-list">${body}</div>
+    </div>`;
   }
 
   function batchOrbit(rnd) {
-    const rings = SIDES.map((side) => {
-      const [r0, r1] = ORBIT[side];
-      const track = `<circle class="ab-orbit-track${sideReady(rnd, side) ? "" : " is-pending"}" cx="110" cy="110" r="${(r0 + r1) / 2}" style="--ring:${r1 - r0}"/>`;
-      if (!sideReady(rnd, side)) return track;
-      const parts = batchParts(rnd, side);
-      const total = sumOf(parts.map((part) => part.n));
-      if (!total) return track;
-      let angle = -Math.PI / 2;
-      const gap = parts.length > 1 ? Math.min(0.035, 0.14 / parts.length) : 0;
-      const paths = parts.map((part, i) => {
-        const span = (TAU * part.n) / total;
-        const d = orbitPath(r0, r1, angle + gap / 2, angle + span - gap / 2);
-        angle += span;
-        const opacity = parts.length === 1 ? 0.86 : 0.94 - (i * 0.44) / (parts.length - 1);
-        return `<path class="ab-orbit-seg" d="${d}" style="fill:${SIDE_TONE[side]};opacity:${opacity.toFixed(2)}"><title>${esc(`${sideLabel(data, side)} · ${part.name} · ${fmt(part.n)}`)}</title></path>`;
-      }).join("");
-      return track + paths;
-    }).join("");
-    const side = (key) => {
-      const s = rnd.sides && rnd.sides[key];
-      const detail = !s ? "待回填" : key === "online" ? `${fmt(s.traces)} 条评测` : `${fmt(s.traces)} / ${fmt(rnd.targets)} 有落点`;
-      return `<div class="ab-side${s ? "" : " is-pending"}"><i style="--c:${SIDE_TONE[key]}"></i><span>${esc(sideLabel(data, key))}</span><b class="num">${s ? fmt(s.hits) : DASH}</b><small>${esc(detail)}</small></div>`;
-    };
-    return `<section class="ab-overview" aria-label="A/B Test 三批问题落点概览">
-      <div class="ab-orbit"><svg viewBox="0 0 220 220" role="img" aria-label="按聚类阶段分解的三批问题落点">${rings}</svg>
-        <div class="ab-orbit-core"><small>固定题集</small><b class="num">${fmt(rnd.targets)}</b></div>
+    return `<section class="ab-overview" aria-label="A/B Test 改版前后问题对比">
+      <div class="ab-orbit-card">
+        <div class="seg ab-orbit-switch" id="abOrbitSides" role="group" aria-label="聚类树版本">
+          <span class="seg-knob" aria-hidden="true"></span>
+          <button type="button" data-value="before" aria-pressed="${state.orbitSide === "before"}">改版前</button>
+          <button type="button" data-value="after" aria-pressed="${state.orbitSide === "after"}">改版后</button>
+        </div>
+        <div class="ab-orbit-sunburst" id="abOrbit" aria-label="聚类树"></div>
       </div>
-      <div class="ab-sides"><div class="ab-sides-title">问题落点</div>${SIDES.map(side).join("")}</div>
+      <div class="ab-overview-side" id="abOverviewSide">
+        <div class="ab-side-pane" data-pane="sides">${abComparisonHTML(rnd)}</div>
+        <div class="ab-side-pane" data-pane="samples"></div>
+      </div>
     </section>`;
+  }
+
+  function orbitTree(rnd, side) {
+    const nodes = Array.isArray(rnd.nodes) ? rnd.nodes : [];
+    const root = { id: "ab/root", name: "固定题集", n: 0, children: [] };
+    const byId = new Map();
+    nodes.forEach((node) => {
+      const n = side === "after" ? num(node.after) + num(node.online) : num(node.before);
+      if (n > 0) byId.set(node.id, { id: node.id, name: node.name || node.id, n, children: [] });
+    });
+    nodes.forEach((node) => {
+      const item = byId.get(node.id);
+      if (!item) return;
+      const parent = node.parent ? byId.get(node.parent) : root;
+      if (parent) parent.children.push(item);
+    });
+    root.n = root.children.reduce((s, node) => s + node.n, 0);
+    return root;
   }
 
   function changes(rnd) {
     return (Array.isArray(rnd.leaves) ? rnd.leaves : [])
-      .filter((leaf) => leaf.after != null)
-      .map((leaf) => ({ leaf, before: num(leaf.before), after: num(leaf.after), online: leaf.online == null ? null : num(leaf.online), d: num(leaf.after) - num(leaf.before) }));
+      .filter((leaf) => leaf.after != null || leaf.online != null)
+      .map((leaf) => {
+        const after = (leaf.after == null ? 0 : num(leaf.after)) + (leaf.online == null ? 0 : num(leaf.online));
+        return { leaf, before: num(leaf.before), after, online: leaf.online == null ? null : num(leaf.online), d: after - num(leaf.before) };
+      });
   }
 
   function rankPanel(title, rows, tone, max, total, rnd) {
@@ -393,7 +375,7 @@ export function mountAB(host, data, state, tax) {
           <b class="num">${row.before} → ${row.after}</b>
           <small>${row.online > 0 ? `线上 ${fmt(row.online)}` : row.onlineMatched ? "线上同簇" : ""}</small>
         </button>`).join("")
-      : `<p class="ab-rankempty">${sideReady(rnd, "after") ? "暂无变化" : "改版后待回填"}</p>`;
+      : `<p class="ab-rankempty">${sideReady(rnd, "after") || sideReady(rnd, "online") ? "暂无变化" : "改版后暂无结果"}</p>`;
     return `<section class="ab-rank ${tone}"><header><span>${title}</span><b class="num">${total}</b></header>${body}</section>`;
   }
 
@@ -414,62 +396,58 @@ export function mountAB(host, data, state, tax) {
     </section>`;
   }
 
-  function crumbs(rowPath, colPath) {
-    const group = (label, path, kind, keyOf) => `<span class="mx-crumb-group"><span class="mx-crumb-label">${label}</span>${path.map((node, i) => {
-      const current = i === path.length - 1;
-      return `${i ? '<i class="mx-sep">›</i>' : ""}<button type="button" class="mx-crumb" data-act="${kind}crumb" data-depth="${i + 1}"${current ? ' aria-current="true"' : ""}>${esc(keyOf(node))}</button>`;
-    }).join("")}</span>`;
-    return `${group("场景", rowPath, "row", (n) => n.name)}${group("问题", colPath, "col", (n) => n.name)}`;
+  function showOrbitPane(node) {
+    const wrap = host.querySelector("#abOverviewSide");
+    if (!wrap) return;
+    const samples = wrap.querySelector('[data-pane="samples"]');
+    const leaf = node && (!node.children || !node.children.length);
+    if (!leaf) {
+      wrap.classList.remove("is-sample");
+      if (samples) samples.innerHTML = "";
+      return;
+    }
+    if (samples) samples.innerHTML = samplePane(node);
+    wrap.classList.add("is-sample");
   }
 
-  function metricChips(rnd) {
-    return METRICS.map(([key, label]) => {
-      const disabled = (key === "after" && !sideReady(rnd, "after")) || (key === "online" && !sideReady(rnd, "online")) || (key === "delta" && !sideReady(rnd, "after"));
-      return `<button type="button" class="ab-chip" data-act="metric" data-metric="${key}" aria-pressed="${state.metric === key}"${disabled ? " disabled" : ""}>${label}</button>`;
-    }).join("");
+  function mountOrbit(rnd, animate = true) {
+    const orbitHost = host.querySelector("#abOrbit");
+    if (!orbitHost) { orbitApi = null; return; }
+    const tree = orbitTree(rnd, state.orbitSide);
+    const ready = state.orbitSide === "before" ? sideReady(rnd, "before") : sideReady(rnd, "after") || sideReady(rnd, "online");
+    orbitApi = sunburst(orbitHost, tree, {
+      unit: ready ? "个问题" : "暂无结果", sort: true, state: state.orbit[state.orbitSide], animate: animate && !REDUCED,
+      onChange: (_focus, open) => showOrbitPane(open),
+    });
   }
 
   function trend(rnd, selectedCell) {
-    if (!selectedCell) return `<section class="ab-trend" aria-live="polite"><p class="ab-trend-hint">尚未选择聚类格</p></section>`;
+    if (!selectedCell) return "";
     const { row, col } = selectedCell;
     const rows = rounds.map((r, i) => ({
       label: roundLabel(r, i),
       before: treeCount(r, "before", row, col.prefix),
-      after: treeCount(r, "after", row, col.prefix),
-      online: treeCount(r, "online", row, col.prefix),
+      after: (() => {
+        const after = treeCount(r, "after", row, col.prefix);
+        const online = treeCount(r, "online", row, col.prefix);
+        return after == null && online == null ? null : num(after) + num(online);
+      })(),
     }));
     const cur = rows[state.round];
-    const ready = SIDES.filter((side) => sideReady(rnd, side));
-    let cols;
-    let series;
-    if (rows.length === 1) {
-      cols = ready.map((side) => SIDE_SHORT[side]);
-      series = ready.map((side, i) => ({
-        label: SIDE_SHORT[side], color: side === "before" ? "var(--t2)" : side === "after" ? "var(--accent)" : "var(--loc-ulq)",
-        values: cols.map((_, j) => (j === i ? cur[side] : null)),
-      }));
-    } else {
-      cols = rows.map((r) => r.label);
-      series = ready.map((side) => ({
-        label: SIDE_SHORT[side], color: side === "before" ? "var(--t2)" : side === "after" ? "var(--accent)" : "var(--loc-ulq)",
-        values: rows.map((r) => r[side]),
-      }));
-    }
-    const d = sideReady(rnd, "after") ? num(cur.after) - num(cur.before) : null;
-    const dcls = d == null ? "" : d > 0 ? " is-worse" : d < 0 ? " is-better" : " is-zero";
-    const vals = [`<span>前 <b class="num">${cur.before == null ? DASH : fmt(cur.before)}</b></span>`];
-    if (sideReady(rnd, "after")) vals.push(`<span>后 <b class="num">${fmt(cur.after)}</b></span>`, `<span class="ab-d${dcls}">Δ ${signed(d)}</span>`);
-    if (sideReady(rnd, "online")) vals.push(`<span>线上 <b class="num">${fmt(cur.online)}</b></span>`);
-    const legend = series.map((s) => `<span><i style="--c:${s.color}"></i>${s.label}</span>`).join("");
-    const aria = `AB 趋势：${row.name} · ${col.name}，${rows.map((r) => `${r.label} 前 ${r.before == null ? "无" : fmt(r.before)} 后 ${r.after == null ? "无" : fmt(r.after)} 线上 ${r.online == null ? "无" : fmt(r.online)}`).join("；")}`;
+    const cols = rows.length === 1 ? ["改版前", "改版后"] : rows.map((r) => r.label);
+    const series = rows.length === 1
+      ? [{ label: col.name, color: "var(--accent)", values: [cur.before, cur.after], samples: [{ round: rnd, sides: ["before"] }, { round: rnd, sides: ["after", "online"] }] }]
+      : [
+          { label: "改版前", color: "var(--t2)", values: rows.map((r) => r.before), samples: rounds.map((round) => ({ round, sides: ["before"] })) },
+          { label: "改版后", color: "var(--accent)", values: rows.map((r) => r.after), samples: rounds.map((round) => ({ round, sides: ["after", "online"] })) },
+        ];
+    const aria = `AB 趋势：${row.name} · ${col.name}，${rows.map((r) => `${r.label} 改版前 ${r.before == null ? "无" : fmt(r.before)} 改版后 ${r.after == null ? "无" : fmt(r.after)}`).join("；")}`;
     const width = host.getBoundingClientRect().width || 720;
-    const note = sideReady(rnd, "online")
-      ? "固定题集前 / 后可做配对差值；线上是另一批真实用户，只用于验证问题是否继续出现。"
-      : "固定题集前 / 后可做配对差值；线上窗口待回填。";
+    const chart = { height: 260, yAxis: true, endLabels: series.every((s) => s.values[s.values.length - 1] != null), xLabels: cols, xDates: cols, series, aria, formatValue: fmt };
+    cellTrendChart = { chart, row, node: col.prefix };
     return `<section class="ab-trend is-on" aria-live="polite">
-      <div class="ab-trendhead"><span class="ab-trendname">${esc(row.name)} · ${esc(col.name)}</span><code class="ab-trendpath">${esc(col.prefix)}</code><span class="ab-trendlegend">${legend}</span><span class="ab-trendvals">${vals.join("")}</span></div>
-      <div class="ab-trendplot">${plotSVG(Math.min(width, 1120), cols, series, aria)}</div>
-      <p class="ab-trendnote">${note}</p>
+      <div class="ab-trendhead"><span class="ab-trendname">${esc(row.name)} · ${esc(col.name)}</span></div>
+      ${trendSampleFrame(`<div class="mxt-plot" id="abCellTrend" data-own-tip>${lineTrendSVG({ ...chart, width }).html}</div>`)}
     </section>`;
   }
 
@@ -493,46 +471,66 @@ export function mountAB(host, data, state, tax) {
       else state.cell = null;
     }
     const back = '<button type="button" class="link ab-back" data-act="summary">← 返回汇总</button>'
-      + (rowPath.length > 1 || colPath.length > 1 ? '<button type="button" class="link ab-back" data-act="back">← 返回上一级</button>' : "");
+      + (rowPath.length > 1 || colPath.length > 1 ? '<button type="button" class="link ab-back ab-up" data-act="back">← 上一级</button>' : "");
     return `<section class="ab-matrixstep">
-      <div class="ab-matrixhead">${back}<div class="ab-metrics" role="group" aria-label="矩阵口径">${metricChips(rnd)}</div><span class="ab-matrixmeta">${esc(roundLabel(rnd, state.round))} · ${esc(rnd.released_at || dateRange(rnd.dates) || "")}</span></div>
-      <div class="mx-crumbs ab-mxcrumbs">${crumbs(rowPath, colPath)}</div>
+      <div class="ab-matrix-title">${back}<h3>聚类矩阵</h3></div>
       <div class="ab-mxshell" id="abMxShell">${matrixTableAb(view, rnd, state.metric, selectedIdx)}</div>
       ${trend(rnd, state.cell)}
     </section>`;
   }
 
   function render() {
+    cellTrendDrawer?.destroy();
+    cellTrendDrawer = null;
+    cellTrendChart = null;
     const rnd = rounds[state.round];
-    host.innerHTML = `<div class="abw">${roundBar(rnd)}${state.step === "matrix" ? matrix(rnd) : summary(rnd)}</div>`;
+    host.innerHTML = `<div class="abw">${roundBar()}${state.step === "matrix" ? matrix(rnd) : summary(rnd)}</div>`;
+    const sideSwitch = host.querySelector("#abOrbitSides");
+    if (sideSwitch) {
+      const control = segmented(sideSwitch, (side) => {
+        if (side === state.orbitSide) return;
+        state.orbitSide = side;
+        showOrbitPane(null);
+        const orbitHost = host.querySelector("#abOrbit");
+        if (!orbitHost) return;
+        mountOrbit(rnd, true);
+      });
+      control.set(state.orbitSide, { silent: true });
+    }
+    mountOrbit(rnd, true);
+    const chartHost = host.querySelector("#abCellTrend");
+    if (chartHost && cellTrendChart) {
+      if (actions.mountCellTrend) cellTrendDrawer = actions.mountCellTrend(chartHost, cellTrendChart);
+      else wireLineTrendChart(chartHost, lineTrendSVG({ ...cellTrendChart.chart, width: chartHost.clientWidth }));
+    }
     requestAnimationFrame(() => fitMatrix(host.querySelector(".abmatrix")));
   }
 
   host.addEventListener("click", (e) => {
+    const sample = e.target.closest("[data-sample]");
+    if (sample) {
+      actions.openSample && actions.openSample(sample.dataset.sample);
+      return;
+    }
     const action = e.target.closest("[data-act]");
     if (!action) return;
     const act = action.dataset.act;
     const rnd = rounds[state.round];
+    if (act === "orbitBack") { if (orbitApi) orbitApi.up(); return; }
     if (act === "round") {
       const i = Number(action.dataset.i);
       if (!(i >= 0 && i < rounds.length) || i === state.round) return;
       state.round = i;
       state.step = "summary";
-      state.metric = sideReady(rounds[i], "after") ? "delta" : "all";
+      state.metric = defaultMetric(rounds[i]);
+      state.orbit = { before: {}, after: {} };
+      state.orbitSide = "before";
       resetMatrix();
       render();
       return;
     }
     if (act === "matrix") { state.step = "matrix"; resetMatrix(); render(); return; }
     if (act === "summary") { state.step = "summary"; render(); return; }
-    if (act === "metric") {
-      const next = action.dataset.metric;
-      if (!METRICS.some(([k]) => k === next) || action.disabled) return;
-      state.metric = next;
-      state.cell = null;
-      render();
-      return;
-    }
     if (act === "back") {
       if (state.cols.length) state.cols.pop();
       else state.rows.pop();
@@ -540,13 +538,11 @@ export function mountAB(host, data, state, tax) {
       render();
       return;
     }
-    if (act === "rowcrumb") { state.rows = state.rows.slice(0, Number(action.dataset.depth) - 1); state.cell = null; render(); return; }
-    if (act === "colcrumb") { state.cols = state.cols.slice(0, Number(action.dataset.depth) - 1); state.cell = null; render(); return; }
     if (act === "focus") {
       const leaf = (Array.isArray(rnd.leaves) ? rnd.leaves : []).find((item) => item.id === action.dataset.leaf);
       if (!leaf) return;
       state.step = "matrix";
-      state.metric = "delta";
+      state.metric = defaultMetric(rnd);
       state.rows = [];
       state.cols = leaf.id.split(".").slice(0, -1);
       state.cell = null;

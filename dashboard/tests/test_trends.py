@@ -183,6 +183,8 @@ class TrendBuildTests(unittest.TestCase):
                              ["S1", "S1.M2", "S1.M2.1", "S1.M2.1.3", "S2", "S2.M1", "S2.M1.2"])
             # 干净样本也进 base；每个评测记录算一条，模型是独立维度。
             self.assertEqual(wencai["base"], [[0, 0, 0, 0, 1], [1, 1, 0, 1, 1], [1, 1, 1, 0, 1]])
+            self.assertEqual(wencai["trace_severity"]["daily"],
+                             [[0, 1, 0, 0, 0, 0], [1, 0, 1, 0, 0, 0]])
             self.assertEqual(wencai["releases"],
                              [{"date": "2026-11-01"}, {"date": "2026-11-02", "label": "策略复盘"}])
             self.assertEqual(wencai["generated_at"],

@@ -197,6 +197,23 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
   .eval-content .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
+.mx-card-head { align-items: center; margin-bottom: 6px; }
+.mx-head-views { display: flex; align-items: center; gap: 8px; }
+.mx-head-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+.mx-back,
+.mx-expand {
+  display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 9px;
+  border-radius: var(--r-chip); color: var(--muted); font-size: var(--fs-meta); white-space: nowrap;
+  transition: background var(--snap), color var(--snap), transform var(--spring);
+}
+.mx-back:hover, .mx-expand:hover { background: var(--hover); color: var(--ink); }
+.mx-back:active, .mx-expand:active { transform: scale(0.985); transition-duration: 120ms; }
+.mx-back[hidden] { display: none; }
+.mx-expand { background: var(--well); color: var(--ink-2); }
+.mx-expand svg { width: 14px; height: 14px; transition: transform 260ms cubic-bezier(0.16, 1, 0.3, 1); }
+.mx-expand[aria-expanded="true"] { background: var(--active); color: var(--ink); }
+.mx-expand[aria-expanded="true"] svg { transform: rotate(180deg); }
+
 /* ------------------------------------------------------------------ 聚类矩阵 (neutral heat)
    Three panes share one row grid: the scene labels, a horizontally scrollable pane of columns,
    and the 问题合计 column. The scene pane is as wide as its longest name and the column pane
@@ -223,30 +240,27 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
   grid-template-rows: var(--mx-headh) repeat(var(--rows), var(--mx-rowh));
 }
 #mxShell { position: relative; }
-/* A drill replaces the whole table - other rows, other columns, other height - so the two tables are
-   never painted together: the old one leaves, then the new one arrives while the block eases to its
-   height. Cross-fading them stacked the old and new column sets (different widths) on top of each
-   other, which read as a single broken table. */
-#mxShell.is-swapping { overflow: hidden; transition: height 280ms cubic-bezier(0.2, 0.7, 0.2, 1); }
-#mxShell.is-swapping .matrix { position: absolute; left: 0; right: 0; top: 0; }
-.matrix.is-out { opacity: 0; pointer-events: none; transition: opacity 110ms cubic-bezier(0.4, 0, 1, 1); }
-.matrix.is-in { opacity: 0; transform: translateY(4px); }
-.matrix.is-on { opacity: 1; transform: none; transition: opacity 170ms cubic-bezier(0.2, 0.7, 0.2, 1) 20ms, transform 220ms cubic-bezier(0.16, 1, 0.3, 1) 20ms; }
-/* Hover reads the row and column under the pointer; the rest only steps back a little. The
-   highlight rides the same 120ms snap as every other hover, so it lands with the pointer instead
-   of arriving after it. */
-.matrix.is-hover .cell:not(.is-hl) { opacity: 0.72; }
-.matrix.is-hover .rh:not(.is-hl), .matrix.is-hover .mh:not(.is-hl), .matrix.is-hover .rowtot:not(.is-hl) { opacity: 0.62; }
+#mxShell.is-swapping { overflow: hidden; }
+#mxShell.is-probing .matrix { opacity: 0.62; transform: scale(0.996); pointer-events: none; transition: opacity 140ms var(--ease-out), transform 140ms var(--ease-out); }
+.mx-trend-probe {
+  position: absolute; z-index: 3; top: 4px; right: 4px; padding: 4px 8px; border-radius: var(--r-chip);
+  background: var(--lift); color: var(--muted); font-size: var(--fs-meta); box-shadow: var(--shadow);
+}
+.mx-swap-probe {
+  position: absolute; z-index: 2; width: 22px; height: 22px; border-radius: 50%;
+  pointer-events: none; transform: translate(-50%, -50%);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 44%, transparent);
+}
+.mx-swap-panel { will-change: clip-path, transform, opacity; }
+/* The same surface step as the data-volume ledger: the table stays still and fully legible. */
 .matrix .rh.is-hl, .matrix .mh.is-hl { color: var(--ink); }
-.matrix .rh.is-hl { background: var(--hover); }
+.matrix .rh.is-hl, .matrix .mh.is-hl { background: var(--hover); }
 .matrix .rowtot.is-hl { color: var(--ink-2); }
-/* The hovered cell gets a soft ring on the card surface rather than a hard outline, so it settles
-   in with the crosshair instead of snapping on top of it. */
-.matrix .cell.is-cur { box-shadow: 0 0 0 1.5px var(--card), 0 0 0 2.5px color-mix(in oklab, var(--ink) 28%, transparent); }
+.matrix .cell.is-cur { box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ink) 36%, transparent); }
 .matrix .mh {
   display: flex; align-items: flex-end; justify-content: center; gap: 4px; min-width: 0;
   padding-bottom: 6px; font-size: var(--fs-meta); line-height: 1.35; color: var(--muted); white-space: nowrap;
-  transition: opacity var(--snap), color var(--snap);
+  transition: background var(--snap), color var(--snap);
 }
 .matrix .rh {
   display: flex; align-items: center; gap: 8px; min-width: 0; height: var(--mx-rowh); padding: 0 8px; margin-left: -8px;
@@ -269,10 +283,10 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .matrix .cell {
   display: grid; place-items: center; height: var(--mx-rowh); border-radius: 6px; font-size: var(--fs-small); color: var(--ink-2);
   background: color-mix(in oklab, var(--ink) calc(var(--v) * 100%), transparent);
-  transition: opacity var(--snap), transform var(--snap), box-shadow var(--snap);
+  transition: background var(--snap), box-shadow var(--snap), transform var(--spring);
 }
 .matrix .cell:not(.is-empty) { cursor: pointer; }
-.matrix .cell:not(.is-empty):active { transform: scale(0.97); }
+.matrix .cell:not(.is-empty):active { transform: scale(0.985); transition-duration: 120ms; }
 .matrix .cell.is-empty { background: none; }
 .matrix .cell.hot { color: var(--card); }
 .matrix .rowtot {
@@ -283,25 +297,114 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .matrix .rowtot i { height: 4px; border-radius: 2px; background: var(--t2); }
 .matrix .rowtot-head { display: flex; align-items: flex-end; justify-content: flex-end; padding-bottom: 6px; font-size: var(--fs-meta); line-height: 1.35; color: var(--muted); white-space: nowrap; }
 
-/* matrix drill: both axes swap the table; the paths sit in the card head */
-.mx-crumbs { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 18px; margin-left: auto; font-size: var(--fs-meta); }
-.mx-crumb-group { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
-.mx-crumb-label { color: var(--faint); }
-.mx-crumb { color: var(--muted); white-space: nowrap; transition: color var(--snap); }
-.mx-crumb:hover { color: var(--ink); }
-.mx-sep { color: var(--faint); font-style: normal; }
-.mx-crumbs b { color: var(--ink-2); font-weight: var(--w-medium); }
-/* 趋势图只留问题路径：用 accent 色 + 细框把当前问题聚类拎出来，场景名放到上面的「本场景」开关。 */
-.mx-crumb-group.is-key {
-  display: flex; align-items: baseline; gap: 6px; padding: 3px 10px; border-radius: 8px;
-  background: var(--accent-soft);
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 34%, transparent);
+/* Matrix disclosures share the sunburst motion. Only surfaces and transforms move. */
+.mx-perspective[hidden], .mx-issue-trends-shell[hidden] { display: none; }
+.mx-perspective, .mx-issue-trends-shell { overflow-anchor: none; }
+.mx-perspective-inner, .mx-issue-trends-shell > .mpt { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--well-2); }
+.mx-issue-loading .empty { min-height: 180px; display: grid; place-items: center; padding: 0; }
+.mx-card.is-panel-moving { background: transparent; box-shadow: none; }
+.mx-card.is-panel-moving > .mx-face { position: relative; z-index: 1; }
+.mx-motion-surface { position: absolute; top: 0; left: 0; width: 100%; border-radius: inherit; background: var(--card); box-shadow: var(--shadow); transform-origin: 50% 0; pointer-events: none; }
+.mxp { display: grid; gap: 16px; min-width: 0; }
+.mxp-lenses { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.mxp-lens { min-width: 0; padding: 16px; border-radius: 12px; background: var(--well); }
+.mxp-lens.is-depth, .mxp-lens.is-speed { display: flex; flex-direction: column; }
+.mxp-lens header { display: flex; align-items: baseline; gap: 8px; min-width: 0; margin-bottom: 12px; }
+.mxp-lens header > b { flex: none; font-size: var(--fs-body); font-weight: var(--w-medium); }
+.mxp .is-up { color: var(--sev-1); }
+.mxp .is-down { color: var(--loc-ulq); }
+.mxp-track { height: 6px; min-width: 0; border-radius: 2px; background: var(--well-2); overflow: hidden; }
+.mxp-track i { display: block; height: 100%; min-width: 2px; border-radius: inherit; background: var(--c, var(--accent)); }
+.mxp-track i[style*="width:0%"] { min-width: 0; }
+.mxp-severity { display: grid; gap: 8px; }
+.mxp-severity-row { display: grid; grid-template-columns: 40px minmax(16px, 1fr) 60px 48px; gap: 8px; align-items: center; min-height: 24px; font-size: 12px; }
+.mxp-severity-row > b { text-align: right; color: var(--ink-2); font-weight: var(--w-medium); }
+.mxp-severity-row > span:last-child { text-align: right; color: var(--muted); }
+.mxp-severity-head { color: var(--muted); font-size: 11px; }
+.mxp-severity-head > span:nth-last-child(2) { text-align: right; }
+.mxp-severity-total { border-top: 1px solid var(--well-2); padding-top: 8px; }
+.mxp-severity-rule { margin: 12px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.mxp-levels { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+.mxp-levels .mxt-chip { cursor: pointer; }
+.mxp-levels .mxt-chip:hover { transform: none; }
+.mxp-lens .mxp-rate-chart { height: auto; min-height: 232px; flex: 1; display: grid; align-items: center; }
+.mxp-rate-chart svg { height: auto; }
+.mxp-rate-chart .empty { padding: 24px 0; }
+.mxp-chart-panel { min-width: 0; padding-top: 4px; overflow-x: auto; scrollbar-width: thin; }
+.mxp-heat { display: grid; gap: var(--tile-gap); min-width: 684px; }
+.mxp-heat-head, .mxp-heat-row { display: grid; grid-template-columns: minmax(88px, 120px) minmax(0, 1fr) 60px 48px; gap: 12px; align-items: center; }
+.mxp-heat-head { min-height: 28px; color: var(--muted); font-size: 11px; }
+.mxp-heat-head > span:nth-last-child(-n+2) { text-align: right; }
+.mxp-heat-dates, .mxp-heat-days.tiles { display: grid; grid-template-columns: repeat(30, minmax(0, 1fr)); gap: var(--tile-gap); grid-auto-rows: auto; }
+.mxp-heat-dates { font-size: 11px; white-space: nowrap; }
+.mxp-heat-dates > span { overflow: visible; }
+.mxp-heat-row { min-height: 0; font-size: 12px; line-height: 1; }
+.mxp-heat-row > b { text-align: right; color: var(--ink-2); font-weight: var(--w-medium); }
+.mxp-heat-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+.mxp-heat-name:is(button) { display: flex; align-items: center; gap: 8px; padding: 0 4px; margin-left: -4px; min-height: 100%; border-radius: 4px; text-align: left; transition: background var(--snap), color var(--snap); }
+.mxp-heat-name:is(button):hover { background: var(--hover); color: var(--ink); }
+.mxp-heat-name .mx-caret { flex: none; width: 4px; height: 4px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(-45deg); color: var(--muted); }
+.mxp-heat-nav { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--muted); font-size: var(--fs-meta); }
+.mxp-heat-days.tiles > span { width: 100%; height: auto; aspect-ratio: 1; min-width: 0; cursor: default; }
+.mxp-delta { text-align: right; color: var(--muted); }
+.mxp-chart-empty { display: grid; place-items: center; min-height: 200px; color: var(--faint); font-size: var(--fs-meta); }
+.mx-trend-loading .empty { min-height: 220px; display: grid; place-items: center; padding: 0; }
+
+/* Global problem-type trends: one time curve per type, all scenes aggregated. */
+.mpt { display: grid; gap: 12px; min-width: 0; }
+.mpt-toolbar { scroll-margin-top: 76px; display: flex; align-items: center; gap: 10px 12px; min-width: 0; flex-wrap: wrap; }
+.mpt-range { height: 30px; padding: 2px; }
+.mpt-range button { padding: 0 10px; font-size: var(--fs-meta); }
+.mpt-range .seg-knob { top: 2px; bottom: 2px; }
+.mpt-path { display: flex; align-items: center; gap: 4px; min-width: 0; color: var(--muted); font-size: var(--fs-meta); }
+.mpt-path[hidden] { display: none; }
+.mpt-crumb { min-width: 0; overflow: hidden; padding: 2px 4px; border-radius: 5px; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.mpt-crumb:hover, .mpt-crumb[aria-current="page"] { background: var(--well); color: var(--ink-2); }
+.mpt-path i { color: var(--faint); font-style: normal; }
+.mpt-back { flex: none; width: 24px; height: 24px; border-radius: 6px; color: var(--muted); }
+.mpt-back:hover { background: var(--hover); color: var(--ink); }
+.mpt-meta { margin-left: auto; color: var(--faint); font-size: var(--fs-meta); white-space: nowrap; }
+.mpt-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(205px, 1fr)); gap: 8px;
+  align-items: start; align-content: start; padding: 0; overflow: visible; scroll-margin-top: 116px;
 }
-.mx-crumb-group.is-key .mx-crumb-label { color: color-mix(in oklab, var(--accent) 55%, var(--muted)); }
-.mx-crumb-group.is-key .mx-crumb { color: var(--accent); }
-.mx-crumb-group.is-key b { color: var(--accent); }
-.mx-crumb-group.is-key .mx-sep { color: color-mix(in oklab, var(--accent) 45%, var(--faint)); }
-.mx-tip-pats { margin-top: 4px; }
+.mpt-card {
+  display: grid; gap: 8px; min-width: 0; padding: 12px; border-radius: 12px; background: var(--well);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ink) 3%, transparent);
+  color: inherit; text-align: left;
+}
+.mpt-card.is-expanded { grid-column: 1 / -1; padding: 16px; }
+.mpt-card > header { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.mpt-card h4 { min-width: 0; overflow: hidden; color: var(--ink-2); font-size: 12.5px; line-height: 1.4; font-weight: var(--w-medium); text-overflow: ellipsis; white-space: nowrap; }
+.mpt-card.is-expanded h4 { white-space: normal; font-size: var(--fs-body); }
+.mpt-action.icon-btn { flex: none; width: 24px; height: 24px; }
+.mpt-action svg { width: 14px; height: 14px; }
+.mpt-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mpt-chart { min-width: 0; height: 76px; }
+.mpt-chart:is(button) { display: block; width: 100%; border-radius: 4px; cursor: pointer; }
+.mpt-chart:is(button):focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.mpt-chart.mpt-chart-detail { height: auto; min-height: 280px; }
+.mpt-card .mpt-chart-detail svg { height: auto; min-height: 280px; }
+.mpt-chart svg { display: block; width: 100%; height: 100%; }
+.mpt-chart .mxt-xlab { font-size: 11px; }
+.mpt-card > footer { display: flex; min-height: 28px; align-items: center; justify-content: space-between; gap: 8px; color: var(--faint); font-size: 10.5px; }
+.mpt-card > footer b { color: var(--ink-2); font-weight: var(--w-medium); }
+.mpt-children { margin-left: auto; }
+.mpt-empty { grid-column: 1 / -1; display: grid; place-items: center; min-height: 180px; color: var(--faint); font-size: var(--fs-meta); }
+@media (max-width: 700px) {
+  .mx-card-head { align-items: center; }
+  .mx-head-actions { width: 100%; justify-content: flex-start; margin-left: 0; }
+  .mpt-toolbar { align-items: flex-start; }
+  .mpt-path { order: 3; width: 100%; overflow-x: auto; }
+  .mpt-meta { margin-left: 0; }
+}
+
+@media (max-width: 600px) {
+  .mxp-lenses { grid-template-columns: minmax(0, 1fr); }
+  .mxp-heat-head, .mxp-heat-row { grid-template-columns: 76px minmax(0, 1fr) 48px; gap: 8px; }
+  .mxp-heat-head > span:last-child, .mxp-heat-row > .mxp-delta { display: none; }
+  .mxp-heat-dates > span:nth-child(2n) { visibility: hidden; }
+}
 
 /* 格子 → 就地趋势：一张按时间轴的多折线图。口径 / 时间 / 场景是单选，来源 / 模型 / 等级是多选；
    每条线的身份直接标在右端（不再用 legend）。 */
@@ -367,6 +470,7 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .mxt-area { pointer-events: none; }
 .mxt-line { fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .mxt-band { pointer-events: none; }
+.mxt-nebula-dot { pointer-events: none; }
 .mxt-dot { stroke: var(--card); stroke-width: 1.2; }
 .mxt-rel line { stroke: var(--faint); stroke-width: 1; stroke-dasharray: 3 3; }
 .mxt-rel text { fill: var(--muted); font-size: 10px; text-anchor: middle; }
@@ -620,6 +724,32 @@ body.is-modal { overflow: hidden; }
 .gl-r b { font-size: var(--fs-meta); font-weight: var(--w-medium); color: var(--muted); }
 .gl-r:hover, .gl-r.is-hl { background: var(--hover); color: var(--ink); }
 .gl-r.is-inert { cursor: default; }
+/* Trend points open the existing case ledger inside the chart's own gx slot. */
+.mxt-samples { overflow: hidden; }
+.mxt-sample-layout.gx-in { position: relative; inset: auto; grid-template-columns: minmax(0, 1fr); align-items: center; }
+.mxt-sample-layout.is-open { grid-template-columns: minmax(0, 1fr) clamp(188px, 36%, 280px); }
+.mxt-sample-layout > .gx-map { min-height: 280px; display: grid; align-items: center; }
+.mxp-lens .mxt-samples { flex: 1; }
+.mxp-lens .mxt-sample-layout > .gx-map { min-height: 252px; }
+.mxt-sample-side.gx-side { display: flex; position: absolute; inset: 0 0 0 auto; width: clamp(188px, 36%, 280px); padding: 0 0 0 12px; gap: 8px; border-left: 1px solid var(--well-2); background: var(--card); animation: none; overflow: hidden; }
+.mxp-lens .mxt-sample-side, .mpt-card .mxt-sample-side { background: var(--well); }
+.mxt-sample-side[hidden] { display: none; }
+.mxt-sample-side .gl-r, .mxt-sample-side .gl-strip i { animation: none; }
+.mxt-sample-side.gx-side .empty { position: static; min-height: 80px; flex: 1; }
+.mxt-sample-side .gx-list { overscroll-behavior: contain; scrollbar-width: thin; mask-image: none; margin-right: 0; }
+.mxt-sample-side .gl-sum b { font-size: 18px; }
+.mxt-sample-head { display: flex; align-items: center; justify-content: space-between; gap: 4px; min-width: 0; font-size: var(--fs-meta); }
+.mxt-sample-head > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+.mxt-sample-note { color: var(--muted); font-size: 11px; line-height: 1.4; margin: 0; }
+.mxt-sample-more { align-self: flex-start; }
+.has-sample-picks { cursor: crosshair; }
+.has-sample-picks [data-trend-point] { cursor: pointer; }
+.has-sample-picks [data-trend-point]:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+@container (max-width: 639px) {
+  .mxt-sample-layout.is-open { grid-template-columns: minmax(0, 1fr); }
+  .mxt-sample-layout.is-open > .gx-map { opacity: 0; transform: translateX(-100%); pointer-events: none; }
+  .mxt-sample-side.gx-side { display: flex; width: 100%; border-left: 0; padding-left: 0; }
+}
 .gx[hidden], .compact { display: none; }
 .gx canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .gx .empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 0; }

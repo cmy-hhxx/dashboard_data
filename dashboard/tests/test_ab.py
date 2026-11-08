@@ -85,6 +85,10 @@ class PayloadTests(unittest.TestCase):
             self.assertIsNone(rnd["sides"]["after"])
             self.assertIsNone(rnd["sides"]["online"])
             self.assertEqual(rnd["sides"]["before"], {"traces": 2, "hits": 3})
+            self.assertEqual(rnd["sample_refs"]["before"][0], {
+                "trace": "t1", "model": "expert", "task": "未接入分类体系", "sub": "", "paths": ["S1.M2.1"],
+            })
+            self.assertEqual(rnd["sample_refs"]["after"], [])
 
             nodes = {node["id"]: node for node in rnd["nodes"]}
             self.assertEqual(sorted(nodes), ["S1", "S1.M2", "S1.M2.1", "S1.M2.1.3", "S2", "S2.M1", "S2.M1.2"])
@@ -115,6 +119,8 @@ class PayloadTests(unittest.TestCase):
             round_dir(root, after=[("t1", "S2.M1.2"), ("t2", "S1.M2.1")])
             rnd = self.payload(root)["rounds"][0]
             self.assertEqual(rnd["sides"]["after"], {"traces": 2, "hits": 2})
+            self.assertEqual(rnd["sample_refs"]["after"][0]["paths"], ["S2.M1.2"])
+            self.assertEqual(rnd["sample_refs"]["after"][0]["trace"], "t1")
             nodes = {node["id"]: node for node in rnd["nodes"]}
             self.assertEqual((nodes["S2.M1.2"]["before"], nodes["S2.M1.2"]["after"]), (1, 1))
             self.assertEqual((nodes["S1.M2.1"]["before"], nodes["S1.M2.1"]["after"]), (2, 1))
@@ -122,6 +128,16 @@ class PayloadTests(unittest.TestCase):
             leaves = {leaf["id"]: leaf for leaf in rnd["leaves"]}
             self.assertEqual((leaves["S1.M2.1.3"]["before"], leaves["S1.M2.1.3"]["after"]), (1, 0))
             self.assertEqual(leaves["S1.M2.1.3"]["model_after"], {})
+
+    def test_baseline_sample_refs_locate_a_trace_inside_its_session(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            round_dir(root)
+            samples = [("session-detail", {"meta": {}, "attribution": {"turns": [{"trace_id": "t1"}]}},
+                        {"tid": "session-id", "m": "aime_expert"}, {})]
+            rnd = ab_test.ab_payload(root, "aime", samples=samples)["rounds"][0]
+            self.assertEqual(rnd["sample_refs"]["before"][0]["slug"], "session-detail")
+            self.assertNotIn("slug", rnd["sample_refs"]["before"][1])
 
     def test_round_metadata_and_signature(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -162,6 +178,7 @@ class PayloadTests(unittest.TestCase):
             rnd = ab_test.ab_payload(root, "aime", samples=samples)["rounds"][0]
             self.assertEqual(rnd["sides"]["online"],
                              {"traces": 3, "hits": 2, "from": "2026-11-06", "to": "2026-11-09", "user_type": "real"})
+            self.assertEqual([ref["slug"] for ref in rnd["sample_refs"]["online"]], ["online-1", "online-3"])
             leaves = {leaf["id"]: leaf for leaf in rnd["leaves"]}
             self.assertEqual((leaves["S1.M2.1"]["online"], leaves["S2.M1.2"]["online"]), (1, 1))
             nodes = {node["id"]: node for node in rnd["nodes"]}
