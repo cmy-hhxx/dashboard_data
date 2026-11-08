@@ -63,6 +63,14 @@ curl -s http://10.217.219.2:2221/healthz | jq
 `running` / `seconds` / `error`）。发布本身因此只要几秒到十几秒，ceph 再慢也不拖慢上线。
 需要「发布前先构建」的老行为时加 `EVAL_DEPLOY_BUILD=1`。
 
+- SSH 边缘会间歇性拒绝连接，`deploy.sh` 的每步（含首次 mkdir / rsync / 启停 / 健康检查）都带重试；
+  重试次数用 `EVAL_DEPLOY_RETRIES`（默认 6），健康检查等待秒数用 `EVAL_DEPLOY_HEALTH_TRIES`（默认 150×2s）。
+- **冷启动副本（首次部署 / 没有 payload）**：`server.py` 会先构建完再开始监听，`/healthz` 在这段时间不可达，
+  所以健康检查要留足时间（本次预发冷构建约 3–5 分钟）。
+- `start.sh` 先看 `server.pid` 是否存活再决定是否启动（构建期间 healthz 还没起，不能只看 healthz，
+  否则会拉起第二个 server 再跑一份 build）；`stop.sh` 会连带清理本目录的 `build.py` 孤儿进程，
+  避免两个 build 抢 `cache/build.sqlite3`（报 `database is locked`）。
+
 远端不是 git 仓库，回滚 = 切旧 commit 重新部署；构建失败不阻断发布，服务继续用旧数据。
 
 **为什么以前那么慢**：`input_files()` 每次都用 `rglob` 走一遍 `eval_input`（弗吉尼亚 52 个目录、ceph 上
