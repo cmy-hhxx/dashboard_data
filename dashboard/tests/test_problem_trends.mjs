@@ -244,9 +244,10 @@ test("AB overview is three cards whose four flows add up to the net paired chang
     assert.equal((host.innerHTML.match(/data-act="abcard"/g) || []).length, 3, "each card can take the row");
     assert.match(host.innerHTML, /class="ab-bridge-main"><b class="num is-better">−60<\/b><small>个问题<\/small>/);
     assert.match(host.innerHTML, /<span class="ab-bridge-pair num">125<i>→<\/i>65<\/span>/);
-    const flows = [...host.innerHTML.matchAll(/class="ab-flow ([^"]+)"[\s\S]*?<span>([^<]+)<\/span>[\s\S]*?<b class="num">([^<]+)<\/b>/g)].map((m) => [m[2], m[3]]);
-    assert.deepEqual(flows, [["消除", "−50"], ["减少", "−40"], ["增加", "+20"], ["新增", "+10"]]);
-    assert.doesNotMatch(host.innerHTML, /ab-scope|ab-mxnote|<h3|<h4/);
+    const flows = [...host.innerHTML.matchAll(/class="ab-wf-label"><span>([^<]+)<\/span><b class="num" data-flow="([^"]+)">([^<]+)<\/b>/g)].map((m) => [m[1], m[2], m[3]]);
+    assert.deepEqual(flows, [["消除", "clear", "−50"], ["减少", "down", "−40"], ["增加", "up", "+20"], ["新增", "add", "+10"]]);
+    assert.equal((host.innerHTML.match(/class="ab-wf-col /g) || []).length, 4, "one floating step per flow");
+    assert.doesNotMatch(host.innerHTML, /ab-flow-bar|ab-scope|ab-mxnote|<h3|<h4/);
   } finally {
     globalThis.window = previousWindow;
     globalThis.requestAnimationFrame = previousRAF;

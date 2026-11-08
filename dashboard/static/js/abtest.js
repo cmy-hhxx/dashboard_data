@@ -63,11 +63,13 @@ export function abRoundsHTML(rounds, active) {
 }
 
 /* Reuse 评测量 bars, grouping the two post-release populations without mixing them.  The bars are
-   one of three overview cards, so each column prints its own count and the volume behind it. */
+   one of three overview cards, so each column prints its own count and the volume behind it.
+   The release boundary is one hairline of release red; the two post-release columns sit closer to
+   each other than to the baseline, so the card reads as "one baseline, then the release pair". */
 export function abComparisonHTML(rnd) {
   const labels = { before: "同题基线", after: "同题复测", online: "线上真实" };
   const max = Math.max(1, ...SIDES.map((side) => num(rnd.sides?.[side]?.hits)));
-  const columns = SIDES.map((side) => {
+  const column = (side) => {
     const result = rnd.sides?.[side];
     const n = result ? num(result.hits) : null;
     const traces = result?.traces == null ? DASH : fmt(result.traces);
@@ -81,8 +83,11 @@ export function abComparisonHTML(rnd) {
         : `<div class="evbar" style="height:${h}px;--c:${SIDE_TONE[side]}" data-tip="${SIDE_SHORT[side]} · ${labels[side]}|${fmt(n)} 个问题|${traces} ${volumeLabel}"><i style="height:100%"></i></div>`}</div>
       <span class="evdate">${labels[side]}</span><small class="ab-result-volume"><b class="num">${traces}</b><span>${volumeLabel}</span></small>
     </div>`;
-  }).join("");
-  return `<div class="ab-results"><header><span>问题数量</span></header><div class="ab-result-groups"><span>改版前</span><span>改版后</span></div><div class="evrow ab-result-bars" style="--n:3;--bar-h:${BAR_H}px">${columns}</div></div>`;
+  };
+  return `<div class="ab-results"><header><span>问题数量</span></header><div class="ab-result-groups" style="--bar-h:${BAR_H}px">
+    <div class="ab-result-group is-before"><span>改版前</span>${column("before")}</div>
+    <div class="ab-result-group is-post"><span>改版后</span><div class="ab-result-post">${column("after")}${column("online")}</div></div>
+  </div></div>`;
 }
 
 function crossFor(rnd, side) {
@@ -448,21 +453,43 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     return flows;
   }
 
+  /* 变化构成：一根从左到右的桥，而不是四根各自起跑的长条。  Each problem the release touched
+     moves the running total once, so the four steps walk 改版前 → 改版后 and the head keeps the two
+     totals.  The plot is zoomed to the change band (totals in the head, values on every step), so a
+     483 out of 3288 still reads; the dashed step lines carry the running total between columns. */
   function bridgeCard(rnd) {
     const before = num(rnd.sides?.before?.hits);
     const after = num(rnd.sides?.after?.hits);
     const net = after - before;
-    const flows = changeFlows(rnd);
-    const max = Math.max(1, ...flows.map((flow) => flow.n));
-    const rows = flows.map((flow) => `<div class="ab-flow ${flow.dir}" title="${esc(`${flow.name} ${signed(flow.sign * flow.n)} 个问题 · ${flow.count} 个问题类型`)}">
-      <span>${flow.name}</span>
-      <i class="ab-flow-bar"><b style="--w:${flow.n ? Math.max(2, (100 * flow.n) / max).toFixed(1) : 0}%"></b></i>
-      <b class="num">${signed(flow.sign * flow.n)}</b>
-    </div>`).join("");
+    let level = before;
+    const steps = changeFlows(rnd).map((flow) => {
+      const from = level;
+      level += flow.sign * flow.n;
+      return { ...flow, from, to: level, delta: flow.sign * flow.n };
+    });
+    const levels = [before, ...steps.map((step) => step.to)];
+    const lo = Math.min(...levels);
+    const hi = Math.max(...levels);
+    const pad = Math.max(1, (hi - lo) * 0.08);
+    const floor = lo - pad;
+    const span = Math.max(1, hi + pad - floor);
+    const y = (value) => (100 * (1 - (value - floor) / span)).toFixed(2);
+    const cols = steps.map((step, i) => {
+      const top = Math.min(Number(y(step.from)), Number(y(step.to)));
+      const h = Math.abs(Number(y(step.from)) - Number(y(step.to)));
+      const bar = step.n ? `<i class="ab-wf-bar" style="top:${top.toFixed(2)}%;height:${h.toFixed(2)}%"></i>` : "";
+      const link = i < steps.length - 1 ? `<span class="ab-wf-link" style="top:${y(step.to)}%"></span>` : "";
+      return `<div class="ab-wf-col ${step.dir}" data-flow="${step.key}" title="${esc(`${step.name} ${signed(step.delta)} 个问题 · ${step.count} 个问题类型`)}">${bar}${link}</div>`;
+    }).join("");
+    const labels = steps.map((step) => `<div class="ab-wf-label"><span>${step.name}</span><b class="num" data-flow="${step.key}">${signed(step.delta)}</b></div>`).join("");
+    const aria = `变化构成（纵轴只展开变化区间）：${steps.map((step) => `${step.name} ${signed(step.delta)}`).join("，")}；${fmt(before)} → ${fmt(after)}`;
     return `<section class="ab-card ab-bridge-card${state.overviewOpen === "bridge" ? " is-deep" : state.overviewOpen ? " is-compact" : ""}" data-abcard="bridge" data-abname="变化构成">
       <div class="ab-card-top"><span class="ab-bridge-pair num">${fmt(before)}<i>→</i>${fmt(after)}</span>${pushButton("bridge", "变化构成")}</div>
       <div class="ab-bridge-main"><b class="num${net < 0 ? " is-better" : net > 0 ? " is-worse" : ""}">${signed(net)}</b><small>个问题</small></div>
-      <div class="ab-flows">${rows}</div>
+      <div class="ab-wf" role="img" aria-label="${esc(aria)}" title="纵轴只展开变化区间 ${fmt(lo)}–${fmt(hi)}，未从 0 起">
+        <div class="ab-wf-plot">${cols}</div>
+        <div class="ab-wf-labels">${labels}</div>
+      </div>
     </section>`;
   }
 
@@ -512,28 +539,43 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
       }));
   }
 
+  /* 前 / 后各一个点、中间一根连线（哑铃），两条轴都画在 0–max 的同一把尺上：读数不再只剩 |Δ|，
+     两行之间的差距也能直接比出来。  0…max 的公共刻度由 summary() 传进来，两块面板因此可比。 */
   function rankPanel(title, rows, tone, max, total, rnd) {
     const body = rows.length
-      ? rows.map((row) => `<button type="button" class="ab-rankrow ${tone}" data-act="focus" data-leaf="${esc(row.leaf.id)}" title="${esc(`${row.leaf.id} · 前 ${fmt(row.before)} → 后 ${fmt(row.after)} · 线上 ${row.online == null ? DASH : fmt(row.online)}`)}">
+      ? rows.map((row) => {
+          const from = Math.min(100, Math.max(0, (100 * row.before) / max));
+          const to = Math.min(100, Math.max(0, (100 * row.after) / max));
+          const left = Math.min(from, to);
+          const width = Math.abs(to - from);
+          return `<button type="button" class="ab-rankrow ${tone}" data-act="focus" data-leaf="${esc(row.leaf.id)}" title="${esc(`${row.leaf.id} · 前 ${fmt(row.before)} → 后 ${fmt(row.after)} · 线上 ${row.online == null ? DASH : fmt(row.online)}`)}">
           <span class="ab-rankname">${esc(row.leaf.name || row.leaf.id)}</span>
-          <span class="ab-rankbar"><i style="--w:${Math.max(3, (100 * Math.abs(row.d)) / max).toFixed(1)}%"></i></span>
-          <b class="num">${row.before} → ${row.after}</b>
+          <span class="ab-dumbbell" aria-hidden="true">
+            <i class="ab-db-rule"></i>
+            <i class="ab-db-link" style="left:${left.toFixed(1)}%;width:${Math.max(width, 0.6).toFixed(1)}%"></i>
+            <i class="ab-db-dot is-from" style="left:${from.toFixed(1)}%"></i>
+            <i class="ab-db-dot is-to" style="left:${to.toFixed(1)}%"></i>
+          </span>
+          <b class="num">${fmt(row.before)} → ${fmt(row.after)}</b>
           <small>${row.online > 0 ? `线上 ${fmt(row.online)}` : row.onlineMatched ? "线上同簇" : ""}</small>
-        </button>`).join("")
+        </button>`;
+        }).join("")
       : `<p class="ab-rankempty">${sideReady(rnd, "after") || sideReady(rnd, "online") ? "暂无变化" : "改版后暂无结果"}</p>`;
-    return `<section class="ab-rank ${tone}"><header><span>${title}</span><b class="num">${total}</b></header>${body}</section>`;
+    return `<section class="ab-rank ${tone}"><header><span>${title}</span><b class="num">${total}</b></header>
+      <div class="ab-rank-axis" aria-hidden="true"><div class="ab-rank-axis-track"><span>0</span><span>${fmt(max)}</span></div></div>
+      ${body}</section>`;
   }
 
   function summary(rnd) {
     const changesNow = changes(rnd);
     const improved = changesNow.filter((x) => x.d < 0).sort((a, b) => a.d - b.d || b.before - a.before);
     const worsened = changesNow.filter((x) => x.d > 0).sort((a, b) => b.d - a.d || b.after - a.after);
-    const max = Math.max(1, ...changesNow.map((x) => Math.abs(x.d)));
+    const max = Math.max(1, ...changesNow.map((x) => Math.max(x.before, x.after)));
     const onlineRows = (Array.isArray(rnd.leaves) ? rnd.leaves : []).filter((leaf) => num(leaf.online) > 0);
     changesNow.forEach((row) => { row.onlineMatched = onlineRows.some((leaf) => pathRelated(row.leaf.id, leaf.id)); });
     return `<section class="ab-summary">
       ${overview(rnd)}
-      <div class="ab-change-head"><span title="同题变化：同题复测 − 同题基线；线上真实只在「问题数量」和矩阵的「同题+线上变化 / 发版后」里计入">问题变化（同题）</span><span class="ab-change-pills"><i class="is-better"></i>改善 <b class="num">${fmt(improved.length)}</b><i class="is-worse"></i>变差 <b class="num">${fmt(worsened.length)}</b></span></div>
+      <div class="ab-change-head"><span title="同题变化：同题复测 − 同题基线；线上真实只在「问题数量」和矩阵的「同题+线上变化 / 发版后」里计入">问题变化（同题）</span><span class="ab-change-pills"><i class="is-from"></i>改版前<i class="is-to"></i>改版后<i class="is-better"></i>改善 <b class="num">${fmt(improved.length)}</b><i class="is-worse"></i>变差 <b class="num">${fmt(worsened.length)}</b></span></div>
       <div class="ab-summary-grid">${rankPanel("变好的问题", improved.slice(0, 5), "is-better", max, improved.length, rnd)}${rankPanel("变差的问题", worsened.slice(0, 5), "is-worse", max, worsened.length, rnd)}</div>
       <div class="ab-summary-foot"><button type="button" class="link ab-next" data-act="matrix">下一步：查看聚类矩阵 →</button></div>
     </section>`;
