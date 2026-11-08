@@ -4,7 +4,8 @@
    `state` ({focus, open} node ids) is kept up to date so a redraw on fresh data lands on the same
    ring; `onChange(focus, open)` reports every move. `inert(node)` returns a short note for a branch with
    nothing behind it: its arc and row stay put when clicked and carry the note in their tip instead. */
-import { esc, fmt, pct, REDUCED, hideTip } from "./core.js";
+import { esc, fmt, pct, hideTip } from "./core.js";
+import { sunburstTween } from "./motion.js";
 
 const S = 220;
 const C = S / 2;
@@ -90,7 +91,7 @@ export function sunburst(host, tree, { unit = "", sort = false, state = null, an
   const center = host.querySelector(".sb-c");
   const list = host.querySelector(".sb-list");
   const els = new Map();
-  let raf = 0;
+  let cancelMotion = () => {};
 
   function layout() {
     const out = [];
@@ -195,7 +196,7 @@ export function sunburst(host, tree, { unit = "", sort = false, state = null, an
       jobs.push({ el, from: el._g, to: { ...el._g, r1: el._g.r0 }, o0: Number(el.style.opacity || 1), o1: 0, drop: id });
     });
     chrome(target);
-    cancelAnimationFrame(raf);
+    cancelMotion();
     const finish = () =>
       jobs.forEach((j) => {
         if (j.drop && !j.el._t) {
@@ -210,18 +211,7 @@ export function sunburst(host, tree, { unit = "", sort = false, state = null, an
         j.el.setAttribute("d", arcD(g));
         j.el.style.opacity = String(lerp(j.o0, j.o1, Math.min(1, k * 1.5)));
       });
-    if (!animate || REDUCED) {
-      frame(1);
-      return finish();
-    }
-    const t0 = performance.now();
-    const step = (now) => {
-      const p = Math.min(1, (now - t0) / 620);
-      frame(1 - Math.pow(1 - p, 4));
-      if (p < 1) raf = requestAnimationFrame(step);
-      else finish();
-    };
-    raf = requestAnimationFrame(step);
+    cancelMotion = sunburstTween(frame, { animate, finish });
   }
 
   function pick(node, ring, e) {

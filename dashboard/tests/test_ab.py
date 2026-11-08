@@ -74,7 +74,7 @@ class PayloadTests(unittest.TestCase):
             root = Path(folder)
             round_dir(root)
             payload = self.payload(root)
-            self.assertEqual((payload["schema"], payload["product"]), (1, "aime"))
+            self.assertEqual((payload["schema"], payload["product"]), (2, "aime"))
             self.assertEqual(len(payload["rounds"]), 1)
             rnd = payload["rounds"][0]
             self.assertEqual((rnd["id"], rnd["version"], rnd["label"]), ("0_version1106_test", "1106", "v1106"))
@@ -83,12 +83,17 @@ class PayloadTests(unittest.TestCase):
             self.assertEqual(rnd["sources"], [["daily", 1], ["lost_user", 1]])
             self.assertEqual(rnd["dates"], ["2026-10-20", "2026-10-22"])
             self.assertIsNone(rnd["sides"]["after"])
+            self.assertIsNone(rnd["sides"]["online"])
             self.assertEqual(rnd["sides"]["before"], {"traces": 2, "hits": 3})
+            self.assertEqual(rnd["sample_refs"]["before"][0], {
+                "trace": "t1", "model": "expert", "task": "未接入分类体系", "sub": "", "paths": ["S1.M2.1"],
+            })
+            self.assertEqual(rnd["sample_refs"]["after"], [])
 
             nodes = {node["id"]: node for node in rnd["nodes"]}
             self.assertEqual(sorted(nodes), ["S1", "S1.M2", "S1.M2.1", "S1.M2.1.3", "S2", "S2.M1", "S2.M1.2"])
             # 前缀包含其下所有叶子：S1.M2.1 计 t1 与 t2 的更深落点。
-            self.assertEqual((nodes["S1.M2.1"]["before"], nodes["S1.M2.1"]["after"]), (2, 0))
+            self.assertEqual((nodes["S1.M2.1"]["before"], nodes["S1.M2.1"]["after"]), (2, None))
             self.assertEqual((nodes["S1"]["before"], nodes["S1"]["level"]), (2, 1))
             self.assertEqual((nodes["S1.M2.1"]["parent"], nodes["S1.M2.1"]["name"]), ("S1.M2", "请求照抄原句"))
             # L4 的名字只存在于树快照里，leaves.tsv 没有这一层。
@@ -101,8 +106,11 @@ class PayloadTests(unittest.TestCase):
             self.assertEqual(leaves["S1.M2.1"]["source_before"], {"daily": 1})
             self.assertEqual(leaves["S1.M2.1.3"]["source_before"], {"lost_user": 1})
             self.assertIsNone(leaves["S1.M2.1"]["after"])
+            self.assertIsNone(leaves["S1.M2.1"]["online"])
             self.assertEqual(payload["models"], ["expert"])
             self.assertEqual(payload["labels"]["status"]["C"][0], "无评测记录")
+            self.assertEqual(payload["labels"]["sides"]["online"], "改版后 · 线上真实用户")
+            self.assertEqual(rnd["matrix"]["before"], [["未接入分类体系", "", [["S1.M2.1", 1], ["S1.M2.1.3", 1], ["S2.M1.2", 1]]]])
 
     def test_after_side_unions_and_pairs(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -111,6 +119,8 @@ class PayloadTests(unittest.TestCase):
             round_dir(root, after=[("t1", "S2.M1.2"), ("t2", "S1.M2.1")])
             rnd = self.payload(root)["rounds"][0]
             self.assertEqual(rnd["sides"]["after"], {"traces": 2, "hits": 2})
+            self.assertEqual(rnd["sample_refs"]["after"][0]["paths"], ["S2.M1.2"])
+            self.assertEqual(rnd["sample_refs"]["after"][0]["trace"], "t1")
             nodes = {node["id"]: node for node in rnd["nodes"]}
             self.assertEqual((nodes["S2.M1.2"]["before"], nodes["S2.M1.2"]["after"]), (1, 1))
             self.assertEqual((nodes["S1.M2.1"]["before"], nodes["S1.M2.1"]["after"]), (2, 1))
@@ -118,6 +128,16 @@ class PayloadTests(unittest.TestCase):
             leaves = {leaf["id"]: leaf for leaf in rnd["leaves"]}
             self.assertEqual((leaves["S1.M2.1.3"]["before"], leaves["S1.M2.1.3"]["after"]), (1, 0))
             self.assertEqual(leaves["S1.M2.1.3"]["model_after"], {})
+
+    def test_baseline_sample_refs_locate_a_trace_inside_its_session(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            round_dir(root)
+            samples = [("session-detail", {"meta": {}, "attribution": {"turns": [{"trace_id": "t1"}]}},
+                        {"tid": "session-id", "m": "aime_expert"}, {})]
+            rnd = ab_test.ab_payload(root, "aime", samples=samples)["rounds"][0]
+            self.assertEqual(rnd["sample_refs"]["before"][0]["slug"], "session-detail")
+            self.assertNotIn("slug", rnd["sample_refs"]["before"][1])
 
     def test_round_metadata_and_signature(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -134,6 +154,58 @@ class PayloadTests(unittest.TestCase):
             signature = ab_test.rounds_signature(root)
             round_dir(root, name="1_version1201_test", after=[("t1", "S2.M1.2")])
             self.assertNotEqual(ab_test.rounds_signature(root), signature)
+
+    def test_online_real_users_after_release_are_a_third_side(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            base = round_dir(root)
+            (base / "round.json").write_text(json.dumps({"released_at": "2026-11-06", "label": "1106 发版"}),
+                                             encoding="utf-8")
+
+            def sample(slug, day, ut, trace, path=None, task="取数规划", sub="目标错配"):
+                problems = [{"cl": {"path": path}}] if path else []
+                detail = {"meta": {"task": task, "subtask": sub}, "attribution": {"problems": problems}}
+                return (slug, detail, {"d": day, "ut": ut, "tid": trace, "m": "expert"}, {})
+
+            samples = [
+                sample("fixed", "2026-11-07", "real", "t1", "S2.M1.2"),      # 固定题集 trace 不复用
+                sample("before", "2026-11-05", "real", "t6", "S2.M1.2"),     # 发版前
+                sample("test", "2026-11-07", "test", "t5", "S2.M1.2"),       # 非真实用户
+                sample("online-1", "2026-11-07", "real", "t4", "S1.M2.1"),
+                sample("online-2", "2026-11-08", "real", "t7", None),
+                sample("online-3", "2026-11-09", "real", "t8", "S2.M1.2", task="检索规划", sub="空转未执行"),
+            ]
+            rnd = ab_test.ab_payload(root, "aime", samples=samples)["rounds"][0]
+            self.assertEqual(rnd["sides"]["online"],
+                             {"traces": 3, "hits": 2, "from": "2026-11-06", "to": "2026-11-09", "user_type": "real"})
+            self.assertEqual([ref["slug"] for ref in rnd["sample_refs"]["online"]], ["online-1", "online-3"])
+            leaves = {leaf["id"]: leaf for leaf in rnd["leaves"]}
+            self.assertEqual((leaves["S1.M2.1"]["online"], leaves["S2.M1.2"]["online"]), (1, 1))
+            nodes = {node["id"]: node for node in rnd["nodes"]}
+            self.assertEqual((nodes["S1.M2.1"]["online"], nodes["S2"]["online"]), (1, 1))
+            self.assertEqual(rnd["matrix"]["online"], [
+                ["取数规划", "目标错配", [["S1.M2.1", 1]]],
+                ["检索规划", "空转未执行", [["S2.M1.2", 1]]],
+            ])
+
+    def test_online_window_stops_at_the_next_release(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            first = round_dir(root, name="0_version1106_test")
+            second = round_dir(root, name="1_version1113_test")
+            (first / "round.json").write_text(json.dumps({"released_at": "2026-11-06"}), encoding="utf-8")
+            (second / "round.json").write_text(json.dumps({"released_at": "2026-11-13"}), encoding="utf-8")
+
+            def sample(slug, day, trace):
+                detail = {"meta": {"task": "行情解读", "subtask": "股价走势"},
+                          "attribution": {"problems": [{"cl": {"path": "S1.M2.1"}}]}}
+                return (slug, detail, {"d": day, "ut": "real", "tid": trace, "m": "expert"}, {})
+
+            samples = [sample("r1", "2026-11-07", "r1"), sample("r2", "2026-11-13", "r2")]
+            payload = ab_test.ab_payload(root, "aime", samples=samples)
+            self.assertEqual([rnd["sides"]["online"]["traces"] for rnd in payload["rounds"]], [1, 1])
+            self.assertEqual(payload["rounds"][0]["sides"]["online"]["to"], "2026-11-07")
+            self.assertEqual(payload["rounds"][1]["sides"]["online"]["from"], "2026-11-13")
 
     def test_no_ab_directory_means_no_payload(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -161,7 +233,8 @@ class BuildIntegrationTests(unittest.TestCase):
             datasets, static = root / "datasets", root / "static"
             seed(datasets)
             add_aime(datasets)
-            round_dir(datasets)
+            base = round_dir(datasets)
+            (base / "round.json").write_text(json.dumps({"released_at": "2026-10-31"}), encoding="utf-8")
 
             summary = self.run_build(datasets, static)
             self.assertGreater(summary["ab_kb"], 0)
@@ -174,6 +247,8 @@ class BuildIntegrationTests(unittest.TestCase):
             entry = data["products"]["aime"]["ab"]
             self.assertEqual(entry["url"], "abtests-aime.json")
             self.assertEqual((entry["rounds"], entry["targets"], entry["paired"]), (1, 3, False))
+            self.assertTrue(entry["online"])
+            self.assertEqual(abtests["rounds"][0]["sides"]["online"]["traces"], 1)
             wencai = json.loads((static / "data-wencai.json").read_text(encoding="utf-8"))
             self.assertNotIn("ab", wencai["products"]["wencai"])
 

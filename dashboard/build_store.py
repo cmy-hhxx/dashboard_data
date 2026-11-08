@@ -25,7 +25,7 @@ from pathlib import Path
 
 SCHEMA_VERSION = 1
 # Bump when the detail / payload shape changes so cached samples are rebuilt.
-BUILD_VERSION = "2026-11-06.1"
+BUILD_VERSION = "2026-11-08.2"
 
 PRODUCT_MODELS = {
     "wencai": ("a_fast", "a_expert", "b_fast", "b_expert"),

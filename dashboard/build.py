@@ -54,7 +54,7 @@ REPO = DASHBOARD.parent
 STATIC = DASHBOARD / "static"
 PRODUCTION_DATASETS = Path("/mnt/fin_bench/code_and_clean_data/datasets")
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-07.7"
+PAYLOAD_VERSION = "2026-11-08.3"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 2
 
@@ -1449,6 +1449,7 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
                 msg["ev"] = sorted(set(row["ev"]))
             msgs.append(msg)
         out_traces.append({
+            "trace_id": tmeta.get("trace_id") or ((inp or {}).get("trace_id") if len(raw_traces) == 1 else None),
             "agent": tmeta.get("name") or tmeta.get("agent_id"), "model": tmeta.get("model"),
             "mode": tmeta.get("mode") or tmeta.get("runtime_mode"),
             "question_zh": tmeta.get("question_zh"), "task": tmeta.get("task"),
@@ -1861,6 +1862,59 @@ def release_entries(datasets: Path, product: str):
     return sorted(entries, key=lambda entry: entry["date"])
 
 
+def trace_severity(detail, include_refs=False):
+    """One mutually exclusive worst level per evaluated Trace, including clean ones.
+
+    Attribution turns define the evaluated population, not input/session counts.
+    Session-wide problems require a Trace evidence anchor; ambiguous assignments
+    cannot turn an affected Trace into a supposedly clean one.
+    """
+    attr = detail.get("attribution") or {}
+    turns = attr.get("turns") or []
+    keys = [turn.get("trace_id") or f"turn:{i}" for i, turn in enumerate(turns)]
+    worst = dict.fromkeys(keys, len(SEVERITIES))
+    ambiguous = dict.fromkeys(keys, len(SEVERITIES))
+    inputs = (detail.get("input") or {}).get("traces") or []
+    evidence = detail.get("evidence") or []
+    for problem in attr.get("problems") or []:
+        level = SEVERITIES.index(problem["sev"]) if problem.get("sev") in SEVERITIES else None
+        turn = problem.get("turn")
+        targets = set()
+        if isinstance(turn, int) and 0 <= turn < len(keys):
+            targets.add(keys[turn])
+        else:
+            for ei in problem.get("ev") or []:
+                ev = evidence[ei] if isinstance(ei, int) and 0 <= ei < len(evidence) else {}
+                ti = ev.get("t")
+                if isinstance(ti, int) and 0 <= ti < len(inputs):
+                    trace_id = inputs[ti].get("trace_id")
+                    if trace_id and trace_id in worst:
+                        targets.add(trace_id)
+            if not targets and len(worst) == 1 and len(inputs) <= 1:
+                targets.update(worst)
+        if level is not None and targets:
+            for key in targets:
+                worst[key] = min(worst[key], level)
+        else:
+            for key in targets or worst:
+                ambiguous[key] = min(ambiguous[key], level if level is not None else 0)
+    counts = [0] * 6
+    refs = []
+    unresolved = 0
+    for key, level in worst.items():
+        if ambiguous[key] < level:
+            unresolved += 1
+        else:
+            counts[level] += 1
+            if include_refs:
+                turn = keys.index(key)
+                refs.append([turn, level, turns[turn].get("trace_id")])
+    result = {"counts": counts, "unresolved": unresolved}
+    if include_refs:
+        result["refs"] = refs
+    return result
+
+
 def trend_payload(product, samples, releases=(), generated=None):
     """Lazy payload behind a cluster-matrix cell's in-card trend chart.
 
@@ -1868,10 +1922,13 @@ def trend_payload(product, samples, releases=(), generated=None):
     clean and unclustered included, so a cell always has a denominator.  ``cells``
     repeats each clustered problem at every prefix of its cluster path, one column
     per severity including P4; the ``h*`` sets dedupe slugs per severity, so they
-    count hit sessions, not problems; the trailing column is that session set's
+    count hit sessions, not problems; the trailing ``any`` column is that session set's
     union, because summing per-severity hit sessions double counts a session that
-    shows the same problem at several levels.  Models keep the same order as the
-    aggregate.
+    shows the same problem at several levels.  After ``any`` comes a sparse
+    ``levelMask, sessionCount, ...`` histogram: a mask has bit ``k`` set when the
+    session hit Pk, so the hit-session union of any level combination can be summed
+    exactly (多选 P0+P1+P2 只算同时命中其中任一等级的会话一次). Models keep the same
+    order as the aggregate.
     """
     scene = scene_votes(product, samples)
 
@@ -1917,27 +1974,42 @@ def trend_payload(product, samples, releases=(), generated=None):
             parts = p["cl"]["path"].split(".")
             for n in range(1, len(parts) + 1):
                 key = (day, scene_i, node_idx[".".join(parts[:n])], model, ut)
-                cell = cells.setdefault(key, [0, 0, 0, 0, 0, set(), set(), set(), set(), set(), set()])
+                cell = cells.setdefault(key, [0, 0, 0, 0, 0, set(), set(), set(), set(), set(), set(), {}])
                 cell[sev] += 1
                 cell[5 + sev].add(slug)
                 # 合计口径要的是「出现过任意等级问题的会话」，各级命中会话并集不能相加。
                 cell[10].add(slug)
+                # 同一会话可能命中多个等级；记录 mask，任意等级组合的命中会话并集都能精确算。
+                cell[11][slug] = cell[11].get(slug, 0) | (1 << sev)
 
     base_out = sorted([day_idx[day], scene_idx[pair], model_idx[model], ut_idx[ut], n]
                       for (day, pair, model, ut), n in base.items())
     cells_out = []
     for key in sorted(cells):
-        counts, hits, any_hit = cells[key][:5], cells[key][5:10], cells[key][10]
+        counts, hits, any_hit, mask_of = cells[key][:5], cells[key][5:10], cells[key][10], cells[key][11]
         if any(counts):
-            cells_out.append([*key, *counts, *(len(slugs) for slugs in hits), len(any_hit)])
+            hist = sorted(Counter(mask_of.values()).items())
+            cells_out.append([*key, *counts, *(len(slugs) for slugs in hits), len(any_hit),
+                              *(v for pair in hist for v in pair)])
+
+    trace_days = [[0] * 6 for _ in dates]
+    trace_refs = []
+    unresolved = 0
+    for slug, detail, row, _ in samples:
+        trace = detail.get("trace_severity") or trace_severity(detail, include_refs=True)
+        for level, count in enumerate(trace["counts"]):
+            trace_days[day_idx[row["d"]]][level] += count
+        unresolved += trace["unresolved"]
+        trace_refs.extend([day_idx[row["d"]], slug, *ref] for ref in trace.get("refs", []))
 
     return {
-        "schema": 1, "generated_at": generated or iso_now(), "product": product,
+        "schema": 2, "generated_at": generated or iso_now(), "product": product,
         "releases": [dict(entry) for entry in releases],
         "dates": dates, "uts": uts, "models": models,
         "scenes": [[task, sub] for task, sub in scenes],
         "nodes": nodes,
         "base": base_out, "cells": cells_out,
+        "trace_severity": {"levels": WORST_KEYS, "daily": trace_days, "unresolved": unresolved, "refs": trace_refs},
     }
 
 
@@ -2105,6 +2177,7 @@ def slim_detail(detail):
     problem structure, evidence anchors and compact counts, not the transcript
     itself or the evidence quote strings.
     """
+    detail["trace_severity"] = trace_severity(detail, include_refs=True)
     detail["input"] = {"traces": [], "missing": detail["input"].get("missing", True)}
     evidence = []
     for e in detail["evidence"]:
@@ -2890,7 +2963,7 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
         t0 = time.time()
         ab_bytes = 0
         for product in products:
-            payload = ab_test.ab_payload(datasets, product, generated)
+            payload = ab_test.ab_payload(datasets, product, generated, samples[product])
             if not payload:
                 continue
             latest = payload["rounds"][-1]
@@ -2899,6 +2972,7 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
                 "url": f"abtests-{product}.json", "rounds": len(payload["rounds"]),
                 "label": latest["label"], "targets": latest["targets"],
                 "paired": latest["sides"]["after"] is not None,
+                "online": latest["sides"]["online"] is not None,
             }
             ab_bytes += write_json(out_dir / f"abtests-{product}.json", payload)
         for stale in out_dir.glob("abtests-*.json*"):

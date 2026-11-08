@@ -48,6 +48,12 @@ SOURCE_LABEL = {
     "lost_user_archive": "流失归档",
     "raw_eval_fallback": "原始兜底",
 }
+SIDE_LABEL = {
+    "before": "改版前 · 固定题集",
+    "after": "改版后 · 固定题集",
+    "online": "改版后 · 线上真实用户",
+}
+NO_SCENE = "未接入分类体系"
 
 
 def ab_round_dirs(datasets: Path, product: str):
@@ -206,25 +212,23 @@ def round_meta(round_dir: Path, order: int, version: str):
     }
 
 
-def tree_nodes(before, after, names):
-    """Union of both trees, one node per path prefix, counting hits per side.
+def tree_nodes(before, after, online, names, after_available, online_available):
+    """Union of all three trees, one node per path prefix, counting hits per side.
 
     ``before`` / ``after`` map path -> hit count; a prefix sums every leaf under it, because a
     trace that hits a deeper leaf also shows the problem at each level above it.
     """
+    counts = {"before": before, "after": after, "online": online}
     nodes = {}
-    for path, count in before.items():
-        parts = path.split(".")
-        for depth in range(1, len(parts) + 1):
-            nid = ".".join(parts[:depth])
-            node = nodes.setdefault(nid, {"id": nid, "level": depth, "before": 0, "after": 0})
-            node["before"] += count
-    for path, count in after.items():
-        parts = path.split(".")
-        for depth in range(1, len(parts) + 1):
-            nid = ".".join(parts[:depth])
-            node = nodes.setdefault(nid, {"id": nid, "level": depth, "before": 0, "after": 0})
-            node["after"] += count
+    for side, source in counts.items():
+        for path, count in source.items():
+            parts = path.split(".")
+            for depth in range(1, len(parts) + 1):
+                nid = ".".join(parts[:depth])
+                node = nodes.setdefault(nid, {
+                    "id": nid, "level": depth, "before": 0, "after": 0, "online": 0,
+                })
+                node[side] += count
     out = []
     for nid in sorted(nodes, key=node_order):
         node = nodes[nid]
@@ -232,7 +236,9 @@ def tree_nodes(before, after, names):
         out.append({
             "id": nid, "level": node["level"], "parent": parent,
             "name": names.get(nid) or nid,
-            "before": node["before"], "after": node["after"],
+            "before": node["before"],
+            "after": node["after"] if after_available else None,
+            "online": node["online"] if online_available else None,
         })
     return out
 
@@ -244,19 +250,74 @@ def node_order(nid: str):
     return [head, *rest]
 
 
-def build_round(round_dir: Path, order: int, version: str):
-    """One round: header figures, per-leaf counts per side / model / source, union tree."""
-    meta = round_meta(round_dir, order, version)
+def scene_pair(detail, row):
+    """The same scene the main matrix uses once build.py has voted on it."""
+    task = row.get("sc") or (detail.get("meta") or {}).get("task")
+    task = task or (detail.get("meta") or {}).get("skill") or NO_SCENE
+    sub = (detail.get("meta") or {}).get("subtask") or ""
+    return task, sub
+
+
+def sample_scene_map(samples):
+    found = {}
+    for _slug, detail, row, _facts in samples or []:
+        trace = str(row.get("tid") or "")
+        if trace:
+            found[trace] = scene_pair(detail, row)
+    return found
+
+
+def coverage_scene(row, scenes):
+    trace = str(row.get("trace_id") or "")
+    task = (row.get("task") or row.get("scene") or "").strip()
+    sub = (row.get("subtask") or row.get("sub") or "").strip()
+    if not task and trace in scenes:
+        task, sub = scenes[trace]
+    return task or NO_SCENE, sub
+
+
+def matrix_rows(counter):
+    """``[(task, sub)] → [[path, n], …]`` in the shape the browser matrix already consumes."""
+    grouped = defaultdict(Counter)
+    for (task, sub, path), count in counter.items():
+        grouped[(task, sub)][path] += count
+    return [
+        [task, sub, [[path, n] for path, n in sorted(paths.items(), key=lambda item: node_order(item[0]))]]
+        for (task, sub), paths in sorted(grouped.items(), key=lambda item: (-sum(item[1].values()), item[0]))
+    ]
+
+
+def build_round(round_dir: Path, order: int, version: str, samples=None,
+                next_release: str | None = None, meta=None):
+    """One round: fixed-set before/after plus post-release real-user online validation."""
+    meta = meta or round_meta(round_dir, order, version)
     rows = read_rows(round_dir / "00_manifest" / "coverage.csv")
+    scenes = sample_scene_map(samples)
+    sample_by_trace = defaultdict(set)
+    for slug, detail, sample_row, _facts in samples or []:
+        model = str(sample_row.get("m") or "").rsplit("_", 1)[-1]
+        traces = {turn.get("trace_id") for turn in (detail.get("attribution") or {}).get("turns", [])}
+        traces.add(sample_row.get("tid"))
+        for trace in traces - {None, ""}:
+            sample_by_trace[(str(trace), model)].add(slug)
     before, before_model, before_source = Counter(), defaultdict(Counter), defaultdict(Counter)
+    before_matrix = Counter()
+    sample_refs = {side: [] for side in ("before", "after", "online")}
     for row in rows:
         paths = [p for p in (row.get("cls_paths") or "").split(";") if p]
         if not paths:
             continue
-        model = eval_model(row.get("eval_store"))
+        model = eval_model(str(row.get("eval_store") or ""))
         source = row.get("eval_category") or ""
+        scene = coverage_scene(row, scenes)
+        sample_refs["before"].append({"trace": str(row.get("trace_id") or ""), "model": model,
+                                      "task": scene[0], "sub": scene[1], "paths": paths})
+        slugs = sample_by_trace[(str(row.get("trace_id") or ""), model)]
+        if len(slugs) == 1:
+            sample_refs["before"][-1]["slug"] = next(iter(slugs))
         for path in paths:
             before[path] += 1
+            before_matrix[(*scene, path)] += 1
             if model:
                 before_model[path][model] += 1
             if source:
@@ -266,6 +327,7 @@ def build_round(round_dir: Path, order: int, version: str):
     after = Counter()
     after_model = defaultdict(Counter)
     after_source = defaultdict(Counter)
+    after_matrix = Counter()
     by_trace = {}
     if after_paths:
         for row in rows:
@@ -273,60 +335,124 @@ def build_round(round_dir: Path, order: int, version: str):
             paths = after_paths.get(trace)
             if not paths:
                 continue
-            model = eval_model(row.get("eval_store"))
+            model = eval_model(str(row.get("eval_store") or ""))
             source = row.get("eval_category") or ""
+            scene = coverage_scene(row, scenes)
             by_trace[trace] = paths
+            sample_refs["after"].append({"trace": trace, "model": model, "task": scene[0], "sub": scene[1], "paths": paths})
             for path in paths:
                 after[path] += 1
+                after_matrix[(*scene, path)] += 1
                 if model:
                     after_model[path][model] += 1
                 if source:
                     after_source[path][source] += 1
 
+    # The third batch is not the same population as the fixed set: only real users, only
+    # after this release (and before the next one when another round exists), and never one
+    # of the fixed traces. Counts are therefore shown as online validation, not subtracted.
+    online = Counter()
+    online_model = defaultdict(Counter)
+    online_source = defaultdict(Counter)
+    online_matrix = Counter()
+    online_dates = set()
+    online_traces = 0
+    online_start = meta.get("released_at")
+    online_available = bool(samples is not None and online_start)
+    if samples is not None and online_start:
+        fixed_traces = {str(row.get("trace_id") or "") for row in rows if row.get("trace_id")}
+        for _slug, detail, row, _facts in samples:
+            day = str(row.get("d") or "")
+            if row.get("ut") != "real" or not day or day < online_start:
+                continue
+            if next_release and day >= next_release:
+                continue
+            trace = str(row.get("tid") or "")
+            if trace and trace in fixed_traces:
+                continue
+            paths = sorted({p["cl"]["path"] for p in (detail.get("attribution") or {}).get("problems", [])
+                            if p.get("cl") and p["cl"].get("path")})
+            online_traces += 1
+            online_dates.add(day)
+            scene = scene_pair(detail, row)
+            if paths:
+                sample_refs["online"].append({"slug": _slug, "trace": trace, "model": row.get("m") or "",
+                                               "task": scene[0], "sub": scene[1], "paths": paths})
+            for path in paths:
+                online[path] += 1
+                online_matrix[(*scene, path)] += 1
+                model = row.get("m") or ""
+                if model:
+                    online_model[path][model] += 1
+                online_source[path]["online_real"] += 1
+
     names = read_leaf_names(round_dir)
     leaves = []
-    for path in sorted(set(before) | set(after), key=node_order):
+    for path in sorted(set(before) | set(after) | set(online), key=node_order):
         leaves.append({
             "id": path,
             "name": names.get(path) or path,
             "before": before.get(path, 0),
             "after": after.get(path, 0) if after_paths else None,
+            "online": online.get(path, 0) if online_available else None,
             "model_before": dict(before_model.get(path) or {}),
             "model_after": dict(after_model.get(path) or {}) if after_paths else None,
+            "model_online": dict(online_model.get(path) or {}) if online_available else None,
             "source_before": dict(before_source.get(path) or {}),
             "source_after": dict(after_source.get(path) or {}) if after_paths else None,
+            "source_online": dict(online_source.get(path) or {}) if online_available else None,
         })
 
     meta["sides"] = {
         "before": {"traces": sum(1 for row in rows if (row.get("cls_paths") or "").strip()),
                    "hits": sum(before.values())},
         "after": ({"traces": len(by_trace), "hits": sum(after.values())} if after_paths else None),
+        "online": ({
+            "traces": online_traces, "hits": sum(online.values()),
+            "from": online_start,
+            "to": max(online_dates) if online_dates else None,
+            "user_type": "real",
+        } if online_available else None),
     }
     meta["leaves"] = leaves
-    meta["nodes"] = tree_nodes(before, after, names)
+    meta["sample_refs"] = sample_refs
+    meta["matrix"] = {
+        "before": matrix_rows(before_matrix),
+        "after": matrix_rows(after_matrix) if after_paths else None,
+        "online": matrix_rows(online_matrix) if online_available else None,
+    }
+    meta["nodes"] = tree_nodes(before, after, online, names, bool(after_paths), online_available)
     return meta
 
 
-def ab_payload(datasets: Path, product: str, generated: str | None = None):
+def ab_payload(datasets: Path, product: str, generated: str | None = None, samples=None):
     """Every round for one product, oldest first; ``None`` when the product has no AB data."""
     found = ab_round_dirs(datasets, product)
     if not found:
         return None
+    prepared = [(order, version, path, round_meta(path, order, version)) for order, version, path in found]
     rounds = []
-    for order, version, path in found:
-        rounds.append(build_round(path, order, version))
+    for index, (order, version, path, meta) in enumerate(prepared):
+        next_meta = prepared[index + 1][3] if index + 1 < len(prepared) else None
+        rounds.append(build_round(
+            path, order, version, samples=samples, meta=meta,
+            next_release=next_meta.get("released_at") if next_meta else None,
+        ))
     models = set()
     for rnd in rounds:
         for leaf in rnd["leaves"]:
             models.update((leaf["model_before"] or {}).keys())
+            models.update((leaf["model_after"] or {}).keys())
+            models.update((leaf["model_online"] or {}).keys())
     return {
-        "schema": 1,
+        "schema": 2,
         "generated_at": generated or datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "product": product,
         "labels": {
             "status": {k: list(v) for k, v in STATUS_LABEL.items()},
             "b_reason": {k: list(v) for k, v in B_REASON_LABEL.items()},
             "sources": SOURCE_LABEL,
+            "sides": SIDE_LABEL,
         },
         "models": sorted(models),
         "rounds": rounds,

@@ -171,7 +171,7 @@ class TrendBuildTests(unittest.TestCase):
             summary = self.run_build(datasets, static)
             self.assertGreater(summary["trend_kb"], 0)
             wencai = self.trends(static, "wencai")
-            self.assertEqual((wencai["schema"], wencai["product"]), (1, "wencai"))
+            self.assertEqual((wencai["schema"], wencai["product"]), (2, "wencai"))
             self.assertEqual(wencai["dates"], ["2026-11-01", "2026-11-02"])
             self.assertEqual(wencai["uts"], ["real", "test"])
             self.assertEqual(wencai["models"], ["a_fast", "b_fast"])
@@ -183,14 +183,16 @@ class TrendBuildTests(unittest.TestCase):
                              ["S1", "S1.M2", "S1.M2.1", "S1.M2.1.3", "S2", "S2.M1", "S2.M1.2"])
             # 干净样本也进 base；每个评测记录算一条，模型是独立维度。
             self.assertEqual(wencai["base"], [[0, 0, 0, 0, 1], [1, 1, 0, 1, 1], [1, 1, 1, 0, 1]])
+            self.assertEqual(wencai["trace_severity"]["daily"],
+                             [[0, 1, 0, 0, 0, 0], [1, 0, 1, 0, 0, 0]])
             self.assertEqual(wencai["releases"],
                              [{"date": "2026-11-01"}, {"date": "2026-11-02", "label": "策略复盘"}])
             self.assertEqual(wencai["generated_at"],
                              json.loads((static / "data-wencai.json").read_text())["generated_at"])
 
             node_idx = {name: i for i, name in enumerate(wencai["nodes"])}
-            cells = {(c[0], c[1], c[2], c[3], c[4]): c[5:] for c in wencai["cells"]}
-            self.assertTrue(all(len(c) == 16 for c in wencai["cells"]))
+            cells = {(c[0], c[1], c[2], c[3], c[4]): c[5:16] for c in wencai["cells"]}
+            self.assertTrue(all(len(c) >= 16 and (len(c) - 16) % 2 == 0 for c in wencai["cells"]))
             self.assertTrue(all(len(b) == 5 for b in wencai["base"]))
             self.assertEqual(cells[(0, 0, 0, 0, 0)], [0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1])
             # 3 段 S1.M2.1 与 4 段 S1.M2.1.3：同一问题的每个前缀只计一次。
@@ -198,10 +200,20 @@ class TrendBuildTests(unittest.TestCase):
                              [1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 1])
             self.assertEqual(cells[(1, 1, node_idx["S1.M2.1.3"], 0, 1)],
                              [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
+            # 同一会话命中 P0+P1 → mask 3；P0-only / P2+P3+P4 的 mask 也要正确。
+            hist = {(c[0], c[1], c[2], c[3], c[4]): c[16:] for c in wencai["cells"]}
+            self.assertEqual(hist[(1, 1, node_idx["S1.M2.1"], 0, 1)], [3, 1])
+            self.assertEqual(hist[(1, 1, node_idx["S1.M2.1.3"], 0, 1)], [1, 1])
+            self.assertEqual(hist[(1, 1, node_idx["S2.M1.2"], 1, 0)], [28, 1])
             # P3/P4 的计数与命中会话数也进 payload，且不改变 P0-P2 的值。
             self.assertEqual(cells[(1, 1, node_idx["S2.M1.2"], 1, 0)],
                              [0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 1])
             self.assertEqual(len(wencai["cells"]), 10)
+            for c in wencai["cells"]:
+                masks, counts = c[16::2], c[17::2]
+                self.assertEqual(len(c[16:]) % 2, 0)
+                self.assertEqual(sum(counts), c[15])
+                self.assertTrue(all(0 < m < 32 for m in masks))
 
             # 前缀自洽：节点 N 的 P0-P4 计数 == path 以 N 开头（含自身）的问题数。
             expected = {"S1": (1, 2, 0, 0, 0), "S1.M2": (1, 2, 0, 0, 0), "S1.M2.1": (1, 2, 0, 0, 0),
@@ -237,7 +249,7 @@ class TrendBuildTests(unittest.TestCase):
             self.assertEqual(aime["dates"], ["2026-11-01"])
             self.assertEqual(aime["scenes"], [["未接入分类体系", ""]])
             self.assertEqual(aime["base"], [[0, 0, 0, 0, 1]])
-            aime_cells = {(c[0], c[1], c[2], c[3], c[4]): c[5:] for c in aime["cells"]}
+            aime_cells = {(c[0], c[1], c[2], c[3], c[4]): c[5:16] for c in aime["cells"]}
             self.assertEqual(aime_cells[(0, 0, 2, 0, 0)], [0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1])
 
             # 顶层 list 对所有产品生效；改 releases.json 必须让 reuse marker 失效。
@@ -284,7 +296,7 @@ class TrendPayloadUnitTests(unittest.TestCase):
             one("d", "2026-11-01", "a_fast", "real", "任务A", "", []),
         ]
         payload = build.trend_payload("wencai", samples)
-        self.assertEqual((payload["schema"], payload["releases"]), (1, []))
+        self.assertEqual((payload["schema"], payload["releases"]), (2, []))
         self.assertEqual(payload["dates"], ["2026-11-01", "2026-11-03"])
         self.assertEqual(payload["uts"], ["real", "internal", "unknown", "beta"])
         self.assertEqual(payload["models"], ["a_fast", "b_fast"])
@@ -292,12 +304,19 @@ class TrendPayloadUnitTests(unittest.TestCase):
         self.assertEqual(payload["base"], [[0, 0, 0, 0, 1], [0, 0, 0, 1, 1], [0, 0, 0, 2, 1],
                                            [0, 0, 1, 0, 1], [1, 1, 1, 3, 1]])
         self.assertEqual(payload["nodes"], ["S1", "S1.M2", "S1.M2.1", "S1.M2.1.3", "S2", "S2.M1"])
-        cells = {(c[0], c[1], c[2], c[3], c[4]): c[5:] for c in payload["cells"]}
+        cells = {(c[0], c[1], c[2], c[3], c[4]): c[5:16] for c in payload["cells"]}
         # 四段 path 的每个前缀都计数；模型/用户类型是独立维度。
         self.assertEqual(cells[(1, 1, 3, 1, 3)], [0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1])
         # 同一 slug 的两个 P1 问题：p1=2 但 h1=1（按 session 去重），P0 单独累计。
         # 同一 slug 的 P0 和 P1：h0=h1=1，但并集仍是 1 个会话（合计不能相加）。
         self.assertEqual(cells[(0, 0, 0, 0, 2)], [1, 2, 0, 0, 0, 1, 1, 0, 0, 0, 1])
+        hist = {(c[0], c[1], c[2], c[3], c[4]): c[16:] for c in payload["cells"]}
+        self.assertEqual(hist[(0, 0, 0, 0, 2)], [3, 1])
+        for c in payload["cells"]:
+            masks, counts = c[16::2], c[17::2]
+            self.assertEqual(len(c[16:]) % 2, 0)
+            self.assertEqual(sum(counts), c[15])
+            self.assertTrue(all(0 < m < 32 for m in masks))
         self.assertEqual(cells[(0, 0, 2, 1, 0)], [0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1])
         # P0-P4 全部进 cells；四条节点路径各自成格（4 + 1 + 3 + 2）。
         self.assertEqual(len(payload["cells"]), 10)
