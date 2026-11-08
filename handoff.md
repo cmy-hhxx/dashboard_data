@@ -190,21 +190,35 @@ uid 用户 ID（输入 meta.user_id）· ut 用户类型 real/test/internal/unkn
                  online{traces,hits,from,to,user_type}|null},
            leaves[{id,name,before,after|null,online|null,model_*,source_*}],
            nodes[{id,level,parent,name,before,after|null,online|null}],
-           matrix{before[[task,sub,[[path,n]…]]…], after|null, online|null}}] }
+           matrix{before[[task,sub,[[path,n]…]]…], after|null, online|null},
+           sample_refs{before[{trace,model,task,sub,paths,slug?}…],
+                       after[…], online[…]}}] }
 ```
 
-- 目录约定见 `ab_test/*/README.md`：`00_manifest/{summary.json,coverage.csv}` 是清单（A/B/C 三类状态、
-  评测来源、逐条 trace 的叶子落点），`03_cluster_<ver>/<model>/` 是发版前树快照，
-  `04_retest_after/<model>/item_index.slice.jsonl` 是发版后同批 trace 的新落点（**回填后自动出前后列**），
-  轮次目录名 `0_version1106_test` → 期次 0、版本 v1106；日期用可选 `round.json` 的
-  `{"released_at","label","title"}` 钉住。
+- 轮次目录（2026-11 v1106 起的数据侧新布局，`dashboard/ab_test.py` 两种布局都读）：
+  `00_manifest/coverage_before_release_cluster.csv`（**before 的权威落点**，A/B/C = 970/138/29）、
+  `coverage_after_release_retest.csv`（after 重测状态 + 落点，940 评测 / 818 落点）、
+  `coverage_after_release_online_real.csv`（线上批次，未落盘时只有表头）；
+  `02_before_release/cluster_tree/<model>/`、`03_after_release_retest/cluster_tree/<model>/`、
+  `04_after_release_online_real/cluster_tree/<model>/` 各放 `item_index.slice.jsonl` + `leaves.tsv` +
+  `cluster_tree.json`。叶子名取自 `leaves.tsv`（L3）和 `cluster_tree.json`（L4）。
+- 旧布局（`00_manifest/coverage.csv` + `03_cluster_<ver>/` + `04_retest_after/`）仍然兼容；轮次目录名
+  `0_version1106_test` → 期次 0、版本 v1106。发版日用 `round.json` 的
+  `{"released_at","label","title"}` 钉住（v1106 = `2026-11-06`）。
 - 口径：`before` / `after` 都数**命中该叶子的 trace 数**（同一批题），前缀节点包含其下所有叶子；
   分母写清楚是 `targets`（固定题集）还是 `sides.*.traces`（有落点的），不要和「线上大盘」的批次占比混。
   `A/B/C` 数据质量总账仍保留在 payload，当前汇总不再单独渲染。
-- `online` = `round.json.released_at` 起、下一期 `released_at` 前（最后一期到当前）的 `用户类型=real` 评测；
-  排除固定题集 trace。它是另一批总体，只用于验证问题是否继续出现，不能和 `before` / `after` 直接相减。
-- 改 `ab_test/` 下任何文件都会让 reuse marker 失效并重写 payload；删掉整个 `ab_test/` 会连带删掉
-  `abtests-*.json` 并隐藏卡片入口。
+- 场景（task/subtask）按 trace 从 build 的 samples 里取（`sample_scene_map` 同时认归因各轮的
+  `trace_id` 与 sample 行），取不到才落 `未接入分类体系`。若数据侧写了可选的
+  `00_manifest/trace_scenes.csv`（`trace_id,task,subtask`），它优先于 samples。
+- `online`：轮次若已落 `coverage_after_release_online_real.csv` 就直接读；否则从 build 的 samples
+  反推 = `round.json.released_at` 起、下一期 `released_at` 前（最后一期到当前）的 `用户类型=real`
+  评测，排除固定题集 trace。它是另一批总体，只用于验证问题是否继续出现，不能和 `before` / `after` 直接相减。
+- `sides` / `leaves` / `nodes` / `matrix` 四处的 after/online **必须同源同 null**：不可用统一 `null`，
+  不能拿 `{}` 或 `[]` 占位，否则前端会把空批次当成「改版后全为 0 / 全面改善」。前端对空批次只在
+  `sides` 缺失或 `matrix` 未重建时禁用对应口径，不拿 leaves 冒充。
+- 改 `ab_test/` 下的清单 / 树 / `round.json` 会让 reuse marker 失效并重写 payload（只指纹这些文件，
+  不扫 attribution 与 provenance）；删掉整个 `ab_test/` 会连带删掉 `abtests-*.json` 并隐藏卡片入口。
 
 问题标签 `lb` 已从索引行拆出（2026-11-07）：`static/labels-<product>.json` = `{schema, product,
 labels:["…",…]}`，与 `rows[]` 同长度、同顺序；前端首屏后再拉，搜索时回填。`samples-<product>.json`
