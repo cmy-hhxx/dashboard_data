@@ -63,6 +63,9 @@ function crossFor(rnd, side) {
   if (!sideReady(rnd, side)) return null;
   const source = rnd.matrix && rnd.matrix[side];
   if (Array.isArray(source)) return source;
+  // sides says the batch exists but its matrix has not been rebuilt yet: do not fall back to
+  // leaves for after/online, or an empty batch would read as "everything improved".
+  if (Array.isArray(rnd.leaves) && side !== "before") return null;
   // Compatibility with schema 1: matrix files can be rebuilt before the browser cache rolls.
   const leaves = Array.isArray(rnd.leaves) ? rnd.leaves : [];
   const pats = leaves.map((leaf) => [leaf.id, leaf[side]]).filter(([, n]) => n != null && num(n) > 0);
@@ -451,6 +454,15 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     </section>`;
   }
 
+  function metricChips(rnd) {
+    return METRICS.map(([key, label]) => {
+      const disabled = (key === "after" && !sideReady(rnd, "after"))
+        || (key === "online" && !sideReady(rnd, "online"))
+        || (key === "delta" && !sideReady(rnd, "after"));
+      return `<button type="button" class="ab-chip" data-act="metric" data-metric="${key}" aria-pressed="${state.metric === key}"${disabled ? " disabled" : ""}>${label}</button>`;
+    }).join("");
+  }
+
   function matrix(rnd) {
     const names = new Map((Array.isArray(rnd.nodes) ? rnd.nodes : []).map((n) => [n.id, n.name]));
     const cross = allCross(rnd);
@@ -473,7 +485,7 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     const back = '<button type="button" class="link ab-back" data-act="summary">← 返回汇总</button>'
       + (rowPath.length > 1 || colPath.length > 1 ? '<button type="button" class="link ab-back ab-up" data-act="back">← 上一级</button>' : "");
     return `<section class="ab-matrixstep">
-      <div class="ab-matrix-title">${back}<h3>聚类矩阵</h3></div>
+      <div class="ab-matrixhead"><div class="ab-matrix-title">${back}<h3>聚类矩阵</h3></div><div class="ab-metrics" role="group" aria-label="矩阵口径">${metricChips(rnd)}</div><span class="ab-matrixmeta">${esc(roundLabel(rnd, state.round))} · ${esc(rnd.released_at || (rnd.dates || []).join(" ~ ") || "")}</span></div>
       <div class="ab-mxshell" id="abMxShell">${matrixTableAb(view, rnd, state.metric, selectedIdx)}</div>
       ${trend(rnd, state.cell)}
     </section>`;
@@ -545,6 +557,16 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
       state.metric = defaultMetric(rnd);
       state.rows = [];
       state.cols = leaf.id.split(".").slice(0, -1);
+      state.cell = null;
+      render();
+      return;
+    }
+    if (act === "metric") {
+      const next = action.dataset.metric;
+      if (!METRICS.some(([key]) => key === next) || action.disabled) return;
+      if ((next === "after" || next === "delta") && !sideReady(rnd, "after")) return;
+      if (next === "online" && !sideReady(rnd, "online")) return;
+      state.metric = next;
       state.cell = null;
       render();
       return;

@@ -116,8 +116,19 @@
 
 /* ---------------------------------------------------------------- 聚类矩阵 */
 .ab-matrixstep { display: grid; gap: 10px; min-width: 0; }
+.ab-matrixhead { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; min-width: 0; }
 .ab-matrix-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .ab-matrix-title h3 { color: var(--ink); font-size: var(--fs-title); font-weight: var(--w-medium); }
+.ab-metrics { display: flex; flex-wrap: wrap; gap: 4px; }
+.ab-chip {
+  height: 26px; padding: 0 10px; border-radius: var(--r-chip); background: var(--well); color: var(--muted);
+  font-size: var(--fs-meta); font-weight: var(--w-medium); white-space: nowrap;
+  transition: background 180ms cubic-bezier(0.2, 0.7, 0.2, 1), color 180ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.ab-chip:hover:not([disabled]) { background: var(--well-2); color: var(--ink-2); }
+.ab-chip[aria-pressed="true"] { background: var(--active); color: var(--ink); }
+.ab-chip[disabled] { opacity: 0.35; cursor: default; }
+.ab-matrixmeta { margin-left: auto; color: var(--faint); font-size: var(--fs-meta); white-space: nowrap; }
 .ab-back { flex: none; }
 .ab-up { margin-left: auto; }
 .ab-mxshell { position: relative; min-width: 0; }
