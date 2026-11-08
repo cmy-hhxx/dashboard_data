@@ -249,8 +249,14 @@ def is_excluded(rel):
     if rel.startswith(".delivery/provenance/"):
         # 投递台账会整份重写（不是 append-only），单独用 exact pair 按 mtime 同步
         return True
+    if "/99_provenance/work/" in "/" + rel:
+        # ab_test 实验的 run 工作目录（中间产物，~800MB/128 文件），两边不必一致且拖慢同步
+        return True
     name = parts[-1]
     if name.startswith(".") or name.endswith(".tmp"):
+        return True
+    if name.endswith(".dedup-bak"):
+        # 2026-11-07 一次性去重维护留下的备份副本（内容已是当前文件前缀），不要同步
         return True
     if (name.endswith(".lock") or name.endswith(".run-lock")
             or name.startswith(".run-lock") or name.endswith(PART_SUFFIX)):
