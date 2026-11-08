@@ -2569,7 +2569,12 @@ function mountSampleTrend(plot, renderChart, load, interaction = {}) {
   };
   const drawer = trendSampleDrawer(plot, load, draw);
   draw();
-  return { destroy: () => { dispose(); drawer.destroy(); } };
+  return {
+    destroy: () => { dispose(); drawer.destroy(); },
+    // Recall a source the chart may not draw as its own point (e.g. online samples while the
+    // matrix shows the paired change). The pick's series carries the sides to load.
+    openPick: (pick) => drawer.open(pick),
+  };
 }
 
 function mountABCellTrend(plot, spec) {

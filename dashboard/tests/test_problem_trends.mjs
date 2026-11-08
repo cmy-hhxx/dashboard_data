@@ -7,7 +7,7 @@ globalThis.window = {};
 const { buildProblemTrendModel, problemRateValues, problemTrendChart, mountProblemTrends } = await import("../static/js/problem_trends.js");
 const { traceSeverityModel, traceShares } = await import("../static/js/trace_analysis.js");
 const { lineTrendSVG, nearestTrendPoint, wireTrendPointPick, wireLineTrendChart } = await import("../static/js/trend_chart.js");
-const { abComparisonHTML, mountAB, metricValue } = await import("../static/js/abtest.js");
+const { abComparisonHTML, mountAB, metricValue, metricTip } = await import("../static/js/abtest.js");
 const { matrixHeatSummary } = await import("../static/js/matrix_heat.js");
 const { trendSampleCandidates, trendSampleProblems, traceSampleRefs, abTrendSampleRefs, resolveABSamples } = await import("../static/js/trend_samples.js");
 
@@ -223,7 +223,8 @@ test("AB cell trends remove duplicate captions and use a labelled, full-height c
     matrix: { before: [[row.task, "", [["S4.M1.1", 95]]]] }, nodes: [] };
   const chartHost = { clientWidth: 720, querySelector: () => null };
   const host = { innerHTML: "", getBoundingClientRect: () => ({ width: 720 }),
-    querySelector: (selector) => selector === "#abCellTrend" ? chartHost : null, addEventListener() {} };
+    querySelector: (selector) => selector === "#abCellTrend" ? chartHost : null,
+    querySelectorAll: () => [], addEventListener() {} };
   const previousWindow = globalThis.window;
   const previousRAF = globalThis.requestAnimationFrame;
   globalThis.window = { addEventListener() {} };
@@ -240,15 +241,34 @@ test("AB cell trends remove duplicate captions and use a labelled, full-height c
     assert.ok(mounted, "the AB chart must use the shared sample drawer mount");
     assert.equal(mounted[0], chartHost);
     const picks = mounted[1].chart.series[0].samples;
-    assert.deepEqual(picks.map((pick) => pick.sides), [["before"], ["after", "online"]]);
+    assert.deepEqual(picks.map((pick) => pick.sides), [["before"], ["after"]]);
+    assert.equal(mounted[1].chart.series[0].values[1], null, "without a retest the paired change has no second point");
+
     const released = { ...rnd, sides: { ...rnd.sides, after: { hits: 60 }, online: { hits: 40 } },
-      matrix: { ...rnd.matrix, after: [[row.task, "", [["S4.M1.1", 60]]]], online: [[row.task, "", [["S4.M1.1", 40]]]] } };
-    mountAB(host, { rounds: [released] }, { round: 0, step: "matrix", cell: { row, col } }, {}, null, {
+      matrix: { ...rnd.matrix, after: [[row.task, "", [["S4.M1.1", 60]]]], online: [[row.task, "", [["S4.M1.1", 40]]]] },
+      sample_refs: {
+        before: [{ trace: "a", model: "expert", task: row.task, sub: "", paths: ["S4.M1.1"] }],
+        after: [],
+        online: [{ trace: "b", model: "expert", task: row.task, sub: "", paths: ["S4.M1.1"], slug: "online-sample" }],
+      } };
+    mountAB(host, { rounds: [released] }, { round: 0, step: "matrix", metric: "delta", cell: { row, col } }, {}, null, {
       mountCellTrend: (...args) => { mounted = args; },
     });
     assert.equal(mounted[1].chart.series.length, 1);
-    assert.deepEqual(mounted[1].chart.series[0].values, [95, 100]);
+    assert.deepEqual(mounted[1].chart.series[0].values, [95, 60], "the paired change must not fold the online batch in");
+    assert.deepEqual(mounted[1].chart.series[0].samples.map((pick) => pick.sides), [["before"], ["after"]]);
     assert.deepEqual(mounted[1].chart.xLabels, ["改版前", "改版后"]);
+    assert.match(host.innerHTML, /改版前样本/);
+    assert.match(host.innerHTML, /线上真实样本/);
+    assert.match(host.innerHTML, /data-sides="online"/);
+
+    mountAB(host, { rounds: [released] }, { round: 0, step: "matrix", metric: "post", cell: { row, col } }, {}, null, {
+      mountCellTrend: (...args) => { mounted = args; },
+    });
+    assert.deepEqual(mounted[1].chart.series[0].values, [95, 100], "the post-release reading is retest + online");
+    assert.deepEqual(mounted[1].chart.series[0].samples.map((pick) => pick.sides), [["before"], ["after", "online"]]);
+    assert.deepEqual(mounted[1].chart.xLabels, ["改版前", "发版后"]);
+    assert.match(host.innerHTML, /发版后 <b class="num">100<\/b>/);
   } finally {
     globalThis.window = previousWindow;
     globalThis.requestAnimationFrame = previousRAF;
@@ -265,7 +285,7 @@ test("AB matrix offers change / pre-release / post-release metrics and sums rete
     nodes: [],
   };
   const host = { innerHTML: "", getBoundingClientRect: () => ({ width: 720 }),
-    querySelector: () => null, addEventListener() {} };
+    querySelector: () => null, querySelectorAll: () => [], addEventListener() {} };
   const previousWindow = globalThis.window, previousRAF = globalThis.requestAnimationFrame;
   globalThis.window = { addEventListener() {} };
   globalThis.requestAnimationFrame = () => 0;
@@ -289,6 +309,20 @@ test("AB matrix offers change / pre-release / post-release metrics and sums rete
   assert.equal(metricValue(cell, "post", { sides: { online: {} } }), 40);
   assert.equal(metricValue(cell, "post", { sides: {} }), null);
   assert.equal(metricValue(cell, "delta", { sides: {} }), null);
+});
+
+test("AB cell tooltips explain the printed number with the same sides and arithmetic", () => {
+  const released = { sides: { before: {}, after: {}, online: {} } };
+  const s1 = { before: 0, after: 0, online: 547 };
+  const delta = metricTip(s1, "delta", released);
+  assert.equal(delta.value, "变化 0");
+  assert.match(delta.note, /同题基线 0 → 同题复测 0/);
+  assert.match(delta.note, /线上真实 547 不计入变化/, "the online batch must not silently disappear from the 0");
+  const post = metricTip(s1, "post", released);
+  assert.equal(post.value, "发版后 547");
+  assert.equal(post.note, "同题复测 0 + 线上真实 547");
+  assert.equal(metricTip(s1, "before", released).value, "发版前 0");
+  assert.equal(metricTip({ before: 5, after: 0, online: 0 }, "delta", { sides: { before: {} } }).value, "变化 —");
 });
 
 test("AB cloud sample refs keep phase, scene and taxonomy prefix aligned with the selected point", () => {

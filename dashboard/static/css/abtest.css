@@ -145,6 +145,19 @@
 .ab-trend { display: grid; gap: 8px; min-width: 0; margin-top: 1px; padding-top: 12px; border-top: 1px solid var(--well-2); }
 .ab-trendhead { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
 .ab-trendname { color: var(--ink); font-size: var(--fs-body); font-weight: var(--w-medium); }
+.ab-trendmetric { display: inline-flex; align-items: baseline; gap: 5px; color: var(--muted); font-size: var(--fs-meta); }
+.ab-trendmetric b { color: var(--ink-2); font-size: var(--fs-body); font-weight: var(--w-medium); }
+.ab-trendmetric small { color: var(--faint); }
+.ab-trendacts { display: flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
+.ab-trendhint { color: var(--faint); font-size: var(--fs-meta); }
+.ab-samplechip {
+  height: 24px; padding: 0 9px; border-radius: var(--r-chip); background: var(--well); color: var(--muted);
+  font-size: var(--fs-meta); white-space: nowrap;
+  transition: background 180ms cubic-bezier(0.2, 0.7, 0.2, 1), color 180ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.ab-samplechip:hover { background: var(--well-2); color: var(--ink-2); }
+.ab-samplechip b { color: var(--ink-2); font-weight: var(--w-medium); }
+.ab-mxnote { margin: -2px 0 0; color: var(--muted); font-size: var(--fs-meta); line-height: 1.5; }
 
 /* ---------------------------------------------------------------- 响应式 */
 @media (max-width: 860px) {

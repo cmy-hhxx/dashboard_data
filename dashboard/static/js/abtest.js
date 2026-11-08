@@ -12,7 +12,7 @@
 import { esc, fmt, REDUCED, sevColor, segmented } from "./core.js";
 import { sunburst } from "./sunburst.js";
 import { lineTrendSVG, wireLineTrendChart } from "./trend_chart.js";
-import { trendSampleFrame } from "./trend_samples.js";
+import { trendSampleFrame, abTrendSampleRefs } from "./trend_samples.js";
 
 const SIDES = ["before", "after", "online"];
 const SIDE_SHORT = { before: "改版前", after: "改版后", online: "线上" };
@@ -86,6 +86,25 @@ export function metricValue(cell, metric, rnd) {
   }
   if (metric === "delta") return sideReady(rnd, "after") ? cell.after - cell.before : null;
   return null;
+}
+
+/* The tooltip must explain the number that is printed in the cell, with the same sides and the
+   same arithmetic. In particular a 0 change is not missing data: the online batch is a separate
+   population, so it is spelled out as "not counted in the change" instead of being mixed in. */
+export function metricTip(cell, metric, rnd) {
+  const afterReady = sideReady(rnd, "after");
+  if (metric === "before") return { value: `发版前 ${fmt(cell.before)}`, note: "同题基线" };
+  if (metric === "post") {
+    const value = metricValue(cell, "post", rnd);
+    const note = `同题复测 ${afterReady ? fmt(cell.after) : DASH} + 线上真实 ${sideReady(rnd, "online") ? fmt(cell.online) : DASH}`;
+    return { value: `发版后 ${value == null ? DASH : fmt(value)}`, note };
+  }
+  const value = metricValue(cell, "delta", rnd);
+  const online = sideReady(rnd, "online") && cell.online > 0 ? `；线上真实 ${fmt(cell.online)} 不计入变化` : "";
+  const note = afterReady
+    ? `同题基线 ${fmt(cell.before)} → 同题复测 ${fmt(cell.after)}${online}`
+    : "同题复测缺失，无法计算变化";
+  return { value: value == null ? `变化 ${DASH}` : `变化 ${signed(value)}`, note };
 }
 
 function sceneMatches(node, task, sub) {
@@ -213,7 +232,8 @@ function matrixTableAb(view, rnd, metric, selected) {
       const tone = metric === "delta" && v != null ? (v < 0 ? " is-better" : v > 0 ? " is-worse" : " is-zero") : "";
       const zero = metric !== "delta" && v != null && v === 0;
       const on = selected && selected.ri === ri && selected.ci === ci;
-      const tip = `${r.name} · ${c.name}|前 ${fmt(cell.before)} · 后 ${sideReady(rnd, "after") ? fmt(cell.after) : DASH} · 线上 ${sideReady(rnd, "online") ? fmt(cell.online) : DASH}`;
+      const tipParts = metricTip(cell, metric, rnd);
+      const tip = `${r.name} · ${c.name}|${tipParts.value}|${tipParts.note}`;
       gridCells += v == null || zero
         ? `<span class="cell is-empty" data-mx="${ri}:${ci}"></span>`
         : `<span class="cell num${tone}${on ? " is-sel" : ""}" style="--v:${(0.08 + 0.62 * Math.sqrt(Math.abs(v) / max)).toFixed(3)}" data-act="cell" data-ri="${ri}" data-ci="${ci}" data-mx="${ri}:${ci}" data-tip="${esc(tip)}">${metric === "delta" ? signed(v) : fmt(v)}</span>`;
@@ -429,32 +449,64 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     });
   }
 
-  function trend(rnd, selectedCell) {
+  function trend(rnd, selectedCell, metric) {
     if (!selectedCell) return "";
     const { row, col } = selectedCell;
+    const postMode = metric === "post";
+    const before = treeCount(rnd, "before", row, col.prefix);
+    const fixedAfter = treeCount(rnd, "after", row, col.prefix);
+    const online = treeCount(rnd, "online", row, col.prefix);
+    const releaseCount = (r) => {
+      const after = treeCount(r, "after", row, col.prefix);
+      const live = treeCount(r, "online", row, col.prefix);
+      return postMode ? (after == null && live == null ? null : num(after) + num(live)) : after;
+    };
     const rows = rounds.map((r, i) => ({
       label: roundLabel(r, i),
       before: treeCount(r, "before", row, col.prefix),
-      after: (() => {
-        const after = treeCount(r, "after", row, col.prefix);
-        const online = treeCount(r, "online", row, col.prefix);
-        return after == null && online == null ? null : num(after) + num(online);
-      })(),
+      after: releaseCount(r),
     }));
     const cur = rows[state.round];
-    const cols = rows.length === 1 ? ["改版前", "改版后"] : rows.map((r) => r.label);
+    const afterLabel = postMode ? "发版后" : "改版后";
+    const cols = rows.length === 1 ? ["改版前", afterLabel] : rows.map((r) => r.label);
     const series = rows.length === 1
-      ? [{ label: col.name, color: "var(--accent)", values: [cur.before, cur.after], samples: [{ round: rnd, sides: ["before"] }, { round: rnd, sides: ["after", "online"] }] }]
+      ? [{ label: col.name, color: "var(--accent)", values: [cur.before, cur.after], samples: [{ round: rnd, sides: ["before"] }, { round: rnd, sides: postMode ? ["after", "online"] : ["after"] }] }]
       : [
-          { label: "改版前", color: "var(--t2)", values: rows.map((r) => r.before), samples: rounds.map((round) => ({ round, sides: ["before"] })) },
-          { label: "改版后", color: "var(--accent)", values: rows.map((r) => r.after), samples: rounds.map((round) => ({ round, sides: ["after", "online"] })) },
+          { label: "改版前", color: "var(--t2)", values: rows.map((r) => r.before), samples: rounds.map((r) => ({ round: r, sides: ["before"] })) },
+          { label: afterLabel, color: "var(--accent)", values: rows.map((r) => r.after), samples: rounds.map((r) => ({ round: r, sides: postMode ? ["after", "online"] : ["after"] })) },
         ];
-    const aria = `AB 趋势：${row.name} · ${col.name}，${rows.map((r) => `${r.label} 改版前 ${r.before == null ? "无" : fmt(r.before)} 改版后 ${r.after == null ? "无" : fmt(r.after)}`).join("；")}`;
+    const current = metric === "post"
+      ? (fixedAfter == null && online == null ? null : num(fixedAfter) + num(online))
+      : metric === "before" ? before : (fixedAfter == null || before == null ? null : fixedAfter - before);
+    const detail = metric === "post"
+      ? `同题复测 ${fmt(fixedAfter)} + 线上真实 ${fmt(online)}`
+      : metric === "before"
+        ? "同题基线"
+        : `同题基线 ${fmt(before)} → 同题复测 ${fmt(fixedAfter)}${online > 0 ? `；线上真实 ${fmt(online)} 不计入变化` : ""}`;
+    // Sample recall is per side, not per metric: the cell's samples stay recallable even when the
+    // printed number is a paired delta. The retest side has no detail page in 5002, so it only
+    // gets a chip when its refs actually carry a slug.
+    const sampleSides = [
+      { sides: ["before"], source: "改版前" },
+      { sides: ["after"], source: "改版后" },
+      { sides: ["online"], source: "线上真实" },
+    ];
+    const chips = sampleSides.map(({ sides, source }) => {
+      const refs = abTrendSampleRefs(rnd, sides, row, col.prefix);
+      const resolvable = sides[0] === "after" ? refs.some((ref) => ref.slug) : refs.length > 0;
+      if (!resolvable) return "";
+      return `<button type="button" class="ab-samplechip" data-act="samples" data-sides="${sides.join(",")}" data-source="${source}" title="召回「${source}」命中 ${esc(row.name)} × ${esc(col.name)} 的样本">${source}样本 <b class="num">${fmt(refs.length)}</b></button>`;
+    }).join("");
+    const aria = `AB 趋势：${row.name} · ${col.name}，${rows.map((r) => `${r.label} 改版前 ${r.before == null ? "无" : fmt(r.before)} ${afterLabel} ${r.after == null ? "无" : fmt(r.after)}`).join("；")}`;
     const width = host.getBoundingClientRect().width || 720;
-    const chart = { height: 260, yAxis: true, endLabels: series.every((s) => s.values[s.values.length - 1] != null), xLabels: cols, xDates: cols, series, aria, formatValue: fmt };
-    cellTrendChart = { chart, row, node: col.prefix };
+    const chart = { height: 260, yAxis: true, minTop: 4, endLabels: series.every((s) => s.values[s.values.length - 1] != null), xLabels: cols, xDates: cols, series, aria, formatValue: fmt };
+    cellTrendChart = { chart, row, node: col.prefix, colName: col.name };
     return `<section class="ab-trend is-on" aria-live="polite">
-      <div class="ab-trendhead"><span class="ab-trendname">${esc(row.name)} · ${esc(col.name)}</span></div>
+      <div class="ab-trendhead">
+        <span class="ab-trendname">${esc(row.name)} · ${esc(col.name)}</span>
+        <span class="ab-trendmetric">${esc(metric === "post" ? "发版后" : metric === "before" ? "发版前" : "变化")} <b class="num">${current == null ? DASH : metric === "delta" ? signed(current) : fmt(current)}</b><small>${esc(detail)}</small></span>
+        <span class="ab-trendacts">${chips || '<small class="ab-trendhint">当前簇没有可召回样本</small>'}</span>
+      </div>
       ${trendSampleFrame(`<div class="mxt-plot" id="abCellTrend" data-own-tip>${lineTrendSVG({ ...chart, width }).html}</div>`)}
     </section>`;
   }
@@ -488,10 +540,26 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     }
     const back = '<button type="button" class="link ab-back" data-act="summary">← 返回汇总</button>'
       + (rowPath.length > 1 || colPath.length > 1 ? '<button type="button" class="link ab-back ab-up" data-act="back">← 上一级</button>' : "");
+    // A stage can exist only in the online batch (取数规划 in 1106). Its paired change is a real 0,
+    // so say why next to the table instead of letting the number look broken.
+    const quietCols = state.metric === "post" ? [] : view.cols.map((col, ci) => {
+      let fixed = 0, onlineTotal = 0, shown = 0;
+      view.rows.forEach((_, ri) => {
+        const cell = view.cells[ri][ci];
+        fixed += num(cell.before) + num(cell.after);
+        onlineTotal += num(cell.online);
+        shown += Math.abs(num(cell.n));
+      });
+      return { col, fixed, onlineTotal, shown };
+    }).filter(({ fixed, onlineTotal, shown }) => fixed === 0 && onlineTotal > 0 && shown === 0);
+    const quietNote = quietCols.length
+      ? `<p class="ab-mxnote">${quietCols.map(({ col, onlineTotal }) => `「${esc(col.name)}」同题两批均无落点（${state.metric === "delta" ? "变化" : "发版前"}为 0），线上真实 ${fmt(onlineTotal)} 只计入「发版后」`).join("；")}</p>`
+      : "";
     return `<section class="ab-matrixstep">
       <div class="ab-matrixhead"><div class="ab-matrix-title">${back}<h3>聚类矩阵</h3></div><div class="ab-metrics" role="group" aria-label="矩阵口径">${metricChips(rnd)}</div><span class="ab-matrixmeta">${esc(roundLabel(rnd, state.round))} · ${esc(rnd.released_at || (rnd.dates || []).join(" ~ ") || "")}</span></div>
+      ${quietNote}
       <div class="ab-mxshell" id="abMxShell">${matrixTableAb(view, rnd, state.metric, selectedIdx)}</div>
-      ${trend(rnd, state.cell)}
+      ${trend(rnd, state.cell, state.metric)}
     </section>`;
   }
 
@@ -519,6 +587,20 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
       if (actions.mountCellTrend) cellTrendDrawer = actions.mountCellTrend(chartHost, cellTrendChart);
       else wireLineTrendChart(chartHost, lineTrendSVG({ ...cellTrendChart.chart, width: chartHost.clientWidth }));
     }
+    host.querySelectorAll(".ab-samplechip").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        if (!cellTrendDrawer || !cellTrendChart) return;
+        const sides = chip.dataset.sides.split(",");
+        // The chart's own clickable points still recall their side; these chips recall a side that
+        // the current metric does not draw (e.g. online samples while reading the paired change).
+        cellTrendDrawer.openPick?.({
+          date: chip.dataset.source,
+          series: { label: cellTrendChart.colName, samples: [{ round: rnd, sides }] },
+          seriesIndex: -1,
+          index: 0,
+        });
+      });
+    });
     requestAnimationFrame(() => fitMatrix(host.querySelector(".abmatrix")));
   }
 
