@@ -5,6 +5,8 @@
    The three sides are deliberately not one denominator:
    - before / after are the same fixed targets and can be subtracted;
    - online is a different real-user population and is shown as validation only.
+   The matrix reads either the paired change, the pre-release baseline, or the
+   post-release volume (retest + online), matching the orbit tree's release side.
    State lives in data.js's u.ab so an in-place dashboard refresh returns to the same round,
    summary / matrix step, metric and selected cell. */
 import { esc, fmt, REDUCED, sevColor, segmented } from "./core.js";
@@ -15,11 +17,9 @@ import { trendSampleFrame } from "./trend_samples.js";
 const SIDES = ["before", "after", "online"];
 const SIDE_SHORT = { before: "改版前", after: "改版后", online: "线上" };
 const METRICS = [
-  ["all", "三批合计"],
   ["delta", "变化"],
-  ["before", "改版前"],
-  ["after", "改版后"],
-  ["online", "线上"],
+  ["before", "发版前"],
+  ["post", "发版后（同题回测+线上真实）"],
 ];
 const NO_SCENE = "未接入分类体系";
 const DASH = "—";
@@ -30,7 +30,8 @@ const pathRelated = (a, b) => a === b || String(a).startsWith(`${b}.`) || String
 const SIDE_TONE = { before: "var(--t2)", after: "var(--accent)", online: "var(--loc-ulq)" };
 
 const sideReady = (rnd, side) => !!(rnd.sides && rnd.sides[side]);
-const defaultMetric = (rnd) => (sideReady(rnd, "after") ? "delta" : "all");
+const postReady = (rnd) => sideReady(rnd, "after") || sideReady(rnd, "online");
+const defaultMetric = (rnd) => (sideReady(rnd, "after") ? "delta" : "before");
 const roundLabel = (rnd, i) => rnd.label || rnd.release_label || `第 ${i + 1} 期`;
 
 /* Reuse 评测量 bars, grouping the two post-release populations without mixing them. */
@@ -76,12 +77,15 @@ function allCross(rnd) {
   return SIDES.flatMap((side) => crossFor(rnd, side) || []);
 }
 
-function metricValue(cell, metric, rnd) {
+export function metricValue(cell, metric, rnd) {
   if (metric === "before") return cell.before;
-  if (metric === "after") return sideReady(rnd, "after") ? cell.after : null;
-  if (metric === "online") return sideReady(rnd, "online") ? cell.online : null;
+  if (metric === "post") {
+    const after = sideReady(rnd, "after") ? cell.after : null;
+    const online = sideReady(rnd, "online") ? cell.online : null;
+    return after == null && online == null ? null : num(after) + num(online);
+  }
   if (metric === "delta") return sideReady(rnd, "after") ? cell.after - cell.before : null;
-  return cell.before + (sideReady(rnd, "after") ? cell.after : 0) + (sideReady(rnd, "online") ? cell.online : 0);
+  return null;
 }
 
 function sceneMatches(node, task, sub) {
@@ -279,8 +283,9 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
   state.orbit.after = state.orbit.after || {};
   state.orbitSide = state.orbitSide === "after" ? "after" : "before";
   state.metric = METRICS.some(([k]) => k === state.metric) ? state.metric : defaultMetric(rounds[state.round]);
-  if (((state.metric === "after" || state.metric === "delta") && !sideReady(rounds[state.round], "after"))
-      || (state.metric === "online" && !sideReady(rounds[state.round], "online"))) state.metric = "all";
+  const current = rounds[state.round];
+  if ((state.metric === "delta" && !sideReady(current, "after"))
+      || (state.metric === "post" && !postReady(current))) state.metric = defaultMetric(current);
   if (!state.cell || typeof state.cell !== "object") state.cell = null;
   let cellTrendChart = null;
   let cellTrendDrawer = null;
@@ -456,9 +461,8 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
 
   function metricChips(rnd) {
     return METRICS.map(([key, label]) => {
-      const disabled = (key === "after" && !sideReady(rnd, "after"))
-        || (key === "online" && !sideReady(rnd, "online"))
-        || (key === "delta" && !sideReady(rnd, "after"));
+      const disabled = (key === "delta" && !sideReady(rnd, "after"))
+        || (key === "post" && !postReady(rnd));
       return `<button type="button" class="ab-chip" data-act="metric" data-metric="${key}" aria-pressed="${state.metric === key}"${disabled ? " disabled" : ""}>${label}</button>`;
     }).join("");
   }
@@ -564,8 +568,7 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     if (act === "metric") {
       const next = action.dataset.metric;
       if (!METRICS.some(([key]) => key === next) || action.disabled) return;
-      if ((next === "after" || next === "delta") && !sideReady(rnd, "after")) return;
-      if (next === "online" && !sideReady(rnd, "online")) return;
+      if ((next === "delta" && !sideReady(rnd, "after")) || (next === "post" && !postReady(rnd))) return;
       state.metric = next;
       state.cell = null;
       render();

@@ -7,7 +7,7 @@ globalThis.window = {};
 const { buildProblemTrendModel, problemRateValues, problemTrendChart, mountProblemTrends } = await import("../static/js/problem_trends.js");
 const { traceSeverityModel, traceShares } = await import("../static/js/trace_analysis.js");
 const { lineTrendSVG, nearestTrendPoint, wireTrendPointPick, wireLineTrendChart } = await import("../static/js/trend_chart.js");
-const { abComparisonHTML, mountAB } = await import("../static/js/abtest.js");
+const { abComparisonHTML, mountAB, metricValue } = await import("../static/js/abtest.js");
 const { matrixHeatSummary } = await import("../static/js/matrix_heat.js");
 const { trendSampleCandidates, trendSampleProblems, traceSampleRefs, abTrendSampleRefs, resolveABSamples } = await import("../static/js/trend_samples.js");
 
@@ -253,6 +253,42 @@ test("AB cell trends remove duplicate captions and use a labelled, full-height c
     globalThis.window = previousWindow;
     globalThis.requestAnimationFrame = previousRAF;
   }
+});
+
+test("AB matrix offers change / pre-release / post-release metrics and sums retest with online", () => {
+  const row = { name: "未接入分类体系", task: "未接入分类体系", sub: "" };
+  const side = (n) => ({ traces: n, hits: n, matrix: [[row.task, "", [["S4.M1.1", n]]]] });
+  const post = {
+    label: "v1106",
+    sides: { before: side(95), after: side(60), online: side(40) },
+    matrix: { before: side(95).matrix, after: side(60).matrix, online: side(40).matrix },
+    nodes: [],
+  };
+  const host = { innerHTML: "", getBoundingClientRect: () => ({ width: 720 }),
+    querySelector: () => null, addEventListener() {} };
+  const previousWindow = globalThis.window, previousRAF = globalThis.requestAnimationFrame;
+  globalThis.window = { addEventListener() {} };
+  globalThis.requestAnimationFrame = () => 0;
+  try {
+    mountAB(host, { rounds: [post] }, { round: 0, step: "matrix", metric: "delta", cell: null }, {}, null, {});
+    assert.equal((host.innerHTML.match(/data-act="metric"/g) || []).length, 3, "only three matrix metrics exist");
+    assert.match(host.innerHTML, /data-metric="delta" aria-pressed="true"/);
+    assert.match(host.innerHTML, /data-metric="before"/);
+    assert.match(host.innerHTML, /data-metric="post"/);
+    assert.doesNotMatch(host.innerHTML, /data-metric="(all|after|online)"/);
+    assert.match(host.innerHTML, /发版后（同题回测\+线上真实）/);
+  } finally {
+    globalThis.window = previousWindow;
+    globalThis.requestAnimationFrame = previousRAF;
+  }
+  const cell = { before: 95, after: 60, online: 40 };
+  assert.equal(metricValue(cell, "delta", post), -35);
+  assert.equal(metricValue(cell, "before", post), 95);
+  assert.equal(metricValue(cell, "post", post), 100);
+  assert.equal(metricValue(cell, "post", { sides: { after: {} } }), 60);
+  assert.equal(metricValue(cell, "post", { sides: { online: {} } }), 40);
+  assert.equal(metricValue(cell, "post", { sides: {} }), null);
+  assert.equal(metricValue(cell, "delta", { sides: {} }), null);
 });
 
 test("AB cloud sample refs keep phase, scene and taxonomy prefix aligned with the selected point", () => {
