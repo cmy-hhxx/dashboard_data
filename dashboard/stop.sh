@@ -22,8 +22,9 @@ fi
 # clean up any dashboard server.py / build.py whose cwd is this deployment directory.
 # build.py is a child of server.py: killing only the server leaves the build running, and two
 # builds then collide on cache/build.sqlite3 ("database is locked") and on payload writes.
+# argv[0] can be "python3" or an absolute "/usr/local/bin/python3": match its basename.
 for script in server.py build.py; do
-  for pid in $(ps -eo pid=,args= | awk -v s="$script" '$2=="python3" && $3==s {print $1}'); do
+  for pid in $(ps -eo pid=,args= | awk -v s="$script" '{cmd=$2; sub(/.*\//,"",cmd); if (cmd=="python3" && $3==s) print $1}'); do
     [ "$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)" = "$HERE" ] && terminate "$pid"
   done
 done
