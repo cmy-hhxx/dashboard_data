@@ -177,7 +177,7 @@ function sideHeadHTML(label, n) {
 function sideHTML(prefix, label, ref, gap) {
   const n = ref && !gap ? Number(ref.n || 0) : null;
   const body = gap ? `<div class="empty">这一侧没有可用的评测详情</div>` : detailPaneHTML(prefix);
-  return `<section class="pane pane-out pane-sticky compare-side" data-side="${prefix}" aria-label="${esc(label)}">${sideHeadHTML(label, n)}${body}</section>`;
+  return `<section class="pane pane-out pane-sticky compare-side${gap ? " is-gap" : ""}" data-side="${prefix}" aria-label="${esc(label)}">${sideHeadHTML(label, n)}${body}</section>`;
 }
 
 function destroyDetails() {

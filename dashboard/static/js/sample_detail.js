@@ -1066,8 +1066,7 @@ function alignColumns() {
   $$(".chain-box", root).forEach((b) => b.classList.toggle("is-open", S.bandOpen));
   const zoom = stl.offsetHeight ? stl.getBoundingClientRect().height / stl.offsetHeight : 1;   // 整页 zoom 时 rect 是放大后的像素
   // 窄屏是单栏堆叠，对齐关闭。
-  // compare 的详情是单列窄容器：不跑具体数据那套四列对齐（也不让内联高度泄漏到单列）。
-  if (!matchMedia("(min-width: 1181px)").matches || root.clientWidth < 900 || root.closest(".bench-compare")) return;
+  if (!matchMedia("(min-width: 1181px)").matches || root.clientWidth < 900) return;
   // Session 总评：左列是「问 → 答」的全景，没有链路也没有轨迹列。右列归因卡片仍然要对齐
   // 到第一段模型回答的顶部（和单轮视图里对齐链路第一步是一个意思），而不是跟着用户问句走。
   if (box.classList.contains("is-session")) {

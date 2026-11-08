@@ -2499,7 +2499,7 @@ function trendSampleDrawer(plot, load, repaint, interaction = {}) {
         const led = ledger([{ items: result.items }], false, result.unit);
         const restoreFocus = side.contains(document.activeElement);
         const note = [result.note, result.items.length > LEDGER_MAX ? `展示前 ${LEDGER_MAX} 条` : ""].filter(Boolean).join(" · ");
-        side.innerHTML = `${title}${result.items.length ? led.body : '<div class="empty">当前索引中没有匹配样本</div>'}${note ? `<p class="mxt-sample-note">${esc(note)}</p>` : ""}${result.more ? '<button type="button" class="mx-back mxt-sample-more" data-samples-more>加载更多</button>' : ""}`;
+        side.innerHTML = `${title}${result.items.length ? led.body : `<div class="empty">${esc(result.emptyText || "当前索引中没有匹配样本")}</div>`}${note ? `<p class="mxt-sample-note">${esc(note)}</p>` : ""}${result.more ? '<button type="button" class="mx-back mxt-sample-more" data-samples-more>加载更多</button>' : ""}`;
         if (restoreFocus) $("[data-samples-close]", side)?.focus({ preventScroll: true });
         side.querySelectorAll(".gl-r").forEach((row) => {
           row.title = led.items[Number(row.dataset.i)].q;
@@ -2558,6 +2558,9 @@ async function loadTrendSamplePage(trend, spec, pick) {
     }
     return {
       items, unit: "个 case",
+      // No candidate at all is not the same as candidates that miss the cluster/levels: say which
+      // one happened instead of blaming the index for every empty drawer.
+      emptyText: candidates.length ? "候选样本没有命中该簇的问题" : "",
       note: [offset < candidates.length ? `已检查 ${fmt(offset)} / ${fmt(candidates.length)} 个候选样本` : "", failures ? `${fmt(failures)} 条读取失败` : ""].filter(Boolean).join(" · "),
       more: offset < candidates.length && items.length < LEDGER_MAX ? more : null,
     };
@@ -2579,13 +2582,16 @@ async function loadTraceSamplePage(trend, pick) {
 
 async function loadABTrendSamplePage(spec, pick) {
   const { round, sides } = pick.series.samples[pick.index];
-  if (!round.sample_refs) return { items: [], note: "当前快照缺少 A/B 样本关联" };
+  if (!round.sample_refs) return { items: [], note: "当前快照缺少 A/B 样本关联", emptyText: "当前快照缺少 A/B 样本关联" };
   const refs = abTrendSampleRefs(round, sides, spec.row, spec.node);
   const index = await ctx.loadIndex(ctx.product);
   const rows = index.products?.[ctx.product]?.rows || [];
   const { items, unavailable } = resolveABSamples(refs, rows, spec.node);
   return {
     items: items.map(({ row, trace, n, ref }) => ({ ...caseItem(row), trace, n, ref, pair: ref.pair || ref.trace, round: spec.round?.id })), unit: "个样本",
+    // An empty drawer must name the real reason: this side of the batch has no hit here, or the
+    // hits exist but have no detail to open — never "no samples in the index" for AB data.
+    emptyText: refs.length ? "这些样本暂无可打开的评测详情" : "该批次这一格没有命中样本",
     note: unavailable ? `${fmt(unavailable)} 个样本缺少对应评测详情` : "",
   };
 }

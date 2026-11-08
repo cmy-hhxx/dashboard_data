@@ -1,47 +1,34 @@
-/* 版本对比 · layout only: the list pane and the two detail panes reuse samples.css.
-   No new colours, icons or heading levels — the two side labels are the page's own content.
-   Spacing follows the 4px grid already used by .pane-head / .pane-scroll. */
+/* 版本对比 · layout only: 同题列表 + 改版前 / 改版后两块全宽的样本详情，上下对照。
+   详情沿用 samples.css 的原始工作台排版（轨迹 / 中间链路 / 证据连线 / 归因三列 + 折叠），
+   这里只决定它们上下排、各自占一屏；不引入新的颜色、图标、标题层级。 */
 
-html[data-view="compare"] main { max-width: none; padding-bottom: 16px; }
+html[data-view="compare"] main { max-width: none; padding-bottom: 24px; }
 
-/* Left list + right pair; .bench supplies the 300px / full-height contract. */
-.bench-compare { grid-template-columns: 300px minmax(0, 1fr); }
-.bench-compare > .pane { height: 100%; }
-.compare-panes {
-  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--gap);
-  min-width: 0; height: 100%; align-items: stretch;
-}
-.compare-panes.is-single { grid-template-columns: minmax(0, 1fr); }
-.compare-panes > .pane { height: 100%; min-width: 0; }
+/* 左侧列表吸顶，右侧两块详情在文档流里上下排；整个页面滚动，不是每屏一个独立看板。 */
+.bench-compare { grid-template-columns: 300px minmax(0, 1fr); height: auto; min-height: 0; align-items: start; }
+.bench-compare > .compare-list { position: sticky; top: 72px; height: calc(100vh - 88px); }
+.compare-panes { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--gap); min-width: 0; }
+/* 每块详情仍是一屏高的样本工作台：内部滚动、三列对齐、折叠与展开全部都和「具体数据」一致。 */
+.compare-panes > .pane { position: static; top: auto; height: calc(100vh - 88px); min-width: 0; }
+/* 一屏滚到底后继续滚要能翻到下一块（改版前 → 改版后），只在块内滚会被 contain 卡住。 */
+.compare-panes .pane-scroll { overscroll-behavior: auto; }
 .compare-side > .pane-head { padding: 12px 16px 8px; gap: 4px; }
-.compare-side > .empty { padding: 48px 16px; }
+/* 缺详情的一侧只留标题与一句空态，不占一整屏。 */
+.compare-side.is-gap { height: auto; }
+.compare-side.is-gap > .empty { padding: 24px 16px; }
 
-/* A compare pane is 550–700px wide: one column, no evidence threads (the wide-workbench
-   geometry stays on 具体数据). */
-.bench-compare .anatomy,
-.bench-compare .anatomy.is-session { grid-template-columns: minmax(0, 1fr); }
-.bench-compare .threads { display: none; }
-
-/* The list is a question picker, not a filtering workbench: search + count only. */
+/* 列表是选题器，不是筛选工作台：只留搜索 + 计数。 */
 .compare-list .pane-head { padding-bottom: 8px; }
 .compare-list .srow .m { gap: 4px 10px; }
 
-@media (max-width: 1180px) {
-  html[data-view="compare"] main { padding-bottom: 48px; }
-  .bench-compare { grid-template-columns: minmax(0, 1fr); height: auto; min-height: 0; }
-  .bench-compare > .pane { height: auto; max-height: 420px; }
-  .bench-compare .pane-sticky { position: static; height: auto; }
-  .bench-compare .compare-panes { height: auto; }
-  .bench-compare .compare-side { height: auto; }
-}
 @media (max-width: 860px) {
-  .bench-compare .compare-panes { grid-template-columns: minmax(0, 1fr); }
-  .bench-compare .compare-side { max-height: 720px; }
+  html[data-view="compare"] main { padding-bottom: 48px; }
+  .bench-compare { grid-template-columns: minmax(0, 1fr); }
+  .bench-compare > .compare-list { position: static; height: auto; max-height: 420px; }
+  .compare-panes > .pane { height: auto; max-height: 760px; }
+  .compare-side > .pane-head { padding: 12px 12px 8px; }
 }
 
-
-/* A compare pane is narrower than the 具体数据 workbench: give the question its own line instead
-   of letting the ID row squeeze it into an ellipsis. */
-.bench-compare .headline { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 4px; }
-.bench-compare .headline h2 { flex: 0 0 auto; }
-.bench-compare .headline .idline { justify-content: flex-start; }
+@media (min-width: 1800px) {
+  html[data-view="compare"] main { max-width: 2100px; }
+}
