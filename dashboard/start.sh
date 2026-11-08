@@ -21,6 +21,13 @@ else
   echo $! > stats.pid
 fi
 
+# A server that is still building its first payloads does not answer /healthz yet, but it IS
+# already running.  Starting a second copy here would run a second build against the same
+# cache (seen as "database is locked") and double the ceph load, so trust the pid first.
+if [ -f server.pid ] && kill -0 "$(cat server.pid 2>/dev/null)" 2>/dev/null; then
+  echo "already starting on :${PORT} (pid $(cat server.pid))"
+  exit 0
+fi
 if curl -s -m 2 -o /dev/null "http://127.0.0.1:${PORT}/healthz"; then
   echo "already serving on :${PORT}"
   exit 0

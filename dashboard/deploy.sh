@@ -59,5 +59,5 @@ echo "deployed -> $REMOTE"
 # A deploy that restarts into a dead service is the failure worth catching here;
 # the payload itself is built by the server's own refresh loop afterwards.
 PORT_REMOTE="${PORT:-5001}"
-retry "${SSH[@]}" "$HOST" "for i in \$(seq 1 20); do curl -sf -m 5 http://127.0.0.1:$PORT_REMOTE/healthz && exit 0; sleep 2; done; echo '[deploy] service did not become healthy' >&2; tail -20 $REMOTE/logs/server.log >&2; exit 1"
+retry "${SSH[@]}" "$HOST" "for i in \$(seq 1 ${EVAL_DEPLOY_HEALTH_TRIES:-150}); do curl -sf -m 5 http://127.0.0.1:$PORT_REMOTE/healthz && exit 0; sleep 2; done; echo '[deploy] service did not become healthy' >&2; tail -20 $REMOTE/logs/server.log >&2; exit 1"
 echo "healthy -> $HOST:$PORT_REMOTE"
