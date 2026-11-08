@@ -410,6 +410,28 @@ class ScopeLayoutTests(unittest.TestCase):
             self.assertIn(("事件解读", "行情事件解读"), pairs)
             self.assertNotIn(("检索规划", "空转未执行"), pairs)
 
+    def test_build_writes_scope_payload_and_entry(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            datasets, static = root / "datasets", root / "static"
+            seed(datasets)
+            add_aime(datasets)
+            base = scope_round_dir(datasets)
+            (base / "round.json").write_text(json.dumps({"released_at": "2026-10-31"}), encoding="utf-8")
+            proc = subprocess.run(
+                [sys.executable, str(DASHBOARD / "build.py"), "--datasets", str(datasets),
+                 "--out", str(static)],
+                check=True, capture_output=True, text=True, env={**os.environ},
+            )
+            self.assertGreater(json.loads(proc.stdout.strip().splitlines()[-1])["ab_kb"], 0)
+            payload = json.loads((static / "abtests-aime.json").read_text(encoding="utf-8"))
+            rnd = payload["rounds"][0]
+            self.assertEqual((rnd["sides"]["before"]["traces"], rnd["sides"]["after"]["traces"]), (2, 1))
+            self.assertIsInstance(rnd["matrix"]["after"], list)
+            self.assertIsInstance(rnd["matrix"]["online"], list)
+            entry = json.loads((static / "data-aime.json").read_text())["products"]["aime"]["ab"]
+            self.assertEqual((entry["rounds"], entry["paired"], entry["online"]), (1, True, True))
+
     def test_scope_signature_tracks_after_backfill(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
