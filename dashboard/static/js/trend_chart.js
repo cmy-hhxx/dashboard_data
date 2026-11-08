@@ -5,13 +5,6 @@ import { esc, fmt, showTip, hideTip } from "./core.js";
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
-function jitter(seed) {
-  let t = (seed + 0x6d2b79f5) >>> 0;
-  t = Math.imul(t ^ (t >>> 15), t | 1);
-  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-}
-
 export function monotonePath(points) {
   if (points.length < 2) return "";
   const secant = points.slice(1).map((p, i) => (p[1] - points[i][1]) / (p[0] - points[i][0] || 1));
@@ -36,24 +29,31 @@ export function monotonePath(points) {
   return d;
 }
 
-/* A capped, deterministic cloud. Volume controls the number and spread of atoms; the hit ratio
-   controls their density/opacity. 1,000 observations never become 1,000 circles. */
-export function nebulaCluster({ x, y, value, max, ratio = 0, color, seed = 0, maxDots = 16, spread = 9 }) {
+/* A cluster of problems at one point, drawn as a regular dotted rosette: volume sets the number of
+   dots and the radius, the hit/session ratio sets their density. Dots sit on evenly spaced angles
+   (no jitter), so a row of points reads as one rhythm, and the mark stays inside the plot padding so
+   the first and last dates are never clipped by the chart edge. 1,000 observations never become
+   1,000 circles. */
+export function nebulaCluster({ x, y, value, max, ratio = 0, color, maxDots = 16, spread = 9 }) {
   if (!(value > 0)) return "";
   const share = max > 0 ? clamp(value / max, 0, 1) : 0;
   const hitShare = clamp(ratio || share, 0, 1);
   const dots = Math.max(3, Math.min(maxDots, Math.round(3 + 13 * Math.sqrt(share))));
-  const reach = 2.5 + spread * (0.25 + 0.75 * Math.sqrt(share));
+  const reach = 2.6 + spread * (0.28 + 0.72 * Math.sqrt(share));
+  const dotR = spread > 7 ? 1.45 : spread > 4 ? 1.3 : 1.1;
+  const opacity = (0.3 + 0.36 * hitShare).toFixed(2);
+  const rings = dots >= 9 ? [6, dots - 6] : [dots];
+  const radii = rings.length > 1 ? [reach * 0.55, reach] : [reach * 0.88];
   let out = `<g class="mxt-nebula" aria-hidden="true">`;
-  for (let i = 0; i < dots; i++) {
-    const angle = i * 2.399963 + jitter(seed + i * 17) * 0.9;
-    const radial = reach * (0.2 + 0.8 * Math.sqrt(jitter(seed + i * 31 + 7)));
-    const px = x + Math.cos(angle) * radial;
-    const py = y + Math.sin(angle) * radial * 0.58;
-    const r = 0.9 + jitter(seed + i * 43 + 11) * 1.25;
-    const opacity = 0.27 + 0.34 * hitShare + jitter(seed + i * 53 + 19) * 0.17;
-    out += `<circle class="mxt-nebula-dot" cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="${r.toFixed(2)}" fill="${color}" opacity="${opacity.toFixed(2)}"/>`;
-  }
+  rings.forEach((count, ring) => {
+    const radius = radii[ring];
+    const step = (Math.PI * 2) / count;
+    const start = -Math.PI / 2 + (ring ? step / 2 : 0);
+    for (let i = 0; i < count; i += 1) {
+      const angle = start + i * step;
+      out += `<circle class="mxt-nebula-dot" cx="${(x + Math.cos(angle) * radius).toFixed(1)}" cy="${(y + Math.sin(angle) * radius).toFixed(1)}" r="${dotR}" fill="${color}" opacity="${opacity}"/>`;
+    }
+  });
   return `${out}</g>`;
 }
 
@@ -66,10 +66,15 @@ function topFor(values) {
   return step * 4;
 }
 
-export function lineTrendSVG({ width = 720, height = 170, xLabels = [], xDates = [], series = [], aria = "", compact = false, formatValue = fmt, nebulaDots = null, connectGaps = false, yAxis = false, endLabels = !compact, minTop = 0 }) {
+export function lineTrendSVG({ width = 720, height = 170, xLabels = [], xDates = [], series = [], aria = "", compact = false, formatValue = fmt, nebulaDots = null, connectGaps = false, yAxis = false, endLabels = !compact, minTop = 0, releases = null, marks = null }) {
   const W = Math.max(compact ? 180 : 320, Math.min(1120, Math.round(width || 720)));
   const H = Math.max(compact ? 52 : 120, Math.round(height || 170));
-  const PAD = compact ? (yAxis ? { l: 48, r: 16, t: 16, b: 24 } : { l: 10, r: 10, t: 10, b: 20 }) : { l: 48, r: endLabels ? 116 : 16, t: 16, b: 28 };
+  // A labelled release mark needs a strip above the plot for the version name; the line itself
+  // always runs from the top axis to the bottom axis on one x mapping.
+  const labelled = !compact && ((Array.isArray(releases) && releases.length) || (Array.isArray(marks) && marks.length));
+  const PAD = compact
+    ? (yAxis ? { l: 48, r: 16, t: 16, b: 24 } : { l: 12, r: 12, t: 12, b: 20 })
+    : { l: 48, r: endLabels ? 116 : 16, t: labelled ? 32 : 16, b: 28 };
   const n = Math.max(1, xLabels.length);
   const all = series.flatMap((s) => s.values);
   const top = Math.max(minTop, topFor(all));
@@ -79,6 +84,24 @@ export function lineTrendSVG({ width = 720, height = 170, xLabels = [], xDates =
   const timeAxis = times.length === n && times.every(Number.isFinite) && times[n - 1] > times[0];
   const xOf = (i) => PAD.l + (n <= 1 ? innerW / 2 : innerW * (timeAxis ? (times[i] - times[0]) / (times[n - 1] - times[0]) : i / (n - 1)));
   const yOf = (v) => PAD.t + innerH - (clamp(v, 0, top) / top) * innerH;
+  /* Release dates are placed on the same time axis as the curve, not snapped to the nearest
+     sample, so the marker and the line agree; an index-based mark covers categorical x axes. */
+  const releaseAt = (at) => PAD.l + (n <= 1 ? innerW / 2 : innerW * (clamp(at, 0, n - 1) / Math.max(1, n - 1)));
+  const rel = [];
+  if (timeAxis && Array.isArray(releases)) {
+    releases.forEach((entry) => {
+      const t = Date.parse(`${entry && entry.date}T00:00:00Z`);
+      if (!Number.isFinite(t) || t < times[0] || t > times[n - 1]) return;
+      rel.push({ x: PAD.l + (innerW * (t - times[0])) / (times[n - 1] - times[0]), label: entry.label || "发版", date: entry.date });
+    });
+  }
+  if (Array.isArray(marks)) {
+    marks.forEach((mark) => {
+      if (!mark || !Number.isFinite(mark.at)) return;
+      rel.push({ x: releaseAt(mark.at), label: mark.label || "发版", date: mark.date || null });
+    });
+  }
+  rel.sort((a, b) => a.x - b.x);
   let grid = "";
   const gridLines = compact && !yAxis ? 1 : 4;
   for (let g = 0; g <= gridLines; g++) {
@@ -87,8 +110,20 @@ export function lineTrendSVG({ width = 720, height = 170, xLabels = [], xDates =
     if (yAxis) grid += `<text class="mxt-ylab" x="${PAD.l - 8}" y="${y.toFixed(1)}">${esc(formatValue(top * g / gridLines))}</text>`;
   }
   const maxLabels = compact ? 3 : 6;
-  const tickIdx = [...new Set(Array.from({ length: Math.min(n, maxLabels) }, (_, i) =>
+  const candidates = [...new Set(Array.from({ length: Math.min(n, maxLabels) }, (_, i) =>
     Math.round((i * (n - 1)) / Math.max(1, Math.min(n, maxLabels) - 1))))];
+  // Irregular dates make evenly-picked ticks crowd at the right edge: keep a minimum pixel gap and
+  // always keep the newest date, anchored to the plot edge so its label never runs out of the chart.
+  const minGap = 54;
+  const tickIdx = [];
+  candidates.forEach((i) => {
+    if (!tickIdx.length || xOf(i) - xOf(tickIdx[tickIdx.length - 1]) >= minGap) tickIdx.push(i);
+  });
+  const lastTick = candidates[candidates.length - 1];
+  if (lastTick != null && tickIdx[tickIdx.length - 1] !== lastTick) {
+    if (xOf(lastTick) - xOf(tickIdx[tickIdx.length - 1]) < minGap) tickIdx.pop();
+    tickIdx.push(lastTick);
+  }
   const xSvg = tickIdx.map((i) => `<text class="mxt-xlab" style="text-anchor:${i === 0 ? "start" : i === n - 1 ? "end" : "middle"}" x="${xOf(i).toFixed(1)}" y="${H - 4}">${esc(xLabels[i] == null ? "" : xLabels[i])}</text>`).join("");
   let areas = "";
   let lines = "";
@@ -112,7 +147,7 @@ export function lineTrendSVG({ width = 720, height = 170, xLabels = [], xDates =
       run.push(point);
       if (!s.ghost) {
         const ratio = s.ratios && s.ratios[i] != null ? s.ratios[i] : v / top;
-        nebula += nebulaCluster({ x: point[0], y: point[1], value: s.volumes ? s.volumes[i] : v, max: volumeMax, ratio, color: s.color, seed: si * 1009 + i * 37, maxDots: nebulaDots || (compact ? 10 : 16), spread: compact ? 6 : 9 });
+        nebula += nebulaCluster({ x: point[0], y: point[1], value: s.volumes ? s.volumes[i] : v, max: volumeMax, ratio, color: s.color, maxDots: nebulaDots || (compact ? 10 : 16), spread: compact ? 3.4 : 9 });
         dots += `<circle class="mxt-dot" data-trend-point="${si}:${i}" cx="${point[0].toFixed(1)}" cy="${point[1].toFixed(1)}" r="${compact ? 2 : 2.8}" style="fill:${s.color}" aria-label="${esc(`${s.label || ""} ${xLabels[i] || ""} · ${formatValue(v)}`)}"/>`;
       }
     });
@@ -143,11 +178,27 @@ export function lineTrendSVG({ width = 720, height = 170, xLabels = [], xDates =
     <line x1="${(labelX - 1).toFixed(1)}" x2="${(labelX + 8).toFixed(1)}" y1="${e.ly.toFixed(1)}" y2="${e.ly.toFixed(1)}" style="stroke:${e.s.color};stroke-width:2"/>
     <text x="${(labelX + 13).toFixed(1)}" y="${(e.ly + 3.4).toFixed(1)}"><tspan>${esc(e.s.label || "")}</tspan><tspan class="mxt-end-val" dx="6">${esc(formatValue(e.value))}</tspan></text>
   </g>`).join("");
+  // 发版参照：一条从顶轴贯到底轴的实线 + 一条淡红带 + 顶端版本名，读图和读日期在同一个 x 上。
+  // 小图里只留一根 1px 发版线（画在曲线之下），大图才用淡红带 + 端点 + 版本名强调。
+  const relBands = compact ? "" : rel.map((m) => `<rect class="mxt-release-band" x="${(m.x - 3).toFixed(1)}" y="${PAD.t}" width="6" height="${innerH.toFixed(1)}" rx="3"/>`).join("");
+  const relBars = rel.map((m) => compact
+    ? `<line class="mxt-release-line is-compact" x1="${m.x.toFixed(1)}" x2="${m.x.toFixed(1)}" y1="${PAD.t}" y2="${(PAD.t + innerH).toFixed(1)}"/>`
+    : `<line class="mxt-release-line" x1="${m.x.toFixed(1)}" x2="${m.x.toFixed(1)}" y1="${PAD.t}" y2="${(PAD.t + innerH).toFixed(1)}"/><circle class="mxt-release-dot" cx="${m.x.toFixed(1)}" cy="${PAD.t}" r="2.4"/><circle class="mxt-release-dot" cx="${m.x.toFixed(1)}" cy="${(PAD.t + innerH).toFixed(1)}" r="2.4"/>`).join("");
+  let relLabels = "";
+  if (!compact && rel.length) {
+    const placed = [];
+    rel.forEach((m) => {
+      let y = PAD.t - 9;
+      while (placed.some((p) => Math.abs(p.x - m.x) < 46 && Math.abs(p.y - y) < 11)) y += 12;
+      placed.push({ x: m.x, y });
+      relLabels += `<text class="mxt-release-label" x="${clamp(m.x, PAD.l + 14, W - PAD.r - 14).toFixed(1)}" y="${y.toFixed(1)}" text-anchor="middle">${esc(m.label)}</text>`;
+    });
+  }
   const html = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(aria)}" data-l="${PAD.l}" data-r="${PAD.r}" data-t="${PAD.t}" data-b="${PAD.b}" data-n="${n}" data-w="${W}" data-h="${H}">
-    <g class="mxt-grid">${grid}${xSvg}</g>${areas}${nebula}${lines}${dots}${ends}
+    <g class="mxt-grid">${grid}${xSvg}</g>${relBands}${areas}${nebula}${compact ? relBars : ""}${lines}${dots}${compact ? "" : relBars}${relLabels}${ends}
     <g class="mxt-cursor"><line/><circle/></g>
   </svg>`;
-  return { html, geo: { W, H, PAD, innerW, innerH, top, xOf, yOf, xLabels, xDates, series, formatValue } };
+  return { html, geo: { W, H, PAD, innerW, innerH, top, xOf, yOf, xLabels, xDates, series, formatValue, releases: rel } };
 }
 
 export function nearestTrendPoint(geo, x, y, radius = 24) {

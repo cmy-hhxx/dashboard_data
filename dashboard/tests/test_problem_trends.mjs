@@ -6,8 +6,8 @@ globalThis.location = { search: "" };
 globalThis.window = {};
 const { buildProblemTrendModel, problemRateValues, problemTrendChart, mountProblemTrends } = await import("../static/js/problem_trends.js");
 const { traceSeverityModel, traceShares } = await import("../static/js/trace_analysis.js");
-const { lineTrendSVG, nearestTrendPoint, wireTrendPointPick, wireLineTrendChart } = await import("../static/js/trend_chart.js");
-const { abComparisonHTML, mountAB, metricValue, metricTip } = await import("../static/js/abtest.js");
+const { lineTrendSVG, nearestTrendPoint, wireTrendPointPick, wireLineTrendChart, nebulaCluster } = await import("../static/js/trend_chart.js");
+const { abComparisonHTML, abRoundsHTML, mountAB, metricValue, metricTip } = await import("../static/js/abtest.js");
 const { matrixHeatSummary } = await import("../static/js/matrix_heat.js");
 const { trendSampleCandidates, trendSampleProblems, traceSampleRefs, abTrendSampleRefs, resolveABSamples } = await import("../static/js/trend_samples.js");
 
@@ -190,12 +190,11 @@ test("rounded Trace shares sum to exactly 100.0% without inventing a denominator
   assert.deepEqual(traceShares([0, 0, 0, 0, 0, 0]), [null, null, null, null, null, null]);
 });
 
-test("AB groups both released populations but keeps their volumes and paired delta separate", () => {
+test("AB groups both released populations but keeps their volumes separate", () => {
   const html = abComparisonHTML({ sides: { before: { hits: 200, traces: 80 }, after: { hits: 60, traces: 30 }, online: { hits: 40, traces: 400 } } });
-  assert.match(html, /height:156px/);
-  assert.match(html, /height:46.8px/);
-  assert.match(html, /height:31.2px/);
-  assert.match(html, /同题减少 140/);
+  assert.match(html, /height:112px/);
+  assert.match(html, /height:34px/);
+  assert.match(html, /height:22px/);
   assert.match(html, /同题复测/);
   assert.match(html, /线上真实/);
   assert.match(html, /30 有问题 Trace/);
@@ -209,11 +208,129 @@ test("AB comparison distinguishes missing results from measured zero problems", 
   assert.equal((missing.match(/class="evbar"/g) || []).length, 1);
   assert.doesNotMatch(missing, /减少/);
   const zero = abComparisonHTML({ sides: { before: { hits: 200 }, after: { hits: 0 } } });
-  assert.match(zero, /同题减少 200/);
   assert.equal((zero.match(/暂无结果/g) || []).length, 1); // Online remains independently missing.
   assert.equal((zero.match(/class="evbar"/g) || []).length, 2);
   const onlineOnly = abComparisonHTML({ sides: { before: { hits: 200 }, online: { hits: 40 } } });
   assert.doesNotMatch(onlineOnly, /同题减少|同题增加/);
+  assert.equal((onlineOnly.match(/class="evbar"/g) || []).length, 2);
+});
+
+test("AB overview is three cards whose four flows add up to the net paired change", () => {
+  const rnd = {
+    label: "v1106",
+    sides: { before: { hits: 125, traces: 40 }, after: { hits: 65, traces: 30 } },
+    leaves: [
+      { id: "S1.M1.1", name: "消除的", before: 50, after: 0 },
+      { id: "S1.M1.2", name: "回落的", before: 60, after: 20 },
+      { id: "S1.M1.3", name: "上升的", before: 10, after: 30 },
+      { id: "S1.M1.4", name: "新出现的", before: 0, after: 10 },
+      { id: "S1.M1.5", name: "没动的", before: 5, after: 5 },
+    ],
+    matrix: {
+      before: [["未接入分类体系", "", [["S1.M1.1", 50], ["S1.M1.2", 60], ["S1.M1.3", 10], ["S1.M1.5", 5]]]],
+      after: [["未接入分类体系", "", [["S1.M1.2", 20], ["S1.M1.3", 30], ["S1.M1.4", 10], ["S1.M1.5", 5]]]],
+    },
+    nodes: [],
+  };
+  const host = { innerHTML: "", getBoundingClientRect: () => ({ width: 720 }),
+    querySelector: () => null, querySelectorAll: () => [], addEventListener() {} };
+  const previousWindow = globalThis.window, previousRAF = globalThis.requestAnimationFrame;
+  globalThis.window = { addEventListener() {} };
+  globalThis.requestAnimationFrame = () => 0;
+  try {
+    mountAB(host, { rounds: [rnd] }, { round: 0, step: "summary" }, {}, null, {});
+    assert.match(host.innerHTML, /class="ab-overview" id="abOverview" data-open="" data-cards="3"/);
+    assert.equal((host.innerHTML.match(/data-abcard="/g) || []).length, 3, "three cards share the row");
+    assert.equal((host.innerHTML.match(/data-act="abcard"/g) || []).length, 3, "each card can take the row");
+    assert.match(host.innerHTML, /class="ab-bridge-main"><b class="num is-better">−60<\/b><small>个问题<\/small>/);
+    assert.match(host.innerHTML, /<span class="ab-bridge-pair num">125<i>→<\/i>65<\/span>/);
+    const flows = [...host.innerHTML.matchAll(/class="ab-flow ([^"]+)"[\s\S]*?<span>([^<]+)<\/span>[\s\S]*?<b class="num">([^<]+)<\/b>/g)].map((m) => [m[2], m[3]]);
+    assert.deepEqual(flows, [["消除", "−50"], ["减少", "−40"], ["增加", "+20"], ["新增", "+10"]]);
+    assert.doesNotMatch(host.innerHTML, /ab-scope|ab-mxnote|<h3|<h4/);
+  } finally {
+    globalThis.window = previousWindow;
+    globalThis.requestAnimationFrame = previousRAF;
+  }
+});
+
+test("AB overview drops the change card while the release side has not been measured", () => {
+  const rnd = { label: "v1106", sides: { before: { hits: 12 } }, leaves: [{ id: "S1.M1.1", name: "x", before: 12, after: null }], matrix: { before: [] }, nodes: [] };
+  const host = { innerHTML: "", getBoundingClientRect: () => ({ width: 720 }),
+    querySelector: () => null, querySelectorAll: () => [], addEventListener() {} };
+  const previousWindow = globalThis.window, previousRAF = globalThis.requestAnimationFrame;
+  globalThis.window = { addEventListener() {} };
+  globalThis.requestAnimationFrame = () => 0;
+  try {
+    mountAB(host, { rounds: [rnd] }, { round: 0, step: "summary" }, {}, null, {});
+    assert.match(host.innerHTML, /data-cards="2"/);
+    assert.equal((host.innerHTML.match(/data-abcard="/g) || []).length, 2);
+    assert.doesNotMatch(host.innerHTML, /ab-bridge-card/);
+    assert.match(host.innerHTML, /暂无结果/);
+  } finally {
+    globalThis.window = previousWindow;
+    globalThis.requestAnimationFrame = previousRAF;
+  }
+});
+
+test("trend release marks land on the date axis and span the whole plot from top to bottom", () => {
+  const chart = lineTrendSVG({
+    width: 720, height: 260,
+    xLabels: ["10-28", "10-30", "11-02", "11-06", "11-08"],
+    xDates: ["2026-10-28", "2026-10-30", "2026-11-02", "2026-11-06", "2026-11-08"],
+    series: [{ label: "问题", color: "var(--accent)", values: [1, 2, 3, 4, 5] }],
+    releases: [{ date: "2026-10-30", label: "v1030" }, { date: "2026-11-06", label: "v1106" }, { date: "2026-12-01", label: "窗外" }],
+  });
+  assert.equal((chart.html.match(/class="mxt-release-line"/g) || []).length, 2, "only releases inside the window are drawn");
+  assert.match(chart.html, />v1030</);
+  assert.match(chart.html, />v1106</);
+  assert.doesNotMatch(chart.html, /窗外/);
+  assert.equal(chart.geo.releases.length, 2);
+  assert.ok(Math.abs(chart.geo.releases[0].x - chart.geo.xOf(1)) < 0.01, "a release on a sample date uses that date's x");
+  const line = chart.html.match(/class="mxt-release-line" x1="([\d.]+)" x2="([\d.]+)" y1="([\d.]+)" y2="([\d.]+)"/);
+  assert.equal(Number(line[3]), chart.geo.PAD.t, "the release line starts on the top axis");
+  assert.equal(Number(line[4]), chart.geo.PAD.t + chart.geo.innerH, "and ends on the bottom axis");
+  assert.match(chart.html, /class="mxt-release-band"/);
+  assert.match(chart.html, /class="mxt-release-dot"/);
+});
+
+test("compact trend cards keep release marks to a quiet hairline without labels", () => {
+  const chart = lineTrendSVG({
+    compact: true, width: 220, height: 76,
+    xLabels: ["10-28", "11-06"], xDates: ["2026-10-28", "2026-11-06"],
+    series: [{ label: "问题", color: "var(--accent)", values: [1, 2] }],
+    releases: [{ date: "2026-11-06", label: "v1106" }],
+  });
+  assert.match(chart.html, /class="mxt-release-line is-compact"/);
+  assert.doesNotMatch(chart.html, /mxt-release-band|mxt-release-dot|mxt-release-label/);
+});
+
+test("index-based release marks cover a categorical before/after axis", () => {
+  const chart = lineTrendSVG({
+    width: 720, height: 260, xLabels: ["改版前", "改版后"], xDates: ["改版前", "改版后"],
+    series: [{ label: "问题", color: "var(--accent)", values: [3, 5] }],
+    marks: [{ at: 0.5, label: "v1106" }],
+  });
+  assert.equal(chart.geo.releases.length, 1);
+  assert.ok(Math.abs(chart.geo.releases[0].x - (chart.geo.PAD.l + chart.geo.innerW / 2)) < 0.01);
+  assert.match(chart.html, />v1106</);
+});
+
+test("problem cluster dots are a deterministic, regular rosette instead of random scatter", () => {
+  const args = { x: 100, y: 60, value: 1, max: 10, ratio: 0.4, color: "var(--accent)", maxDots: 10, spread: 9 };
+  const one = nebulaCluster(args);
+  const two = nebulaCluster(args);
+  assert.equal(one, two, "the same point always draws the same mark");
+  const dots = [...one.matchAll(/<circle class="mxt-nebula-dot" cx="([\d.-]+)" cy="([\d.-]+)" r="([\d.]+)"/g)];
+  assert.ok(dots.length >= 3);
+  const radii = dots.map(([, x, y]) => Math.hypot(Number(x) - 100, Number(y) - 60));
+  assert.ok(Math.max(...radii) - Math.min(...radii) < 0.25, "a light point is one evenly spaced ring");
+  dots.forEach(([, x, y, r]) => {
+    assert.ok(Math.abs(Number(x) - 100) + Number(r) < 14, "never wider than the plot padding");
+    assert.ok(Math.abs(Number(y) - 60) + Number(r) < 14);
+  });
+  const heavy = [...nebulaCluster({ ...args, value: 10 }).matchAll(/cx="([\d.-]+)" cy="([\d.-]+)"/g)];
+  const heavyRadii = heavy.map(([, x, y]) => Math.hypot(Number(x) - 100, Number(y) - 60));
+  assert.ok(Math.max(...heavyRadii) - Math.min(...heavyRadii) > 3, "a heavy point fills an outer ring around the inner one");
 });
 
 test("AB cell trends remove duplicate captions and use a labelled, full-height chart with sample interaction", () => {
@@ -238,6 +355,9 @@ test("AB cell trends remove duplicate captions and use a labelled, full-height c
     assert.match(host.innerHTML, /class="mxt-ylab"/);
     assert.match(host.innerHTML, /viewBox="0 0 720 260"/);
     assert.doesNotMatch(host.innerHTML, /class="mxt-end-line"/); // No line into the missing after result.
+    assert.deepEqual(mounted[1].chart.marks, [{ at: 0.5, label: "v1106" }], "the release sits between 改版前 and 改版后");
+    assert.match(host.innerHTML, /class="mxt-release-line"/);
+    assert.match(host.innerHTML, /class="mxt-release-label"[^>]*>v1106</);
     assert.ok(mounted, "the AB chart must use the shared sample drawer mount");
     assert.equal(mounted[0], chartHost);
     const picks = mounted[1].chart.series[0].samples;
@@ -307,7 +427,7 @@ test("AB matrix offers change / pre-release / post-release metrics and sums rete
     assert.match(host.innerHTML, /data-metric="post"/);
     assert.doesNotMatch(host.innerHTML, /data-metric="(all|after|online)"/);
     assert.match(host.innerHTML, /发版后（同题回测\+线上真实）/);
-    assert.match(host.innerHTML, /class="ab-model">expert</);
+    assert.doesNotMatch(host.innerHTML, /class="ab-round"/); // the records live in the card head
     assert.doesNotMatch(host.innerHTML, /ab-mxnote|ab-scope/);
     // The shared session-matrix tooltip resolver owns [data-mx]; AB cells must opt out of it and
     // carry their own metric-aware data-tip instead.
@@ -330,29 +450,17 @@ test("AB matrix offers change / pre-release / post-release metrics and sums rete
   assert.equal(metricValue(cell, "paired", { sides: { online: {} } }), null);
 });
 
-test("AB round tag maps the model scope to one of expert / fast / fast+expert", () => {
-  const host = { innerHTML: "", getBoundingClientRect: () => ({ width: 720 }),
-    querySelector: () => null, querySelectorAll: () => [], addEventListener() {} };
-  const previousWindow = globalThis.window, previousRAF = globalThis.requestAnimationFrame;
-  globalThis.window = { addEventListener() {} };
-  globalThis.requestAnimationFrame = () => 0;
-  try {
-    const mount = (models) => {
-      const rnd = { label: "v1106", models, sides: { before: { hits: 1 } }, matrix: { before: [] }, nodes: [] };
-      mountAB(host, { rounds: [rnd] }, { round: 0, step: "summary" }, {}, null, {});
-    };
-    mount(["expert"]);
-    assert.match(host.innerHTML, /class="ab-model">expert</);
-    mount(["fast"]);
-    assert.match(host.innerHTML, /class="ab-model">fast</);
-    mount(["fast", "expert"]);
-    assert.match(host.innerHTML, /class="ab-model">fast\+expert</);
-    mount([]);
-    assert.doesNotMatch(host.innerHTML, /class="ab-model"/);
-  } finally {
-    globalThis.window = previousWindow;
-    globalThis.requestAnimationFrame = previousRAF;
-  }
+test("AB round records are head chips tagged with one of expert / fast / fast+expert", () => {
+  const round = (label, models) => ({ label, models, sides: { before: { hits: 1 } } });
+  const expert = abRoundsHTML([round("v1106", ["expert"])], 0);
+  assert.match(expert, /class="ab-round" data-act="round" data-i="0" aria-pressed="true"/);
+  assert.match(expert, /class="ab-model">expert</);
+  assert.match(abRoundsHTML([round("v1106", ["fast"])], 0), /class="ab-model">fast</);
+  assert.match(abRoundsHTML([round("v1106", ["fast", "expert"])], 0), /class="ab-model">fast\+expert</);
+  assert.doesNotMatch(abRoundsHTML([round("v1106", [])], 0), /class="ab-model"/);
+  const two = abRoundsHTML([round("v1030", ["fast"]), round("v1106", ["expert"])], 1);
+  assert.equal((two.match(/class="ab-round"/g) || []).length, 2, "a new AB round is one more head chip");
+  assert.match(two, /data-i="1" aria-pressed="true"/);
 });
 
 test("AB cell tooltips explain the printed number with the same sides and arithmetic", () => {

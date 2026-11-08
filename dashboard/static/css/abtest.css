@@ -1,4 +1,4 @@
-/* AB Test: flips the cluster-matrix card in place → comparison-record summary → AB matrix.
+/* AB Test: flips the cluster-matrix card in place → a three-card comparison overview → AB matrix.
    Reuse base tokens and the existing matrix / trend primitives from data.css. */
 
 .mx-ab { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
@@ -12,78 +12,135 @@
 .mx-card { transform-origin: 50% 50%; }
 .mx-card.is-flipping { user-select: none; }
 .mx-face[hidden] { display: none; }
-.mx-ab-face > .card-head .ab-close { margin-left: auto; align-self: center; white-space: nowrap; }
 .mx-ab-face .ab-body { min-width: 0; }
+
+/* ---------------------------------------------------------------- 卡片头：期次 · 全屏 · 返回 */
+.ab-card-head { align-items: center; gap: 12px; margin-bottom: 12px; }
+.ab-card-head h2 { flex: none; }
+.ab-rounds { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.ab-round {
+  display: inline-flex; align-items: center; gap: 7px;
+  min-width: 0; height: 28px; padding: 0 10px; border-radius: var(--r-ctl); background: var(--well); text-align: left;
+  transition: background var(--snap), box-shadow var(--snap);
+}
+.ab-round:hover { background: var(--well-2); }
+.ab-round[aria-pressed="true"] { background: var(--active); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 26%, transparent); }
+.ab-round b { color: var(--ink); font-size: var(--fs-small); font-weight: var(--w-medium); white-space: nowrap; }
+.ab-model {
+  padding: 1px 5px; border-radius: 4px; background: var(--well-2); color: var(--muted);
+  font-size: 10px; line-height: 1.5; font-weight: var(--w-body); font-variant-numeric: tabular-nums;
+}
+.ab-round[aria-pressed="true"] .ab-model { background: color-mix(in oklab, var(--card) 70%, transparent); }
+.ab-head-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.ab-full { width: 28px; height: 28px; border-radius: var(--r-ctl); color: var(--muted); }
+.ab-full:hover { color: var(--ink); }
+.ab-full svg { width: 16px; height: 16px; }
+.ab-full .i-abfull-close { display: none; }
+.ab-full[aria-pressed="true"] { background: var(--active); color: var(--ink); }
+.ab-full[aria-pressed="true"] .i-abfull-open { display: none; }
+.ab-full[aria-pressed="true"] .i-abfull-close { display: block; }
+.ab-close { white-space: nowrap; }
+
+/* 全屏：卡片离开 bento 铺满视口，Esc 或同一个 icon 回到原位 */
+.mx-card.is-full {
+  position: fixed; inset: 0; z-index: 80; width: auto; height: auto; overflow: auto;
+  border-radius: 0; padding: 20px var(--gutter) 40px;
+}
+.mx-card.is-full > .mx-face { max-width: 1600px; margin-inline: auto; }
+.mx-card.is-full .ab-card-head { position: sticky; top: 0; z-index: 2; padding: 4px 0 10px; background: var(--card); }
+.mx-card.is-full .ab-overview { min-height: 320px; }
+.mx-card.is-full .ab-orbit-sunburst .sb-list { max-height: 264px; }
+body.is-ab-full { overflow: hidden; }
 
 .abw { display: grid; gap: 16px; min-width: 0; }
 
-/* ---------------------------------------------------------------- 对比记录 */
-.ab-rounds { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
-.ab-round {
-  display: inline-flex; align-items: center; gap: 8px;
-  min-width: 0; height: 34px; padding: 0 12px; border-radius: 10px; background: var(--well); text-align: left;
-  transition: background 180ms cubic-bezier(0.2, 0.7, 0.2, 1), box-shadow 180ms cubic-bezier(0.2, 0.7, 0.2, 1);
+/* ---------------------------------------------------------------- 三卡总览：一张占行，另两张让位 */
+.ab-overview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: stretch; gap: 12px; min-width: 0; }
+.ab-overview[data-cards="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.ab-overview[data-open="orbit"] { grid-template-columns: minmax(0, 1.85fr) minmax(0, 1fr) minmax(0, 1fr); }
+.ab-overview[data-open="bridge"] { grid-template-columns: minmax(0, 1fr) minmax(0, 1.85fr) minmax(0, 1fr); }
+.ab-overview[data-open="sides"] { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.85fr); }
+.ab-card { position: relative; min-width: 0; overflow: hidden; padding: 12px 16px; border-radius: var(--r-well); background: var(--well); }
+.ab-card-btn {
+  position: absolute; top: 8px; right: 8px; z-index: 1;
+  width: 24px; height: 24px; display: grid; place-items: center; border-radius: 6px;
+  color: var(--faint); opacity: 0.5;
+  transition: opacity var(--snap), background var(--snap), color var(--snap), transform var(--snap);
 }
-.ab-round:hover { background: var(--well-2); }
-.ab-round[aria-pressed="true"] { background: var(--active); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 28%, transparent); }
-.ab-round b { color: var(--ink); font-size: var(--fs-body); font-weight: var(--w-medium); white-space: nowrap; }
-.ab-model {
-  padding: 1px 6px; border-radius: 4px; background: var(--well-2); color: var(--muted);
-  font-size: 11px; line-height: 1.45; font-weight: var(--w-body); font-variant-numeric: tabular-nums;
-}
+.ab-card-btn:hover { opacity: 1; background: var(--well-2); color: var(--ink-2); }
+.ab-card-btn:active { transform: scale(0.94); }
+.ab-card-btn[aria-pressed="true"] { opacity: 1; background: var(--active); color: var(--accent); }
+.ab-card-btn svg { width: 15px; height: 15px; }
+.ab-card-top { display: flex; align-items: center; gap: 8px; min-height: 24px; padding-right: 26px; }
 
-/* ---------------------------------------------------------------- 三批总览 */
-.ab-summary { display: grid; gap: 14px; min-width: 0; }
-.ab-overview {
-  display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(230px, 0.65fr);
-  align-items: stretch; gap: 18px; padding: 14px; border-radius: var(--r-well); background: var(--well);
-}
-.ab-orbit-card { display: grid; align-content: start; gap: 8px; min-width: 0; }
-.ab-orbit-switch { width: max-content; height: 30px; padding: 2px; }
-.ab-orbit-switch button { padding: 0 11px; font-size: var(--fs-meta); }
+/* 聚类树 */
+.ab-orbit-card { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 8px; }
+.ab-orbit-switch { width: max-content; height: 28px; padding: 2px; }
+.ab-orbit-switch button { padding: 0 10px; font-size: var(--fs-meta); }
 .ab-orbit-switch .seg-knob { top: 2px; bottom: 2px; }
 .ab-orbit-sunburst { min-width: 0; display: grid; align-items: center; }
-.ab-orbit-sunburst .sb-view { grid-template-columns: 180px minmax(0, 1fr); gap: 8px; }
-.ab-orbit-sunburst .sb { width: 180px; }
-.ab-orbit-sunburst .sb-c b { font-size: 24px; }
-.ab-orbit-sunburst .sb-list { max-height: 184px; overflow-y: auto; align-content: start; }
-.ab-orbit-sunburst .sb-r { min-height: 24px; font-size: var(--fs-meta); }
-.ab-overview-side { position: relative; min-width: 0; min-height: 268px; overflow: hidden; }
-.ab-side-pane { position: absolute; inset: 0; min-width: 0; transition: transform 360ms cubic-bezier(0.16, 1, 0.3, 1), opacity 260ms cubic-bezier(0.16, 1, 0.3, 1); }
+.ab-orbit-sunburst .sb-view { grid-template-columns: 150px minmax(0, 1fr); gap: 10px; }
+.ab-orbit-sunburst .sb { width: 150px; }
+.ab-orbit-sunburst .sb-c b { font-size: 22px; }
+.ab-orbit-sunburst .sb-list { max-height: 200px; overflow-y: auto; align-content: safe center; scrollbar-width: thin; }
+.ab-orbit-sunburst .sb-r { min-height: 26px; font-size: var(--fs-meta); }
+.ab-orbit-card.is-deep .ab-orbit-sunburst .sb-view { grid-template-columns: 190px minmax(0, 1fr); gap: 16px; }
+.ab-orbit-card.is-deep .ab-orbit-sunburst .sb { width: 190px; }
+.ab-orbit-card:not(.is-deep) .ab-orbit-sunburst .sb-r { grid-template-columns: 8px minmax(0, 1fr) auto; }
+.ab-orbit-card:not(.is-deep) .ab-orbit-sunburst .sb-markn,
+.ab-orbit-card:not(.is-deep) .ab-orbit-sunburst .sb-r em { display: none; }
+
+/* 变化构成：四项流量合起来就是两根柱子之间的净变化 */
+.ab-bridge-card { display: grid; align-content: start; gap: 8px; }
+.ab-bridge-pair { color: var(--muted); font-size: var(--fs-meta); font-variant-numeric: tabular-nums; }
+.ab-bridge-pair i { margin: 0 6px; font-style: normal; color: var(--faint); }
+.ab-bridge-main { display: flex; align-items: baseline; gap: 6px; }
+.ab-bridge-main b { color: var(--ink); font-size: 30px; line-height: 1; font-weight: var(--w-light); letter-spacing: -0.02em; }
+.ab-bridge-main b.is-better { color: var(--accent); }
+.ab-bridge-main b.is-worse { color: var(--sev-1); }
+.ab-bridge-main small { color: var(--muted); font-size: var(--fs-meta); }
+.ab-flows { display: grid; gap: 8px; max-width: 720px; margin-top: 4px; }
+.ab-flow { display: grid; grid-template-columns: 44px minmax(0, 1fr) 52px; align-items: center; gap: 8px; min-height: 24px; }
+.ab-flow > span { color: var(--muted); font-size: var(--fs-meta); }
+.ab-flow-bar { height: 4px; border-radius: 2px; background: var(--well-2); overflow: hidden; }
+.ab-flow-bar b { display: block; width: var(--w); height: 100%; border-radius: inherit; background: var(--accent); }
+.ab-flow.is-worse .ab-flow-bar b { background: var(--sev-1); }
+.ab-flow > b { text-align: right; color: var(--ink-2); font-size: var(--fs-meta); font-weight: var(--w-medium); white-space: nowrap; }
+.ab-bridge-card.is-compact { align-content: center; }
+.ab-bridge-card.is-compact .ab-card-top { position: absolute; top: 12px; left: 16px; right: 36px; }
+.ab-bridge-card.is-compact .ab-flows { display: none; }
+.ab-bridge-card.is-compact .ab-bridge-main b { font-size: 36px; }
+
+/* 三批总量：同题基线 / 同题复测 / 线上真实 */
+.ab-sides-card { min-height: 252px; padding: 0; }
+.ab-side-pane {
+  position: absolute; inset: 12px 16px; min-width: 0;
+  transition: transform 360ms cubic-bezier(0.16, 1, 0.3, 1), opacity 260ms cubic-bezier(0.16, 1, 0.3, 1);
+}
 .ab-side-pane[data-pane="samples"] { opacity: 0; pointer-events: none; transform: translateX(100%); }
 .ab-overview-side.is-sample .ab-side-pane[data-pane="sides"] { opacity: 0; pointer-events: none; transform: translateX(22px); }
 .ab-overview-side.is-sample .ab-side-pane[data-pane="samples"] { opacity: 1; pointer-events: auto; transform: none; }
-.ab-sides { display: grid; gap: 6px; min-width: 0; height: 100%; align-content: center; }
-.ab-sides-title { color: var(--muted); font-size: var(--fs-meta); }
-.ab-side {
-  display: grid; grid-template-columns: 9px minmax(0, 1fr) auto; align-items: center; gap: 2px 10px;
-  min-height: 54px; padding: 7px 11px; border-radius: 10px; background: color-mix(in oklab, var(--card) 62%, transparent);
-}
-.ab-side > i { grid-row: 1 / 3; width: 9px; height: 9px; border-radius: 50%; background: var(--c); box-shadow: var(--swatch-ring); }
-.ab-side > span { color: var(--ink-2); font-size: var(--fs-small); }
-.ab-side > b { color: var(--ink); font-size: 25px; line-height: 1; font-weight: var(--w-light); letter-spacing: -0.02em; }
-.ab-side > small { grid-column: 2 / 4; color: var(--faint); font-size: var(--fs-meta); line-height: 1.35; }
-.ab-side.is-pending { opacity: 0.62; }
 .ab-results { display: grid; align-content: center; gap: 8px; height: 100%; min-width: 0; }
-.ab-results > header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; color: var(--ink-2); font-size: var(--fs-small); }
-.ab-result-change { color: var(--muted); font-size: var(--fs-meta); }
-.ab-result-change.is-better { color: var(--loc-ulq); }
-.ab-result-change.is-worse { color: var(--sev-1); }
-.ab-result-groups { display: grid; grid-template-columns: 1fr 2fr; text-align: center; font-size: var(--fs-meta); color: var(--ink-2); }
-.ab-result-groups > span:last-child { border-bottom: 1px solid var(--well-2); padding-bottom: 4px; }
-.ab-result-bars.evrow { width: 100%; gap: 8px; }
-.ab-result-bars .evday { grid-template-rows: 28px 156px auto 32px; }
-.ab-result-bars .evnums { min-height: 28px; }
-.ab-result-bars .evnums b { font-size: 20px; font-weight: var(--w-light); }
-.ab-result-column { display: flex; align-items: flex-end; justify-content: center; height: 156px; border-bottom: 1px solid var(--well-2); }
-.ab-result-column .evbar { max-width: 64px; }
+.ab-results > header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; color: var(--muted); font-size: var(--fs-meta); }
+.ab-result-groups { display: grid; grid-template-columns: 1fr 2fr; text-align: center; color: var(--faint); font-size: 11px; }
+.ab-result-bars.evrow,
+.ab-result-groups,
+.ab-results > header { width: min(100%, 520px); margin-inline: auto; }
+.ab-result-bars.evrow { gap: 8px; }
+.ab-result-bars .evday { grid-template-rows: 24px var(--bar-h) auto 32px; gap: 4px; }
+.ab-result-bars .evnums { min-height: 24px; align-content: end; }
+.ab-result-bars .evnums b { font-size: 20px; line-height: 1.1; font-weight: var(--w-light); }
+.ab-result-column { display: flex; align-items: flex-end; justify-content: center; height: var(--bar-h); border-bottom: 1px solid var(--well-2); }
+.ab-result-column .evbar { max-width: 56px; }
 .ab-result-column .evbar i { background: var(--c); }
 .ab-result-bars .is-missing .evnums b { color: var(--faint); }
 .ab-result-empty { align-self: center; color: var(--faint); font-size: var(--fs-meta); }
-.ab-result-volume { display: grid; align-content: start; text-align: center; color: var(--muted); font-size: 10px; line-height: 1.5; white-space: nowrap; }
+.ab-result-volume { display: flex; align-items: baseline; justify-content: center; gap: 4px; color: var(--muted); font-size: var(--fs-meta); line-height: 1.4; white-space: nowrap; }
 .ab-result-volume b { color: var(--ink-2); font-weight: var(--w-medium); }
-.ab-sample-pane { height: 100%; padding: 2px 2px 2px 4px; animation: none; }
-.ab-sample-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; min-width: 0; }
+.ab-sides-card.is-compact .ab-result-groups,
+.ab-sides-card.is-compact .ab-result-volume { display: none; }
+.ab-sample-pane { height: 100%; padding: 0; animation: none; }
+.ab-sample-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; min-width: 0; padding-right: 28px; }
 .ab-sample-head span { overflow: hidden; color: var(--ink-2); font-size: var(--fs-small); font-weight: var(--w-medium); text-overflow: ellipsis; white-space: nowrap; }
 .ab-sample-head .link { flex: none; }
 .ab-sample-list { max-height: 160px; }
@@ -97,23 +154,23 @@
 .ab-change-pills b { color: var(--ink-2); font-weight: var(--w-medium); }
 .ab-change-pills small { margin-left: 8px; color: var(--faint); }
 
-.ab-summary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.ab-summary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .ab-rank { min-width: 0; background: var(--well); border-radius: var(--r-well); overflow: hidden; }
-.ab-rank > header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 10px 12px 5px; color: var(--muted); font-size: var(--fs-meta); }
+.ab-rank > header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 12px 16px 4px; color: var(--muted); font-size: var(--fs-meta); }
 .ab-rank > header b { color: var(--ink-2); font-weight: var(--w-medium); }
 .ab-rankrow {
-  display: grid; grid-template-columns: minmax(0, 1fr) minmax(48px, 92px) 66px auto; align-items: center; gap: 8px;
-  width: 100%; min-height: 31px; padding: 4px 11px; text-align: left; color: var(--ink-2);
-  transition: background 120ms ease;
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(48px, 92px) 64px auto; align-items: center; gap: 8px;
+  width: 100%; min-height: 32px; padding: 4px 16px; text-align: left; color: var(--ink-2);
+  transition: background var(--snap);
 }
 .ab-rankrow:hover { background: var(--hover); }
 .ab-rankname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-small); }
-.ab-rankbar { height: 5px; border-radius: 3px; background: var(--well-2); overflow: hidden; }
+.ab-rankbar { height: 4px; border-radius: 2px; background: var(--well-2); overflow: hidden; }
 .ab-rankbar i { display: block; width: var(--w); height: 100%; border-radius: inherit; background: var(--accent); }
 .ab-rank.is-worse .ab-rankbar i { background: var(--sev-1); }
-.ab-rankrow b { text-align: right; color: var(--ink-2); font-size: var(--fs-meta); font-weight: var(--w-medium); white-space: nowrap; }
+.ab-rankrow b { text-align: right; color: var(--ink-2); font-size: var(--fs-meta); font-weight: var(--w-medium); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .ab-rankrow small { color: var(--faint); font-size: 11px; white-space: nowrap; }
-.ab-rankempty { margin: 0; padding: 15px 12px 18px; color: var(--faint); font-size: var(--fs-meta); }
+.ab-rankempty { margin: 0; padding: 16px; color: var(--faint); font-size: var(--fs-meta); }
 
 .ab-summary-foot { display: flex; justify-content: flex-end; }
 .ab-next { font-size: var(--fs-small); }
@@ -127,7 +184,7 @@
 .ab-chip {
   height: 26px; padding: 0 10px; border-radius: var(--r-chip); background: var(--well); color: var(--muted);
   font-size: var(--fs-meta); font-weight: var(--w-medium); white-space: nowrap;
-  transition: background 180ms cubic-bezier(0.2, 0.7, 0.2, 1), color 180ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  transition: background var(--snap), color var(--snap);
 }
 .ab-chip:hover:not([disabled]) { background: var(--well-2); color: var(--ink-2); }
 .ab-chip[aria-pressed="true"] { background: var(--active); color: var(--ink); }
@@ -157,22 +214,35 @@
 .ab-samplechip {
   height: 24px; padding: 0 9px; border-radius: var(--r-chip); background: var(--well); color: var(--muted);
   font-size: var(--fs-meta); white-space: nowrap;
-  transition: background 180ms cubic-bezier(0.2, 0.7, 0.2, 1), color 180ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  transition: background var(--snap), color var(--snap);
 }
 .ab-samplechip:hover { background: var(--well-2); color: var(--ink-2); }
 .ab-samplechip b { color: var(--ink-2); font-weight: var(--w-medium); }
 
 /* ---------------------------------------------------------------- 响应式 */
-@media (max-width: 860px) {
-  .abw { gap: 13px; }
-  .ab-overview { grid-template-columns: minmax(0, 1.35fr) minmax(230px, 0.65fr); gap: 16px; padding: 14px; }
+@media (max-width: 1180px) {
+  .ab-overview, .ab-overview[data-cards="2"], .ab-overview[data-open] { grid-template-columns: minmax(0, 1fr); }
+  .ab-card { padding: 14px 16px; }
+  .ab-bridge-card.is-compact { align-content: start; }
+  .ab-bridge-card.is-compact .ab-card-top { position: static; padding-right: 26px; }
+  .ab-bridge-card.is-compact .ab-flows { display: grid; }
+  .ab-sides-card.is-compact .ab-result-groups,
+  .ab-sides-card.is-compact .ab-result-volume { display: flex; }
+  .ab-orbit-card:not(.is-deep) .ab-orbit-sunburst .sb-r { grid-template-columns: 8px minmax(0, 1fr) 30px auto 44px; }
+  .ab-orbit-card:not(.is-deep) .ab-orbit-sunburst .sb-markn,
+  .ab-orbit-card:not(.is-deep) .ab-orbit-sunburst .sb-r em { display: inline; }
+  .ab-sides-card { min-height: 268px; }
+  .ab-summary-grid { grid-template-columns: minmax(0, 1fr); }
+  .ab-card-btn { display: none; }
+  .ab-orbit-sunburst .sb-view { grid-template-columns: 180px minmax(0, 1fr); max-width: 640px; margin-inline: auto; }
+  .ab-orbit-sunburst .sb { width: 180px; }
 }
 @media (max-width: 720px) {
   .ab-round { min-width: 0; }
-  .ab-overview, .ab-summary-grid { grid-template-columns: minmax(0, 1fr); }
-  .ab-overview { gap: 10px; }
   .ab-orbit-sunburst .sb-view { grid-template-columns: minmax(0, 1fr); }
+  .ab-orbit-sunburst .sb { justify-self: center; }
   .ab-orbit-sunburst .sb-list { max-height: none; }
   .ab-rankrow { grid-template-columns: minmax(0, 1fr) minmax(48px, 84px) 60px; }
   .ab-rankrow small { display: none; }
+  .mx-card.is-full { padding: 12px 16px 32px; }
 }

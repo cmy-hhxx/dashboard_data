@@ -131,6 +131,25 @@ def add_aime(datasets):
              "label": "收盘价取值错误"}]
 
 
+class ReleaseConfigTests(unittest.TestCase):
+    def test_repo_config_is_the_default_and_dataset_file_overrides_it(self):
+        import build
+        with tempfile.TemporaryDirectory() as folder:
+            datasets = Path(folder)
+            configured = json.loads(build.RELEASES_CONFIG.read_text(encoding="utf-8"))
+            expected = sorted(
+                [{"date": entry["date"], **({"label": entry["label"]} if entry.get("label") else {})}
+                 for entry in configured.get("aime", []) if isinstance(entry, dict)],
+                key=lambda entry: entry["date"],
+            )
+            self.assertEqual(build.release_entries(datasets, "aime"), expected)
+            self.assertEqual(build.release_entries(datasets, "wencai"), [])
+            (datasets / "releases.json").write_text(json.dumps(
+                {"aime": [{"date": "2026-01-02", "label": "自有配置"}]}, ensure_ascii=False), encoding="utf-8")
+            self.assertEqual(build.release_entries(datasets, "aime"), [{"date": "2026-01-02", "label": "自有配置"}])
+            self.assertEqual(build.release_entries(datasets, "wencai"), [])
+
+
 class TrendBuildTests(unittest.TestCase):
     def run_build(self, datasets, static, *extra, env=None):
         proc = subprocess.run(

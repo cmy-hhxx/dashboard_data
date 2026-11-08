@@ -59,6 +59,8 @@
   --sev-3: #da8249;
   --sev-4: #dea372;
   --sev-none: #dfe3e8;
+  /* release marker: one red that reads as an event, not as a severity */
+  --release: #b3261e;
 
   --w-title: 600;
   --w-medium: 500;
@@ -89,6 +91,7 @@
   --sev-3: #a7673e;
   --sev-4: #7e583c;
   --sev-none: #2a3038;
+  --release: #ff8f7d;
   /* dark text halos, so every weight steps down once */
   --w-title: 500;
   --w-medium: 400;

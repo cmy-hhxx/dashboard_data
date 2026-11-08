@@ -13,6 +13,7 @@ import { matrixHeatSummary } from "./matrix_heat.js";
 import { trendSampleFrame, abTrendSampleRefs, resolveABSamples, trendSampleCandidates, trendSampleProblems, traceSampleRefs } from "./trend_samples.js";
 
 let ctx;
+let abDocKey = null;
 let shown = null;
 let lastDetail = null;
 /* View state per product that outlives a redraw: an in-place data refresh (or switching product
@@ -45,6 +46,8 @@ export async function render(root, c) {
   const key = `${c.product}|${c.data.generated_at}|${detail ? `eval|${ed}|${em}|${ep}|${edp}` : "home"}`;
   if (shown === key && root.firstChild) return;
   shown = key;
+  // A redraw replaces the whole board: drop the fullscreen lock first, the AB block re-applies it.
+  document.body.classList.remove("is-ab-full");
   if (!p) {
     root.innerHTML = `<div class="bento"><article class="card" style="--span:12"><div class="empty">${
       c.product === "wencai" ? "问财" : "AIME"
@@ -2022,7 +2025,8 @@ function trendSVG(view, title, releases, width) {
   const PAD = {
     l: narrow ? 40 : TREND_PAD.l,
     r: Math.round(Math.min(TW * 0.42, Math.max(baseRight, fullLabelW + 38))),
-    t: TREND_PAD.t,
+    // 发版标签要落在绘图区上方，给顶端留一行。
+    t: (releases || []).length ? TREND_PAD.t + 14 : TREND_PAD.t,
     b: TREND_PAD.b,
   };
   const compactEnds = narrow || fullLabelW + 38 > PAD.r;
@@ -2074,19 +2078,28 @@ function trendSVG(view, title, releases, width) {
     }
     points.forEach(([x, y, value, i]) => {
       const ratio = s.sessions[i] > 0 ? s.hits[i] / s.sessions[i] : value / valueMax;
-      nebulas += nebulaCluster({ x, y, value, max: valueMax, ratio, color: s.color, seed: gi * 1009 + i * 37, maxDots: 14, spread: 8 });
+      nebulas += nebulaCluster({ x, y, value, max: valueMax, ratio, color: s.color, maxDots: 14, spread: 8 });
       dots += `<circle class="mxt-dot" data-trend-point="${gi}:${i}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.8" style="fill:${s.color}"/>`;
     });
   });
 
-  // 发版日参照线。
-  const winAt = new Map(view.win.map((w, i) => [w.d, i]));
-  const rel = (releases || [])
-    .filter((r) => r && r.date && winAt.has(r.date))
-    .map((r, k) => {
-      const x = xOf(winAt.get(r.date)).toFixed(1);
-      return `<g class="mxt-rel"><line x1="${x}" x2="${x}" y1="${PAD.t}" y2="${PAD.t + innerH}"/><text x="${x}" y="${PAD.t + 10 + (k % 2) * 11}">${esc(r.label || "发版")}</text></g>`;
-    }).join("");
+  // 发版日参照线：按真实日期在相邻窗口之间插值（不是就近吸附），线从顶轴贯到底轴，
+  // 与下方总体趋势用同一套标记与配色。
+  const winTimes = view.win.map((w) => Date.parse(`${w.d}T00:00:00Z`));
+  const clampX = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const relMarks = [];
+  (releases || []).forEach((r) => {
+    const t = Date.parse(`${r && r.date}T00:00:00Z`);
+    if (!Number.isFinite(t) || !winTimes.length || t < winTimes[0] || t > winTimes[winTimes.length - 1]) return;
+    let k = winTimes.findIndex((time, i) => i === winTimes.length - 1 || winTimes[i + 1] > t);
+    if (k < 0) k = winTimes.length - 1;
+    const span = winTimes[k + 1] != null ? winTimes[k + 1] - winTimes[k] : 0;
+    relMarks.push({ x: xOf(k + (span > 0 ? (t - winTimes[k]) / span : 0)), label: r.label || "发版" });
+  });
+  relMarks.sort((a, b) => a.x - b.x);
+  const relBands = relMarks.map((m) => `<rect class="mxt-release-band" x="${(m.x - 3).toFixed(1)}" y="${PAD.t}" width="6" height="${innerH.toFixed(1)}" rx="3"/>`).join("");
+  const relBars = relMarks.map((m) => `<line class="mxt-release-line" x1="${m.x.toFixed(1)}" x2="${m.x.toFixed(1)}" y1="${PAD.t}" y2="${(PAD.t + innerH).toFixed(1)}"/><circle class="mxt-release-dot" cx="${m.x.toFixed(1)}" cy="${PAD.t}" r="2.4"/><circle class="mxt-release-dot" cx="${m.x.toFixed(1)}" cy="${(PAD.t + innerH).toFixed(1)}" r="2.4"/>`).join("");
+  const relLabels = relMarks.map((m) => `<text class="mxt-release-label" x="${clampX(m.x, PAD.l + 14, TW - PAD.r - 14).toFixed(1)}" y="${(PAD.t - 9).toFixed(1)}" text-anchor="middle">${esc(m.label)}</text>`).join("");
 
   // 端点标签：每条线的最新值直接标在右侧，按行距错开，线上不再用 legend。
   const endName = (s) => (compactEnds ? s.shortName : s.name);
@@ -2139,7 +2152,7 @@ function trendSVG(view, title, releases, width) {
 
   return {
     html: `<svg viewBox="0 0 ${TW} ${TH}" role="img" aria-label="${esc(title)}" data-n="${n}" data-l="${PAD.l}" data-r="${PAD.r}" data-t="${PAD.t}" data-b="${PAD.b}" data-top="${view.top}">
-      <defs>${defs}</defs><g class="mxt-grid">${grid}${xlab}</g>${areas}${nebulas}${rel}${bands}${lines}${dots}${endsSvg}${gapSvg}
+      <defs>${defs}</defs><g class="mxt-grid">${grid}${xlab}</g>${relBands}${areas}${nebulas}${bands}${lines}${dots}${relBars}${relLabels}${endsSvg}${gapSvg}
       <g class="mxt-cursor"><line y1="${PAD.t}" y2="${PAD.t + innerH}"/><g class="mxt-cursor-dots"></g></g></svg>`,
     geo: { W: TW, H: TH, TW, TH, PAD, innerW, innerH, xOf, yOf, xDates: view.win.map((day) => day.d), series: series.map((s) => ({ ...s, label: s.name, values: s.vals })) },
   };
@@ -2346,8 +2359,17 @@ function matrixCard(p, tax) {
       ${chrome ? `<section class="mx-perspective" id="mxPerspective" hidden aria-label="聚类矩阵问题分析"></section>` : ""}
     </div>
     <div class="mx-face mx-ab-face" id="mxABFace" hidden>
-      <header class="card-head"><h2>A/B Test</h2>
-        <button type="button" class="link ab-close" id="abClose" aria-label="返回聚类矩阵">← 返回矩阵</button></header>
+      <header class="card-head ab-card-head">
+        <h2>A/B Test</h2>
+        <div class="ab-rounds" id="abRounds" role="group" aria-label="AB 测试期次"></div>
+        <div class="ab-head-actions">
+          <button type="button" class="icon-btn ab-full" id="abFull" aria-pressed="false" aria-label="全屏查看 A/B Test" title="全屏">
+            <svg class="i-abfull-open" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 2.5H2.5V6M10 2.5h3.5V6M6 13.5H2.5V10M10 13.5h3.5V10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <svg class="i-abfull-close" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 6H6V2.5M13.5 6H10V2.5M2.5 10H6v3.5M13.5 10H10v3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button type="button" class="link ab-close" id="abClose" aria-label="返回聚类矩阵">← 返回矩阵</button>
+        </div>
+      </header>
       <div class="ab-body" id="abBody"><div class="empty">正在读取 AB 测试数据…</div></div>
     </div>
   </article>`;
@@ -3725,8 +3747,32 @@ function wire(bento, p, tax, u) {
       loaded = true;
       loading = false;
     };
+    /* Fullscreen keeps the reader inside the same card: it leaves the bento, covers the viewport and
+       returns to its slot on Esc or the same icon, so no second panel is mounted. */
+    const fullBtn = $("#abFull", mxCard);
+    const setFull = (on, animate = true) => {
+      const had = mxCard.classList.contains("is-full");
+      u.ab.full = on;
+      if (had === on) return;
+      const first = animate && !REDUCED ? mxCard.getBoundingClientRect() : null;
+      mxCard.classList.toggle("is-full", on);
+      document.body.classList.toggle("is-ab-full", on);
+      if (fullBtn) {
+        fullBtn.setAttribute("aria-pressed", String(on));
+        const label = on ? "退出全屏" : "全屏查看 A/B Test";
+        fullBtn.setAttribute("aria-label", label);
+        fullBtn.title = on ? "退出全屏" : "全屏";
+      }
+      if (!first) return;
+      const last = mxCard.getBoundingClientRect();
+      mxCard.animate([
+        { transform: `translate(${first.left - last.left}px, ${first.top - last.top}px) scale(${first.width / Math.max(1, last.width)}, ${first.height / Math.max(1, last.height)})`, transformOrigin: "0 0" },
+        { transform: "none" },
+      ], { duration: 360, easing: "cubic-bezier(0.16, 1, 0.3, 1)" });
+    };
     const closeAB = () => {
       u.ab.open = false;
+      setFull(false, false);
       requestFace(false);
     };
     const openAB = async () => {
@@ -3736,12 +3782,19 @@ function wire(bento, p, tax, u) {
     };
     abBtn.addEventListener("click", () => (u.ab.open ? closeAB() : openAB()));
     $("#abClose", mxCard).addEventListener("click", closeAB);
-    mxCard.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && u.ab.open) closeAB();
-    });
+    if (fullBtn) fullBtn.addEventListener("click", () => setFull(!u.ab.full));
+    const onDocKey = (e) => {
+      if (e.key !== "Escape" || !u.ab.open || !mxCard.isConnected) return;
+      if (u.ab.full) setFull(false);
+      else closeAB();
+    };
+    if (abDocKey) document.removeEventListener("keydown", abDocKey);
+    abDocKey = onDocKey;
+    document.addEventListener("keydown", abDocKey);
     if (u.ab.open) {
       setFace(true);
       targetBack = true;
+      if (u.ab.full) setFull(true, false);
       hydrateAB();
     }
   }

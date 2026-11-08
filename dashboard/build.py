@@ -52,6 +52,8 @@ from filelist import TreeCache
 DASHBOARD = Path(__file__).resolve().parent
 REPO = DASHBOARD.parent
 STATIC = DASHBOARD / "static"
+# 发版日期：数据目录里的 releases.json 优先（数据侧可覆盖），仓库内 config/releases.json 是随代码走的默认值。
+RELEASES_CONFIG = DASHBOARD / "config" / "releases.json"
 PRODUCTION_DATASETS = Path("/mnt/fin_bench/code_and_clean_data/datasets")
 # Bump when the aggregate payload shape changes (details can stay cached).
 PAYLOAD_VERSION = "2026-11-08.3"
@@ -1827,15 +1829,21 @@ def aggregate(product, samples, taxonomy):
     return out
 
 
+def release_source(datasets: Path) -> Path:
+    """The dataset file wins when present; otherwise the repo config is the shipped default."""
+    own = datasets / "releases.json"
+    return own if own.is_file() else RELEASES_CONFIG
+
+
 def release_entries(datasets: Path, product: str):
-    """Dated releases for one product from the optional ``<datasets>/releases.json``.
+    """Dated releases for one product, from ``<datasets>/releases.json`` or ``config/releases.json``.
 
     Accepts ``{"<product>": [entry, ...]}`` or a bare list applying to every product;
     each entry is ``"YYYY-MM-DD"`` or ``{"date": "YYYY-MM-DD", "label": "..."}``.
     Malformed entries are skipped and the result is sorted by date.
     """
     try:
-        data = json.loads((datasets / "releases.json").read_text(encoding="utf-8"))
+        data = json.loads(release_source(datasets).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return []
     if isinstance(data, dict):
@@ -2751,14 +2759,14 @@ def feed_signature(datasets: Path):
 
 
 def release_signature(datasets: Path):
-    """Cheap fingerprint of the optional releases.json, part of the reuse marker."""
+    """Cheap fingerprint of both release configs, part of the reuse marker."""
     parts = []
-    try:
-        stat = (datasets / "releases.json").stat()
-    except OSError:
-        pass
-    else:
-        parts = [stat.st_size, stat.st_mtime_ns]
+    for path in (datasets / "releases.json", RELEASES_CONFIG):
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        parts.append([path.name, stat.st_size, stat.st_mtime_ns])
     return hashlib.sha1(json.dumps(parts, separators=(",", ":")).encode()).hexdigest()
 
 

@@ -475,8 +475,12 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .mxt-band { pointer-events: none; }
 .mxt-nebula-dot { pointer-events: none; }
 .mxt-dot { stroke: var(--card); stroke-width: 1.2; }
-.mxt-rel line { stroke: var(--faint); stroke-width: 1; stroke-dasharray: 3 3; }
-.mxt-rel text { fill: var(--muted); font-size: 10px; text-anchor: middle; }
+/* 发版标记：一条贯满上下坐标轴的实线 + 淡红带 + 顶端版本名，压过数据线但只占 1.4px。 */
+.mxt-release-band { fill: var(--release); opacity: 0.06; pointer-events: none; }
+.mxt-release-line { stroke: var(--release); stroke-width: 1.4; stroke-linecap: round; opacity: 0.9; pointer-events: none; }
+.mxt-release-line.is-compact { stroke-width: 1; opacity: 0.5; }
+.mxt-release-dot { fill: var(--release); pointer-events: none; }
+.mxt-release-label { fill: var(--release); font-size: 10px; font-weight: var(--w-medium); letter-spacing: 0.02em; paint-order: stroke; stroke: var(--card); stroke-width: 3px; stroke-linejoin: round; }
 .mxt-cursor { display: none; pointer-events: none; }
 .mxt-cursor.is-on { display: block; }
 .mxt-cursor line { stroke: var(--faint); stroke-width: 1; }

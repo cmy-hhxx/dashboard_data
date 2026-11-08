@@ -51,7 +51,7 @@ export function buildProblemTrendModel(trend, names = new Map()) {
     return node;
   };
   fill(root);
-  return { dates, base, byId, root };
+  return { dates, base, byId, root, releases: Array.isArray(trend.releases) ? trend.releases : [] };
 }
 
 function rangeIndexes(model, range) {
@@ -88,7 +88,7 @@ export function problemTrendChart(model, node, idx, width, expanded = false) {
       details: idx.map((i) => `${fmt(node.counts[i])} 个问题 · ${fmt(node.hits[i])} / ${fmt(model.base[i])} 会话`),
     }],
     aria: `${node.name} 的问题发生率与问题数量`, formatValue: (v) => `${fmt(v, v < 1 ? 2 : 1)}%`,
-    nebulaDots: expanded ? 16 : 6, connectGaps: true,
+    nebulaDots: expanded ? 16 : 6, connectGaps: true, releases: model.releases,
   });
 }
 
