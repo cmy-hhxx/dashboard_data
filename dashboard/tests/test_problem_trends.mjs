@@ -9,7 +9,7 @@ const { traceSeverityModel, traceShares } = await import("../static/js/trace_ana
 const { lineTrendSVG, nearestTrendPoint, wireTrendPointPick, wireLineTrendChart, nebulaCluster } = await import("../static/js/trend_chart.js");
 const { abComparisonHTML, abRoundsHTML, mountAB, metricValue, metricTip } = await import("../static/js/abtest.js");
 const { matrixHeatSummary } = await import("../static/js/matrix_heat.js");
-const { trendSampleCandidates, trendSampleProblems, traceSampleRefs, abTrendSampleRefs, resolveABSamples } = await import("../static/js/trend_samples.js");
+const { trendSampleCandidates, trendSampleProblems, traceSampleRefs, abTrendSampleRefs, abLeafRefs, resolveABSamples } = await import("../static/js/trend_samples.js");
 
 const cell = (date, node, count, hits) => [date, 0, node, 0, 0, 0, 0, count, 0, 0, 0, 0, hits, 0, 0, hits];
 const trend = {
@@ -493,14 +493,36 @@ test("AB cloud sample refs keep phase, scene and taxonomy prefix aligned with th
   assert.deepEqual(abTrendSampleRefs({}, ["before"], row, "S1"), []);
 });
 
-test("AB sample navigation never substitutes the baseline detail for an unlinked retest", () => {
+test("AB layout leaf refs keep the side and match the taxonomy prefix", () => {
+  const before = { trace: "a", pair: "a", q: "Q", paths: ["S1.M2.1"] };
+  const after = { trace: "b", pair: "b", q: "Q", detail: 3, paths: ["S1.M2.2"] };
+  const online = { slug: "online", trace: "c", q: "Q", paths: ["S1.M2.2"] };
+  const round = { sample_refs: { before: [before], after: [after], online: [online] } };
+  assert.deepEqual(abLeafRefs(round, ["before"], "S1"), [{ ...before, side: "before" }]);
+  assert.deepEqual(abLeafRefs(round, ["after", "online"], "S1.M2"), [{ ...after, side: "after" }, { ...online, side: "online" }]);
+  assert.deepEqual(abLeafRefs(round, ["after"], "S10"), []);
+  assert.deepEqual(abLeafRefs({}, ["before"], "S1"), []);
+});
+
+test("AB sample navigation opens the exact retest detail without borrowing the baseline", () => {
   const row = { s: "baseline", tid: "a", m: "aime_expert" };
   const ref = { side: "before", trace: "a", model: "expert", paths: ["S1.M2.1"] };
-  assert.equal(resolveABSamples([ref], [row], "S1").items[0].row, row);
+  const resolved = resolveABSamples([ref], [row], "S1");
+  assert.equal(resolved.items[0].row, row);
+  assert.equal(resolved.items[0].ref, ref);
+  assert.equal(resolved.items[0].n, 1);
+  // A retest with no generated detail cannot open, and must not substitute the baseline.
   assert.deepEqual(resolveABSamples([{ ...ref, side: "after" }], [row], "S1"), { items: [], unavailable: 1 });
-  const retest = { ...row, s: "retest" };
-  assert.equal(resolveABSamples([{ ...ref, side: "after", slug: "retest" }], [row, retest], "S1").items[0].row, retest);
-  assert.deepEqual(resolveABSamples([ref], [row, retest], "S1"), { items: [], unavailable: 1 });
+  // Schema 3: the retest carries its own eq reference, so no recall-index row is needed.
+  const retest = { ...ref, side: "after", pair: "a", detail: 7, q: "Q" };
+  const after = resolveABSamples([retest], [row], "S1");
+  assert.equal(after.items[0].row.s, "7");
+  assert.equal(after.items[0].ref, retest);
+  // An online ref still resolves through its sample slug.
+  const online = { side: "online", slug: "live-1", paths: ["S1.M2.2"] };
+  assert.equal(resolveABSamples([online], [row, { ...row, s: "live-1" }], "S1").items[0].row.s, "live-1");
+  // A baseline trace that matches more than one index row stays unavailable: never guess.
+  assert.deepEqual(resolveABSamples([ref], [row, { ...row, s: "retest" }], "S1"), { items: [], unavailable: 1 });
 });
 
 test("heatmap drills only the taxonomy axis and reads each parent union once", () => {

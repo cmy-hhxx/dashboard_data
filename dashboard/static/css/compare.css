@@ -1,0 +1,47 @@
+/* 版本对比 · layout only: the list pane and the two detail panes reuse samples.css.
+   No new colours, icons or heading levels — the two side labels are the page's own content.
+   Spacing follows the 4px grid already used by .pane-head / .pane-scroll. */
+
+html[data-view="compare"] main { max-width: none; padding-bottom: 16px; }
+
+/* Left list + right pair; .bench supplies the 300px / full-height contract. */
+.bench-compare { grid-template-columns: 300px minmax(0, 1fr); }
+.bench-compare > .pane { height: 100%; }
+.compare-panes {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--gap);
+  min-width: 0; height: 100%; align-items: stretch;
+}
+.compare-panes.is-single { grid-template-columns: minmax(0, 1fr); }
+.compare-panes > .pane { height: 100%; min-width: 0; }
+.compare-side > .pane-head { padding: 12px 16px 8px; gap: 4px; }
+.compare-side > .empty { padding: 48px 16px; }
+
+/* A compare pane is 550–700px wide: one column, no evidence threads (the wide-workbench
+   geometry stays on 具体数据). */
+.bench-compare .anatomy,
+.bench-compare .anatomy.is-session { grid-template-columns: minmax(0, 1fr); }
+.bench-compare .threads { display: none; }
+
+/* The list is a question picker, not a filtering workbench: search + count only. */
+.compare-list .pane-head { padding-bottom: 8px; }
+.compare-list .srow .m { gap: 4px 10px; }
+
+@media (max-width: 1180px) {
+  html[data-view="compare"] main { padding-bottom: 48px; }
+  .bench-compare { grid-template-columns: minmax(0, 1fr); height: auto; min-height: 0; }
+  .bench-compare > .pane { height: auto; max-height: 420px; }
+  .bench-compare .pane-sticky { position: static; height: auto; }
+  .bench-compare .compare-panes { height: auto; }
+  .bench-compare .compare-side { height: auto; }
+}
+@media (max-width: 860px) {
+  .bench-compare .compare-panes { grid-template-columns: minmax(0, 1fr); }
+  .bench-compare .compare-side { max-height: 720px; }
+}
+
+
+/* A compare pane is narrower than the 具体数据 workbench: give the question its own line instead
+   of letting the ID row squeeze it into an ellipsis. */
+.bench-compare .headline { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 4px; }
+.bench-compare .headline h2 { flex: 0 0 auto; }
+.bench-compare .headline .idline { justify-content: flex-start; }

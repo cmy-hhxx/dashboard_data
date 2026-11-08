@@ -107,6 +107,13 @@ P0-P4 多折线趋势（默认全部来源 × 全部模型 × 全部问题；来
 payload 的 `rounds[].models` 暴露该集合，页面上只用一个标签表示：`v1106` 旁的 expert / fast / fast+expert。
 点格子看跨期趋势，趋势头可按「改版前 / 改版后 / 线上真实」召回样本。
 
+顶部导航「版本对比」是同题对比页：左栏列出当前轮次固定题集（`pairs`，按「改版后 − 改版前」的问题数变化降序，
+可搜索、分页），右侧并排 **改版前 / 改版后** 两栏，落的都是同一份 `pane pane-out pane-sticky` 样本详情
+（`sample_detail.js` 的工厂，samples 页与 compare 页共用）；改版前用主 samples 的会话 slug，改版后用
+`/ab_samples/<round>/<eq>.json`。缺一侧详情时该栏给空态，不编造。A/B 面板里的样本入口（旭日图叶子样本、
+矩阵格趋势的样本抽屉、线上真实样本）都跳到这页；线上样本没有同题对照，单栏展示。
+**只有 A/B 面板跳这里**：数据看板 / 聚类矩阵 / 会话场等其它入口仍然跳「具体数据」。
+
 ## 4. 文件地图
 
 | 文件 | 用途 | 通常什么时候改 |
@@ -123,7 +130,11 @@ payload 的 `rounds[].models` 暴露该集合，页面上只用一个标签表�
 | `dashboard/static/js/trend_chart.js` | 共享趋势图：折线/面积、问题聚类点、发版红线、格子趋势几何 | 趋势图形状、坐标轴、发版标注 |
 | `dashboard/config/releases.json` | 发版日期默认配置（`<datasets>/releases.json` 可覆盖） | 新增发版、改版本名 |
 | `dashboard/static/js/system.js` | 评测体系机制图、聚类（阶段 → 环节 → 机制 → 模式）、证据闭环 | 体系页 |
-| `dashboard/static/js/samples.js` | 具体数据两栏工作台（顶部轨迹概览、三列轨迹 / 对话 / 归因、证据连线） | 筛选、样本详情 |
+| `dashboard/static/js/samples.js` | 具体数据两栏工作台（样本列表 + 详情） | 列表、筛选、分页 |
+| `dashboard/static/js/sample_detail.js` | 样本详情工厂（head + 轨迹 / 中间链路 / 归因、证据连线、轮次切换）；samples 与版本对比共用，`prefix` 控制 id | 详情呈现、证据交互 |
+| `dashboard/static/js/compare.js` + `css/compare.css` | 版本对比页：同题列表 + 改版前 / 后两栏详情，A/B 面板样本的落点 | 同题对比排版、路由 |
+| `dashboard/ab_detail.py` | 改版后重测详情的懒生成（attribution + compact + retest_input，item_index 回填聚类落点） | 改版后详情、缓存 |
+| `dashboard/tests/test_compare.mjs` / `test_sample_detail.mjs` | 版本对比纯逻辑、详情工厂焊点、样本列表回归 | 改 compare / 详情 |
 | `dashboard/static/js/render.js` | 公共内容渲染：Markdown-lite、JSON 高亮、按偏移保留证据高亮 | 文本 / JSON 呈现 |
 | `dashboard/ab_test.py` | A/B Test 轮次读取：清单 / 逐条叶子落点 / 前后并集树 / 线上真实用户 → `abtests-<product>.json` | A/B Test 数据接入 |
 | `dashboard/static/js/abtest.js` + `css/abtest.css` | A/B Test 面板（记录列表、三批汇总、聚类矩阵、跨期趋势） | A/B Test 对比交互 |
@@ -141,12 +152,7 @@ payload 的 `rounds[].models` 暴露该集合，页面上只用一个标签表�
 
 `static/data.json`（共享壳）：
 
-```text
-{ schema, generated_at, source, taxonomy, system,
-  products{<product>:{label}} }
-```
-
-`static/data-<product>.json`：
+````static/data-<product>.json`：
 
 ```text
 { schema, generated_at, product, products{<product>:{ kpi, dates, field, cross, patterns, ... }} }
@@ -191,12 +197,12 @@ uid 用户 ID（输入 meta.user_id）· ut 用户类型 real/test/internal/unkn
   展开大图、聚类矩阵格子的趋势图、A/B Test 矩阵趋势（单期时落在改版前/改版后的分界）都会显示；
   问题聚类点改成了规则点环（点数/半径随问题量、浓度随命中率），不会越过坐标轴被裁。
 
-`static/abtests-<product>.json`（懒加载，点「聚类矩阵」标题旁的 A/B Test 才拉；只有
-`<datasets>/<n>_<product>/ab_test/` 存在时才生成）：同一批**固定问句**在发版前后各评测 + 聚类一次，
+`static/abtests-<product>.json`（懒加载：数据页点「聚类矩阵」标题旁的 A/B Test、或进入「版本对比」页；
+只有 `<datasets>/<n>_<product>/ab_test/` 存在时才生成）：同一批**固定问句**在发版前后各评测 + 聚类一次，
 再叠一批发版后的线上真实用户评测做验证；三批在 UI 内先汇总、再进入聚类矩阵。
 
 ```text
-{ schema, generated_at, product, models[], labels{status,b_reason,sources},
+{ schema: 3, generated_at, product, models[], labels{status,b_reason,sources},
   rounds[{ id, order, version, label, released_at, generated_at, targets,
            status{A,B,C}, b_reason{B1,B2}, sources[[name,n]…], dates[first,last],
            sides{before{traces,hits}, after{traces,hits}|null,
@@ -204,9 +210,23 @@ uid 用户 ID（输入 meta.user_id）· ut 用户类型 real/test/internal/unkn
            leaves[{id,name,before,after|null,online|null,model_*,source_*}],
            nodes[{id,level,parent,name,before,after|null,online|null}],
            matrix{before[[task,sub,[[path,n]…]]…], after|null, online|null},
-           sample_refs{before[{trace,model,task,sub,paths,slug?}…],
-                       after[…], online[…]}}] }
-```
+           pairs[{id,eq,q,scene,sub,
+                  before{trace,model,detail,n,paths,status},
+                  after{trace,model,detail,n,paths,status}|null}…],
+           sample_refs{before[{trace,model,task,sub,paths,slug?,pair,eq,q,detail}…],
+                       after[{trace,model,task,sub,paths,pair,eq,q,detail}…],
+                       online[{slug,trace,model,task,sub,paths}…]}}] }
+
+- `pairs` = 固定题集全部 1137 行（`01_targets/questions.jsonl` 顺序 = `coverage_after_release_retest.eq_index`），
+  供「版本对比」左栏；`before.detail` 是主 samples 的会话 slug（多 slug 无唯一解时 null），
+  `after.detail` 是能生成改版后详情的 eq（attribution 里存在该 `case_id` 才算）。
+- `sample_refs` 的三批保留聚合口径：`before/after` 是命中叶子的 trace 级引用（after 不带主 samples slug），
+  `online` 是线上真实用户样本；`pair/eq/q/detail` 只用于从 A/B 面板跳到版本对比。
+- `schema` 2 → 3 只因新增 `pairs` 与 refs 字段；旧 payload 会自动重建。
+- 改版后详情：主 samples 索引里没有重测样本，`ab_detail.py` 在第一次打开
+  `/ab_samples/<round>/<eq>.json` 时从轮次里的 attribution + compact + `99_provenance/retest_input` 懒生成；
+  问题落点用 `03_after_release_retest/cluster_tree/<model>/item_index.slice.jsonl` 的
+  `(trace_id, json_path)` → `path/edge` 精确回填（不依赖 `cls_paths/cls_labels` 的平行关系）。
 
 - 轮次目录（2026-11 v1106 起的数据侧新布局，`dashboard/ab_test.py` 两种布局都读）：
   `00_manifest/coverage_before_release_cluster.csv`（**before 的权威落点**，A/B/C = 970/138/29）、

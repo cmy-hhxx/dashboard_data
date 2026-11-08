@@ -44,8 +44,10 @@ from pathlib import Path
 AB_DIR = "ab_test"
 # Bump when the payload's meaning changes (model scoping, leaf/matrix assembly) so an unchanged
 # dataset still rebuilds its abtests-*.json instead of serving a stale payload.
-AB_PAYLOAD_VERSION = 2
+AB_PAYLOAD_VERSION = 3
 ROUND_RE = re.compile(r"^(\d+)_version(?P<version>[0-9A-Za-z.]+?)(?:_test)?$")
+# 重测归因的 session_meta.case_id 结尾是 ``_eq_00013``：只有它的 eq 能生成改版后详情。
+ATTRIBUTION_EQ_RE = re.compile(r"_eq_(\d+)$")
 DECLARED_VERSION = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 # A/B/C with the names the extraction README uses; the payload ships labels so the browser
@@ -167,6 +169,13 @@ def _round_signature_files(round_dir: Path):
             for name in ("item_index.slice.jsonl", "leaves.tsv", "cluster_tree.json"):
                 for path in base.rglob(name):
                     add(path)
+    # The payload's after.detail comes from the retest attribution's eq set, so a new or
+    # rewritten attribution file must invalidate the payload too (stat only: the files are
+    # 18 MB, never read here; provenance stays unscanned).
+    attribution = round_dir / SCOPE_AFTER / "attribution"
+    if attribution.is_dir():
+        for path in sorted(attribution.rglob("*.jsonl")):
+            add(path)
     return sorted(seen)
 
 
@@ -472,6 +481,46 @@ def _split_paths(value):
     return [part for part in (value or "").split(";") if part]
 
 
+def _clip(text, limit):
+    text = text if isinstance(text, str) else ("" if text is None else str(text))
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _as_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def read_attribution_eqs(round_dir: Path):
+    """eq numbers that have a retest attribution row: the only ones a detail can be built for.
+
+    The case id carries the question's fixed-set index (``…_eq_00013``); scanning the 18 MB
+    attribution file at payload-build time keeps ``round.pairs[].after.detail`` honest without
+    the dashboard having to probe the source on every page view.
+    """
+    found = set()
+    base = round_dir / SCOPE_AFTER / "attribution"
+    if not base.is_dir():
+        return found
+    for path in sorted(base.rglob("*.jsonl")):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                for line in fh:
+                    try:
+                        attr = json.loads(line)
+                    except ValueError:
+                        continue
+                    case = str((attr.get("session_meta") or {}).get("case_id") or "")
+                    match = ATTRIBUTION_EQ_RE.search(case)
+                    if match:
+                        found.add(int(match.group(1)))
+        except OSError:
+            continue
+    return found
+
+
 def _model_from_store(value):
     tail = (value or "").rsplit("_", 1)[-1]
     return tail if tail in ("fast", "expert") else ""
@@ -554,6 +603,8 @@ def _scope_rows(round_dir: Path):
                 "task": (row.get("task") or row.get("scene") or "").strip(),
                 "sub": (row.get("subtask") or row.get("sub") or "").strip(),
                 "state": (row.get("status") or row.get("retest_state") or "").strip(),
+                "question": (row.get("question") or "").strip(),
+                "eq": _as_int(row.get("eq_index")),
             })
         normalized[side] = out
     return normalized
@@ -642,6 +693,8 @@ def _collect_side(rows, index, trace_scenes, with_slug=True):
         task, sub = _scene_for(row, index, trace_scenes)
         by_trace[row["trace"]] = paths
         ref = {"trace": row["trace"], "model": row["model"], "task": task, "sub": sub, "paths": paths}
+        if row.get("question"):
+            ref["q"] = _clip(row["question"], 160)
         slug = _slug_for(row, index) if with_slug else None
         if slug:
             ref["slug"] = slug
@@ -689,8 +742,11 @@ def _online_from_samples(round_dir, meta, samples, before_rows, next_release, mo
         dates.add(day)
         task, sub = scene_pair(detail, row)
         if paths:
-            refs.append({"slug": slug, "trace": trace, "model": model, "task": task, "sub": sub,
-                         "paths": paths})
+            ref = {"slug": slug, "trace": trace, "model": model, "task": task, "sub": sub,
+                   "paths": paths}
+            if row.get("q"):
+                ref["q"] = _clip(row["q"], 160)
+            refs.append(ref)
         for path in paths:
             counter[path] += 1
             matrix[(task, sub, path)] += 1
@@ -701,11 +757,145 @@ def _online_from_samples(round_dir, meta, samples, before_rows, next_release, mo
             "refs": refs, "traces": traces, "dates": dates, "available": True}
 
 
+def _before_in_scope(row, models):
+    """Whether a before row belongs to the round's model scope (empty/unknown model stays in)."""
+    if not models:
+        return True
+    model = (row.get("model") or "").strip()
+    return not model or model in models
+
+
+def _round_pairs(after_by_eq, before_by_trace, index, trace_scenes, detail_by_trace, attr_eqs,
+                 models=()):
+    """The fixed set as side-by-side pairs, one per retest coverage row (eq ascending).
+
+    ``q`` / ``id`` / ``eq`` / ``scene`` come from the before row (the retest coverage file has
+    neither); a target with no before row or no attribution still gets a pair so the list never
+    silently loses a question.  A before row outside the round's model scope (the fixed set
+    carries 55 older fast/run evaluations) is emitted as ``before: null``: pairing a fast run
+    with the expert retest would read as a release change when it is a model change.  The
+    question stays so the AB panel's refs still resolve to a row.
+    """
+    pairs = []
+    for eq in sorted(after_by_eq):
+        after_row = after_by_eq[eq]
+        trace = after_row["trace"]
+        before_row = before_by_trace.get(trace)
+        if before_row:
+            task, sub = _scene_for(before_row, index, trace_scenes)
+        else:
+            task, sub = NO_SCENE, ""
+        before = None
+        if before_row and _before_in_scope(before_row, models):
+            before = {
+                "trace": trace,
+                "model": before_row["model"],
+                "detail": detail_by_trace.get(trace),
+                "n": len(before_row["paths"]),
+                "paths": before_row["paths"],
+                "status": before_row["state"],
+            }
+        pairs.append({
+            "id": trace,
+            "eq": eq,
+            "q": _clip(before_row.get("question") or "", 160) if before_row else "",
+            "scene": task,
+            "sub": sub,
+            "before": before,
+            "after": {
+                "trace": trace,
+                "model": after_row["model"],
+                "detail": eq if eq in attr_eqs else None,
+                "n": len(after_row["paths"]),
+                "paths": after_row["paths"],
+                "status": after_row["state"],
+            },
+        })
+    return pairs
+
+
+def read_target_traces(round_dir: Path):
+    """The fixed set's trace ids in target order (``01_targets/questions.jsonl``)."""
+    path = round_dir / "01_targets" / "questions.jsonl"
+    traces = []
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                trace = str(row.get("trace_id") or "")
+                if trace:
+                    traces.append(trace)
+    except OSError:
+        return []
+    return traces
+
+
+def _fallback_pairs(round_dir, before_by_trace, index, trace_scenes, detail_by_trace,
+                    models=()):
+    """Before-only list for a round whose retest coverage has not landed yet.
+
+    The compare page must not go blank between the release and the retest backfill: pair the
+    fixed set in target order (the same order ``eq_index`` uses) and leave ``after`` null.
+    Before rows outside the round's model scope stay as ``before: null`` (see _round_pairs).
+    """
+    order = read_target_traces(round_dir) or list(before_by_trace)
+    pairs = []
+    for at, trace in enumerate(order, 1):
+        row = before_by_trace.get(trace)
+        if row:
+            task, sub = _scene_for(row, index, trace_scenes)
+        else:
+            task, sub = NO_SCENE, ""
+        before = None
+        if row and _before_in_scope(row, models):
+            before = {
+                "trace": trace,
+                "model": row["model"],
+                "detail": detail_by_trace.get(trace),
+                "n": len(row["paths"]),
+                "paths": row["paths"],
+                "status": row["state"],
+            }
+        pairs.append({
+            "id": trace,
+            "eq": at,
+            "q": _clip(row.get("question") or "", 160) if row else "",
+            "scene": task,
+            "sub": sub,
+            "before": before,
+            "after": None,
+        })
+    return pairs
+
+
+def _add_pair_refs(refs, before_by_trace, eq_by_trace, detail_by_trace, attr_eqs, side):
+    """Extend ``sample_refs`` with the compare page's pair/eq/q/detail fields."""
+    for ref in refs:
+        trace = ref.get("trace") or ""
+        eq = eq_by_trace.get(trace)
+        before_row = before_by_trace.get(trace) or {}
+        ref["pair"] = trace
+        ref["eq"] = eq
+        ref["q"] = _clip(before_row.get("question") or "", 160) if side == "after" else ref.get("q", "")
+        if side == "before":
+            # before detail is the main samples slug of the same session/question.
+            ref["detail"] = detail_by_trace.get(trace)
+        else:
+            # after detail opens only when a retest attribution row exists for this eq.
+            ref["detail"] = eq if eq is not None and eq in attr_eqs else None
+
+
 def _build_round_scoped(round_dir: Path, order: int, version: str, samples=None,
                         next_release: str | None = None, meta=None):
     meta = meta or round_meta(round_dir, order, version)
     models = round_models(round_dir)
     data = _scope_rows(round_dir)
+    # The per-question compare list keeps every fixed-set target, including the older-model
+    # before rows the aggregate sides drop for same-model counting.
+    all_before = list(data["before"])
     if models:
         for side in data:
             data[side] = [row for row in data[side]
@@ -721,6 +911,23 @@ def _build_round_scoped(round_dir: Path, order: int, version: str, samples=None,
     online_available = bool(online and online.get("available"))
     online = online or {"counter": Counter(), "model": {}, "source": {}, "matrix": Counter(),
                         "refs": [], "traces": 0, "dates": set(), "available": False}
+
+    # Compare page: the fixed set re-keyed by the retest coverage's eq.  Only a question with
+    # both a before row and an eq row can be paired; the attribution scan says which actually
+    # have an after detail to open.
+    before_by_trace = {row["trace"]: row for row in all_before}
+    after_by_eq = {row["eq"]: row for row in data["after"] if row.get("eq") is not None}
+    eq_by_trace = {row["trace"]: row["eq"] for row in after_by_eq.values()}
+    detail_by_trace = {trace: _slug_for(row, index) for trace, row in before_by_trace.items()}
+    attr_eqs = read_attribution_eqs(round_dir)
+    if after_by_eq:
+        pairs = _round_pairs(after_by_eq, before_by_trace, index, trace_scenes,
+                             detail_by_trace, attr_eqs, models)
+    else:
+        pairs = _fallback_pairs(round_dir, before_by_trace, index, trace_scenes,
+                                detail_by_trace, models)
+    _add_pair_refs(before["refs"], before_by_trace, eq_by_trace, detail_by_trace, attr_eqs, "before")
+    _add_pair_refs(after["refs"], before_by_trace, eq_by_trace, detail_by_trace, attr_eqs, "after")
 
     names = read_leaf_names(round_dir)
     leaves = []
@@ -761,6 +968,7 @@ def _build_round_scoped(round_dir: Path, order: int, version: str, samples=None,
     meta["models"] = models
     meta["leaves"] = leaves
     meta["sample_refs"] = {"before": before["refs"], "after": after["refs"], "online": online["refs"]}
+    meta["pairs"] = pairs
     meta["matrix"] = {
         "before": matrix_rows(before["matrix"]) if before["available"] else [],
         "after": matrix_rows(after["matrix"]) if after_available else None,
@@ -939,7 +1147,7 @@ def ab_payload(datasets: Path, product: str, generated: str | None = None, sampl
             models.update((leaf["model_after"] or {}).keys())
             models.update((leaf["model_online"] or {}).keys())
     return {
-        "schema": 2,
+        "schema": 3,
         "generated_at": generated or datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "product": product,
         "labels": {

@@ -9,10 +9,10 @@
    post-release volume (retest + online), matching the orbit tree's release side.
    State lives in data.js's u.ab so an in-place dashboard refresh returns to the same round,
    summary / matrix step, metric and selected cell. */
-import { esc, fmt, REDUCED, sevColor, segmented } from "./core.js";
+import { esc, fmt, REDUCED, segmented } from "./core.js";
 import { sunburst } from "./sunburst.js";
 import { lineTrendSVG, wireLineTrendChart } from "./trend_chart.js";
-import { trendSampleFrame, abTrendSampleRefs } from "./trend_samples.js";
+import { trendSampleFrame, abTrendSampleRefs, abLeafRefs } from "./trend_samples.js";
 
 const SIDES = ["before", "after", "online"];
 const SIDE_SHORT = { before: "改版前", after: "改版后", online: "线上" };
@@ -378,34 +378,25 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     });
   }
 
-  const patternList = Array.isArray(product && product.patterns) ? product.patterns : [];
-
-  function samplesFor(node) {
-    const models = Array.isArray(rounds[state.round].models) ? rounds[state.round].models.map(String) : [];
-    // The round may test one model: a sample from the other one would disagree with every count here.
-    const inScope = (row) => !models.length || !row.model || models.some((m) => String(row.model).includes(m));
-    const exact = patternList.find((pattern) => pattern.id === node.id);
-    if (exact && exact.examples && exact.examples.length) return exact.examples.filter(inScope);
-    const child = patternList
-      .filter((pattern) => String(pattern.id).startsWith(`${node.id}.`) && pattern.examples && pattern.examples.length)
-      .sort((a, b) => String(a.id).length - String(b.id).length)[0];
-    return child ? child.examples.filter(inScope) : [];
-  }
-
+  /* The leaf list is the current round's own batch, not the main taxonomy's examples: a
+     pre-release ref opens the paired baseline, a retest ref opens its generated detail, and an
+     online ref has no same-question twin so it opens the compare page on its own. */
   function samplePane(node) {
-    const rows = samplesFor(node);
-    const parts = ["P0", "P1", "P2", "P3", "P4"].map((severity) => ({
-      n: rows.filter((row) => row.worst === severity).length,
-      c: sevColor(severity),
-    })).filter((part) => part.n);
-    const body = rows.length
-      ? rows.map((row, i) => `<button type="button" class="gl-r" style="--i:${Math.min(i, 8)};--c:${sevColor(row.worst)}" data-sample="${esc(row.slug)}" title="${esc(row.q || row.label || "")}">
-          <i></i><span>${esc(row.q || row.label || "（无提问）")}</span><b class="num">${esc(row.model || row.worst || "")}</b>
-        </button>`).join("")
+    const sides = state.orbitSide === "before" ? ["before"] : ["after", "online"];
+    const refs = abLeafRefs(rounds[state.round], sides, node.id);
+    const body = refs.length
+      ? refs.map((ref, i) => {
+          const jump = ref.side === "online"
+            ? `data-compare-online="${esc(ref.slug || "")}"`
+            : `data-compare-pair="${esc(ref.pair || ref.trace || "")}"`;
+          return `<button type="button" class="gl-r" style="--i:${Math.min(i, 8)};--c:${SIDE_TONE[ref.side]}" ${jump} title="${esc(ref.q || "")}">
+          <i></i><span>${esc(ref.q || "（无提问）")}</span><b>${SIDE_SHORT[ref.side]}</b>
+        </button>`;
+        }).join("")
       : `<p class="ab-sample-empty">暂无具体样本</p>`;
     return `<div class="gx-side ab-sample-pane">
       <div class="ab-sample-head"><span title="${esc(node.name)}">${esc(node.name)}</span><button type="button" class="link" data-act="orbitBack">← 对比概览</button></div>
-      <div class="gl-sum"><b class="num">${fmt(rows.length)}</b><small>个样本</small>${parts.length ? `<span class="gl-strip" aria-hidden="true">${parts.map((part) => `<i style="flex:${part.n} 1 0;background:${part.c}"></i>`).join("")}</span>` : ""}</div>
+      <div class="gl-sum"><b class="num">${fmt(refs.length)}</b><small>个样本</small></div>
       <div class="gx-list ab-sample-list">${body}</div>
     </div>`;
   }
@@ -618,8 +609,7 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
             ? "发版后缺失，无法计算同题+线上变化"
             : `同题基线 ${fmt(before)} → 发版后 ${fmt(releaseTotal)}（同题复测 ${fmt(fixedAfter)} + 线上真实 ${fmt(online)}）`;
     // Sample recall is per side, not per metric: the cell's samples stay recallable even when the
-    // printed number is a paired delta. The retest side has no detail page in 5002, so it only
-    // gets a chip when its refs actually carry a slug.
+    // printed number is a paired delta, and every side has its own detail page in compare.
     const sampleSides = [
       { sides: ["before"], source: "改版前" },
       { sides: ["after"], source: "改版后" },
@@ -627,8 +617,7 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     ];
     const chips = sampleSides.map(({ sides, source }) => {
       const refs = abTrendSampleRefs(rnd, sides, row, col.prefix);
-      const resolvable = sides[0] === "after" ? refs.some((ref) => ref.slug) : refs.length > 0;
-      if (!resolvable) return "";
+      if (!refs.length) return "";
       return `<button type="button" class="ab-samplechip" data-act="samples" data-sides="${sides.join(",")}" data-source="${source}" title="召回「${source}」命中 ${esc(row.name)} × ${esc(col.name)} 的样本">${source}样本 <b class="num">${fmt(refs.length)}</b></button>`;
     }).join("");
     const aria = `AB 趋势：${row.name} · ${col.name}，${rows.map((r) => `${r.label} 改版前 ${r.before == null ? "无" : fmt(r.before)} ${afterLabel} ${r.after == null ? "无" : fmt(r.after)}`).join("；")}`;
@@ -637,7 +626,7 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     // with a full-height release line, labelled with the version that shipped.
     const releaseMarks = rows.length === 1 ? [{ at: 0.5, label: roundLabel(rnd, state.round) }] : null;
     const chart = { height: 260, yAxis: true, minTop: 4, endLabels: series.every((s) => s.values[s.values.length - 1] != null), xLabels: cols, xDates: cols, series, aria, formatValue: fmt, marks: releaseMarks };
-    cellTrendChart = { chart, row, node: col.prefix, colName: col.name };
+    cellTrendChart = { chart, row, node: col.prefix, colName: col.name, round: rnd };
     return `<section class="ab-trend is-on" aria-live="polite">
       <div class="ab-trendhead">
         <span class="ab-trendname">${esc(row.name)} · ${esc(col.name)}</span>
@@ -769,9 +758,11 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
   }
 
   host.addEventListener("click", (e) => {
-    const sample = e.target.closest("[data-sample]");
-    if (sample) {
-      actions.openSample && actions.openSample(sample.dataset.sample);
+    const ref = e.target.closest("[data-compare-pair], [data-compare-online]");
+    if (ref) {
+      const rnd = rounds[state.round];
+      if (ref.dataset.compareOnline != null) actions.openCompare && actions.openCompare({ online: ref.dataset.compareOnline, round: rnd.id });
+      else actions.openCompare && actions.openCompare({ pair: ref.dataset.comparePair, round: rnd.id });
       return;
     }
     const action = e.target.closest("[data-act]");

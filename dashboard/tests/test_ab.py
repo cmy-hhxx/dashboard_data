@@ -74,7 +74,7 @@ class PayloadTests(unittest.TestCase):
             root = Path(folder)
             round_dir(root)
             payload = self.payload(root)
-            self.assertEqual((payload["schema"], payload["product"]), (2, "aime"))
+            self.assertEqual((payload["schema"], payload["product"]), (3, "aime"))
             self.assertEqual(len(payload["rounds"]), 1)
             rnd = payload["rounds"][0]
             self.assertEqual((rnd["id"], rnd["version"], rnd["label"]), ("0_version1106_test", "1106", "v1106"))
@@ -320,6 +320,12 @@ def scope_round_dir(root: Path, name="0_version1106_test", after=True):
         (tree / "item_index.slice.jsonl").write_text(
             "".join(json.dumps({"trace_id": trace, "path": path}) + "\n" for trace, path in items),
             encoding="utf-8")
+    # 重测归因：case_id 结尾的 eq 决定哪些题能开「改版后」详情（这里 1、2 有、3 没有）。
+    attr = base / "03_after_release_retest" / "attribution" / "aime_expert" / "1800_lost_user_backtest"
+    attr.mkdir(parents=True, exist_ok=True)
+    (attr / "aime_expert_attribution-1800_lost_user_backtest.jsonl").write_text(
+        "".join(json.dumps({"session_meta": {"item_id": f"item_{eq}", "case_id": f"set_eq_{eq:05d}"}}) + "\n"
+                for eq in (1, 2)), encoding="utf-8")
     if after:
         (manifest / "coverage_after_release_retest.csv").write_text(AFTER_COVERAGE, encoding="utf-8")
     else:
@@ -387,6 +393,37 @@ class ScopeLayoutTests(unittest.TestCase):
             self.assertEqual(refs["t2"]["slug"], "sess-t2")
             self.assertEqual(rnd["sample_refs"]["online"][0]["slug"], "online-1")
 
+            # 同题 pairs：全部 eq 行，before/after 各自带详情入口。
+            pairs = rnd["pairs"]
+            self.assertEqual([pair["eq"] for pair in pairs], [1, 2, 3])
+            self.assertEqual([pair["q"] for pair in pairs], ["q1", "q2", "q3"])
+            first = pairs[0]
+            self.assertEqual((first["id"], first["scene"], first["sub"]),
+                             ("t1", "取数规划", "目标错配"))
+            self.assertEqual(first["before"], {
+                "trace": "t1", "model": "expert", "detail": "sess-t1", "n": 2,
+                "paths": ["S1.M2.1", "S1.M2.1.3"], "status": "已评测_有落点",
+            })
+            self.assertEqual(first["after"], {
+                "trace": "t1", "model": "expert", "detail": 1, "n": 1,
+                "paths": ["S2.M1.2"], "status": "已重测_有归因",
+            })
+            third = pairs[2]
+            self.assertEqual((third["before"]["n"], third["before"]["paths"],
+                              third["before"]["detail"]), (0, [], None))
+            self.assertIsNone(third["after"]["detail"])   # 没有 attribution → 不能开详情
+
+            # sample_refs 的对比字段：before 用 slug，after detail 是能开详情的 eq。
+            refs = {ref["trace"]: ref for ref in rnd["sample_refs"]["before"]}
+            self.assertEqual((refs["t1"]["pair"], refs["t1"]["eq"], refs["t1"]["q"],
+                              refs["t1"]["detail"]), ("t1", 1, "q1", "sess-t1"))
+            self.assertEqual((refs["t2"]["pair"], refs["t2"]["eq"], refs["t2"]["q"],
+                              refs["t2"]["detail"]), ("t2", 2, "q2", "sess-t2"))
+            after_refs = {ref["trace"]: ref for ref in rnd["sample_refs"]["after"]}
+            self.assertEqual((after_refs["t1"]["pair"], after_refs["t1"]["eq"],
+                              after_refs["t1"]["q"], after_refs["t1"]["detail"]),
+                             ("t1", 1, "q1", 1))
+
     def test_round_scopes_every_side_to_its_release_models(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -399,6 +436,9 @@ class ScopeLayoutTests(unittest.TestCase):
             tree = base / "02_before_release/cluster_tree/aime_expert/item_index.slice.jsonl"
             tree.write_text(tree.read_text(encoding="utf-8")
                             + json.dumps({"trace_id": "t4", "path": "S1.M2.1"}) + "\n", encoding="utf-8")
+            # 同一道题的重测行也存在（eq4），但 before 是 fast：不能拿来和 expert 的 after 对比。
+            (base / "00_manifest" / "coverage_after_release_retest.csv").write_text(
+                AFTER_COVERAGE + "t4,4,已重测_有归因,0,thread_r4,0,,\n", encoding="utf-8")
 
             def deep_sample(slug, model, trace):
                 detail = {"meta": {"task": "行情解读", "subtask": "股价走势"},
@@ -413,6 +453,16 @@ class ScopeLayoutTests(unittest.TestCase):
             self.assertEqual(rnd["sides"]["before"], {"traces": 2, "hits": 3})
             self.assertEqual(rnd["sides"]["online"]["traces"], 1)
             self.assertEqual([ref["slug"] for ref in rnd["sample_refs"]["online"]], ["online-1"])
+            # pairs 仍保留全部题（AB 面板任意 ref 都能解析），但跨模型口径的 before 置 null；
+            # q 仍在，after 正常。专家口径的 before 不受影响。
+            pairs = {pair["eq"]: pair for pair in rnd["pairs"]}
+            self.assertEqual(sorted(pairs), [1, 2, 3, 4])
+            self.assertIsNotNone(pairs[1]["before"])
+            fast_pair = pairs[4]
+            self.assertIsNone(fast_pair["before"])
+            self.assertEqual((fast_pair["id"], fast_pair["q"], fast_pair["after"]["trace"]),
+                             ("t4", "q4", "t4"))
+            self.assertIsNone(fast_pair["after"]["detail"])
 
     def test_missing_after_scope_is_null_everywhere(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -424,6 +474,12 @@ class ScopeLayoutTests(unittest.TestCase):
             self.assertTrue(all(leaf["after"] is None for leaf in rnd["leaves"]))
             self.assertTrue(all(node["after"] is None for node in rnd["nodes"]))
             self.assertIsNotNone(rnd["matrix"]["before"])
+            # 重测未落盘时 pairs 退化为按 targets 顺序的 before-only 列表，而不是空列表。
+            pairs = rnd["pairs"]
+            self.assertEqual([pair["eq"] for pair in pairs], [1, 2, 3])
+            self.assertTrue(all(pair["after"] is None for pair in pairs))
+            self.assertEqual((pairs[0]["id"], pairs[0]["q"], pairs[0]["before"]["detail"]),
+                             ("t1", "q1", "sess-t1"))
 
     def test_trace_scenes_csv_wins_over_samples(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -454,6 +510,7 @@ class ScopeLayoutTests(unittest.TestCase):
             payload = json.loads((static / "abtests-aime.json").read_text(encoding="utf-8"))
             rnd = payload["rounds"][0]
             self.assertEqual((rnd["sides"]["before"]["traces"], rnd["sides"]["after"]["traces"]), (2, 1))
+            self.assertEqual(len(rnd["pairs"]), 3)
             self.assertIsInstance(rnd["matrix"]["after"], list)
             self.assertIsInstance(rnd["matrix"]["online"], list)
             entry = json.loads((static / "data-aime.json").read_text())["products"]["aime"]["ab"]
@@ -470,3 +527,10 @@ class ScopeLayoutTests(unittest.TestCase):
                 "trace_id,session_id,task,subtask\nt1,thread_1,取数规划,目标错配\n", encoding="utf-8")
             self.assertNotEqual(ab_test.rounds_signature(root),
                                 baseline)
+            # 重测归因变化（只多一行）也要让 after.detail 的 payload 重建。
+            signature = ab_test.rounds_signature(root)
+            attr = base / "03_after_release_retest" / "attribution" / "aime_expert" / "batch"
+            attr.mkdir(parents=True, exist_ok=True)
+            (attr / "aime_expert_attribution-batch.jsonl").write_text(
+                json.dumps({"session_meta": {"case_id": "set_eq_00009"}}) + "\n", encoding="utf-8")
+            self.assertNotEqual(ab_test.rounds_signature(root), signature)

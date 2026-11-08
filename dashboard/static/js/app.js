@@ -1,8 +1,16 @@
 /* Router and shell: ?view=data|system|samples&product=wencai|aime (+ sample params). */
 import { $, $$, segmented, getJSON, announce } from "./core.js";
 
-const VIEWS = ["data", "system", "samples"];
+const VIEWS = ["data", "system", "samples", "compare"];
 const PRODUCTS = ["wencai", "aime"];
+const VIEW_NAME = { data: "数据看板", system: "评测体系", samples: "具体数据", compare: "版本对比" };
+// Sample params (case / trace / filters) and compare params (pair / round / online) never leak
+// across views, or a stale deep link would reopen the previous drill on the next page.
+const SAMPLE_PARAMS = {
+  detail: null, ed: null, em: null, ep: null, edp: null, p: null, q: null, w: null, split: null,
+  model: null, scene: null, sub: null, stage: null, mech: null, pattern: null, case: null, trace: null,
+};
+const COMPARE_PARAMS = { pair: null, online: null, round: null };
 // Each product's board runs on its own server; a product with no data here opens its server instead.
 const SITES = {
   wencai: { url: "http://117.50.195.94:2768/", name: "乌兰察布" },
@@ -10,7 +18,7 @@ const SITES = {
 };
 const state = { view: "data", product: "wencai", data: null, indexes: {}, indexP: {}, productData: {}, productP: {} };
 const modules = {};
-const loaders = { data: () => import("./data.js"), system: () => import("./system.js"), samples: () => import("./samples.js") };
+const loaders = { data: () => import("./data.js"), system: () => import("./system.js"), samples: () => import("./samples.js"), compare: () => import("./compare.js") };
 
 function readURL() {
   const q = new URLSearchParams(location.search);
@@ -167,13 +175,13 @@ async function poll() {
 
 async function boot() {
   viewSeg = segmented($("#viewSwitch"), (v) => {
-    announce(`切换到${{ data: "数据看板", system: "评测体系", samples: "具体数据" }[v]}`);
-    navigate(v === "data" ? { view: v, detail: null, ed: null, em: null, ep: null, edp: null } : { view: v });
+    announce(`切换到${VIEW_NAME[v]}`);
+    navigate({ view: v, ...(v === "compare" ? SAMPLE_PARAMS : {}), ...(v === "data" ? { detail: null, ed: null, em: null, ep: null, edp: null } : {}), ...COMPARE_PARAMS });
   });
   productSeg = segmented($("#productSwitch"), (p) => {
     const away = awayURL(p, { view: state.view, product: p });
     if (away) location.assign(away);
-    else navigate({ product: p, case: null });
+    else navigate({ product: p, case: null, ...COMPARE_PARAMS });
   });
   // Back from the other product's server (bfcache): the knob moved before leaving; put it back.
   window.addEventListener("pageshow", (e) => e.persisted && productSeg.set(state.product, { silent: true }));

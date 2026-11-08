@@ -44,7 +44,7 @@ RUN_ENV=""
 for var in PORT STATS_WORKER REFRESH_SECONDS STATS_REFRESH_SECONDS EVAL_DATASETS EVAL_PRODUCTS; do
   if [ -n "${!var:-}" ]; then RUN_ENV+="export $var=$(printf '%q' "${!var}")"$'\n'; fi
 done
-RSYNC=(rsync -az --delete --exclude 'data.json' --exclude 'data.json.gz' --exclude 'data-*.json' --exclude 'data-*.json.gz' --exclude 'samples.json' --exclude 'samples.json.gz' --exclude 'samples-*.json' --exclude 'samples-*.json.gz' --exclude 'labels-*.json' --exclude 'labels-*.json.gz' --exclude 'trends-*.json' --exclude 'trends-*.json.gz' --exclude 'abtests-*.json' --exclude 'abtests-*.json.gz' --exclude 'static/samples' --exclude 'static/.samples-*' --exclude 'server.pid' --exclude 'stats.pid' --exclude 'deploy.env' --exclude 'logs' --exclude 'cache' --exclude 'cache_backup' --exclude 'static_backup' --exclude '*.log' --exclude '__pycache__' --exclude 'local_dev' --exclude 'tests'
+RSYNC=(rsync -az --delete --exclude 'data.json' --exclude 'data.json.gz' --exclude 'data-*.json' --exclude 'data-*.json.gz' --exclude 'samples.json' --exclude 'samples.json.gz' --exclude 'samples-*.json' --exclude 'samples-*.json.gz' --exclude 'labels-*.json' --exclude 'labels-*.json.gz' --exclude 'trends-*.json' --exclude 'trends-*.json.gz' --exclude 'abtests-*.json' --exclude 'abtests-*.json.gz' --exclude 'static/samples' --exclude 'static/ab_samples' --exclude 'static/.samples-*' --exclude 'server.pid' --exclude 'stats.pid' --exclude 'deploy.env' --exclude 'logs' --exclude 'cache' --exclude 'cache_backup' --exclude 'static_backup' --exclude '*.log' --exclude '__pycache__' --exclude 'local_dev' --exclude 'tests'
   -e "ssh ${SSH_OPTS[*]}")
 
 retry "${SSH[@]}" "$HOST" "mkdir -p $REMOTE/static $REMOTE/logs"

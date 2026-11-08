@@ -4,6 +4,18 @@ export function trendSampleFrame(chart) {
   return `<div class="gx mxt-samples"><div class="gx-in mxt-sample-layout"><div class="gx-map">${chart}</div><aside class="gx-side mxt-sample-side" aria-label="所选问题簇的样本" hidden></aside></div></div>`;
 }
 
+/* Layout leaf: every ref of one side's batch that lands on this cluster path. */
+export function abLeafRefs(round, sides, node) {
+  const refs = [];
+  for (const side of sides) {
+    for (const ref of round.sample_refs?.[side] || []) {
+      if (!(ref.paths || []).some((path) => path === node || path.startsWith(`${node}.`))) continue;
+      refs.push({ ...ref, side });
+    }
+  }
+  return refs;
+}
+
 export function abTrendSampleRefs(round, sides, row, node) {
   const refs = [];
   for (const side of sides) {
@@ -21,14 +33,19 @@ export function resolveABSamples(refs, rows, node) {
   const items = [], seen = new Set();
   let unavailable = 0;
   for (const ref of refs) {
-    // A Trace id can identify the baseline; a retest needs its own exact detail reference.
-    const candidates = ref.slug ? [bySlug.get(ref.slug)].filter(Boolean) : ref.side === "before"
+    // The baseline and online batches live in the recall index; a retest keeps its own detail
+    // reference (eq) instead, so it never borrows the baseline row for the same trace.
+    const matches = ref.slug ? [bySlug.get(ref.slug)].filter(Boolean) : ref.side === "before"
       ? rows.filter((row) => row.tid === ref.trace && (!ref.model || row.m === ref.model || row.m.endsWith(`_${ref.model}`))) : [];
-    if (candidates.length !== 1) { unavailable++; continue; }
-    const row = candidates[0], key = `${row.s}|${ref.trace}`;
+    const matched = matches.length === 1 ? matches[0] : null;
+    const row = matched || (ref.side === "after" && ref.detail != null
+      ? { s: String(ref.detail), q: ref.q || "", m: ref.model || "", sp: "", d: "" }
+      : null);
+    if (!row) { unavailable++; continue; }
+    const key = ref.detail != null ? `eq:${ref.detail}` : `${row.s}|${ref.trace || ""}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    items.push({ row, trace: ref.trace, n: ref.paths.filter((path) => path === node || path.startsWith(`${node}.`)).length });
+    items.push({ row, trace: ref.trace, n: (ref.paths || []).filter((path) => path === node || path.startsWith(`${node}.`)).length, ref });
   }
   return { items, unavailable };
 }

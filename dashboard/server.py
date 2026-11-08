@@ -26,12 +26,16 @@ REFRESH = int(os.environ.get("REFRESH_SECONDS", "600"))
 _state = {"last_run": 0, "running": False, "error": "", "seconds": 0, "build": None}
 _lock = threading.Lock()
 _builder = None
+_ab_builder = None
 _lister = None
 _prewarm_lock = threading.Lock()
 _prewarm_running = False
 PREWARM = int(os.environ.get("DETAIL_PREWARM", "30"))
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 MODEL_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+# /ab_samples/<roundId>/<eq>.json: the round name is validated before it can reach the builder.
+AB_ROUND_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*$")
+AB_DETAIL_RE = re.compile(r"^/ab_samples/([^/]+)/(\d+)\.json$")
 
 
 def prewarm_details():
@@ -255,6 +259,21 @@ class Handler(SimpleHTTPRequestHandler):
             if generated is None and not os.path.isfile(self.translate_path(path_only)):
                 self._send_body(404, b"sample detail unavailable", "text/plain; charset=utf-8")
                 return
+        if _ab_builder and path_only.startswith("/ab_samples/"):
+            match = AB_DETAIL_RE.match(path_only)
+            ref = None
+            if match and AB_ROUND_RE.match(match.group(1)) and int(match.group(2)) > 0:
+                ref = (match.group(1), int(match.group(2)))
+            generated = None
+            if ref:
+                try:
+                    generated = _ab_builder.ensure(*ref)
+                except Exception as exc:  # noqa: BLE001 - a detail failure is a 404, not a crash
+                    print(f"[serve] ab detail {ref[0]}/{ref[1]} failed: {exc}", flush=True)
+            # A malformed / traversal-looking path is a 404 without touching the static tree.
+            if generated is None and (ref is None or not os.path.isfile(self.translate_path(path_only))):
+                self._send_body(404, b"ab sample detail unavailable", "text/plain; charset=utf-8")
+                return
         if "gzip" in self.headers.get("Accept-Encoding", ""):
             path = self.translate_path(self.path)
             if os.path.isdir(path):
@@ -299,7 +318,7 @@ def outputs_ready():
 
 
 def main():
-    global _builder, _lister
+    global _builder, _lister, _ab_builder
     try:
         from build import default_datasets
         from detail_builder import DetailBuilder
@@ -309,6 +328,14 @@ def main():
         )
     except Exception as exc:  # noqa: BLE001 - keep serving pre-generated details
         print(f"[serve] lazy detail builder disabled: {exc}", flush=True)
+    try:
+        from build import default_datasets
+        from ab_detail import ABDetailBuilder
+        _ab_builder = ABDetailBuilder(
+            default_datasets(), os.path.join(HERE, "cache"), os.path.join(STATIC, "ab_samples"),
+        )
+    except Exception as exc:  # noqa: BLE001 - retest details are optional; static files still serve
+        print(f"[serve] ab detail builder disabled: {exc}", flush=True)
     try:
         from build import default_datasets
         from input_list import InputLister

@@ -164,6 +164,13 @@ const SAMPLE_RESET = {
 function openSamples(patch) {
   ctx.navigate({ ...SAMPLE_RESET, view: "samples", product: ctx.product, ...patch });
 }
+/* A/B sample entries land on the version-compare page instead: the same question before and
+   after the release, side by side. `pair` selects the question, `online` opens a live sample on
+   its own (no same-question twin). */
+const COMPARE_RESET = { ...SAMPLE_RESET, pair: null, online: null, round: null };
+function openCompare(patch) {
+  ctx.navigate({ ...COMPARE_RESET, view: "compare", product: ctx.product, ...patch });
+}
 
 /* One tile per evaluation record. Each model/split group has its own pager. Pages
    are filled to the measured capacity, and each severity is spread across the
@@ -2431,7 +2438,7 @@ function groupCases(rows, keyOf, nameOf = (k) => k) {
 }
 
 /* The same gx-map / gx-side and ledger used by 数据量, revealed on the sunburst clock. */
-function trendSampleDrawer(plot, load, repaint) {
+function trendSampleDrawer(plot, load, repaint, interaction = {}) {
   const frame = plot.closest(".mxt-samples");
   const layout = $(".mxt-sample-layout", frame);
   const map = $(".gx-map", layout);
@@ -2498,6 +2505,8 @@ function trendSampleDrawer(plot, load, repaint) {
           row.title = led.items[Number(row.dataset.i)].q;
           row.addEventListener("click", async () => {
             const item = led.items[Number(row.dataset.i)];
+            // An AB drawer opens the paired compare view; every other drawer stays on 具体数据.
+            if (interaction.openItem) { interaction.openItem(item); return; }
             let trace = item.trace;
             if (!trace && item.turn != null) {
               try { trace = (await loadSample(item.s)).attribution?.turns?.[item.turn]?.trace_id; }
@@ -2576,7 +2585,7 @@ async function loadABTrendSamplePage(spec, pick) {
   const rows = index.products?.[ctx.product]?.rows || [];
   const { items, unavailable } = resolveABSamples(refs, rows, spec.node);
   return {
-    items: items.map(({ row, trace, n }) => ({ ...caseItem(row), trace, n })), unit: "个样本",
+    items: items.map(({ row, trace, n, ref }) => ({ ...caseItem(row), trace, n, ref, pair: ref.pair || ref.trace, round: spec.round?.id })), unit: "个样本",
     note: unavailable ? `${fmt(unavailable)} 个样本缺少对应评测详情` : "",
   };
 }
@@ -2589,7 +2598,7 @@ function mountSampleTrend(plot, renderChart, load, interaction = {}) {
     plot.innerHTML = chart.html;
     dispose = wireLineTrendChart(plot, chart, "", (pick) => drawer.open(pick), interaction);
   };
-  const drawer = trendSampleDrawer(plot, load, draw);
+  const drawer = trendSampleDrawer(plot, load, draw, interaction);
   draw();
   return {
     destroy: () => { dispose(); drawer.destroy(); },
@@ -2600,7 +2609,12 @@ function mountSampleTrend(plot, renderChart, load, interaction = {}) {
 }
 
 function mountABCellTrend(plot, spec) {
-  return mountSampleTrend(plot, (width) => lineTrendSVG({ ...spec.chart, width }), (pick) => loadABTrendSamplePage(spec, pick));
+  return mountSampleTrend(plot, (width) => lineTrendSVG({ ...spec.chart, width }), (pick) => loadABTrendSamplePage(spec, pick), {
+    openItem: (item) => {
+      if (item.ref?.side === "online") openCompare({ online: item.ref.slug, round: item.round });
+      else openCompare({ pair: item.pair, round: item.round });
+    },
+  });
 }
 
 function pushPull(bento, p, tax, u) {
@@ -3743,7 +3757,7 @@ function wire(bento, p, tax, u) {
         loading = false;
         return;
       }
-      mountAB(abBody, data, u.ab, tax, p, { openSample: (slug) => openSamples({ case: slug }), mountCellTrend: mountABCellTrend });
+      mountAB(abBody, data, u.ab, tax, p, { openCompare, mountCellTrend: mountABCellTrend });
       loaded = true;
       loading = false;
     };

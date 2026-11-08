@@ -7,7 +7,10 @@ const file = path.join(__dirname, "../static/js/samples.js");
 const source = fs.readFileSync(file, "utf8");
 const js = source.replace(/^import .*\n/gm, "")
   .replace("export async function render", "async function render");
-const prefix = 'const SEV = ["P0", "P1", "P2", "P3", "P4"];\nconst WORST = [...SEV, "none"];\n';
+const prefix = 'const SEV = ["P0", "P1", "P2", "P3", "P4"];\nconst WORST = [...SEV, "none"];\n'
+  + 'const USER_TYPE_SHORT = { real: "真实", test: "测试", internal: "内部", unknown: "未知" };\n'
+  + 'const utOf = (r) => (r && USER_TYPE_SHORT[r.ut] ? r.ut : "unknown");\n'
+  + 'const isLostRow = (r) => !!(r && (r.ul || r.sp === "lost"));\n';
 const cut = js.indexOf("async function render");
 const context = vm.createContext({ console });
 vm.runInContext(`${prefix}${js.slice(0, cut)}\nglobalThis.api = { groupSessions, severityHit, cascadeHit, listHit };`, context);
