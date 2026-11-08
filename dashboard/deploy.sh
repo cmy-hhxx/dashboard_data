@@ -47,7 +47,7 @@ done
 RSYNC=(rsync -az --delete --exclude 'data.json' --exclude 'data.json.gz' --exclude 'data-*.json' --exclude 'data-*.json.gz' --exclude 'samples.json' --exclude 'samples.json.gz' --exclude 'samples-*.json' --exclude 'samples-*.json.gz' --exclude 'labels-*.json' --exclude 'labels-*.json.gz' --exclude 'trends-*.json' --exclude 'trends-*.json.gz' --exclude 'abtests-*.json' --exclude 'abtests-*.json.gz' --exclude 'static/samples' --exclude 'static/.samples-*' --exclude 'server.pid' --exclude 'stats.pid' --exclude 'deploy.env' --exclude 'logs' --exclude 'cache' --exclude 'cache_backup' --exclude 'static_backup' --exclude '*.log' --exclude '__pycache__' --exclude 'local_dev' --exclude 'tests'
   -e "ssh ${SSH_OPTS[*]}")
 
-"${SSH[@]}" "$HOST" "mkdir -p $REMOTE/static $REMOTE/logs"
+retry "${SSH[@]}" "$HOST" "mkdir -p $REMOTE/static $REMOTE/logs"
 if [ -n "$RUN_ENV" ]; then printf '%s' "$RUN_ENV" | retry "${SSH[@]}" "$HOST" "cat > $REMOTE/deploy.env"; fi
 retry "${RSYNC[@]}" "$HERE/" "$HOST:$REMOTE/"
 # 部署只管「代码上线」：rsync + 预压缩 + 重启，十几秒结束。
