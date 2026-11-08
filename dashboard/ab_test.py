@@ -343,7 +343,6 @@ def _scope_round_meta(round_dir: Path, order: int, version: str):
     release = _release_from_declared(declared)
     targets = summary.get("target_traces")
     if not targets:
-        questions = read_json(round_dir / "01_targets" / "questions.jsonl")
         targets = len(rows)
     return {
         "id": round_dir.name,
@@ -660,7 +659,7 @@ def _online_from_samples(round_dir, meta, samples, before_rows, next_release):
         traces += 1
         dates.add(day)
         task, sub = scene_pair(detail, row)
-        model = row.get("m") or ""
+        model = _model_from_dir(row.get("m") or "")
         if paths:
             refs.append({"slug": slug, "trace": trace, "model": model, "task": task, "sub": sub,
                          "paths": paths})
