@@ -1640,13 +1640,12 @@ function matrixPerspectiveHTML(view, trend, loading = false, state = {}, cluster
   return `<div class="mxp">
     <div class="mxp-lenses">
       <section class="mxp-lens is-depth">
-        <header><b>问题等级</b></header>
+        <header><b>问题等级</b><small class="mxp-rule">每条 Trace 仅计入最严重等级</small></header>
         <div class="mxp-severity" role="table" aria-label="按最严重等级归类的 Trace 数量与占比">
           <div class="mxp-severity-row mxp-severity-head" role="row"><span role="columnheader">等级</span><span></span><span role="columnheader">Trace 数</span><span role="columnheader">占比</span></div>
           ${rows}
           <div class="mxp-severity-row mxp-severity-total" role="row"><span role="cell">合计</span><span></span><b class="num" role="cell">${model ? fmt(model.total) : "—"}</b><span class="num" role="cell">${model?.total ? "100.0%" : "—"}</span></div>
         </div>
-        <p class="mxp-severity-rule">每条 Trace 仅计入最严重等级${model?.unresolved ? `；另有 ${fmt(model.unresolved)} 条未能确定等级` : ""}</p>
       </section>
       <section class="mxp-lens is-speed">
         <header><b>Trace 趋势</b></header>

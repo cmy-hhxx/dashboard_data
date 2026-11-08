@@ -317,13 +317,16 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .mxp-track i { display: block; height: 100%; min-width: 2px; border-radius: inherit; background: var(--c, var(--accent)); }
 .mxp-track i[style*="width:0%"] { min-width: 0; }
 .mxp-severity { display: grid; gap: 8px; }
+/* The lens pair stretches to one height; let the severity rows share the slack instead of
+   leaving an empty band under the total, so the card ends on its last row. */
+.mxp-lens.is-depth .mxp-severity { flex: 1; align-content: space-between; }
 .mxp-severity-row { display: grid; grid-template-columns: 40px minmax(16px, 1fr) 60px 48px; gap: 8px; align-items: center; min-height: 24px; font-size: 12px; }
 .mxp-severity-row > b { text-align: right; color: var(--ink-2); font-weight: var(--w-medium); }
 .mxp-severity-row > span:last-child { text-align: right; color: var(--muted); }
 .mxp-severity-head { color: var(--muted); font-size: 11px; }
 .mxp-severity-head > span:nth-last-child(2) { text-align: right; }
 .mxp-severity-total { border-top: 1px solid var(--well-2); padding-top: 8px; }
-.mxp-severity-rule { margin: 12px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.mxp-rule { color: var(--muted); font-size: 11px; }
 .mxp-levels { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
 .mxp-levels .mxt-chip { cursor: pointer; }
 .mxp-levels .mxt-chip:hover { transform: none; }
@@ -733,7 +736,9 @@ body.is-modal { overflow: hidden; }
 .mxp-lens .mxt-sample-layout > .gx-map { min-height: 252px; }
 .mxt-sample-side.gx-side { display: flex; position: absolute; inset: 0 0 0 auto; width: clamp(188px, 36%, 280px); padding: 0 0 0 12px; gap: 8px; border-left: 1px solid var(--well-2); background: var(--card); animation: none; overflow: hidden; }
 .mxp-lens .mxt-sample-side, .mpt-card .mxt-sample-side { background: var(--well); }
-.mxt-sample-side[hidden] { display: none; }
+/* The narrow-container rules below deliberately force the drawer back to flex; [hidden] must
+   still win while the drawer is closed, or an empty panel covers the chart. */
+.mxt-sample-layout .mxt-sample-side[hidden] { display: none; }
 .mxt-sample-side .gl-r, .mxt-sample-side .gl-strip i { animation: none; }
 .mxt-sample-side.gx-side .empty { position: static; min-height: 80px; flex: 1; }
 .mxt-sample-side .gx-list { overscroll-behavior: contain; scrollbar-width: thin; mask-image: none; margin-right: 0; }
