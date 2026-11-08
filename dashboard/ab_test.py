@@ -42,6 +42,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 AB_DIR = "ab_test"
+# Bump when the payload's meaning changes (model scoping, leaf/matrix assembly) so an unchanged
+# dataset still rebuilds its abtests-*.json instead of serving a stale payload.
+AB_PAYLOAD_VERSION = 2
 ROUND_RE = re.compile(r"^(\d+)_version(?P<version>[0-9A-Za-z.]+?)(?:_test)?$")
 DECLARED_VERSION = re.compile(r"\d{4}-\d{2}-\d{2}")
 
@@ -169,7 +172,7 @@ def _round_signature_files(round_dir: Path):
 
 def rounds_signature(datasets: Path) -> str:
     """Cheap fingerprint of every round's relevant files, so a new export rebuilds once."""
-    h = hashlib.sha1()
+    h = hashlib.sha1(f"ab-payload-v{AB_PAYLOAD_VERSION}\x1e".encode())
     for top in sorted(datasets.glob("*")):
         root = top / AB_DIR
         if not root.is_dir():
@@ -317,6 +320,10 @@ def _scope_round_meta(round_dir: Path, order: int, version: str):
     summary = read_json(round_dir / "00_manifest" / "summary.json") or {}
     before_path = scope_coverage_path(round_dir, "before")
     rows = read_rows(before_path) if before_path else []
+    # Header counts follow the same model scope as the three sides (1106 = expert only).
+    models = round_models(round_dir)
+    if models:
+        rows = [row for row in rows if not row_model(row) or row_model(row) in models]
     counts = Counter()
     reasons = Counter()
     for row in rows:
@@ -475,6 +482,26 @@ def _model_from_dir(name: str) -> str:
     return tail if tail in ("fast", "expert") else (name or "")
 
 
+def row_model(row, default_model=""):
+    """Which model produced this coverage row; mode covers the eval batches without a model tag."""
+    return (_model_from_store(row.get("eval_store")) or (row.get("model") or "").strip()
+            or (row.get("mode") or "").strip() or default_model)
+
+
+def round_models(round_dir: Path):
+    """The release models this round tests: the retest trees define the model set.
+
+    A 1106-style round retests expert only; its before scope may still carry older fast traces,
+    and the build samples contain both models.  Every side is filtered to this set so the three
+    batches are the same model version.
+    """
+    for side in ("after", "before"):
+        models = _tree_models(round_dir, side)
+        if models:
+            return models
+    return []
+
+
 def _tree_models(round_dir: Path, side: str):
     models = set()
     for rel in SCOPE_TREES[side]:
@@ -520,8 +547,7 @@ def _scope_rows(round_dir: Path):
             out.append({
                 "trace": trace,
                 "session": str(row.get("session_id") or row.get("retest_session_id") or ""),
-                "model": _model_from_store(row.get("eval_store")) or (row.get("model") or "").strip()
-                         or (row.get("mode") or "").strip() or default_model,
+                "model": row_model(row, default_model),
                 "source": (row.get("eval_category") or "").strip(),
                 "date": (row.get("question_time") or "")[:10],
                 "paths": _split_paths(row.get("cls_paths")),
@@ -631,7 +657,7 @@ def _collect_side(rows, index, trace_scenes, with_slug=True):
             "refs": refs, "by_trace": by_trace, "rows": len(rows), "available": bool(rows)}
 
 
-def _online_from_samples(round_dir, meta, samples, before_rows, next_release):
+def _online_from_samples(round_dir, meta, samples, before_rows, next_release, models=()):
     """Legacy online side: real users after the release, before the next one."""
     online_start = meta.get("released_at")
     if samples is None or not online_start:
@@ -653,13 +679,15 @@ def _online_from_samples(round_dir, meta, samples, before_rows, next_release):
         trace = str(row.get("tid") or "")
         if trace and trace in fixed:
             continue
+        model = _model_from_dir(row.get("m") or "")
+        if models and model and model not in models:
+            continue
         detail = detail or {}
         paths = sorted({p["cl"]["path"] for p in (detail.get("attribution") or {}).get("problems", [])
                         if p.get("cl") and p["cl"].get("path")})
         traces += 1
         dates.add(day)
         task, sub = scene_pair(detail, row)
-        model = _model_from_dir(row.get("m") or "")
         if paths:
             refs.append({"slug": slug, "trace": trace, "model": model, "task": task, "sub": sub,
                          "paths": paths})
@@ -676,14 +704,19 @@ def _online_from_samples(round_dir, meta, samples, before_rows, next_release):
 def _build_round_scoped(round_dir: Path, order: int, version: str, samples=None,
                         next_release: str | None = None, meta=None):
     meta = meta or round_meta(round_dir, order, version)
+    models = round_models(round_dir)
     data = _scope_rows(round_dir)
+    if models:
+        for side in data:
+            data[side] = [row for row in data[side]
+                          if not row["model"] or row["model"] in models]
     index = _sample_index(samples)
     trace_scenes = read_trace_scenes(round_dir)
     before = _collect_side(data["before"], index, trace_scenes)
     after = _collect_side(data["after"], index, trace_scenes, with_slug=False)
     online = _collect_side(data["online"], index, trace_scenes) if data["online"] else None
     if online is None:
-        online = _online_from_samples(round_dir, meta, samples, data["before"], next_release)
+        online = _online_from_samples(round_dir, meta, samples, data["before"], next_release, models)
     after_available = bool(after["available"])
     online_available = bool(online and online.get("available"))
     online = online or {"counter": Counter(), "model": {}, "source": {}, "matrix": Counter(),
@@ -725,6 +758,7 @@ def _build_round_scoped(round_dir: Path, order: int, version: str, samples=None,
             "user_type": "real",
         } if online_available else None),
     }
+    meta["models"] = models
     meta["leaves"] = leaves
     meta["sample_refs"] = {"before": before["refs"], "after": after["refs"], "online": online["refs"]}
     meta["matrix"] = {

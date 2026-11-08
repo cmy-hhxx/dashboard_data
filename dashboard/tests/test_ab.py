@@ -387,6 +387,33 @@ class ScopeLayoutTests(unittest.TestCase):
             self.assertEqual(refs["t2"]["slug"], "sess-t2")
             self.assertEqual(rnd["sample_refs"]["online"][0]["slug"], "online-1")
 
+    def test_round_scopes_every_side_to_its_release_models(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            base = scope_round_dir(root)
+            coverage = base / "00_manifest" / "coverage_before_release_cluster.csv"
+            coverage.write_text(
+                BEFORE_COVERAGE
+                + "t4,thread_4,,2026-10-23T10:00:00Z,fast,q4,string,已评测_有落点,,daily,daily_fast,e2.jsonl,4,1,,1,S1.M2.1,,,,\n",
+                encoding="utf-8")
+            tree = base / "02_before_release/cluster_tree/aime_expert/item_index.slice.jsonl"
+            tree.write_text(tree.read_text(encoding="utf-8")
+                            + json.dumps({"trace_id": "t4", "path": "S1.M2.1"}) + "\n", encoding="utf-8")
+
+            def deep_sample(slug, model, trace):
+                detail = {"meta": {"task": "行情解读", "subtask": "股价走势"},
+                          "attribution": {"problems": [{"cl": {"path": "S9.M1.1"}}]}}
+                return (slug, detail, {"d": "2026-11-07", "ut": "real", "tid": trace, "m": model}, {})
+
+            samples = self.samples() + [deep_sample("online-fast", "aime_fast", "t11")]
+            rnd = ab_test.ab_payload(root, "aime", samples=samples)["rounds"][0]
+            # 1106 retests expert only: the older fast trace and the fast online sample are out.
+            self.assertEqual(rnd["models"], ["expert"])
+            self.assertNotIn("t4", {ref["trace"] for ref in rnd["sample_refs"]["before"]})
+            self.assertEqual(rnd["sides"]["before"], {"traces": 2, "hits": 3})
+            self.assertEqual(rnd["sides"]["online"]["traces"], 1)
+            self.assertEqual([ref["slug"] for ref in rnd["sample_refs"]["online"]], ["online-1"])
+
     def test_missing_after_scope_is_null_everywhere(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

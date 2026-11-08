@@ -17,7 +17,8 @@ import { trendSampleFrame, abTrendSampleRefs } from "./trend_samples.js";
 const SIDES = ["before", "after", "online"];
 const SIDE_SHORT = { before: "改版前", after: "改版后", online: "线上" };
 const METRICS = [
-  ["delta", "变化"],
+  ["paired", "同题变化"],
+  ["delta", "同题+线上变化"],
   ["before", "发版前"],
   ["post", "发版后（同题回测+线上真实）"],
 ];
@@ -31,7 +32,7 @@ const SIDE_TONE = { before: "var(--t2)", after: "var(--accent)", online: "var(--
 
 const sideReady = (rnd, side) => !!(rnd.sides && rnd.sides[side]);
 const postReady = (rnd) => sideReady(rnd, "after") || sideReady(rnd, "online");
-const defaultMetric = (rnd) => (postReady(rnd) ? "delta" : "before");
+const defaultMetric = (rnd) => (sideReady(rnd, "after") ? "paired" : postReady(rnd) ? "delta" : "before");
 const roundLabel = (rnd, i) => rnd.label || rnd.release_label || `第 ${i + 1} 期`;
 
 /* Reuse 评测量 bars, grouping the two post-release populations without mixing them. */
@@ -84,6 +85,7 @@ export function metricValue(cell, metric, rnd) {
     const online = sideReady(rnd, "online") ? cell.online : null;
     return after == null && online == null ? null : num(after) + num(online);
   }
+  if (metric === "paired") return sideReady(rnd, "after") ? cell.after - cell.before : null;
   if (metric === "delta") {
     const post = metricValue(cell, "post", rnd);
     return sideReady(rnd, "before") && post != null ? post - cell.before : null;
@@ -91,9 +93,10 @@ export function metricValue(cell, metric, rnd) {
   return null;
 }
 
-/* The tooltip must explain the number that is printed in the cell, with the same sides and the
-   same arithmetic. 变化 compares the pre-release evaluation with the post-release side as a
-   whole: same-question retest plus the post-release real-user batch. */
+/* The tooltip must explain the number printed in the cell, with the same sides and arithmetic.
+   Two change readings are offered because the release side has two populations:
+   - 同题变化: 同题复测 − 同题基线 (the fixed set alone);
+   - 同题+线上变化: 发版后（同题复测 + 线上真实）− 同题基线. */
 export function metricTip(cell, metric, rnd) {
   if (metric === "before") return { value: `发版前 ${fmt(cell.before)}`, note: "同题基线" };
   const afterReady = sideReady(rnd, "after");
@@ -105,11 +108,18 @@ export function metricTip(cell, metric, rnd) {
       note: `同题复测 ${afterReady ? fmt(cell.after) : DASH} + 线上真实 ${onlineReady ? fmt(cell.online) : DASH}`,
     };
   }
+  if (metric === "paired") {
+    const value = metricValue(cell, "paired", rnd);
+    return {
+      value: value == null ? `同题变化 ${DASH}` : `同题变化 ${signed(value)}`,
+      note: `同题基线 ${fmt(cell.before)} → 同题复测 ${afterReady ? fmt(cell.after) : DASH}`,
+    };
+  }
   const value = metricValue(cell, "delta", rnd);
   const note = post == null
-    ? "发版后缺失，无法计算变化"
+    ? "发版后缺失，无法计算同题+线上变化"
     : `同题基线 ${fmt(cell.before)} → 发版后 ${fmt(post)}（同题复测 ${afterReady ? fmt(cell.after) : DASH} + 线上真实 ${onlineReady ? fmt(cell.online) : DASH}）`;
-  return { value: value == null ? `变化 ${DASH}` : `变化 ${signed(value)}`, note };
+  return { value: value == null ? `同题+线上变化 ${DASH}` : `同题+线上变化 ${signed(value)}`, note };
 }
 
 function sceneMatches(node, task, sub) {
@@ -214,6 +224,8 @@ function matrixViewAb(rnd, rows, cols, metric) {
 function matrixTableAb(view, rnd, metric, selected) {
   const { rows, cols, cells } = view;
   if (!rows.length || !cols.length) return `<div class="empty">暂无聚类矩阵数据</div>`;
+  // Both change readings are signed: a real 0 is data, so it is printed (unlike a 0 count).
+  const change = metric === "paired" || metric === "delta";
   let max = 1;
   cells.forEach((row) => row.forEach((x) => { if (x.n != null) max = Math.max(max, Math.abs(x.n)); }));
   const totals = rows.map((_, ri) => sumOf(cells[ri].map((x) => x.n == null ? 0 : x.n)));
@@ -234,21 +246,21 @@ function matrixTableAb(view, rnd, metric, selected) {
     cols.forEach((c, ci) => {
       const cell = cells[ri][ci];
       const v = cell.n;
-      const tone = metric === "delta" && v != null ? (v < 0 ? " is-better" : v > 0 ? " is-worse" : " is-zero") : "";
-      const zero = metric !== "delta" && v != null && v === 0;
+      const tone = change && v != null ? (v < 0 ? " is-better" : v > 0 ? " is-worse" : " is-zero") : "";
+      const zero = !change && v != null && v === 0;
       const on = selected && selected.ri === ri && selected.ci === ci;
       const tipParts = metricTip(cell, metric, rnd);
       const tip = `${r.name} · ${c.name}|${tipParts.value}|${tipParts.note}`;
       gridCells += v == null || zero
         ? `<span class="cell is-empty" data-abmx="${ri}:${ci}"></span>`
-        : `<span class="cell num${tone}${on ? " is-sel" : ""}" style="--v:${(0.08 + 0.62 * Math.sqrt(Math.abs(v) / max)).toFixed(3)}" data-act="cell" data-ri="${ri}" data-ci="${ci}" data-abmx="${ri}:${ci}" data-tip="${esc(tip)}">${metric === "delta" ? signed(v) : fmt(v)}</span>`;
+        : `<span class="cell num${tone}${on ? " is-sel" : ""}" style="--v:${(0.08 + 0.62 * Math.sqrt(Math.abs(v) / max)).toFixed(3)}" data-act="cell" data-ri="${ri}" data-ci="${ci}" data-abmx="${ri}:${ci}" data-tip="${esc(tip)}">${change ? signed(v) : fmt(v)}</span>`;
     });
-    tots += `<span class="rowtot num"><i class="${metric === "delta" && totals[ri] < 0 ? "is-better" : metric === "delta" && totals[ri] > 0 ? "is-worse" : ""}" style="width:${(72 * Math.abs(totals[ri])) / maxTot}px"></i>${metric === "delta" ? signed(totals[ri]) : fmt(totals[ri])}</span>`;
+    tots += `<span class="rowtot num"><i class="${change && totals[ri] < 0 ? "is-better" : change && totals[ri] > 0 ? "is-worse" : ""}" style="width:${(72 * Math.abs(totals[ri])) / maxTot}px"></i>${change ? signed(totals[ri]) : fmt(totals[ri])}</span>`;
   });
   return `<div class="matrix abmatrix" style="--cols:${cols.length};--rows:${rows.length}">
     <div class="mx-rows"><span class="mx-corner" aria-hidden="true"></span>${rowLabels}</div>
     <div class="mx-scroll"><div class="mx-grid">${heads}${gridCells}</div></div>
-    <div class="mx-tots"><span class="rowtot-head" title="该场景在当前口径下的问题数合计">${metric === "delta" ? "变化合计" : "问题合计"}</span>${tots}</div>
+    <div class="mx-tots"><span class="rowtot-head" title="该场景在当前口径下的问题数合计">${change ? "变化合计" : "问题合计"}</span>${tots}</div>
   </div>`;
 }
 
@@ -309,6 +321,7 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
   state.orbitSide = state.orbitSide === "after" ? "after" : "before";
   state.metric = METRICS.some(([k]) => k === state.metric) ? state.metric : defaultMetric(rounds[state.round]);
   const current = rounds[state.round];
+  if (state.metric === "paired" && !sideReady(current, "after")) state.metric = defaultMetric(current);
   if ((state.metric === "delta" || state.metric === "post") && !postReady(current)) state.metric = defaultMetric(current);
   if (!state.cell || typeof state.cell !== "object") state.cell = null;
   let cellTrendChart = null;
@@ -391,12 +404,14 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
   }
 
   function changes(rnd) {
+    // 同题变化: the ranking and its counts stay on the paired fixed set.  The online batch is a
+    // different population, so it is shown as evidence on each row instead of being added in.
     return (Array.isArray(rnd.leaves) ? rnd.leaves : [])
-      .filter((leaf) => leaf.after != null || leaf.online != null)
-      .map((leaf) => {
-        const after = (leaf.after == null ? 0 : num(leaf.after)) + (leaf.online == null ? 0 : num(leaf.online));
-        return { leaf, before: num(leaf.before), after, online: leaf.online == null ? null : num(leaf.online), d: after - num(leaf.before) };
-      });
+      .filter((leaf) => leaf.after != null)
+      .map((leaf) => ({
+        leaf, before: num(leaf.before), after: num(leaf.after),
+        online: leaf.online == null ? null : num(leaf.online), d: num(leaf.after) - num(leaf.before),
+      }));
   }
 
   function rankPanel(title, rows, tone, max, total, rnd) {
@@ -422,7 +437,7 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     changesNow.forEach((row) => { row.onlineMatched = onlineRows.some((leaf) => pathRelated(row.leaf.id, leaf.id)); });
     return `<section class="ab-summary">
       ${batchOrbit(rnd)}
-      <div class="ab-change-head"><span>问题变化</span><span class="ab-change-pills"><i class="is-better"></i>改善 <b class="num">${fmt(improved.length)}</b><i class="is-worse"></i>变差 <b class="num">${fmt(worsened.length)}</b><small>消除 ${fmt(resolved)} · 新增 ${fmt(added)}</small></span></div>
+      <div class="ab-change-head"><span title="同题变化：同题复测 − 同题基线；线上真实只在「问题数量」和矩阵的「同题+线上变化 / 发版后」里计入">问题变化（同题）</span><span class="ab-change-pills"><i class="is-better"></i>改善 <b class="num">${fmt(improved.length)}</b><i class="is-worse"></i>变差 <b class="num">${fmt(worsened.length)}</b><small>消除 ${fmt(resolved)} · 新增 ${fmt(added)}</small></span></div>
       <div class="ab-summary-grid">${rankPanel("变好的问题", improved.slice(0, 5), "is-better", max, improved.length, rnd)}${rankPanel("变差的问题", worsened.slice(0, 5), "is-worse", max, worsened.length, rnd)}</div>
       <div class="ab-summary-foot"><button type="button" class="link ab-next" data-act="matrix">下一步：查看聚类矩阵 →</button></div>
     </section>`;
@@ -459,9 +474,11 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     const before = treeCount(rnd, "before", row, col.prefix);
     const fixedAfter = treeCount(rnd, "after", row, col.prefix);
     const online = treeCount(rnd, "online", row, col.prefix);
-    // 变化矩阵 compares 发版前 with 发版后 as a whole: 同题复测 + 线上真实.
+    // 同题变化 reads the fixed set alone; 同题+线上变化 / 发版后 add the real-user batch.
+    const withOnline = metric === "delta" || metric === "post";
     const releaseCount = (r) => {
       const after = treeCount(r, "after", row, col.prefix);
+      if (!withOnline) return after;
       const live = treeCount(r, "online", row, col.prefix);
       return after == null && live == null ? null : num(after) + num(live);
     };
@@ -471,25 +488,30 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
       after: releaseCount(r),
     }));
     const cur = rows[state.round];
-    const afterLabel = metric === "post" ? "发版后" : "改版后";
+    const afterLabel = withOnline ? "发版后" : "改版后";
     const cols = rows.length === 1 ? ["改版前", afterLabel] : rows.map((r) => r.label);
+    const second = withOnline ? ["after", "online"] : ["after"];
     const series = rows.length === 1
-      ? [{ label: col.name, color: "var(--accent)", values: [cur.before, cur.after], samples: [{ round: rnd, sides: ["before"] }, { round: rnd, sides: ["after", "online"] }] }]
+      ? [{ label: col.name, color: "var(--accent)", values: [cur.before, cur.after], samples: [{ round: rnd, sides: ["before"] }, { round: rnd, sides: second }] }]
       : [
           { label: "改版前", color: "var(--t2)", values: rows.map((r) => r.before), samples: rounds.map((r) => ({ round: r, sides: ["before"] })) },
-          { label: afterLabel, color: "var(--accent)", values: rows.map((r) => r.after), samples: rounds.map((r) => ({ round: r, sides: ["after", "online"] })) },
+          { label: afterLabel, color: "var(--accent)", values: rows.map((r) => r.after), samples: rounds.map((r) => ({ round: r, sides: second })) },
         ];
     const releaseTotal = fixedAfter == null && online == null ? null : num(fixedAfter) + num(online);
     const current = metric === "post"
       ? releaseTotal
-      : metric === "before" ? before : (releaseTotal == null || before == null ? null : releaseTotal - before);
+      : metric === "paired" ? (fixedAfter == null ? null : fixedAfter - before)
+      : metric === "before" ? before
+      : (releaseTotal == null || before == null ? null : releaseTotal - before);
     const detail = metric === "post"
       ? `同题复测 ${fmt(fixedAfter)} + 线上真实 ${fmt(online)}`
       : metric === "before"
         ? "同题基线"
-        : releaseTotal == null
-          ? "发版后缺失，无法计算变化"
-          : `同题基线 ${fmt(before)} → 发版后 ${fmt(releaseTotal)}（同题复测 ${fmt(fixedAfter)} + 线上真实 ${fmt(online)}）`;
+        : metric === "paired"
+          ? `同题基线 ${fmt(before)} → 同题复测 ${fmt(fixedAfter)}`
+          : releaseTotal == null
+            ? "发版后缺失，无法计算同题+线上变化"
+            : `同题基线 ${fmt(before)} → 发版后 ${fmt(releaseTotal)}（同题复测 ${fmt(fixedAfter)} + 线上真实 ${fmt(online)}）`;
     // Sample recall is per side, not per metric: the cell's samples stay recallable even when the
     // printed number is a paired delta. The retest side has no detail page in 5002, so it only
     // gets a chip when its refs actually carry a slug.
@@ -511,7 +533,7 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     return `<section class="ab-trend is-on" aria-live="polite">
       <div class="ab-trendhead">
         <span class="ab-trendname">${esc(row.name)} · ${esc(col.name)}</span>
-        <span class="ab-trendmetric">${esc(metric === "post" ? "发版后" : metric === "before" ? "发版前" : "变化")} <b class="num">${current == null ? DASH : metric === "delta" ? signed(current) : fmt(current)}</b><small>${esc(detail)}</small></span>
+        <span class="ab-trendmetric">${esc(metric === "post" ? "发版后" : metric === "before" ? "发版前" : metric === "paired" ? "同题变化" : "同题+线上变化")} <b class="num">${current == null ? DASH : metric === "paired" || metric === "delta" ? signed(current) : fmt(current)}</b><small>${esc(detail)}</small></span>
         <span class="ab-trendacts">${chips || '<small class="ab-trendhint">当前簇没有可召回样本</small>'}</span>
       </div>
       ${trendSampleFrame(`<div class="mxt-plot" id="abCellTrend" data-own-tip>${lineTrendSVG({ ...chart, width }).html}</div>`)}
@@ -520,7 +542,8 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
 
   function metricChips(rnd) {
     return METRICS.map(([key, label]) => {
-      const disabled = (key === "delta" || key === "post") && !postReady(rnd);
+      const disabled = (key === "paired" && !sideReady(rnd, "after"))
+        || ((key === "delta" || key === "post") && !postReady(rnd));
       return `<button type="button" class="ab-chip" data-act="metric" data-metric="${key}" aria-pressed="${state.metric === key}"${disabled ? " disabled" : ""}>${label}</button>`;
     }).join("");
   }
@@ -562,8 +585,10 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
       const names = quietCols.slice(0, 2).map(({ col }) => `「${esc(col.name)}」`).join("");
       const subject = quietCols.length <= 2 ? names : `${names}等 ${quietCols.length} 个分类`;
       const tail = state.metric === "delta"
-        ? `变化 ${signed(onlineTotal)} 全部来自线上真实`
-        : `发版前为 0，线上真实 ${fmt(onlineTotal)} 计入变化与发版后`;
+        ? `同题+线上变化 ${signed(onlineTotal)} 全部来自线上真实`
+        : state.metric === "paired"
+          ? `同题变化为 0，线上真实 ${fmt(onlineTotal)} 计入「同题+线上变化」和「发版后」`
+          : `发版前为 0，线上真实 ${fmt(onlineTotal)} 计入「同题+线上变化」和「发版后」`;
       return `<p class="ab-mxnote">${subject}同题两批均无落点，${tail}</p>`;
     })() : "";
     return `<section class="ab-matrixstep">
@@ -579,7 +604,11 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     cellTrendDrawer = null;
     cellTrendChart = null;
     const rnd = rounds[state.round];
-    host.innerHTML = `<div class="abw">${roundBar()}${state.step === "matrix" ? matrix(rnd) : summary(rnd)}</div>`;
+    const models = (Array.isArray(rnd.models) ? rnd.models : []).filter(Boolean);
+    const scope = models.length
+      ? `<p class="ab-scope">模型口径：${models.map(esc).join(" / ")} · 同题两批与线上真实样本都只取该模型${models.length === 1 ? "，不含其他模型" : ""}</p>`
+      : "";
+    host.innerHTML = `<div class="abw">${roundBar()}${scope}${state.step === "matrix" ? matrix(rnd) : summary(rnd)}</div>`;
     const sideSwitch = host.querySelector("#abOrbitSides");
     if (sideSwitch) {
       const control = segmented(sideSwitch, (side) => {
@@ -661,7 +690,7 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     if (act === "metric") {
       const next = action.dataset.metric;
       if (!METRICS.some(([key]) => key === next) || action.disabled) return;
-      if ((next === "delta" || next === "post") && !postReady(rnd)) return;
+      if ((next === "paired" && !sideReady(rnd, "after")) || ((next === "delta" || next === "post") && !postReady(rnd))) return;
       state.metric = next;
       state.cell = null;
       render();
