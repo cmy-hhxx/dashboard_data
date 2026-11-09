@@ -344,6 +344,14 @@ labels:["…",…]}`，与 `rows[]` 同长度、同顺序；前端首屏后再�
 - **多轮映射**：头部 `#ttabs` 按 `D.rounds` 渲染；`S.trace / S.turn / S.cturn` 分别取
   `D.rounds[i].trace / .turn / .compact`。`withRounds` 的 trace 要 clamp 到可用输入 trace，
   否则“单输入、多归因轮”的会话会拿不到 `input.traces[S.trace]`，中间对话与顶部 cmap 会空白。
+- **单 trace 输出 → 会话聚合**：后端现在会按 trace 评测，一行只有一条 trace，但详情格式仍是 session 形态。
+  具体数据里 `groupSessions` 按 `(split, model, session_id)` 把行并成一个会话，`sample_detail` 的
+  `loadSession` 拉齐该会话全部详情：`dropSubsetParts` 去掉被多 trace 全量详情包含的单 trace 子集，
+  其余用 `mergeSessionDetails` 拼接输入、turn、问题、证据和紧凑输出并重排 id；对比页（compare）在
+  单 trace 详情上按 `ids.session` 从 samples 索引补齐同会话的其它行后再交给同一个详情工厂。
+  数据侧全部规整成聚合形态后，这些前端兼容逻辑仍然兼容。
+- **Session 点评**：只有详情的 `attribution.summary` 字段存在时才渲染「session 总评」入口和 Session 点评；
+  单 trace 输出没有这个字段，就不显示（不要再补「暂无点评」占位）。Trace 点评仍取 `turns[i].summary`。
 - **复制**：`navigator.clipboard` 在 HTTP 下不可用，`copyText` 必须有 textarea + `execCommand`
   回退；按钮反馈「已复制 / 复制失败」。
 - **数据页跳样本只有一处**：会话场格子带 `case`；聚类矩阵格子不再跳页，而是在卡片里换成趋势图

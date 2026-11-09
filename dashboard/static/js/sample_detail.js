@@ -77,84 +77,13 @@ function wireCmapPan(host) {
   }, true);
 }
 
-export function createSampleDetail(host, ctxArg, opts = {}) {
-  const prefix = opts.prefix || "";
-  const loadDetail = opts.loadDetail || ((slug) => getJSON(`samples/${slug}.json`));
-  // 版本对比的一个 case 是一整段会话里的某一轮：标题要显示这一轮的提问，
-  // 而不是会话第一句（否则左右两栏看起来像不同的问题）。
-  const roundQuestion = opts.roundQuestion === true;
-  const ctx = ctxArg;
-  const root = host;
-  const S = {
-    product: opts.product, prod: opts.prod, all: opts.sessions || [],
-    cache: new Map(), loadSeq: 0, D: null, sessionKey: null, session: null,
-    round: 0, trace: 0, turn: 0, cturn: 0, sessionView: false, tabPage: 0, open: new Set(),
-    active: null, bandOpen: false, traceMiss: null,
-  };
-  let threadsBound = false;
-  const onThreadResize = () => scheduleThreads();
-  const onThreadLoad = () => scheduleThreads();
-
-  function questionOf(D) {
-    if (roundQuestion && !S.sessionView) {
-      const turn = D.input?.traces?.[S.trace];
-      const user = (turn?.messages || []).find((m) => m.k === "user");
-      const text = (user?.blocks || [])
-        .map((b) => (b.x || []).filter((x) => typeof x === "string").join(""))
-        .join(" ")
-        .replace(/\s+/g, " ")
-        .trim();
-      if (text) return text;
-    }
-    return D.question || "";
-  }
-
-  /* 轮次切换、session 总评切换只改内容列，标题行也要跟着换。 */
-  function setHeadQuestion() {
-    if (!S.D) return;
-    const fullQ = questionOf(S.D) || "（无提问）";
-    const shortQ = fullQ.length > 80 ? `${fullQ.slice(0, 80)}…` : fullQ;
-    const h = $(`#${prefix}shead h2`, root);
-    if (!h) return;
-    h.textContent = shortQ;
-    h.title = fullQ;
-  }
-
-  function markCmapScroll() {
-    $$(".cmap", root).forEach((c) => {
-      const overflow = c.scrollWidth > c.clientWidth + 1;
-      c.classList.toggle("is-scrollable", overflow);
-      c.title = overflow ? "拖动查看完整链路" : "";
-      let label = c.querySelector(":scope > .cmap-k");
-      if (overflow && !label) {
-        label = document.createElement("div");
-        label.className = "cmap-k";
-        label.textContent = "链路概览";
-        c.prepend(label);
-      } else if (!overflow && label) {
-        label.remove();
-      }
-    });
-  }
-
-/* ---------------------------------------------------------------- detail */
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const traceSet = (d) => new Set((d.attribution?.turns || []).map((t) => t.trace_id).filter(Boolean));
 const roundCount = (d) => Math.max(d.input?.traces?.length || 0, d.attribution?.turns?.length || 0, d.compact?.turns?.length || 0, 1);
 
-async function fetchDetail(slug) {
-  let D = S.cache.get(slug);
-  if (!D) {
-    D = await loadDetail(slug);
-    S.cache.set(slug, D);
-    if (S.cache.size > 32) S.cache.delete(S.cache.keys().next().value);
-  }
-  return D;
-}
-
 /* If a full-session detail and a per-trace detail overlap, keep the one that contains
    the other's trace ids. Disjoint per-trace evaluations are all kept. */
-function dropSubsetParts(parts) {
+export function dropSubsetParts(parts) {
   const meta = parts.map((part) => ({ part, ids: traceSet(part.detail) }));
   return meta
     .filter((a, i) =>
@@ -186,10 +115,10 @@ function withRounds(part) {
   return d;
 }
 
-function mergeSessionDetails(parts, session) {
+export function mergeSessionDetails(parts, session, product) {
   const D = {
     session: true,
-    product: S.product,
+    product,
     split: session.sp,
     model: session.m,
     date: session.d,
@@ -275,6 +204,84 @@ function mergeSessionDetails(parts, session) {
   return D;
 }
 
+/* 后端的会话点评只看字段有没有。新版本单 trace 输出不带 session_summary，
+   这时不渲染 Session 点评入口；旧数据 / 后处理聚合数据照旧展示。 */
+export const hasSessionComment = (D) => !!(D && D.attribution && D.attribution.summary);
+
+export function createSampleDetail(host, ctxArg, opts = {}) {
+  const prefix = opts.prefix || "";
+  const loadDetail = opts.loadDetail || ((slug) => getJSON(`samples/${slug}.json`));
+  // 对比页会在会话聚合前先读一次当前详情（判断是不是单 trace），把这份数据带进来，
+  // 避免同一个 slug 拉两遍。
+  const seedDetails = opts.seedDetails || {};
+  // 版本对比的一个 case 是一整段会话里的某一轮：标题要显示这一轮的提问，
+  // 而不是会话第一句（否则左右两栏看起来像不同的问题）。
+  const roundQuestion = opts.roundQuestion === true;
+  const ctx = ctxArg;
+  const root = host;
+  const S = {
+    product: opts.product, prod: opts.prod, all: opts.sessions || [],
+    cache: new Map(), loadSeq: 0, D: null, sessionKey: null, session: null,
+    round: 0, trace: 0, turn: 0, cturn: 0, sessionView: false, tabPage: 0, open: new Set(),
+    active: null, bandOpen: false, traceMiss: null,
+  };
+  let threadsBound = false;
+  const onThreadResize = () => scheduleThreads();
+  const onThreadLoad = () => scheduleThreads();
+
+  function questionOf(D) {
+    if (roundQuestion && !S.sessionView) {
+      const turn = D.input?.traces?.[S.trace];
+      const user = (turn?.messages || []).find((m) => m.k === "user");
+      const text = (user?.blocks || [])
+        .map((b) => (b.x || []).filter((x) => typeof x === "string").join(""))
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (text) return text;
+    }
+    return D.question || "";
+  }
+
+  /* 轮次切换、session 总评切换只改内容列，标题行也要跟着换。 */
+  function setHeadQuestion() {
+    if (!S.D) return;
+    const fullQ = questionOf(S.D) || "（无提问）";
+    const shortQ = fullQ.length > 80 ? `${fullQ.slice(0, 80)}…` : fullQ;
+    const h = $(`#${prefix}shead h2`, root);
+    if (!h) return;
+    h.textContent = shortQ;
+    h.title = fullQ;
+  }
+
+  function markCmapScroll() {
+    $$(".cmap", root).forEach((c) => {
+      const overflow = c.scrollWidth > c.clientWidth + 1;
+      c.classList.toggle("is-scrollable", overflow);
+      c.title = overflow ? "拖动查看完整链路" : "";
+      let label = c.querySelector(":scope > .cmap-k");
+      if (overflow && !label) {
+        label = document.createElement("div");
+        label.className = "cmap-k";
+        label.textContent = "链路概览";
+        c.prepend(label);
+      } else if (!overflow && label) {
+        label.remove();
+      }
+    });
+  }
+
+/* ---------------------------------------------------------------- detail */
+async function fetchDetail(slug) {
+  let D = S.cache.get(slug);
+  if (!D) {
+    D = seedDetails[slug] || await loadDetail(slug);
+    S.cache.set(slug, D);
+    if (S.cache.size > 32) S.cache.delete(S.cache.keys().next().value);
+  }
+  return D;
+}
+
 async function loadSession(session, focusSlug, focusTrace, sev) {
   // 连点样本时详情是异步拉的：先发起的旧请求可能后到，晚到的旧数据会把新样本的界面盖掉。
   // 每次进入都领一个序号，await 回来后发现已经不是最新一次就整段丢掉。
@@ -302,7 +309,7 @@ async function loadSession(session, focusSlug, focusTrace, sev) {
   if (token !== S.loadSeq) return;   // 期间用户又点了别的样本：这一份晚到的数据不要写进界面
   parts.sort((a, b) => String(a.detail.meta?.request_time || a.detail.date || "").localeCompare(String(b.detail.meta?.request_time || b.detail.date || "")));
   const kept = dropSubsetParts(parts);
-  const D = kept.length === 1 ? withRounds(kept[0]) : mergeSessionDetails(kept, session);
+  const D = kept.length === 1 ? withRounds(kept[0]) : mergeSessionDetails(kept, session, S.product);
   index(D);
   S.D = D;
   S.round = D.rounds.length - 1;
@@ -364,6 +371,7 @@ function selectRound(i, { scroll = true } = {}) {
   const D = S.D;
   if (!D) return;
   if (i === "session") {
+    if (!hasSessionComment(D)) return;
     S.sessionView = true;
     setHeadQuestion();
     renderTrace();
@@ -415,6 +423,7 @@ function summaryInner(D) {
   const turns = D.attribution.turns || [];
   const turn = turns[Math.max(0, Math.min(S.turn, turns.length - 1))];
   const text = S.sessionView ? D.attribution.summary : (turn?.summary || "");
+  if (S.sessionView && !text) return "";
   return `<div class="sum-box"><span class="sp-k">${S.sessionView ? "Session 点评" : "Trace 点评"}</span>${
     text ? `<p class="summary">${esc(text)}</p>` : `<p class="summary faint">暂无点评</p>`
   }</div>`;
@@ -539,7 +548,7 @@ function traceTabsInner(rounds, D) {
   const pager = paged
     ? `<span class="trace-tabs-pager"><button type="button" data-tpage="-1" aria-label="上一页轮次"${page === 0 ? " disabled" : ""}>‹</button><span class="num">${page + 1}/${pages}</span><button type="button" data-tpage="1" aria-label="下一页轮次"${page === pages - 1 ? " disabled" : ""}>›</button></span>`
     : "";
-  const session = hasChat(D) ? `<button type="button" class="pill" data-t="session" aria-pressed="${S.sessionView}">session 总评</button>` : "";
+  const session = hasChat(D) && hasSessionComment(D) ? `<button type="button" class="pill" data-t="session" aria-pressed="${S.sessionView}">session 总评</button>` : "";
   return `${tabs}${pager}${session}`;
 }
 

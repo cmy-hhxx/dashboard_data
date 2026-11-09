@@ -312,13 +312,54 @@ function destroyDetails() {
   C.details = [];
 }
 
+/* 单 trace 评测把一个会话拆成了多行；对比页拿到的 detail 往往只是其中一条 trace。
+   这里按 session id 把同一会话的其它行找回来，交给详情组件重新拼成一整段会话。 */
+const INDEX_ROWS = new Map();
+async function sampleRows(ctx) {
+  const product = ctx.product;
+  if (!INDEX_ROWS.has(product)) {
+    const index = await ctx.loadIndex(product);
+    INDEX_ROWS.set(product, index?.products?.[product]?.rows || []);
+  }
+  return INDEX_ROWS.get(product);
+}
+
+export function sessionRows(rows, sid, model = "", split = "") {
+  return (Array.isArray(rows) ? rows : []).filter((row) => String(row.sid || "") === String(sid || "")
+    && (!model || !row.m || row.m === model)
+    && (!split || !row.sp || row.sp === split));
+}
+
+async function expandSession(session, ctx, loadDetail, seed) {
+  if (!session || session.rows.length !== 1) return session;
+  try {
+    const slug = session.rows[0].s;
+    if (!seed[slug]) seed[slug] = await loadDetail(slug);
+    const detail = seed[slug];
+    const sid = detail?.ids?.session;
+    // 一份已经聚合好的多 trace 详情就是整段会话，不需要再找兄弟行。
+    const traces = Math.max(detail?.input?.traces?.length || 0, detail?.attribution?.turns?.length || 0);
+    if (!sid || traces > 1) return session;
+    const rows = await sampleRows(ctx);
+    const sibs = sessionRows(rows, sid, detail.model || session.m, detail.split || session.sp);
+    if (sibs.length <= 1) return session;
+    return { ...session, sid, rows: sibs.map((row) => ({ s: row.s })) };
+  } catch (err) {
+    // 索引导出失败不该把对比页打空：退回单条详情，详情组件自己会给错误态。
+    return session;
+  }
+}
+
 async function mountDetail(host, spec) {
   const ctx = C.ctx;
+  const seed = {};
+  const session = spec.expand ? await expandSession(spec.session, ctx, spec.loadDetail, seed) : spec.session;
   const detail = createSampleDetail(host, ctx, {
     prefix: spec.prefix,
     product: ctx.product,
     prod: ctx.data?.products?.[ctx.product],
-    sessions: [spec.session],
+    sessions: [session],
+    seedDetails: seed,
     loadDetail: spec.loadDetail,
     // The compared pair is one question inside a whole session; the pane title must name that
     // round, not the session's first question.
@@ -327,7 +368,7 @@ async function mountDetail(host, spec) {
     onPattern: (path) => ctx.navigate({ ...SAMPLE_VIEW_RESET, view: "samples", product: ctx.product, pattern: path }),
   });
   C.details.push(detail);
-  await detail.load(spec.session, spec.focus);
+  await detail.load(session, spec.focus);
   detail.refreshThreads?.();
 }
 
@@ -399,6 +440,7 @@ async function paintSides(round, pair, online) {
     jobs.push(mountDetail(panes.querySelector('[data-side="o"]'), {
       prefix: "o", session: onlineSession(online, ref),
       focus: {},
+      expand: true,
       loadDetail: (slug) => getJSON(`samples/${encodeURIComponent(slug)}.json`),
     }));
   } else {
@@ -406,6 +448,7 @@ async function paintSides(round, pair, online) {
       jobs.push(mountDetail(panes.querySelector('[data-side="b"]'), {
         prefix: "b", session: beforeSession(pair, before),
         focus: { focusTrace: before.trace },
+        expand: true,
         loadDetail: (slug) => getJSON(`samples/${encodeURIComponent(slug)}.json`),
       }));
     }
