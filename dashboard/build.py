@@ -2221,6 +2221,32 @@ def write_json(path: Path, payload, gz=True):
     return len(data)
 
 
+def write_prewarm_slugs(out_dir: Path) -> None:
+    """Persist the first-page detail slugs from the published sample payloads.
+
+    Used when a build is reused (nothing was rewritten): the server's prewarm
+    thread then reads a 660-byte file instead of parsing the 20 MB index.
+    """
+    prewarm = {}
+    for path in sorted(out_dir.glob("samples-*.json")):
+        product = path.stem[len("samples-"):]
+        try:
+            rows = json.loads(path.read_text(encoding="utf-8"))["products"][product]["rows"]
+        except (OSError, ValueError, KeyError):
+            continue
+        picks = [row.get("s") for row in rows[:40]]
+        picks += [row.get("s") for row in sorted(rows, key=lambda row: row.get("d") or "", reverse=True)[:10]]
+        seen = set()
+        prewarm[product] = [slug for slug in picks if slug and not (slug in seen or seen.add(slug))]
+    if not prewarm:
+        return
+    target = out_dir.parent / "cache" / "prewarm.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(".tmp")
+    tmp.write_text(json.dumps(prewarm, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, target)
+
+
 def empty_payloads(reason):
     now = iso_now()
     data = {"schema": 2, "generated_at": now, "source": {"mode": "empty", "reason": reason, "pairs": 0},
@@ -2945,6 +2971,11 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
             timers["samples"] = 0.0
             timers["aggregate"] = 0.0
             timers["write"] = 0.0
+            try:
+                if not (out_dir.parent / "cache" / "prewarm.json").exists():
+                    write_prewarm_slugs(out_dir)
+            except (OSError, ValueError):
+                pass
             summary = Counter({
                 "pairs": len(pairs), "pairing": pairing_info.get("mode"), "reused": 1,
                 "unmatched": pairing_info.get("unmatched_files", 0),
