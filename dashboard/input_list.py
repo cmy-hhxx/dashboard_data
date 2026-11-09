@@ -175,6 +175,17 @@ class InputLister:
                 self._all_files(product)
             except Exception:  # noqa: BLE001
                 continue
+        self._prune_cache()
+
+    def _prune_cache(self, days: int = 90):
+        """Drop listing/detail caches for days nobody will open again."""
+        cutoff = time.time() - days * 86400
+        for path in self.cache.glob("*.json"):
+            try:
+                if path.stat().st_mtime < cutoff:
+                    path.unlink()
+            except OSError:
+                continue
 
     def _model_of(self, rel: str) -> str:
         """输入文件归属的模型：目录名报不出时用行级 trace 模型（和看板同一套 key）。
