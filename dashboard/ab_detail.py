@@ -406,6 +406,28 @@ class ABDetailBuilder:
             pass
         return False
 
+    def warm(self):
+        """Load/build the AB index at startup so the first compare pane is instant.
+
+        The index is cached on disk, but a retest update invalidates its signature;
+        rebuilding it inside the first /ab_samples request would stall that pane for
+        seconds.  A background warm pays the same cost where nobody is waiting.
+        """
+        for product in sorted(build.ENABLED):
+            try:
+                rounds = ab_test.ab_round_dirs(self.datasets, product)
+            except OSError:
+                continue
+            for _order, _version, round_dir in rounds:
+                if not ab_test.is_scope_layout(round_dir):
+                    continue
+                try:
+                    with self._index_lock:
+                        index = self._index(round_dir.name, round_dir)
+                    build.debug(f"ab index ready: {round_dir.name} ({len(index.get('attribution') or {})} rows)")
+                except Exception as exc:  # noqa: BLE001 - warm is best effort
+                    build.debug(f"ab index warm failed {round_dir.name}: {exc}")
+
     def ensure(self, round_id, eq):
         """Generate (or reuse) one after-release detail; ``None`` when it cannot be built."""
         try:

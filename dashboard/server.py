@@ -140,6 +140,8 @@ def refresh_once():
             if not isinstance(_state["build"], dict) or not _state["build"].get("reused"):
                 threading.Thread(target=prewarm_details, daemon=True).start()
                 threading.Thread(target=prewarm_input_listings, daemon=True).start()
+                if _ab_builder is not None:
+                    threading.Thread(target=_ab_builder.warm, daemon=True).start()
         else:
             _state["error"] = (proc.stderr or line or "")[-500:]
             print("[refresh] failed:", _state["error"], flush=True)
@@ -470,6 +472,7 @@ def main():
         _ab_builder = ABDetailBuilder(
             default_datasets(), os.path.join(HERE, "cache"), os.path.join(STATIC, "ab_samples"),
         )
+        threading.Thread(target=_ab_builder.warm, daemon=True).start()
     except Exception as exc:  # noqa: BLE001 - retest details are optional; static files still serve
         print(f"[serve] ab detail builder disabled: {exc}", flush=True)
     try:
