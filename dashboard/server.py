@@ -76,6 +76,28 @@ def prewarm_details():
             _prewarm_running = False
 
 
+def prewarm_input_listings():
+    """Warm the latest listing per model/split so the first 详情 click is instant."""
+    if not _lister:
+        return
+    try:
+        import build as _build
+        _lister.prewarm_listings(sorted(_build.ENABLED))
+    except Exception as exc:  # noqa: BLE001 - listing prewarm is best effort
+        print(f"[serve] input listing prewarm failed: {exc}", flush=True)
+
+
+def warm_input_lister():
+    if not _lister:
+        return
+    try:
+        import build as _build
+        _lister.warm(sorted(_build.ENABLED))
+        prewarm_input_listings()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[serve] input lister warm failed: {exc}", flush=True)
+
+
 def refresh_once():
     """Rebuild data.json, samples.json and samples/ from the datasets in one pass."""
     with _lock:
@@ -103,6 +125,7 @@ def refresh_once():
             # are still the ones warmed last time; skip loading the 28 MB index again.
             if not isinstance(_state["build"], dict) or not _state["build"].get("reused"):
                 threading.Thread(target=prewarm_details, daemon=True).start()
+                threading.Thread(target=prewarm_input_listings, daemon=True).start()
         else:
             _state["error"] = (proc.stderr or line or "")[-500:]
             print("[refresh] failed:", _state["error"], flush=True)
@@ -398,8 +421,7 @@ def main():
         _lister = InputLister(default_datasets(), os.path.join(HERE, "cache", "build.sqlite3"),
                               os.path.join(HERE, "cache"), STATIC)
         # 文件清单在弗吉尼亚要 23 秒（rglob 在 ceph 上），启动就后台读一遍，别让第一次点击等它。
-        import build as _build
-        threading.Thread(target=_lister.warm, args=(sorted(_build.ENABLED),), daemon=True).start()
+        threading.Thread(target=warm_input_lister, daemon=True).start()
     except Exception as exc:  # noqa: BLE001 - 输入清单不可用时第三级退回旧行为
         print(f"[serve] input lister disabled: {exc}", flush=True)
     if not outputs_ready():

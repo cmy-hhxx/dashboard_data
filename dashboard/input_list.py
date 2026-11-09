@@ -128,6 +128,40 @@ class InputLister:
             if hit:
                 hit[2].clear()
 
+    def prewarm_listings(self, products, days: int = 1):
+        """Pre-read the latest day's listing per model/split.
+
+        The first click on 评测量详情 otherwise pays the per-day input scan
+        (100–600 ms) while the page waits; the payload is cached to disk, so
+        warming one day per series in the background makes that click instant.
+        """
+        try:
+            store = self._open()
+        except Exception:  # noqa: BLE001 - prewarm is best effort
+            return
+        for product in products:
+            try:
+                rows = store.db.execute(
+                    "SELECT DISTINCT date, model, split FROM samples "
+                    "WHERE product=? AND date<>'' ORDER BY date DESC LIMIT 40",
+                    (product,),
+                ).fetchall()
+            except Exception:  # noqa: BLE001
+                continue
+            latest = {}
+            for date, model, split in rows:
+                if not date or not model:
+                    continue
+                bucket = latest.setdefault((model, split), [])
+                if date not in bucket and len(bucket) < days:
+                    bucket.append(date)
+            for (model, split), dates in latest.items():
+                for day in dates:
+                    try:
+                        self.listing(product, day, model, split)
+                    except Exception:  # noqa: BLE001
+                        continue
+
     def warm(self, products):
         """启动时后台预热文件清单：优先用磁盘上那份（秒级），没有才重扫。
 
