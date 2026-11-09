@@ -190,29 +190,28 @@ test("rounded Trace shares sum to exactly 100.0% without inventing a denominator
   assert.deepEqual(traceShares([0, 0, 0, 0, 0, 0]), [null, null, null, null, null, null]);
 });
 
-test("AB groups both released populations but keeps their volumes separate", () => {
+test("AB batches keep both released populations but keep their volumes separate", () => {
   const html = abComparisonHTML({ sides: { before: { hits: 200, traces: 80 }, after: { hits: 60, traces: 30 }, online: { hits: 40, traces: 400 } } });
-  assert.match(html, /height:112px/);
-  assert.match(html, /height:34px/);
-  assert.match(html, /height:22px/);
-  assert.match(html, /同题复测/);
+  assert.equal((html.match(/class="ab-batch is-/g) || []).length, 3);
+  assert.match(html, /改版前/);
+  assert.match(html, /改版后同题/);
   assert.match(html, /线上真实/);
-  assert.match(html, /30 有问题 Trace/);
-  assert.match(html, /400 评测样本/);
-  assert.doesNotMatch(html, /暂无结果|落点|待回填/);
+  assert.match(html, />80 有问题 Trace</);
+  assert.match(html, />30 有问题 Trace</);
+  assert.match(html, />400 评测样本</);
+  assert.doesNotMatch(html, /暂无结果/);
 });
 
 test("AB comparison distinguishes missing results from measured zero problems", () => {
   const missing = abComparisonHTML({ sides: { before: { hits: 200 }, after: null } });
-  assert.match(missing, /暂无结果/);
-  assert.equal((missing.match(/class="evbar"/g) || []).length, 1);
+  assert.equal((missing.match(/暂无结果/g) || []).length, 2); // The retest and the online batch are both missing.
   assert.doesNotMatch(missing, /减少/);
   const zero = abComparisonHTML({ sides: { before: { hits: 200 }, after: { hits: 0 } } });
   assert.equal((zero.match(/暂无结果/g) || []).length, 1); // Online remains independently missing.
-  assert.equal((zero.match(/class="evbar"/g) || []).length, 2);
+  assert.match(zero, /<b class="num">0<\/b>/);
   const onlineOnly = abComparisonHTML({ sides: { before: { hits: 200 }, online: { hits: 40 } } });
   assert.doesNotMatch(onlineOnly, /同题减少|同题增加/);
-  assert.equal((onlineOnly.match(/class="evbar"/g) || []).length, 2);
+  assert.equal((onlineOnly.match(/暂无结果/g) || []).length, 1);
 });
 
 test("AB overview is three cards whose four flows add up to the net paired change", () => {
@@ -243,18 +242,22 @@ test("AB overview is three cards whose four flows add up to the net paired chang
     assert.equal((host.innerHTML.match(/data-abcard="/g) || []).length, 3, "three cards share the row");
     assert.equal((host.innerHTML.match(/data-act="abcard"/g) || []).length, 3, "each card can take the row");
     assert.match(host.innerHTML, /class="ab-bridge-main"><b class="num is-better">−60<\/b><small>个问题<\/small>/);
-    assert.match(host.innerHTML, /<span class="ab-bridge-pair num">125<i>→<\/i>65<\/span>/);
+    assert.match(host.innerHTML, /<span>改版后同题<\/span>\s*<b class="num">65<\/b>/);
+    assert.match(host.innerHTML, /<span>改版前<\/span>\s*<b class="num">125<\/b>/);
+    assert.equal((host.innerHTML.match(/class="ab-batch is-/g) || []).length, 3, "both batches stay one readout");
     const flows = [...host.innerHTML.matchAll(/class="ab-wf-label"><span>([^<]+)<\/span><b class="num" data-flow="([^"]+)">([^<]+)<\/b>/g)].map((m) => [m[1], m[2], m[3]]);
     assert.deepEqual(flows, [["消除", "clear", "−50"], ["减少", "down", "−40"], ["增加", "up", "+20"], ["新增", "add", "+10"]]);
     assert.equal((host.innerHTML.match(/class="ab-wf-col /g) || []).length, 4, "one floating step per flow");
-    assert.doesNotMatch(host.innerHTML, /ab-flow-bar|ab-scope|ab-mxnote|<h3|<h4/);
+    // The matrix step below the summary legitimately uses h3; only the overview must stay heading-free.
+    const summaryHtml = host.innerHTML.split('class="ab-matrixstep"')[0];
+    assert.doesNotMatch(summaryHtml, /ab-flow-bar|ab-scope|ab-mxnote|<h3|<h4/);
   } finally {
     globalThis.window = previousWindow;
     globalThis.requestAnimationFrame = previousRAF;
   }
 });
 
-test("AB overview drops the change card while the release side has not been measured", () => {
+test("AB overview keeps three cards but no waterfall while the release side has not been measured", () => {
   const rnd = { label: "v1106", sides: { before: { hits: 12 } }, leaves: [{ id: "S1.M1.1", name: "x", before: 12, after: null }], matrix: { before: [] }, nodes: [] };
   const host = { innerHTML: "", getBoundingClientRect: () => ({ width: 720 }),
     querySelector: () => null, querySelectorAll: () => [], addEventListener() {} };
@@ -263,9 +266,10 @@ test("AB overview drops the change card while the release side has not been meas
   globalThis.requestAnimationFrame = () => 0;
   try {
     mountAB(host, { rounds: [rnd] }, { round: 0, step: "summary" }, {}, null, {});
-    assert.match(host.innerHTML, /data-cards="2"/);
-    assert.equal((host.innerHTML.match(/data-abcard="/g) || []).length, 2);
-    assert.doesNotMatch(host.innerHTML, /ab-bridge-card/);
+    assert.match(host.innerHTML, /data-cards="3"/);
+    assert.equal((host.innerHTML.match(/data-abcard="/g) || []).length, 3);
+    assert.doesNotMatch(host.innerHTML, /class="ab-wf"/);
+    assert.match(host.innerHTML, /待复测/);
     assert.match(host.innerHTML, /暂无结果/);
   } finally {
     globalThis.window = previousWindow;

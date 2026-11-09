@@ -56,10 +56,9 @@ body.is-ab-full { overflow: hidden; }
 
 /* ---------------------------------------------------------------- 三卡总览：一张占行，另两张让位 */
 .ab-overview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: stretch; gap: 12px; min-width: 0; }
-.ab-overview[data-cards="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .ab-overview[data-open="orbit"] { grid-template-columns: minmax(0, 1.85fr) minmax(0, 1fr) minmax(0, 1fr); }
-.ab-overview[data-open="bridge"] { grid-template-columns: minmax(0, 1fr) minmax(0, 1.85fr) minmax(0, 1fr); }
-.ab-overview[data-open="sides"] { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.85fr); }
+.ab-overview[data-open="change"] { grid-template-columns: minmax(0, 1fr) minmax(0, 1.85fr) minmax(0, 1fr); }
+.ab-overview[data-open="ranks"] { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.85fr); }
 .ab-card { position: relative; min-width: 0; overflow: hidden; padding: 12px 16px; border-radius: var(--r-well); background: var(--well); }
 .ab-card-btn {
   position: absolute; top: 8px; right: 8px; z-index: 1;
@@ -72,6 +71,7 @@ body.is-ab-full { overflow: hidden; }
 .ab-card-btn[aria-pressed="true"] { opacity: 1; background: var(--active); color: var(--accent); }
 .ab-card-btn svg { width: 15px; height: 15px; }
 .ab-card-top { display: flex; align-items: center; gap: 8px; min-height: 24px; padding-right: 26px; }
+.ab-card-title { flex: none; color: var(--ink-2); font-size: var(--fs-meta); font-weight: var(--w-medium); white-space: nowrap; }
 
 /* 聚类树 */
 .ab-orbit-card { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 8px; }
@@ -90,10 +90,21 @@ body.is-ab-full { overflow: hidden; }
 .ab-orbit-card:not(.is-deep) .ab-orbit-sunburst .sb-markn,
 .ab-orbit-card:not(.is-deep) .ab-orbit-sunburst .sb-r em { display: none; }
 
-/* 变化构成：四项流量合起来就是卡头两个总量之间的净变化 */
-.ab-bridge-card { display: grid; grid-template-rows: auto auto minmax(0, 1fr); align-content: stretch; gap: 8px; }
-.ab-bridge-pair { color: var(--muted); font-size: var(--fs-meta); font-variant-numeric: tabular-nums; }
-.ab-bridge-pair i { margin: 0 6px; font-style: normal; color: var(--faint); }
+/* 变化构成：三批总量 + 四步瀑布桥，并托管聚类树叶子的样本抽屉。 */
+.ab-change-card { display: grid; min-width: 0; }
+.ab-change-pane {
+  display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); align-content: stretch; gap: 8px; min-width: 0;
+  transition: opacity 260ms cubic-bezier(0.16, 1, 0.3, 1), transform 360ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+/* 三批总量：一个问题数一行读数，复测与基线之间是一条发丝红虚线。 */
+.ab-batches { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; min-width: 0; }
+.ab-batch { display: grid; align-content: start; gap: 1px; min-width: 0; padding-left: 8px; border-left: 1px solid var(--well-2); }
+.ab-batch:first-child { padding-left: 0; border-left: 0; }
+.ab-batch.is-after { border-left: 1px dashed color-mix(in oklab, var(--release) 55%, transparent); }
+.ab-batch > span { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.ab-batch > b { color: var(--ink); font-size: 20px; line-height: 1.15; font-weight: var(--w-light); letter-spacing: -0.01em; }
+.ab-batch > small { overflow: hidden; color: var(--faint); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.ab-batch.is-missing > b { color: var(--faint); }
 .ab-bridge-main { display: flex; align-items: baseline; gap: 6px; }
 .ab-bridge-main b { color: var(--ink); font-size: 30px; line-height: 1; font-weight: var(--w-light); letter-spacing: -0.02em; }
 .ab-bridge-main b.is-better { color: var(--accent); }
@@ -111,80 +122,53 @@ body.is-ab-full { overflow: hidden; }
 .ab-wf-bar { position: absolute; left: 50%; width: var(--wf-bar); margin-left: calc(var(--wf-bar) / -2); min-height: 3px; border-radius: 3px; background: var(--accent); }
 .ab-wf-col.is-worse .ab-wf-bar { background: var(--sev-1); }
 .ab-wf-link { position: absolute; left: calc(50% + var(--wf-bar) / 2); width: calc(100% + var(--wf-gap) - var(--wf-bar)); height: 1px; background: color-mix(in oklab, var(--ink) 22%, transparent); }
-.ab-bridge-card.is-compact { grid-template-rows: auto auto; align-content: center; }
-.ab-bridge-card.is-compact .ab-card-top { position: absolute; top: 12px; left: 16px; right: 36px; }
-.ab-bridge-card.is-compact .ab-wf { display: none; }
-.ab-bridge-card.is-compact .ab-bridge-main b { font-size: 36px; }
-.ab-bridge-card.is-deep .ab-wf { --wf-bar: 28px; max-width: 720px; }
-.ab-bridge-card.is-deep .ab-wf-plot { min-height: 132px; }
+.ab-change-card.is-compact .ab-change-pane { grid-template-rows: auto auto auto; align-content: center; padding-top: 24px; }
+.ab-change-card.is-compact .ab-card-top { position: absolute; top: 12px; left: 16px; right: 36px; }
+.ab-change-card.is-compact .ab-wf { display: none; }
+.ab-change-card.is-compact .ab-batch > small { display: none; }
+.ab-change-card.is-compact .ab-bridge-main b { font-size: 36px; }
+.ab-change-card.is-deep .ab-wf { --wf-bar: 28px; max-width: 720px; }
+.ab-change-card.is-deep .ab-wf-plot { min-height: 132px; }
 
-/* 三批总量：同题基线 / 同题复测 / 线上真实 */
-.ab-sides-card { min-height: 252px; padding: 0; }
+/* 变化构成 ↔ 样本抽屉：同一张卡，两层叠放。 */
 .ab-side-pane {
   position: absolute; inset: 12px 16px; min-width: 0;
   transition: transform 360ms cubic-bezier(0.16, 1, 0.3, 1), opacity 260ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 .ab-side-pane[data-pane="samples"] { opacity: 0; pointer-events: none; transform: translateX(100%); }
-.ab-overview-side.is-sample .ab-side-pane[data-pane="sides"] { opacity: 0; pointer-events: none; transform: translateX(22px); }
+.ab-overview-side.is-sample .ab-change-pane { opacity: 0; pointer-events: none; transform: translateX(22px); }
 .ab-overview-side.is-sample .ab-side-pane[data-pane="samples"] { opacity: 1; pointer-events: auto; transform: none; }
-.ab-results { display: grid; align-content: center; gap: 8px; height: 100%; min-width: 0; }
-.ab-results > header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; color: var(--muted); font-size: var(--fs-meta); }
-/* 一根发丝级的 release 红：左边是改版前，右边是改版后（复测 + 线上靠得更近）。 */
-.ab-result-groups {
-  display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(0, 2.1fr); column-gap: 16px;
-  width: min(100%, 520px); margin-inline: auto;
-}
-.ab-result-group { display: grid; align-content: start; gap: 8px; min-width: 0; }
-.ab-result-group > span { text-align: center; color: var(--muted); font-size: 11px; }
-/* divider 只切到柱子的基线，不穿过 volume 那一行 */
-.ab-result-group.is-post { position: relative; padding-left: 12px; }
-.ab-result-group.is-post::before {
-  content: ""; position: absolute; left: 0; top: 0; height: calc(100% - 59px);
-  border-left: 1px dashed color-mix(in oklab, var(--release) 70%, transparent);
-}
-.ab-result-post { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 0; min-width: 0; }
-.ab-result-groups .evday { grid-template-rows: 24px var(--bar-h) auto 32px; gap: 4px; }
-.ab-result-groups .evnums { min-height: 24px; align-content: end; }
-.ab-result-groups .evnums b { font-size: 20px; line-height: 1.1; font-weight: var(--w-light); }
-.ab-result-column { display: flex; align-items: flex-end; justify-content: center; height: var(--bar-h); border-bottom: 1px solid var(--well-2); }
-.ab-result-column .evbar { max-width: 60px; }
-.ab-result-column .evbar i { background: var(--c); }
-.ab-result-groups .is-missing .evnums b { color: var(--faint); }
-.ab-result-empty { align-self: center; color: var(--faint); font-size: var(--fs-meta); }
-.ab-result-volume { display: flex; align-items: baseline; justify-content: center; gap: 4px; color: var(--muted); font-size: var(--fs-meta); line-height: 1.4; white-space: nowrap; }
-.ab-result-volume b { color: var(--ink-2); font-weight: var(--w-medium); }
-.ab-sides-card.is-compact .ab-result-group > span,
-.ab-sides-card.is-compact .ab-result-volume { display: none; }
 .ab-sample-pane { height: 100%; padding: 0; animation: none; }
+/* 样本抽屉现在托管在 418px 高的变化卡里，列表跟着卡片长，而不是固定 160px 后留白。 */
+.ab-change-card .ab-sample-pane { display: grid; grid-template-rows: auto auto minmax(0, 1fr); min-height: 0; }
+.ab-change-card .ab-sample-list { max-height: none; min-height: 0; overflow-y: auto; }
 .ab-sample-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; min-width: 0; padding-right: 28px; }
 .ab-sample-head span { overflow: hidden; color: var(--ink-2); font-size: var(--fs-small); font-weight: var(--w-medium); text-overflow: ellipsis; white-space: nowrap; }
 .ab-sample-head .link { flex: none; }
 .ab-sample-list { max-height: 160px; }
 .ab-sample-empty { margin: 20px 8px; color: var(--faint); font-size: var(--fs-meta); }
-
-/* ---------------------------------------------------------------- 变好 / 变差 */
-.ab-change-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; color: var(--ink-2); font-size: var(--fs-small); font-weight: var(--w-medium); }
-.ab-change-pills { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 5px; color: var(--muted); font-size: var(--fs-meta); font-weight: var(--w-body); }
-.ab-change-pills i { width: 7px; height: 7px; margin-left: 8px; border-radius: 50%; background: var(--accent); }
-.ab-change-pills i.is-from { background: var(--well); box-shadow: inset 0 0 0 1px var(--muted); }
-.ab-change-pills i.is-to { background: var(--ink-2); }
-.ab-change-pills i.is-worse { background: var(--sev-1); }
-.ab-change-pills b { color: var(--ink-2); font-weight: var(--w-medium); }
-.ab-change-pills small { margin-left: 8px; color: var(--faint); }
-
-.ab-summary-grid { --rank-cols: minmax(0, 160px) minmax(120px, 1fr) 84px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.ab-rank { min-width: 0; background: var(--well); border-radius: var(--r-well); overflow: hidden; }
-.ab-rank > header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 12px 16px 4px; color: var(--muted); font-size: var(--fs-meta); }
-.ab-rank > header b { color: var(--ink-2); font-weight: var(--w-medium); }
-.ab-rank-axis { display: grid; grid-template-columns: var(--rank-cols); column-gap: 12px; padding: 0 16px 4px; }
+/* ---------------------------------------------------------------- 问题变化：两段排行共用一条 0–max 刻度 */
+.ab-rank-card { --rank-cols: minmax(0, 140px) minmax(60px, 1fr) 84px; display: grid; align-content: start; gap: 8px; }
+.ab-rank-card.is-deep { --rank-cols: minmax(0, 200px) minmax(60px, 1fr) 84px; }
+.ab-rank-card.is-compact { --rank-cols: minmax(0, 116px) minmax(40px, 1fr) 76px; }
+.ab-rank-legend { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.ab-rank-legend i { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-2); }
+.ab-rank-legend i.is-from { background: var(--well); box-shadow: inset 0 0 0 1px var(--muted); }
+.ab-rank-legend i + i { margin-left: 4px; }
+.ab-rank-axis { display: grid; grid-template-columns: var(--rank-cols); column-gap: 12px; }
 .ab-rank-axis-track {
   grid-column: 2; display: flex; justify-content: space-between; gap: 8px;
   padding-bottom: 2px; border-bottom: 1px solid var(--well-2);
   color: var(--faint); font-size: 11px; line-height: 1.2;
 }
+.ab-rank { min-width: 0; }
+.ab-rank + .ab-rank { padding-top: 8px; border-top: 1px solid var(--well-2); }
+.ab-rank > header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 0 0 2px; color: var(--muted); font-size: var(--fs-meta); }
+.ab-rank > header b { color: var(--ink-2); font-weight: var(--w-medium); }
 .ab-rankrow {
   display: grid; grid-template-columns: var(--rank-cols); align-items: center; column-gap: 12px;
-  width: 100%; min-height: 32px; padding: 4px 16px; text-align: left; color: var(--ink-2);
+  min-height: 28px; margin: 0 -8px; padding: 3px 8px; border-radius: 6px;
+  text-align: left; color: var(--ink-2);
   transition: background var(--snap);
 }
 .ab-rankrow:hover { background: var(--hover); }
@@ -247,19 +231,14 @@ body.is-ab-full { overflow: hidden; }
 
 /* ---------------------------------------------------------------- 响应式 */
 @media (max-width: 1180px) {
-  .ab-overview, .ab-overview[data-cards="2"], .ab-overview[data-open] { grid-template-columns: minmax(0, 1fr); }
+  .ab-overview, .ab-overview[data-open] { grid-template-columns: minmax(0, 1fr); }
   .ab-card { padding: 14px 16px; }
-  .ab-bridge-card.is-compact { grid-template-rows: auto auto minmax(0, 1fr); align-content: start; }
-  .ab-bridge-card.is-compact .ab-card-top { position: static; padding-right: 26px; }
-  .ab-bridge-card.is-compact .ab-wf { display: grid; }
+  .ab-change-card.is-compact .ab-change-pane { grid-template-rows: auto auto auto minmax(0, 1fr); align-content: start; }
+  .ab-change-card.is-compact .ab-wf { display: grid; }
   .ab-wf { max-width: 640px; margin-inline: auto; }
-  .ab-sides-card.is-compact .ab-result-group > span { display: block; }
-  .ab-sides-card.is-compact .ab-result-volume { display: flex; }
   .ab-orbit-card:not(.is-deep) .ab-orbit-sunburst .sb-r { grid-template-columns: 8px minmax(0, 1fr) 30px auto 44px; }
   .ab-orbit-card:not(.is-deep) .ab-orbit-sunburst .sb-markn,
   .ab-orbit-card:not(.is-deep) .ab-orbit-sunburst .sb-r em { display: inline; }
-  .ab-sides-card { min-height: 268px; }
-  .ab-summary-grid { grid-template-columns: minmax(0, 1fr); }
   .ab-card-btn { display: none; }
   .ab-orbit-sunburst .sb-view { grid-template-columns: 180px minmax(0, 1fr); max-width: 640px; margin-inline: auto; }
   .ab-orbit-sunburst .sb { width: 180px; }
@@ -269,12 +248,13 @@ body.is-ab-full { overflow: hidden; }
   .ab-orbit-sunburst .sb-view { grid-template-columns: minmax(0, 1fr); }
   .ab-orbit-sunburst .sb { justify-self: center; }
   .ab-orbit-sunburst .sb-list { max-height: none; }
-  .ab-result-groups { grid-template-columns: minmax(0, 1fr) minmax(0, 2.4fr); column-gap: 12px; }
-  .ab-result-volume { font-size: 11px; }
-  .ab-summary-grid { --rank-cols: minmax(0, 1fr) minmax(60px, 1fr) auto; }
-  .ab-rankrow { grid-template-columns: var(--rank-cols); }
-  .ab-rank-axis { display: none; }
+  .ab-rank-card { --rank-cols: minmax(0, 1fr) minmax(60px, 1fr) auto; }
+  .ab-batches { gap: 6px; }
+  .ab-batch { padding-left: 6px; }
   .mx-card.is-full { padding: 12px 16px 32px; }
 }
 .abmatrix .coltot.is-better, .abmatrix .rowtot-foot.is-better { color: var(--accent); }
 .abmatrix .coltot.is-worse, .abmatrix .rowtot-foot.is-worse { color: var(--sev-1); }
+
+/* The AB grid's own coltot base outranks the generic is-hl tint, so restate it here. */
+.abmatrix .cell.coltot.is-hl { background: color-mix(in oklab, var(--accent) 16%, transparent); }

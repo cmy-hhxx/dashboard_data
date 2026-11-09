@@ -226,15 +226,12 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
   grid-template-rows: var(--mx-headh) repeat(var(--rows), var(--mx-rowh)) var(--mx-rowh);
 }
 .mx-tots { width: max-content; min-width: 120px; }
-.mx-scroll { flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; scrollbar-color: var(--well-2) transparent; }
+.mx-scroll { flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; }
 /* A fade on the pane edge says "there are more columns"; it goes away at the end of the scroll. */
 .mx-scroll.is-overflow:not(.is-at-end) {
   -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
   mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
 }
-.mx-scroll::-webkit-scrollbar { height: 6px; }
-.mx-scroll::-webkit-scrollbar-track { background: none; }
-.mx-scroll::-webkit-scrollbar-thumb { border-radius: 3px; background: var(--well-2); }
 .mx-grid {
   display: grid; gap: 4px; min-width: 100%;
   grid-template-columns: repeat(var(--cols), minmax(var(--mx-colw, 0px), 1fr));
@@ -254,9 +251,10 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .mx-swap-panel { will-change: clip-path, transform, opacity; }
 /* The same surface step as the data-volume ledger: the table stays still and fully legible. */
 .matrix .rh.is-hl, .matrix .mh.is-hl { color: var(--ink); }
-.matrix .rh.is-hl, .matrix .mh.is-hl { background: var(--hover); }
-.matrix .rowtot.is-hl { color: var(--ink-2); }
-.matrix .cell.is-cur { box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ink) 36%, transparent); }
+.matrix .rh.is-hl .mx-caret, .matrix .mh.is-hl .mx-caret { color: var(--accent); }
+.matrix .coltot.is-hl, .matrix .rowtot.is-hl { background: color-mix(in oklab, var(--accent) 16%, transparent); }
+.matrix .cell.is-cur { box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--ink) 42%, transparent); }
+.matrix .cell.is-cur.hot { box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--card) 74%, transparent); }
 .matrix .mh {
   display: flex; align-items: flex-end; justify-content: center; gap: 4px; min-width: 0;
   padding-bottom: 6px; font-size: var(--fs-meta); line-height: 1.35; color: var(--muted); white-space: nowrap;
@@ -278,16 +276,15 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 /* The column header pins its title to the bottom of the header row; its caret still centers on
    the title line instead of hanging at the baseline. */
 .matrix .mh .mx-caret { align-self: center; }
-.matrix button.rh:hover, .matrix button.mh:hover { color: var(--ink); }
-.matrix button.rh:hover { background: var(--hover); }
-.matrix button.rh:hover .mx-caret, .matrix button.mh:hover .mx-caret { color: var(--accent); }
+.matrix .rh:hover, .matrix .mh:hover { color: var(--ink); }
+.matrix .rh:hover .mx-caret, .matrix .mh:hover .mx-caret { color: var(--accent); }
 .matrix .cell {
   display: grid; place-items: center; height: var(--mx-rowh); border-radius: 6px; font-size: var(--fs-small); color: var(--ink-2);
   background: color-mix(in oklab, var(--ink) calc(var(--v) * 100%), transparent);
   transition: background var(--snap), box-shadow var(--snap), transform var(--spring);
 }
 .matrix .cell:not(.is-empty) { cursor: pointer; }
-.matrix .cell:not(.is-empty):active { transform: scale(0.985); transition-duration: 120ms; }
+.matrix .cell:not(.is-empty):active { transform: scale(0.98); transition-duration: 110ms; }
 .matrix .cell.is-empty { background: none; }
 .matrix .cell.hot { color: var(--card); }
 .matrix .rowtot, .matrix .rowtot-foot {
@@ -296,11 +293,12 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .matrix .rowtot {
   display: flex; align-items: center; justify-content: flex-end; gap: 8px; height: var(--mx-rowh);
   padding: 0 8px; font-size: var(--fs-small); color: var(--ink);
-  transition: opacity var(--snap), color var(--snap);
+  transition: opacity var(--snap), color var(--snap), background var(--snap);
 }
 .matrix .rowtot-head { display: flex; align-items: flex-end; justify-content: center; padding: 0 8px 6px; font-size: var(--fs-meta); line-height: 1.35; color: var(--muted); white-space: nowrap; }
 .matrix .coltot, .matrix .rowtot-foot { height: var(--mx-rowh); border-top: 1px solid var(--well-2); }
-.matrix .coltot { display: grid; place-items: center; color: var(--ink); cursor: pointer; border: 0; appearance: none; font: inherit; font-size: var(--fs-small); background: color-mix(in oklab, var(--accent) 10%, transparent); }
+.matrix .coltot { display: grid; place-items: center; color: var(--ink); cursor: pointer; border: 0; appearance: none; font: inherit; font-size: var(--fs-small); background: color-mix(in oklab, var(--accent) 10%, transparent); transition: background var(--snap), color var(--snap); }
+.matrix .coltot:hover, .matrix .coltot.is-hl, .matrix .rowtot.is-hl { background: color-mix(in oklab, var(--accent) 16%, transparent); }
 .matrix .cell-data { display: grid; place-items: center; gap: 1px; line-height: 1.08; }
 .matrix .cell-main { display: inline-flex; align-items: baseline; gap: 2px; font-size: var(--fs-small); white-space: nowrap; }
 .matrix .cell-main b { color: var(--ink); font-weight: var(--w-medium); }
@@ -322,34 +320,59 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .mx-panels.is-issue, .mx-panels.is-perspective { grid-template-columns: minmax(0, 1fr); }
 .mx-panels .mx-perspective-inner, .mx-panels .mx-issue-trends-shell > .mpt { margin-top: 0; padding-top: 0; border-top: 0; }
 .mx-issue-loading .empty { min-height: 180px; display: grid; place-items: center; padding: 0; }
-.mxp { display: grid; gap: 16px; min-width: 0; }
-.mxp-lenses { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.mxp { display: grid; gap: 12px; min-width: 0; }
+/* 右栏工具条与左栏 mpt-toolbar 同高（30 + 12），所以两栏第一张卡的上沿在同一条线上。 */
+.mxp-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; min-height: 30px; }
+.mxp-title { flex: none; color: var(--ink-2); font-size: var(--fs-small); font-weight: var(--w-medium); white-space: nowrap; }
 .mxp-lens { min-width: 0; padding: 16px; border-radius: 12px; background: var(--well); }
-.mxp-lens.is-depth, .mxp-lens.is-speed { display: flex; flex-direction: column; }
-.mxp-lens header { display: flex; align-items: baseline; gap: 8px; min-width: 0; margin-bottom: 12px; }
-.mxp-lens header > b { flex: none; font-size: var(--fs-body); font-weight: var(--w-medium); }
+/* 等级分布（环形，合计 100%）+ Trace 趋势：左右并排，给下面的热力图让出高度。 */
+.mxp-overview { display: grid; grid-template-columns: minmax(0, 190px) minmax(0, 1fr); align-items: center; gap: 16px; }
+.mxp-dist { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.mxp-ring-wrap { position: relative; flex: none; width: 84px; height: 84px; }
+.mxp-ring { display: block; width: 84px; height: 84px; }
+.mxp-ring circle { fill: none; stroke-width: 12; }
+.mxp-ring-track { stroke: var(--well-2); }
+.mxp-ring-arc {
+  transform: rotate(-90deg); transform-origin: 48px 48px;
+  transition: opacity 180ms cubic-bezier(0.2, 0, 0, 1), stroke-width 180ms cubic-bezier(0.2, 0, 0, 1);
+  /* The same entrance as the sunburst: each share grows out of its start, one after another. */
+  animation: mxp-ring-draw 560ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: calc(var(--ring-i, 0) * 70ms);
+}
+.mxp-ring-arc.is-off { opacity: 0.22; }
+.mxp-ring-arc:not(.is-off) { stroke-width: 13; }
+@keyframes mxp-ring-draw { from { stroke-dasharray: 0 100; } }
+.mxp-ring-center { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 1px; text-align: center; }
+.mxp-ring-center b { color: var(--ink); font-size: var(--fs-meta); font-weight: var(--w-light); line-height: 1.1; }
+.mxp-ring-center small { color: var(--muted); font-size: 9px; }
+.mxp-legend { display: grid; align-content: center; gap: 2px; min-width: 0; }
+.mxp-legend-row {
+  display: grid; grid-template-columns: 7px minmax(0, 1fr) auto;
+  grid-template-areas: "dot name share" ". count count";
+  align-items: center; gap: 0 6px; min-height: 28px; margin: 0 -4px; padding: 2px 4px;
+  border-radius: 5px; text-align: left; font-size: 11px; color: var(--muted);
+  transition: background var(--snap), color var(--snap);
+}
+.mxp-legend-row:hover { background: var(--hover); }
+.mxp-legend-row[aria-pressed="true"] { background: var(--active); }
+.mxp-legend-row > i { grid-area: dot; width: 7px; height: 7px; border-radius: 50%; background: var(--c, var(--accent)); }
+.mxp-legend-row > span { grid-area: name; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; transition: color var(--snap); }
+.mxp-legend-row[aria-pressed="true"] > span { color: var(--ink); }
+.mxp-legend-count { grid-area: count; overflow: hidden; color: var(--faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.mxp-legend-share { grid-area: share; color: var(--ink-2); font-weight: var(--w-medium); text-align: right; }
+.mxp-legend-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.mxp-trend { display: grid; gap: 8px; min-width: 0; padding-left: 16px; border-left: 1px solid var(--well-2); }
+.mxp-trend-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; color: var(--muted); font-size: var(--fs-meta); }
+.mxp-trend-head b { color: var(--ink-2); font-weight: var(--w-medium); }
 .mxp .is-up { color: var(--sev-1); }
 .mxp .is-down { color: var(--loc-ulq); }
-.mxp-track { height: 6px; min-width: 0; border-radius: 2px; background: var(--well-2); overflow: hidden; }
-.mxp-track i { display: block; height: 100%; min-width: 2px; border-radius: inherit; background: var(--c, var(--accent)); }
-.mxp-track i[style*="width:0%"] { min-width: 0; }
-.mxp-severity { display: grid; gap: 8px; }
-/* The lens pair stretches to one height; let the severity rows share the slack instead of
-   leaving an empty band under the total, so the card ends on its last row. */
-.mxp-lens.is-depth .mxp-severity { flex: 1; align-content: space-between; }
-.mxp-severity-row { display: grid; grid-template-columns: 40px minmax(16px, 1fr) 60px 48px; gap: 8px; align-items: center; min-height: 24px; font-size: 12px; }
-.mxp-severity-row > b { text-align: right; color: var(--ink-2); font-weight: var(--w-medium); }
-.mxp-severity-row > span:last-child { text-align: right; color: var(--muted); }
-.mxp-severity-head { color: var(--muted); font-size: 11px; }
-.mxp-severity-head > span:nth-last-child(2) { text-align: right; }
-.mxp-severity-total { border-top: 1px solid var(--well-2); padding-top: 8px; }
-.mxp-levels { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+.mxp-levels { display: flex; flex-wrap: wrap; gap: 4px; }
 .mxp-levels .mxt-chip { cursor: pointer; }
 .mxp-levels .mxt-chip:hover { transform: none; }
-.mxp-lens .mxp-rate-chart { height: auto; min-height: 180px; flex: 1; display: grid; align-items: center; }
+.mxp-overview .mxp-rate-chart { height: auto; min-height: 192px; display: grid; align-items: center; transition: opacity 120ms cubic-bezier(0.2, 0, 0, 1); }
 .mxp-rate-chart svg { height: auto; }
 .mxp-rate-chart .empty { padding: 24px 0; }
-.mxp-chart-panel { min-width: 0; padding-top: 4px; overflow-x: auto; scrollbar-width: thin; }
+.mxp-chart-panel { min-width: 0; padding: 4px 0 8px; overflow-x: auto; overflow-y: hidden; }
 /* 问题发生率：30 天 × 聚类。格子只靠颜色读数，所以行高固定、宽度吃满，不跟着卡片无限长高；
    有命中的格子是按钮，点开就是「当天 × 当前场景 × 该聚类」的具体数据查询。 */
 .mxp-heat { display: grid; gap: var(--tile-gap); min-width: 0; }
@@ -362,36 +385,54 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .mxp-heat-row { min-height: 0; font-size: 12px; line-height: 1; }
 .mxp-heat-row > b { text-align: right; color: var(--ink-2); font-weight: var(--w-medium); }
 .mxp-heat-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
-.mxp-heat-name:is(button) { display: flex; align-items: center; gap: 8px; padding: 0 4px; margin-left: -4px; min-height: 100%; border-radius: 4px; text-align: left; transition: background var(--snap), color var(--snap); }
+.mxp-heat-name:is(button) { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 8px; padding: 0 4px; margin-left: -4px; min-height: 100%; border-radius: 4px; text-align: left; transition: background var(--snap), color var(--snap); }
 .mxp-heat-name:is(button):hover { background: var(--hover); color: var(--ink); }
+/* 整行一起应答：悬浮日期格或行名时，行名和两个数值同时提亮，读者能沿着同一行横向走到数字。 */
+.mxp-heat-row:hover .mxp-heat-name, .mxp-heat-row:hover > b { color: var(--ink); }
+.mxp-heat-row:hover .mxp-delta { color: var(--ink-2); }
 .mxp-heat-name .mx-caret { flex: none; width: 4px; height: 4px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(-45deg); color: var(--muted); }
-/* The right-hand 问题分析 panel is deliberately compact when both panels share the row. */
-.mx-panels.is-both .mxp { gap: 10px; }
-.mx-panels.is-both .mxp-lenses { gap: 10px; }
-.mx-panels.is-both .mxp-lens { padding: 12px; border-radius: 10px; }
-.mx-panels.is-both .mxp-lens header { margin-bottom: 8px; }
-.mx-panels.is-both .mxp-lens header > b { font-size: var(--fs-small); }
-.mx-panels.is-both .mxp-severity-row { grid-template-columns: 32px minmax(16px, 1fr) 48px 42px; gap: 6px; min-height: 20px; font-size: 11px; }
-.mx-panels.is-both .mxp-lens .mxp-rate-chart { min-height: 170px; }
-.mx-panels.is-both .mxp-chart-panel { font-size: 11px; }
-.mx-panels.is-both .mxp-heat-head, .mx-panels.is-both .mxp-heat-row { grid-template-columns: minmax(64px, 88px) minmax(0, 1fr) 48px 42px; gap: 8px; }
+/* 双栏时右栏只有 544px：等级表与趋势叠在同一张卡里，热力图拿到整行。 */
+.mx-panels.is-both .mxp-lens { padding: 12px; border-radius: var(--r-well); }
+.mx-panels.is-both .mxp-chart-panel { font-size: var(--fs-meta); }
+.mx-panels.is-both .mxp-heat-head, .mx-panels.is-both .mxp-heat-row { grid-template-columns: minmax(72px, 96px) minmax(0, 1fr) 52px 48px; gap: 8px; }
+.mx-panels.is-both .mxp-heat-head { min-height: 20px; }
+/* 30 天 × 聚类：格子回到近方形，宽高由列宽决定，不再固定 20px 拉成竖条。 */
+.mx-panels.is-both .mxp-heat-days.tiles { grid-auto-rows: auto; }
+.mx-panels.is-both .mxp-heat-days.tiles > span,
+.mx-panels.is-both .mxp-heat-days.tiles > button { height: auto; aspect-ratio: 1; }
 .mxp-heat-nav { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--muted); font-size: var(--fs-meta); }
-/* 20px 行高：12 行从 ~480px 收到 ~290px；格子变成宽条，颜色仍然是最快被读出来的维度。 */
-.mxp-heat-days.tiles { grid-auto-rows: 20px; }
+/* 整宽时 20px 行高：12 行从 ~480px 收到 ~290px；双栏时改回近方形（见上面的 is-both 规则）。 */
+.mxp-heat-days.tiles { grid-auto-rows: 28px; }
 .mxp-heat-days.tiles > span, .mxp-heat-days.tiles > button {
   width: 100%; height: 100%; min-width: 0; padding: 0; border-radius: 2px; background: var(--c);
 }
 .mxp-heat-days.tiles > span { cursor: default; }
 .mxp-heat-days.tiles > span:hover, .mxp-heat-days.tiles > span:active { transform: none; box-shadow: none; }
+/* 复刻会话场的格子手感：悬浮时放大到 1.45 并带一圈卡片色留白，按下收回到 1.1。 */
 .mxp-heat-days.tiles > button {
-  cursor: pointer; transition: box-shadow var(--snap);
+  position: relative; cursor: pointer;
+  transition: transform var(--snap), box-shadow var(--snap);
 }
-.mxp-heat-days.tiles > button:hover { box-shadow: inset 0 0 0 1.5px var(--ink-2); }
+.mxp-heat-days.tiles > button:hover { transform: scale(1.45); z-index: 2; box-shadow: 0 0 0 2px var(--card); }
+.mxp-heat-days.tiles > button:active { transform: scale(1.1); }
 .mxp-heat-days.tiles > button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .mxp-heat-days.tiles > .is-missing { background: var(--sev-none); }
+/* 与会话场同一套入场：按行优先下标错开 0.9ms，只动 opacity / transform。 */
+.mxp-heat.is-intro .mxp-heat-days.tiles > span,
+.mxp-heat.is-intro .mxp-heat-days.tiles > button {
+  animation: tile-in 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: calc(var(--i, 0) * 0.9ms);
+}
 .mxp-delta { text-align: right; color: var(--muted); }
 .mxp-chart-empty { display: grid; place-items: center; min-height: 200px; color: var(--faint); font-size: var(--fs-meta); }
 .mx-trend-loading .empty { min-height: 220px; display: grid; place-items: center; padding: 0; }
+/* 三列类型卡放不下时（左栏 < 631px）两段改成上下排；右栏拿回整宽，热力图恢复宽条。 */
+@media (max-width: 1160px) {
+  .mx-panels.is-both { grid-template-columns: minmax(0, 1fr); }
+  .mx-panels.is-both .mxp-heat-days.tiles { grid-auto-rows: 28px; }
+  .mx-panels.is-both .mxp-heat-days.tiles > span,
+  .mx-panels.is-both .mxp-heat-days.tiles > button { height: 100%; aspect-ratio: auto; }
+}
 
 /* Global problem-type trends: one time curve per type, all scenes aggregated. */
 .mpt { display: grid; gap: 12px; min-width: 0; }
@@ -415,12 +456,17 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
   display: grid; gap: 8px; min-width: 0; padding: 12px; border-radius: 12px; background: var(--well);
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ink) 3%, transparent);
   color: inherit; text-align: left;
+  transition: background var(--snap), box-shadow var(--snap);
 }
+.mpt-card:hover { box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ink) 8%, transparent); }
+.mpt-card:hover h4 { color: var(--ink); }
+.mpt-card:hover .mpt-action { opacity: 1; }
 .mpt-card.is-expanded { grid-column: 1 / -1; padding: 16px; }
 .mpt-card > header { display: flex; align-items: center; gap: 4px; min-width: 0; }
-.mpt-card h4 { min-width: 0; overflow: hidden; color: var(--ink-2); font-size: 12.5px; line-height: 1.4; font-weight: var(--w-medium); text-overflow: ellipsis; white-space: nowrap; }
+.mpt-card h4 { min-width: 0; overflow: hidden; color: var(--ink-2); font-size: var(--fs-small); line-height: 1.4; font-weight: var(--w-medium); text-overflow: ellipsis; white-space: nowrap; transition: color var(--snap); }
 .mpt-card.is-expanded h4 { white-space: normal; font-size: var(--fs-body); }
-.mpt-action.icon-btn { flex: none; width: 24px; height: 24px; }
+.mpt-action.icon-btn { flex: none; width: 24px; height: 24px; opacity: 0.55; transition: opacity var(--snap), background var(--snap), color var(--snap); }
+.mpt-action:focus-visible, .mpt-action:hover { opacity: 1; }
 .mpt-action svg { width: 14px; height: 14px; }
 .mpt-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .mpt-chart { min-width: 0; height: 76px; }
@@ -428,11 +474,14 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .mpt-chart:is(button):focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
 .mpt-chart.mpt-chart-detail { height: auto; min-height: 280px; }
 .mpt-card .mpt-chart-detail svg { height: auto; min-height: 280px; }
+/* 趋势图固定 192px：样本抽屉的画布底高跟着图表走，不再把整张卡撑高。 */
+.mx-panels.is-both .mxp-overview .mxt-sample-layout > .gx-map { min-height: 0; }
 .mpt-chart svg { display: block; width: 100%; height: 100%; }
 .mpt-chart .mxt-xlab { font-size: 11px; }
-.mpt-card > footer { display: flex; min-height: 28px; align-items: center; justify-content: space-between; gap: 8px; color: var(--faint); font-size: 10.5px; }
-.mpt-card > footer b { color: var(--ink-2); font-weight: var(--w-medium); }
-.mpt-children { margin-left: auto; }
+/* 三个读数各占一列：总数左、发生率右、子类数右，四行卡片之间形成三条对齐的列。 */
+.mpt-card > footer { display: grid; grid-template-columns: minmax(0, 1fr) 44px 64px; min-height: 24px; align-items: baseline; gap: 8px; color: var(--faint); font-size: 11px; }
+.mpt-card > footer b { color: var(--ink-2); font-weight: var(--w-medium); text-align: right; }
+.mpt-children { text-align: right; }
 .mpt-empty { grid-column: 1 / -1; display: grid; place-items: center; min-height: 180px; color: var(--faint); font-size: var(--fs-meta); }
 @media (max-width: 700px) {
   .mx-card-head { align-items: center; }
@@ -440,11 +489,13 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
   .mpt-toolbar { align-items: flex-start; }
   .mpt-path { order: 3; width: 100%; overflow-x: auto; }
   .mpt-meta { margin-left: 0; }
+  .mxp-overview { grid-template-columns: minmax(0, 1fr); }
+  .mxp-trend { border-top: 1px solid var(--well-2); border-left: 0; padding: 12px 0 0; }
 }
 
 @media (max-width: 700px) {
   .mxp-heat { min-width: 520px; }
-  .mxp-heat-days.tiles { grid-auto-rows: 18px; }
+  .mxp-heat-days.tiles { grid-auto-rows: 24px; }
   /* 横向滚动时行名和表头留在左边，滚到 11 月也知道自己在看哪一类问题。 */
   .mxp-heat-head > span:first-child, .mxp-heat-name {
     position: sticky; left: 0; z-index: 2; background: var(--card);
@@ -454,8 +505,8 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 }
 
 @media (max-width: 600px) {
-  .mxp-lenses { grid-template-columns: minmax(0, 1fr); }
-  .mxp-heat-head, .mxp-heat-row { grid-template-columns: 76px minmax(0, 1fr) 48px; gap: 8px; }
+  .mxp-heat-head, .mxp-heat-row,
+  .mx-panels.is-both .mxp-heat-head, .mx-panels.is-both .mxp-heat-row { grid-template-columns: 76px minmax(0, 1fr) 48px; gap: 8px; }
   .mxp-heat-head > span:last-child, .mxp-heat-row > .mxp-delta { display: none; }
   .mxp-heat-dates > span:nth-child(2n) { visibility: hidden; }
 }
@@ -529,7 +580,7 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 /* 发版标记：一条贯满上下坐标轴的实线 + 淡红带 + 顶端版本名，压过数据线但只占 1.4px。 */
 .mxt-release-band { fill: var(--release); opacity: 0.06; pointer-events: none; }
 .mxt-release-line { stroke: var(--release); stroke-width: 1.4; stroke-linecap: round; opacity: 0.9; pointer-events: none; }
-.mxt-release-line.is-compact { stroke-width: 1; opacity: 0.5; }
+.mxt-release-line.is-compact { stroke-width: 1; opacity: 0.55; stroke-dasharray: 2 3; }
 .mxt-release-dot { fill: var(--release); pointer-events: none; }
 .mxt-release-label { fill: var(--release); font-size: 10px; font-weight: var(--w-medium); letter-spacing: 0.02em; paint-order: stroke; stroke: var(--card); stroke-width: 3px; stroke-linejoin: round; }
 .mxt-cursor { display: none; pointer-events: none; }
@@ -774,9 +825,8 @@ body.is-modal { overflow: hidden; }
 .gl-strip i { border-radius: 2px; transform-origin: left; animation: grow-x 900ms cubic-bezier(0.16, 1, 0.3, 1) 260ms both; }
 .gx-list {
   position: relative; flex: 1; min-height: 0; overflow-y: auto; display: grid; align-content: start; gap: 1px;
-  margin: 0 -8px; scrollbar-width: none; mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent);
+  margin: 0 -8px; mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent);
 }
-.gx-list::-webkit-scrollbar { display: none; }
 .gl-r {
   display: grid; grid-template-columns: 7px minmax(0, 1fr) auto; align-items: center; gap: 9px; min-height: 28px; padding: 0 8px;
   border-radius: 8px; text-align: left; font-size: var(--fs-meta); color: var(--ink-2); cursor: pointer; transition: background var(--snap), color var(--snap);
@@ -801,7 +851,7 @@ body.is-modal { overflow: hidden; }
 .mxt-sample-layout .mxt-sample-side[hidden] { display: none; }
 .mxt-sample-side .gl-r, .mxt-sample-side .gl-strip i { animation: none; }
 .mxt-sample-side.gx-side .empty { position: static; min-height: 80px; flex: 1; }
-.mxt-sample-side .gx-list { overscroll-behavior: contain; scrollbar-width: thin; mask-image: none; margin-right: 0; }
+.mxt-sample-side .gx-list { overscroll-behavior: contain; mask-image: none; margin-right: 0; }
 .mxt-sample-side .gl-sum b { font-size: 18px; }
 /* 抬头不再用省略号：日期一行、条件一行（可换行），返回按钮跟日期同一行。 */
 .mxt-sample-head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; min-width: 0; font-size: var(--fs-meta); }

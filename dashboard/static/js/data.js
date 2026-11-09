@@ -1614,7 +1614,7 @@ function mxPerspectiveTimeline(summary, loading) {
     return { group, recent, html: `<div class="mxp-heat-row">${group.node.children?.length ? `<button type="button" class="mxp-heat-name" data-heat-node="${esc(group.node.prefix)}" aria-label="下钻 ${esc(group.name)}" title="${esc(group.name)}">${esc(group.name)}<i class="mx-caret" aria-hidden="true"></i></button>` : `<span class="mxp-heat-name" title="${esc(group.name)}">${esc(group.name)}</span>`}<div class="tiles mxp-heat-days">${cells}</div><b class="num">${mxRateText(recent)}</b><span class="mxp-delta num ${delta == null || Math.abs(delta) < 0.05 ? "" : delta > 0 ? "is-up" : "is-down"}" title="较前 7 天变化，单位：百分点">${mxDeltaText(delta)}</span></div>` };
   }).filter(({ group }) => group.days.some((d, i) => d.n > 0 && dayMs(dates[i]) >= end - 29 * DAY_MS))
     .sort((a, b) => (b.recent || 0) - (a.recent || 0));
-  const ticks = [0, 7, 14, 21, 29].map((i) => `<span style="grid-column:${i + 1};${i === 29 ? "justify-self:end" : ""}">${calendar[i].slice(5)}</span>`).join("");
+  const ticks = [0, 7, 14, 21].map((i) => `<span style="grid-column:${i + 1}">${calendar[i].slice(5)}</span>`).join("");
   return `${summary.path.length ? `<div class="mxp-heat-nav"><button type="button" class="mx-back" data-heat-back aria-label="返回上一级问题分类">← 返回</button><span>${esc(summary.path[summary.path.length - 1].name)}</span></div>` : ""}<div class="mxp-heat" role="group" aria-label="近 30 天各类问题发生率">
     <div class="mxp-heat-head"><span>问题发生率</span><div class="mxp-heat-dates num">${ticks}</div><span>近 7 天</span><span>变化</span></div>
     ${rows.map((row) => row.html).join("") || '<div class="mxp-chart-empty">暂无带日期的问题</div>'}
@@ -1639,31 +1639,55 @@ function mxRateTrendChart(model, width, selected, height = 232) {
 function wireMatrixAnalysis(panel, model, state, trend) {
   const chartHost = $(".mxp-rate-chart", panel);
   if (!chartHost) return;
+  const toolbar = $(".mxp-levels", panel);
+  const rows = $$(".mxp-overview .mxp-legend-row[data-level]", panel);
+  const levels = model?.levels || WORST;
   state.analysisLevels ||= ["P0", "P1"];
-  const controls = $(".mxp-levels", panel);
+  let paintToken = 0;
+  let firstPaint = true;
+  // One source of truth: a chip and a severity row are two handles on the same set.
+  const sync = () => {
+    const on = new Set(state.analysisLevels);
+    toolbar?.querySelectorAll(".mxt-chip").forEach((el) => el.setAttribute("aria-pressed", String(on.has(el.dataset.value))));
+    rows.forEach((el) => el.setAttribute("aria-pressed", String(on.has(el.dataset.level))));
+    // The ring is the third handle on the same set: selected levels stay full, the rest recede.
+    const focus = on.size ? on : new Set(levels);
+    $$(".mxp-ring-arc", panel).forEach((arc) => arc.classList.toggle("is-off", !focus.has(arc.dataset.level)));
+  };
   const paint = () => {
     if (!model?.total) return;
     chartHost._drawer?.destroy();
+    const token = ++paintToken;
     const draw = () => {
-      const chart = mxRateTrendChart(model, chartHost.clientWidth, state.analysisLevels, 180);
+      if (token !== paintToken) return;
+      const chart = mxRateTrendChart(model, chartHost.clientWidth, state.analysisLevels, 192);
       chartHost.innerHTML = state.analysisLevels.length ? chart.html : '<div class="empty">选择问题等级</div>';
       wireLineTrendChart(chartHost, chart, "", (pick) => drawer.open(pick));
+      chartHost.style.opacity = "";
     };
     const drawer = trendSampleDrawer(chartHost, (pick) => loadTraceSamplePage(trend, pick), draw);
     chartHost._drawer = drawer;
-    draw();
+    if (REDUCED || firstPaint) { firstPaint = false; draw(); return; }
+    // 只在重画时淡一下：高度不变，所以不会带出任何布局跳动。
+    chartHost.style.opacity = "0.35";
+    requestAnimationFrame(draw);
   };
-  paint();
-  controls?.addEventListener("click", (event) => {
-    const button = event.target.closest(".mxt-chip");
-    if (!button) return;
-    const selected = new Set(state.analysisLevels);
-    if (selected.has(button.dataset.value)) selected.delete(button.dataset.value);
-    else selected.add(button.dataset.value);
-    state.analysisLevels = WORST.filter((level) => selected.has(level));
-    button.setAttribute("aria-pressed", String(selected.has(button.dataset.value)));
+  const toggle = (level) => {
+    if (!level) return;
+    const on = new Set(state.analysisLevels);
+    if (on.has(level)) on.delete(level);
+    else on.add(level);
+    state.analysisLevels = levels.filter((l) => on.has(l));
+    sync();
     paint();
+  };
+  sync();
+  paint();
+  toolbar?.addEventListener("click", (event) => {
+    const button = event.target.closest(".mxt-chip");
+    if (button) toggle(button.dataset.value);
   });
+  rows.forEach((row) => row.addEventListener("click", () => toggle(row.dataset.level)));
 }
 
 function matrixPerspectiveHTML(view, trend, loading = false, state = {}, clusterRoot) {
@@ -1673,23 +1697,45 @@ function matrixPerspectiveHTML(view, trend, loading = false, state = {}, cluster
   const levels = model?.levels || WORST;
   const selected = state.analysisLevels || ["P0", "P1"];
   const empty = loading ? "正在读取趋势…" : model ? "暂无已评测 Trace" : "当前快照缺少 Trace 等级统计";
-  const rows = levels.map((key, i) => `<div class="mxp-severity-row" role="row"><span role="cell">${SEV_NAME[key]}</span><div class="mxp-track" role="cell"><i style="--c:${sevColor(key)};width:${shares[i] || 0}%"></i></div><b class="num" role="cell">${model ? fmt(model.counts[i]) : "—"}</b><span class="num" role="cell">${shares[i] == null ? "—" : `${fmt(shares[i], 1)}%`}</span></div>`).join("");
+  // 环形图负责「占比」，折线图负责「时间」；两边的等级行与工具栏 chip 共用 analysisLevels。
+  // 空白选择视为「全部」：没有筛选时整圈保持同等亮度，不把环形图做成禁用态。
+  const focus = new Set(selected.length ? selected : levels);
+  let at = 0;
+  const arcs = levels.map((key, i) => ({ key, n: model ? model.counts[i] : 0, share: shares[i] || 0, c: sevColor(key) }))
+    .filter((seg) => seg.share > 0)
+    .map((seg, i) => {
+      const dash = Math.max(0.6, seg.share - 0.8);
+      const offset = at;
+      at += seg.share;
+      return `<circle class="mxp-ring-arc${focus.has(seg.key) ? "" : " is-off"}" data-level="${esc(seg.key)}" cx="48" cy="48" r="38" pathLength="100" style="--ring-i:${i};stroke:${seg.c};stroke-dasharray:${dash.toFixed(2)} ${(100 - dash).toFixed(2)};stroke-dashoffset:${(-offset).toFixed(2)}"/>`;
+    }).join("");
+  const legend = levels.map((key, i) => {
+    const on = selected.includes(key);
+    const count = model ? fmt(model.counts[i]) : "—";
+    const share = shares[i] == null ? "—" : `${fmt(shares[i], 1)}%`;
+    return `<button type="button" class="mxp-legend-row" data-level="${key}" aria-pressed="${on}" title="${esc(`${SEV_NAME[key]} · ${count} Trace · ${share}`)}" aria-label="${esc(`${SEV_NAME[key]}，${count} Trace，${share}，${on ? "正在" : "不在"}趋势中显示`)}"><i style="--c:${sevColor(key)}" aria-hidden="true"></i><span>${SEV_NAME[key]}</span><b class="num mxp-legend-share">${share}</b><small class="num mxp-legend-count">${count} Trace</small></button>`;
+  }).join("");
   return `<div class="mxp">
-    <div class="mxp-lenses">
-      <section class="mxp-lens is-depth">
-        <header><b>问题等级</b></header>
-        <div class="mxp-severity" role="table" aria-label="按最严重等级归类的 Trace 数量与占比">
-          <div class="mxp-severity-row mxp-severity-head" role="row"><span role="columnheader">等级</span><span></span><span role="columnheader">Trace 数</span><span role="columnheader">占比</span></div>
-          ${rows}
-          <div class="mxp-severity-row mxp-severity-total" role="row"><span role="cell">合计</span><span></span><b class="num" role="cell">${model ? fmt(model.total) : "—"}</b><span class="num" role="cell">${model?.total ? "100.0%" : "—"}</span></div>
-        </div>
-      </section>
-      <section class="mxp-lens is-speed">
-        <header><b>Trace 趋势</b></header>
-        <div class="mxp-levels" role="group" aria-label="选择趋势图的问题等级">${levels.map((level) => trendChip("analysis-level", level, SEV_NAME[level], selected.includes(level), false)).join("")}</div>
-        ${trendSampleFrame(`<div class="mpt-chart mxp-rate-chart" data-own-tip>${model?.total ? mxRateTrendChart(model, 340, selected, 180).html : `<div class="empty">${empty}</div>`}</div>`)}
-      </section>
+    <div class="mxp-toolbar">
+      <b class="mxp-title">问题等级与趋势</b>
+      <div class="mxp-levels" role="group" aria-label="选择 Trace 趋势的问题等级">${levels.map((level) => trendChip("analysis-level", level, SEV_NAME[level], selected.includes(level), false)).join("")}</div>
     </div>
+    <section class="mxp-lens mxp-overview" aria-label="问题等级与 Trace 趋势">
+      <div class="mxp-dist" role="group" aria-label="按最严重等级归类的 Trace 数量与占比；点一行可在 Trace 趋势中显示或隐藏">
+        <div class="mxp-ring-wrap">
+          <svg class="mxp-ring" viewBox="0 0 96 96" role="img" aria-label="按最严重等级归类的 Trace 占比，合计 100%">
+            <circle class="mxp-ring-track" cx="48" cy="48" r="38"/>
+            ${arcs}
+          </svg>
+          <div class="mxp-ring-center"><b class="num">${model?.total ? fmt(model.total) : "—"}</b><small>Trace</small></div>
+        </div>
+        <div class="mxp-legend">${legend}</div>
+      </div>
+      <div class="mxp-trend">
+        <div class="mxp-trend-head"><b>Trace 趋势</b><span class="num">近 30 天</span></div>
+        ${trendSampleFrame(`<div class="mpt-chart mxp-rate-chart" data-own-tip>${model?.total ? mxRateTrendChart(model, 340, selected, 192).html : `<div class="empty">${empty}</div>`}</div>`)}
+      </div>
+    </section>
     <section class="mxp-chart-panel">${mxPerspectiveTimeline(summary, loading)}</section>
   </div>`;
 }
@@ -2478,7 +2524,7 @@ const sevIdx = (w) => {
    question and its problem count (or verdict). The head is the slice's size and its severity split. */
 const LEDGER_MAX = 120;
 const predDot = (it) => (it.r === "correct" ? "var(--accent)" : it.r === "wrong" ? "var(--sev-1)" : it.r === "pending" ? "var(--muted)" : "var(--faint)");
-function ledger(groups, pred, unit = null, rows = null) {
+function ledger(groups, pred, unit = null, rows = null, { count = true, strip = true } = {}) {
   const all = groups.flatMap((g) => g.items);
   const ordered = pred ? all : [...all].sort((a, b) => a.w - b.w || b.n - a.n || (b.d || "").localeCompare(a.d || ""));
   // The summary always speaks about everything found; the list can be one page of it.
@@ -2487,11 +2533,11 @@ function ledger(groups, pred, unit = null, rows = null) {
     ? ["correct", "wrong", "pending", "undetermined"].map((r) => ({ n: all.filter((it) => (r === "undetermined" ? !["correct", "wrong", "pending"].includes(it.r) : it.r === r)).length, c: predDot({ r }) }))
     : WORST.map((_, i) => ({ n: all.filter((it) => it.w === i).length, c: sevColor(i) }));
   const rowsHtml = items.slice(0, LEDGER_MAX).map((it, k) =>
-    `<button type="button" class="gl-r${pred ? " is-inert" : ""}" data-i="${k}" style="--i:${Math.min(k, 14)};--c:${pred ? predDot(it) : sevColor(it.w)}" title="${esc(it.q || "（无提问）")}"><i></i><span>${esc(it.q || "（无提问）")}</span><b class="num">${pred ? esc(RESULT[it.r] || "") : it.n ? fmt(it.n) : "—"}</b></button>`);
-  const body = `<div class="gl-sum"><b class="num">${fmt(all.length)}</b><small>${unit || (pred ? "道预测题" : "个 case")}</small><span class="gl-strip" aria-hidden="true">${parts
+    `<button type="button" class="gl-r${pred ? " is-inert" : ""}" data-i="${k}" style="--i:${Math.min(k, 14)};--c:${pred ? predDot(it) : sevColor(it.w)}" title="${esc(it.q || "（无提问）")}"><i></i><span>${esc(it.q || "（无提问）")}</span>${count ? `<b class="num">${pred ? esc(RESULT[it.r] || "") : it.n ? fmt(it.n) : "—"}</b>` : ""}</button>`);
+  const body = `<div class="gl-sum"><b class="num">${fmt(all.length)}</b><small>${unit || (pred ? "道预测题" : "个 case")}</small>${strip ? `<span class="gl-strip" aria-hidden="true">${parts
     .filter((x) => x.n)
     .map((x) => `<i style="flex:${x.n} 1 0;background:${x.c}"></i>`)
-    .join("")}</span></div><div class="gx-list">${rowsHtml.join("")}</div>`;
+    .join("")}</span>` : ""}</div><div class="gx-list">${rowsHtml.join("")}</div>`;
   return { items, all, body, html: `<div class="gx-side">${body}</div>` };
 }
 const caseItem = (r) => ({ s: r.s, w: sevIdx(r.w), n: r.n || 0, q: r.q || "", m: r.m, sp: r.sp, d: r.d || "" });
@@ -2594,7 +2640,7 @@ function trendSampleDrawer(plot, load, repaint, interaction = {}) {
     }
     const pages = pagesOf();
     page = Math.max(0, Math.min(pages - 1, page));
-    const led = ledger([{ items: current.items }], false, current.unit, current.items.slice(page * PAGE, (page + 1) * PAGE));
+    const led = ledger([{ items: current.items }], false, current.unit, current.items.slice(page * PAGE, (page + 1) * PAGE), { count: false, strip: false });
     pageItems = led.items;
     const scanning = busy;
     const canNext = page + 1 < pages || (current.canScan && !busy);
@@ -3313,6 +3359,7 @@ function wire(bento, p, tax, u) {
       $$(".rh", m).forEach((h, i) => h.classList.toggle("is-hl", i === ri));
       $$(".mh", m).forEach((h, i) => h.classList.toggle("is-hl", i === ci));
       $$(".rowtot", m).forEach((h, i) => h.classList.toggle("is-hl", i === ri));
+      $$(".coltot", m).forEach((h, i) => h.classList.toggle("is-hl", i === ci));
     };
     shell.addEventListener("pointerover", (e) => {
       // The table under the pointer is being replaced, or a trend view took its place.
@@ -3443,12 +3490,29 @@ function wire(bento, p, tax, u) {
       }
     }
 
+    /* 会话场的格子入场：按行优先下标错开 0.9ms，只动 opacity / transform；钻取仍走原来的淡入。 */
+    function animateHeat() {
+      const heat = $(".mxp-heat", perspectiveEl);
+      if (!heat) return;
+      if (REDUCED) { heat.classList.remove("is-intro"); return; }
+      let i = 0;
+      heat.querySelectorAll(".mxp-heat-row").forEach((row) => {
+        row.querySelectorAll(".mxp-heat-days.tiles > *").forEach((cell) => cell.style.setProperty("--i", String(Math.min(i++, 240))));
+      });
+      heat.classList.remove("is-intro");
+      void heat.offsetWidth;
+      heat.classList.add("is-intro");
+      clearTimeout(heat._intro);
+      heat._intro = setTimeout(() => heat.classList.remove("is-intro"), 1600);
+    }
+
     function renderPerspective(loading = perspectiveLoading, reveal = true) {
       if (!perspectiveEl || !u.mx.expanded || !mxView) return;
       const update = () => { perspectiveEl.innerHTML = `<div class="mx-perspective-inner">${matrixPerspectiveHTML(mxView, trendData, loading, u.mx, clusterRoot)}</div>`; };
       if (reveal) layoutPanels(update);
       else update();
       wireMatrixAnalysis(perspectiveEl, traceSeverityModel(trendData), u.mx, trendData);
+      animateHeat();
       const heatPanel = $(".mxp-chart-panel", perspectiveEl);
       heatPanel.onclick = (event) => {
         const cell = event.target.closest("[data-heat-date]");
@@ -3881,7 +3945,7 @@ function wire(bento, p, tax, u) {
   const abFace = $("#mxABFace", bento);
   const abBody = $("#abBody", bento);
   if (abBtn && mxCard && matrixFace && abFace && abBody && p.ab) {
-    u.ab = u.ab || { open: false, round: -1, metric: "", cell: null };
+    u.ab = u.ab || { open: false, round: -1, metric: "", cell: null, mxRows: [], mxCols: [], mxTrail: [] };
     let targetBack = !abFace.hidden;
     let flipping = false;
     let loading = false;

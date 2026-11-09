@@ -9,14 +9,14 @@
 #   nohup caffeinate -i bash scripts/aime_sync_loop.sh >/dev/null 2>&1 &
 #
 # 每 INTERVAL 秒（默认 600）跑两段：先 forward（不含 daily in/out），再 reverse（仅 daily in/out）。
-# 单轮互斥由 python 侧 lock 保证。每 VERIFY_EVERY 轮（默认 6 轮 = 1 小时）做全量 md5 对账。
+# 单轮互斥由 python 侧 lock 保证。VERIFY_EVERY=0 时不跑全量 md5 对账轮（默认关闭，避免每小时 15 分钟卡顿）。
 # 日志：tmp/aime_sync/loop.out、tmp/aime_sync/sync.log
 # 状态：tmp/aime_sync/last_round.json、tmp/aime_sync/history.jsonl
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 
 INTERVAL=${INTERVAL:-600}
-VERIFY_EVERY=${VERIFY_EVERY:-6}
+VERIFY_EVERY=${VERIFY_EVERY:-0}   # 0=不做 md5 全量对账轮（用户要求不算 md5；size 检查由定时汇报覆盖）
 STATE=tmp/aime_sync
 mkdir -p "$STATE"
 
