@@ -1,5 +1,6 @@
 """Incremental build coverage: reuse, append-only updates and the lost dimension."""
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -133,6 +134,21 @@ class IncrementalTests(unittest.TestCase):
             self.assertEqual(json.loads((static / "data-wencai.json").read_text())["products"]["wencai"]["kpi"]["sessions"], 2)
             rebuilt = json.loads((static / "data-wencai.json").read_text())["products"]["wencai"]
             self.assertEqual(rebuilt["input"]["sessions"], 3)
+
+    def test_changed_dataset_root_does_not_reuse_payloads(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            datasets, static = root / "datasets", root / "static"
+            seed(datasets)
+            seed_lost(datasets)
+            self.assertNotIn("reused", self.run_build(datasets, static))
+
+            moved = root / "datasets2"
+            shutil.copytree(datasets, moved, copy_function=shutil.copy2)
+            second = self.run_build(moved, static)
+            self.assertNotIn("reused", second)
+            data = json.loads((static / "data.json").read_text())
+            self.assertEqual(data["source"]["root"], "datasets2")
 
 
 if __name__ == "__main__":

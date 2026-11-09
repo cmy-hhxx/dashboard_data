@@ -14,7 +14,8 @@ for file in "$HERE"/static/js/*.js; do
   node --input-type=module --check < "$file"
 done
 
-SSH_OPTS=(-o StrictHostKeyChecking=no -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
+SSH_OPTS=(-o StrictHostKeyChecking=no -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4
+  -o ControlMaster=auto -o ControlPath=/tmp/omp-deploy-%r@%h:%p -o ControlPersist=10m)
 if [ -n "${EVAL_DEPLOY_PORT:-}" ]; then SSH_OPTS+=(-p "$EVAL_DEPLOY_PORT"); fi
 if [ -n "${EVAL_DEPLOY_KEY:-}" ]; then SSH_OPTS+=(-i "$EVAL_DEPLOY_KEY"); fi
 
@@ -38,13 +39,13 @@ retry() {
 }
 # This copy's settings, saved remotely as deploy.env: the deploy build, start.sh and later manual
 # restarts all load it. Only variables set locally are written; with none set, deploy.env is kept.
-#   AIME  @ 弗吉尼亚:  EVAL_DEPLOY_HOST=aime_rsi_data EVAL_DATASETS=/mnt/fin_bench/aime_rsi_data EVAL_PRODUCTS=aime ./dashboard/deploy.sh
+#   AIME  @ 弗吉尼亚:  EVAL_DEPLOY_HOST=aime_rsi_data EVAL_DATASETS=/mnt/aime_eval_ssd EVAL_PRODUCTS=aime ./dashboard/deploy.sh
 #   问财  @ 乌兰 5004: EVAL_DEPLOY_REMOTE=/opt/eval_dashboard_2 PORT=5004 STATS_WORKER=0 EVAL_DATASETS=/mnt/fin_bench/code_and_clean_data/datasets EVAL_PRODUCTS=wencai ./dashboard/deploy.sh
 RUN_ENV=""
 for var in PORT STATS_WORKER REFRESH_SECONDS STATS_REFRESH_SECONDS EVAL_DATASETS EVAL_PRODUCTS; do
   if [ -n "${!var:-}" ]; then RUN_ENV+="export $var=$(printf '%q' "${!var}")"$'\n'; fi
 done
-RSYNC=(rsync -az --delete --exclude 'data.json' --exclude 'data.json.gz' --exclude 'data-*.json' --exclude 'data-*.json.gz' --exclude 'samples.json' --exclude 'samples.json.gz' --exclude 'samples-*.json' --exclude 'samples-*.json.gz' --exclude 'labels-*.json' --exclude 'labels-*.json.gz' --exclude 'trends-*.json' --exclude 'trends-*.json.gz' --exclude 'abtests-*.json' --exclude 'abtests-*.json.gz' --exclude 'static/samples' --exclude 'static/ab_samples' --exclude 'static/.samples-*' --exclude 'server.pid' --exclude 'stats.pid' --exclude 'deploy.env' --exclude 'logs' --exclude 'cache' --exclude 'cache_backup' --exclude 'static_backup' --exclude '*.log' --exclude '__pycache__' --exclude 'local_dev' --exclude 'tests'
+RSYNC=(rsync -az --delete --exclude 'data.json' --exclude 'data.json.gz' --exclude 'data-*.json' --exclude 'data-*.json.gz' --exclude 'samples.json' --exclude 'samples.json.gz' --exclude 'samples-*.json' --exclude 'samples-*.json.gz' --exclude 'labels-*.json' --exclude 'labels-*.json.gz' --exclude 'trends-*.json' --exclude 'trends-*.json.gz' --exclude 'abtests-*.json' --exclude 'abtests-*.json.gz' --exclude 'static/samples' --exclude 'static/ab_samples' --exclude 'static/.samples-*' --exclude 'server.pid' --exclude 'stats.pid' --exclude 'backup_stats.pid' --exclude 'deploy.env' --exclude 'logs' --exclude 'cache' --exclude 'cache_backup' --exclude 'static_backup' --exclude '*.log' --exclude '__pycache__' --exclude 'local_dev' --exclude 'tests'
   -e "ssh ${SSH_OPTS[*]}")
 
 retry "${SSH[@]}" "$HOST" "mkdir -p $REMOTE/static $REMOTE/logs"

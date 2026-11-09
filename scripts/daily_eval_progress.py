@@ -27,7 +27,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 SSH = os.environ.get("AIME_SSH", "aime_rsi_data")
-ROOT = "/mnt/fin_bench/aime_rsi_data/1_aime"
+ROOT = "/mnt/aime_eval_ssd/1_aime"
 MODELS = ["aime_expert", "aime_fast"]
 CACHE = Path(__file__).resolve().parent.parent / "tmp" / "daily_eval_progress_cache.json"
 SSH_OPTS = [

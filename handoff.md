@@ -3,6 +3,10 @@
 > **部署分工（2026-11-04 起）：** 乌兰 5001=问财看板、5002=问财页面接口、5003 已停用；
 > 弗吉尼亚 5001=看板、5002=页面接口、5003=供数，AIME 新数据只在弗吉尼亚更新。
 >
+> **2026-11-09：** 弗吉尼亚看板数据源切到 SSD `/mnt/aime_eval_ssd`（产品目录 `1_aime`）；
+> 对弗吉尼亚的远程操作要走 SSH 长连接（ControlMaster / ControlPersist），见
+> `docs/dashboard-deployment.md` 的「弗吉尼亚 SSH 必须用长连接」。
+>
 > 三视图、亮暗色、1440/1024/390 已验证。部署与端口见 `docs/dashboard-deployment.md`。
 
 ## 1. 先跑起来

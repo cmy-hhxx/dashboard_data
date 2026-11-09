@@ -35,7 +35,8 @@ ssh aime_rsi_data 'chmod +x /tmp/pack_aime_io.sh && SRC_BASE=/mnt/fin_bench/aime
 ## 数据现状
 
 2026-11-04 起 AIME 数据只在弗吉尼亚更新（乌兰的 `1_aime` 是迁移前副本，不再用于打包）。
-弗吉尼亚数据根：`/mnt/fin_bench/aime_rsi_data`。
+弗吉尼亚有两份数据根：看板当前读 SSD `/mnt/aime_eval_ssd`（产品目录 `1_aime`）；
+旧 HDD `/mnt/fin_bench/aime_rsi_data` 仍保留，打包脚本默认还指向它。乌兰 ↔ 弗吉尼亚同步已停止。
 
 | 数据 | 位置（远端） | 规模 |
 |---|---|---|
@@ -52,7 +53,8 @@ ssh aime_rsi_data 'chmod +x /tmp/pack_aime_io.sh && SRC_BASE=/mnt/fin_bench/aime
 
 `dashboard/` 是问财 / AIME 评测看板：原生 ES modules + SVG + Python 起服务；除可选的 `orjson` 外不依赖第三方运行时。
 本地读取仓库根目录的 `datasets/`；生产按产品分两套数据根：问财读乌兰的
-`/mnt/fin_bench/code_and_clean_data/datasets`，AIME 读弗吉尼亚的 `/mnt/fin_bench/aime_rsi_data`；
+`/mnt/fin_bench/code_and_clean_data/datasets`，AIME 看板读弗吉尼亚的 `/mnt/aime_eval_ssd`
+（产品目录 `1_aime`，旧 HDD `/mnt/fin_bench/aime_rsi_data` 留作冷数据）；
 可通过 `EVAL_DATASETS` 显式指定数据根目录（评测输入、输出、cluster_tree、item_index）。
 没有数据时显示待接入空态。将数据放入 `datasets/` 后运行 `./dashboard/local_dev/refresh.sh` 重建；
 本地启动方式见 [本地调试说明](dashboard/local_dev/README.md)。
@@ -153,7 +155,7 @@ tokens / task-subtask / lost 统计写到 `<datasets>/stats.json`；`build.py` �
 | `static/js/` | `app.js` 路由/主题/数据加载，`data.js` 数据页，`sunburst.js` 可下钻旭日图，`system.js` 评测体系页，`samples.js` 样本页（含 compact 流程图），`core.js` 共享格式化/提示/数字动效 |
 | `precompress.sh` | 部署时预压缩 JS/CSS/HTML |
 
-AIME 相关路径相对弗吉尼亚数据根 `/mnt/fin_bench/aime_rsi_data`，问财相关路径相对乌兰数据根
+AIME 看板路径相对弗吉尼亚数据根 `/mnt/aime_eval_ssd`，问财相关路径相对乌兰数据根
 `/mnt/fin_bench/code_and_clean_data/datasets`。
 
 AIME 日常输出以 `1_aime/eval_output/0_daily_eval/<model>/<model>_attribution-<date>.jsonl` 与

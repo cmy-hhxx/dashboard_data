@@ -37,4 +37,9 @@ for pid in $(ps -eo pid=,args= | awk '{a=$2; b=$3; sub(/.*\//,"",a); sub(/.*\//,
   [ "$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)" = "$HERE" ] && terminate "$pid"
 done
 
+if [ -f backup_stats.pid ]; then
+  terminate "$(cat backup_stats.pid)"
+  rm -f backup_stats.pid
+fi
+
 echo stopped

@@ -10,7 +10,7 @@
 | 容器名（集群内部） | `interactive-i6piqwvlnsr5` | `interactive-npasm9ch66eb` |
 | SSH 别名 / 对外端口 | `eval_data` / `2834` | `aime_rsi_data` / `2225` |
 | 数据 | 问财（wencai，只构建 `0_wencai`） | AIME（只构建 `1_aime`） |
-| 数据根 | `/mnt/fin_bench/code_and_clean_data/datasets` | `/mnt/fin_bench/aime_rsi_data` |
+| 看板数据根 | `/mnt/fin_bench/code_and_clean_data/datasets` | `/mnt/aime_eval_ssd`（产品目录 `1_aime`；旧 HDD `/mnt/fin_bench/aime_rsi_data` 仅作冷数据） |
 
 访问约定：集群内部跨容器用「容器名:容器端口」，同容器内用 `127.0.0.1`，本地 / 外部用「IP:对外端口」。
 当前状态（2026-11-04 切分完成）：乌兰 5001 已按 `EVAL_PRODUCTS=wencai` 重建，不再构建 AIME；
@@ -45,8 +45,8 @@
 ```bash
 # 问财 → 乌兰察布 5001（对外 2768），数据 datasets/0_wencai，只构建问财
 EVAL_DATASETS=/mnt/fin_bench/code_and_clean_data/datasets EVAL_PRODUCTS=wencai ./dashboard/deploy.sh
-# AIME → 弗吉尼亚 5001（对外 2221），数据 /mnt/fin_bench/aime_rsi_data/1_aime
-EVAL_DEPLOY_HOST=aime_rsi_data EVAL_DATASETS=/mnt/fin_bench/aime_rsi_data EVAL_PRODUCTS=aime ./dashboard/deploy.sh
+# AIME → 弗吉尼亚 5001（对外 2221），数据根 /mnt/aime_eval_ssd（产品目录 1_aime）
+EVAL_DEPLOY_HOST=aime_rsi_data EVAL_DATASETS=/mnt/aime_eval_ssd EVAL_PRODUCTS=aime ./dashboard/deploy.sh
 # 预发调试副本（乌兰 5004 对外 3336）
 EVAL_DEPLOY_REMOTE=/opt/eval_dashboard_2 PORT=5004 STATS_WORKER=0 \
   EVAL_DATASETS=/mnt/fin_bench/code_and_clean_data/datasets EVAL_PRODUCTS=wencai ./dashboard/deploy.sh
@@ -63,7 +63,8 @@ curl -s http://10.217.219.2:2221/healthz | jq
 `running` / `seconds` / `error`）。发布本身因此只要几秒到十几秒，ceph 再慢也不拖慢上线。
 需要「发布前先构建」的老行为时加 `EVAL_DEPLOY_BUILD=1`。
 
-- SSH 边缘会间歇性拒绝连接，`deploy.sh` 的每步（含首次 mkdir / rsync / 启停 / 健康检查）都带重试；
+- SSH 边缘会间歇性拒绝连接，`deploy.sh` 的每步（含首次 mkdir / rsync / 启停 / 健康检查）都带重试，
+  并默认启用 `ControlMaster` 长连接（`ControlPath=/tmp/omp-deploy-%r@%h:%p`，`ControlPersist=10m`）；
   重试次数用 `EVAL_DEPLOY_RETRIES`（默认 6），健康检查等待秒数用 `EVAL_DEPLOY_HEALTH_TRIES`（默认 150×2s）。
 - **冷启动副本（首次部署 / 没有 payload）**：`server.py` 会先构建完再开始监听，`/healthz` 在这段时间不可达，
   所以健康检查要留足时间（本次预发冷构建约 3–5 分钟）。
@@ -72,6 +73,39 @@ curl -s http://10.217.219.2:2221/healthz | jq
   避免两个 build 抢 `cache/build.sqlite3`（报 `database is locked`）。
 
 远端不是 git 仓库，回滚 = 切旧 commit 重新部署；构建失败不阻断发布，服务继续用旧数据。
+
+### 弗吉尼亚 SSH 必须用长连接
+
+弗吉尼亚（`10.217.219.2:2225`）的 SSH 边缘会间歇性拒绝新连接：短命令成功，但连续 `ssh` / `rsync`
+很容易在几次后被拒。**对弗吉尼亚的所有远程操作都复用同一条长连接**，不要在循环里反复新建连接。
+
+本机 `~/.ssh/config` 加：
+
+```sshconfig
+Host aime_rsi_data
+  HostName 10.217.219.2
+  User root
+  Port 2225
+  IdentityFile /Users/cmy/Downloads/chenmingyang2@myhexin.com_rsa.key
+  ServerAliveInterval 30
+  ServerAliveCountMax 6
+  TCPKeepAlive yes
+  ControlMaster auto
+  ControlPath ~/.ssh/cm-%r@%h:%p
+  ControlPersist 30m
+```
+
+首次显式建 master，之后 `ssh aime_rsi_data` / `rsync -e ssh … aime_rsi_data:…` 自动复用：
+
+```bash
+ssh -MNf aime_rsi_data                 # 后台建立长连接
+ssh -O check aime_rsi_data             # 确认 master 存活
+ssh aime_rsi_data '...'                # 复用，不再重新握手
+ssh -O exit aime_rsi_data              # 用完关闭
+```
+
+`deploy.sh` 自带 `ServerAliveInterval=15` / `ServerAliveCountMax=4` 和重试（`EVAL_DEPLOY_RETRIES`，
+默认 6），但仍建议先建 master；大文件迁移 / 打包更要用 `rsync` + 同一 master，避免长时间连接被边缘掐断。
 
 **为什么以前那么慢**：`input_files()` 每次都用 `rglob` 走一遍 `eval_input`（弗吉尼亚 52 个目录、ceph 上
 50–250s），数据没变也照走。现在走 `dashboard/filelist.py` 的目录清单缓存（`cache/tree-*.json`，默认
@@ -98,6 +132,53 @@ ssh eval_data 'cd /opt/eval_dashboard && ./stop.sh && ./start.sh'
 - `/healthz` 为 `no-store`，其余 `no-cache`；构建缓存 `cache/build.sqlite3` 按 `(size, mtime_ns)` 增量，删除后全量重建。
 - 进程守护见下节；日志不轮转，长期运行注意清理 `logs/`。
 - 预测数据放 `datasets/4_forecast/<产品>/prediction.json`，下一轮构建生效。
+
+## 统计 / 索引备份
+
+`dashboard/backup_stats.py` 每小时把「重建/检索所需的派生数据」快照到
+`/mnt/aime_eval_ssd/1_aime/stats/<UTC 时间>/`，滚动保留最新 12 份。目标、周期、份数可用
+`BACKUP_STATS_DEST` / `BACKUP_STATS_INTERVAL` / `BACKUP_STATS_KEEP` 覆盖（写进 `deploy.env` 即可）。
+看板源切到 SSD 后，备份默认源也是 `/mnt/aime_eval_ssd`；备份目录位于产品目录 `1_aime/stats`，
+构建只扫 `eval_input` / `eval_output`，不会把备份目录当数据。内容是：
+- 数据集侧车与聚类索引：`<datasets>/stats.json`、`user_rules.json`、`releases.json`、
+  `*/eval_output/cluster/`、`*/eval_output/*/cluster/`（`cluster_tree.json`、`item_index.jsonl` 等）；
+- 看板缓存：`cache/build.sqlite3`（SQLite backup API，兼容 WAL 写入）、`samples.pkl`、
+  `clusters-*.pkl`、`tree-*.json`、`cache/inputs/`、`cache/ab-details/`、`config/releases.json`；
+- 检索用 payload：`static/data*.json`、`samples-*.json`、`labels-*.json`、`trends-*.json`、
+  `abtests-*.json`（不含 `static/samples/` 详情和 `.gz`，它们可再生）。
+
+未变化的文件用硬链接指向上一个快照，只有本轮真正重建过的文件才复制。快照先写到
+`.tmp-*`，完成后原子改名；失败时保留旧快照。`backup_stats.sh` 负责 nohup 起停和 pid
+文件，`start.sh` 会在 `EVAL_PRODUCTS=aime` 且 `PORT=5001` 时自动启动它（`/opt/eval_dashboard_2`
+的 5004 副本、乌兰问财部署会跳过；`BACKUP_STATS=0` 可关闭）：
+
+```bash
+ssh aime_rsi_data 'cd /opt/eval_dashboard && ./backup_stats.sh status'
+ssh aime_rsi_data 'cd /opt/eval_dashboard && ./backup_stats.sh run'   # 手动立即备份一份
+```
+
+## 改数据源
+
+看板的数据根由 `EVAL_DATASETS` 决定（`build.py` 启动时读取，`deploy.env` 由
+`deploy.sh` 写入）。改源 = 改 `deploy.env` 后重启，不能只改环境变量而不重启：
+
+```bash
+ssh aime_rsi_data 'cd /opt/eval_dashboard && vi deploy.env   # export EVAL_DATASETS=/new/root
+  ./stop.sh && ./start.sh'
+# 或重新发布：EVAL_DEPLOY_HOST=aime_rsi_data EVAL_DATASETS=/new/root EVAL_PRODUCTS=aime ./dashboard/deploy.sh
+```
+
+新根必须包含同样的布局（`<n>_<product>/eval_input`、`eval_output`、`stats.json`、
+`user_rules.json`），否则看板会构建为空并保留旧 payload。备份目录只含统计/索引缓存，
+**不能**直接当作 `EVAL_DATASETS` 使用。
+
+当前弗吉尼亚看板的 `deploy.env` 是 `EVAL_DATASETS=/mnt/aime_eval_ssd`（产品目录 `1_aime`）。
+5002 页面接口、5003 供数接口有各自的 `deploy.env`，本仓库的看板部署不会改它们；若也要切 SSD，
+需分别按各自的 `deploy.sh` 重新发布。
+
+> **数据更新链路**：乌兰 ↔ 弗吉尼亚的双向同步已停止，`scripts/aime_sync_loop.sh` /
+> `scripts/sync_aime_ulan_to_va.py` 已删除。AIME 只在弗吉尼亚 SSD `/mnt/aime_eval_ssd` 维护；
+> 不要再从乌兰或旧 HDD 同步数据回来。`scripts/daily_eval_progress.py` 已改为读 SSD。
 
 ## 进程守护（eval_supervisor）
 

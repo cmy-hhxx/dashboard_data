@@ -2854,6 +2854,7 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
                 and marker.get("build") == bs.BUILD_VERSION
                 and marker.get("payload") == PAYLOAD_VERSION
                 and marker.get("rules") == rules_sig
+                and marker.get("datasets") == str(datasets)
                 and marker.get("pairs_sig") == pairs_sig
                 and marker.get("cluster") == cluster_sig
                 and marker.get("feed") == feed_sig
@@ -3040,7 +3041,7 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
         store.delete_samples_not(slugs)
         store.set_meta("complete", {
             "build": bs.BUILD_VERSION, "payload": PAYLOAD_VERSION, "pairs": len(pairs),
-            "rules": rules_sig,
+            "rules": rules_sig, "datasets": str(datasets),
             "pairs_sig": pairs_sig, "cluster": cluster_sig, "feed": feed_sig,
             "releases": release_sig, "ab": ab_sig, "input": input_sig,
             "at": generated,

@@ -21,6 +21,12 @@ else
   echo $! > stats.pid
 fi
 
+# Hourly backup of the stats/index caches.  The launcher itself skips staging
+# copies and non-AIME deployments, so this is a no-op outside 弗吉尼亚 5001.
+if [ "${BACKUP_STATS:-1}" != "0" ]; then
+  ./backup_stats.sh start || true
+fi
+
 # A server that is still building its first payloads does not answer /healthz yet, but it IS
 # already running.  Starting a second copy here would run a second build against the same
 # cache (seen as "database is locked") and double the ceph load, so trust the pid first.
