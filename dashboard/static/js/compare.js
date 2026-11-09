@@ -383,14 +383,14 @@ async function paintSides(round, pair, online) {
       }).join("");
     }
   }
-  const caps = columns.map((column) => {
-    const rate = predictionRate(productData, column.model);
-    return `<div class="compare-cap-cell">${rate == null ? "—" : `${fmt(rate, 1)}%`}</div>`;
-  }).join("");
-  panes.innerHTML = `<div class="compare-pred">
+  const rates = columns.map((column) => predictionRate(productData, column.model));
+  const hasPrediction = rates.some((rate) => rate != null);
+  const caps = rates.map((rate) => `<div class="compare-cap-cell">${rate == null ? "—" : `${fmt(rate, 1)}%`}</div>`).join("");
+  panes.classList.toggle("no-pred", !hasPrediction);
+  panes.innerHTML = `${hasPrediction ? `<div class="compare-pred">
       <span class="compare-cap-label">预测能力</span>
       <div class="compare-cap-row" style="--cols:${columns.length}">${caps}</div>
-    </div>
+    </div>` : ""}
     <div class="compare-side-row${columns.length === 1 ? " is-single" : ""}" style="--cols:${columns.length}">${columns.map((column) => sideHTML(column.prefix, column.label, column.ref, column.gap, column.model)).join("")}</div>`;
   applyLayout();
   const jobs = [];
