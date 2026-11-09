@@ -222,13 +222,13 @@ function matrixViewAb(rnd, rows, cols, metric) {
 }
 
 const ratioText = (delta, base) => (base
-  ? `${delta > 0 ? "+" : delta < 0 ? "−" : ""}${fmt(Math.abs((100 * delta) / base), 1)}%`
+  ? `${fmt(Math.abs((100 * delta) / base), 1)}%`
   : DASH);
 
 /* 同题变化 reads one cell as four numbers: 发版前问题数 → 发版后问题数, the net move and its rate. */
 function changeCellData(before, after) {
   const b = num(before), a = num(after), d = a - b;
-  return `<span class="cell-data is-change"><span class="cell-pair"><b>${fmt(b)}</b><i class="cell-arrow" aria-hidden="true">→</i><b>${fmt(a)}</b></span><span class="cell-delta"><span>${signed(d)}</span><span class="cell-ratio">${ratioText(d, b)}</span></span></span>`;
+  return `<span class="cell-data is-change"><span class="cell-pair"><b class="is-from">${fmt(b)}</b><i class="cell-arrow" aria-hidden="true">→</i><b class="is-to">${fmt(a)}</b></span><span class="cell-delta"><b>${signed(d)}</b><span class="cell-ratio">${ratioText(d, b)}</span></span></span>`;
 }
 function countCellData(v, den) {
   return `<span class="cell-data"><span class="cell-main"><b>${fmt(v)}</b></span><span class="cell-pct">${pct(v, den, 1)}</span></span>`;
