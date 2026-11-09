@@ -515,7 +515,7 @@
 }
 @media (max-width: 860px) {
   .bench { grid-template-columns: minmax(0, 1fr); height: auto; min-height: 0; }
-  html[data-view="samples"] main { padding-bottom: 48px; }
+  html[data-view="samples"] main, html[data-view="forecast"] main { padding-bottom: 48px; }
   .bench > .pane { height: auto; }
   .pane-sticky, .bench .pane-sticky { position: static; height: auto; max-height: 420px; }
   .headline { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 4px; }
@@ -530,8 +530,22 @@
    于是右边留一条死白、归因栏被顶到很远。宽度封在 2100（与独立详情页同一口径），
    回答/用户气泡铺满所在栏，三栏重新成比例。 */
 @media (min-width: 1800px) {
-  html[data-view="samples"] main { max-width: 2100px; }
+  html[data-view="samples"] main, html[data-view="forecast"] main { max-width: 2100px; }
   .msg.k-user .msg-body, .msg.k-answer .msg-body { max-width: none; }
 }
 /* While the full index is on its way the list stays readable but visibly waiting. */
 #slist[aria-busy="true"] { opacity: 0.5; pointer-events: none; transition: opacity var(--snap); }
+
+.fc-box .cg { margin: 4px 0 6px; }
+.fc-t { padding-top: 8px; border-top: 1px solid var(--line, rgba(0,0,0,.08)); margin-top: 8px; }
+.fc-t .summary { margin: 4px 0 0; white-space: pre-wrap; }
+/* 预测数据: one row per question, its versions as chips */
+.fk { font-size: 11px; color: var(--faint); align-self: center; margin-right: 6px; white-space: nowrap; }
+.vchips { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: 6px; }
+.vchip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; line-height: 1; padding: 3px 7px; border-radius: 999px;
+  color: var(--ink-2, var(--ink)); background: color-mix(in oklab, var(--c) 12%, var(--card)); border: 1px solid transparent; }
+.vchip i { width: 6px; height: 6px; border-radius: 50%; background: var(--c); }
+.vchip.is-off { opacity: 0.4; }
+.vchip.is-cur { border-color: var(--c); }
+.vchip:hover { border-color: var(--c); }
+#vtabs { align-items: center; }

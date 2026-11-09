@@ -77,7 +77,7 @@ INPUT_INDEX_VERSION = "2026-11-12.1"
 # Bump when pairing semantics change (cache keys are not otherwise versioned).
 PAIRING_VERSION = "2026-11-13.1"
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-13.1"
+PAYLOAD_VERSION = "2026-11-16.1"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 3
 
@@ -3158,13 +3158,59 @@ def prediction_payload(feed: dict, items=None) -> dict:
     return out
 
 
-def prediction_items(path: Path):
+ASSET_CLASSES = {"a_share": "A股", "hk": "港股", "us": "美股", "index": "指数", "etf": "ETF",
+                 "option": "期权", "bond": "债券", "commodity": "大宗商品", "crypto": "加密货币", "other": "其他"}
+_MARKET_CLASS = {"A_share": "a_share", "HK": "hk", "US": "us"}
+_TYPE_CLASS = {"index": "index", "etf": "etf", "option": "option", "bond": "bond",
+               "commodity": "commodity", "future": "commodity", "crypto": "crypto"}
+
+
+def asset_class(item: dict) -> str:
+    """标的类别 of one forecast question: the export's own ``asset_class`` when it has one,
+    else the commonest class among its targets (instrument type first, then market)."""
+    given = item.get("asset_class")
+    if given in ASSET_CLASSES:
+        return ASSET_CLASSES[given]
+    if isinstance(given, str) and given in ASSET_CLASSES.values():
+        return given
+    counts = Counter()
+    for target in item.get("targets") or []:
+        inst = target.get("instrument") if isinstance(target, dict) else None
+        if not isinstance(inst, dict):
+            continue
+        key = _TYPE_CLASS.get(inst.get("type")) or _MARKET_CLASS.get(inst.get("market")) or "other"
+        counts[key] += 1
+    if not counts:
+        return ASSET_CLASSES["other"]
+    order = list(ASSET_CLASSES)
+    return ASSET_CLASSES[max(counts, key=lambda k: (counts[k], -order.index(k)))]
+
+
+def forecast_slug(product: str, version: str, trace_id: str) -> str:
+    """Stable 10-hex id of a forecast answer that has no attribution sample (its detail is
+    generated from the trajectory the export points at, see DetailBuilder.ensure_forecast)."""
+    return hashlib.sha1(f"fc|{product}|{version}|{trace_id}".encode()).hexdigest()[:10]
+
+
+def prediction_slugs(samples) -> dict:
+    """Sample slug of an evaluated answer, so a forecast can open its trajectory:
+    by (batch date, case id, version), else by (trace id, version)."""
+    out = {}
+    for slug, _, row, _ in samples:
+        out[(row.get("d"), row.get("case"), row.get("m"))] = slug
+        if row.get("tid"):
+            out.setdefault(("t", row["tid"], row.get("m")), slug)
+    return out
+
+
+def prediction_items(path: Path, slugs=None, product=None):
     """Judged answers for the card's star map: one per (forecast question, version).
 
     Only revealed / pending questions are kept (the unverifiable ones are a count in 题量),
     with the question clipped, so a month of forecasts stays a small payload.
     """
     out = []
+    numbers = {}  # question id -> position, so the page can group a question's versions
     try:
         with open(path, encoding="utf-8") as fh:
             for line in fh:
@@ -3176,7 +3222,20 @@ def prediction_items(path: Path):
                     continue
                 row = {"q": clip(decode_question(item.get("question")), 60), "v": item.get("version"),
                        "r": item.get("result") or item.get("status"),
-                       "t": item.get("forecast_type_label") or item.get("forecast_type") or "其他"}
+                       "t": item.get("forecast_type_label") or item.get("forecast_type") or "其他",
+                       "c": asset_class(item), "d": item.get("batch_id"),
+                       "i": numbers.setdefault(item.get("question_id") or id(item), len(numbers))}
+                known = slugs or {}
+                slug = (known.get((item.get("batch_id"), item.get("case_id"), item.get("version")))
+                        or known.get(("t", item.get("trace_id"), item.get("version"))))
+                if not slug and product and item.get("trajectory") and item.get("trace_id"):
+                    slug = forecast_slug(product, item.get("version") or "", item["trace_id"])
+                if slug:
+                    row["s"] = slug
+                    if product and item.get("trajectory") and item.get("trace_id"):
+                        fslug = forecast_slug(product, item.get("version") or "", item["trace_id"])
+                        if fslug != slug:
+                            row["f"] = fslug
                 if item.get("error_cause_label"):
                     row["e"] = item["error_cause_label"]
                 out.append(row)
@@ -3377,7 +3436,7 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
                     log(f"[build] skip {feed}: {exc}")
                 else:
                     if isinstance(data, dict):
-                        items = prediction_items(feed.parent / "prediction_items.jsonl")
+                        items = prediction_items(feed.parent / "prediction_items.jsonl", prediction_slugs(samples[product]), product)
                         products[product]["prediction"] = prediction_payload(data, items)
         timers["aggregate"] = round(time.time() - t0, 1)
 

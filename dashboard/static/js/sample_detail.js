@@ -355,6 +355,14 @@ async function loadSession(session, focusSlug, focusTrace, sev) {
   parts.sort((a, b) => String(a.detail.meta?.request_time || a.detail.date || "").localeCompare(String(b.detail.meta?.request_time || b.detail.date || "")));
   const kept = dropSubsetParts(parts);
   const D = kept.length === 1 ? withRounds(kept[0]) : mergeSessionDetails(kept, session, S.product);
+  // An evaluated forecast answer has its attribution detail; the 预测核验 box comes from the generated one.
+  const fslug = ctx.forecast && !D.forecast && session.rows[0] && session.rows[0].f;
+  if (fslug) {
+    try {
+      D.forecast = (await fetchDetail(fslug)).forecast;
+    } catch (e) { /* the pane still works without the box */ }
+    if (token !== S.loadSeq) return;
+  }
   index(D);
   S.D = D;
   S.round = D.rounds.length - 1;
@@ -466,7 +474,29 @@ function index(D) {
   D._ix = { byBlock, sev, owner };
 }
 
+const VERDICT = { hit: "命中", miss: "未命中", partial: "部分命中" };
+
+function forecastBox(D) {
+  const f = D.forecast;
+  if (!f) return "";
+  const chips = [f.cls, f.type, f.result, f.cause].filter(Boolean).map((v) => `<span class="pill">${esc(v)}</span>`).join("");
+  const targets = (f.targets || []).map((t) => `<div class="fc-t">
+      <b>${esc(t.inst || t.desc || "")}</b>${t.from ? ` <small class="faint">${esc(t.from)}${t.to && t.to !== t.from ? ` ~ ${esc(t.to)}` : ""}</small>` : ""}
+      ${t.verdict ? `<span class="pill">${esc(VERDICT[t.verdict] || t.verdict)}</span>` : ""}
+      ${t.pred ? `<p class="summary"><span class="sp-k">预测</span> ${esc(t.pred)}</p>` : ""}
+      ${t.truth ? `<p class="summary"><span class="sp-k">实际</span> ${esc(t.truth)}</p>` : ""}
+      ${t.note ? `<p class="summary faint">${esc(t.note)}</p>` : ""}
+    </div>`).join("");
+  return `<div class="sum-box fc-box"><span class="sp-k">预测核验</span><div class="cg">${chips}</div>${
+    f.note ? `<p class="summary">${esc(f.note)}</p>` : ""}${targets}</div>`;
+}
+
 function summaryInner(D) {
+  if (D.forecast && !(D.attribution.turns || []).length) return forecastBox(D);
+  return forecastBox(D) + attributionSummary(D);
+}
+
+function attributionSummary(D) {
   const turns = D.attribution.turns || [];
   const turn = turns[Math.max(0, Math.min(S.turn, turns.length - 1))];
   const text = S.sessionView ? D.attribution.summary : (turn?.summary || "");
@@ -500,6 +530,17 @@ function renderOverviewItems() {
         .map((x, i) => `<div class="ov-item" title="${esc(x)}"><p><span class="ov-n" aria-hidden="true">${String(i + 1).padStart(2, "0")}</span><span class="ov-t">${esc(x)}</span></p></div>`)
         .join("")}</div>`
     : "";
+}
+
+/* Forecast mode: the other versions' answers to the same question, one pill each. */
+function versionTabs() {
+  if (!ctx.forecast || !S.session || S.session.qi == null) return "";
+  const order = new Map((S.prod?.models || []).map((m, i) => [m.id, i]));
+  const vs = S.all.filter((g) => g.qi === S.session.qi).sort((a, b) => (order.get(a.m) ?? 99) - (order.get(b.m) ?? 99));
+  if (vs.length < 2) return "";
+  const name = (id) => ((S.prod?.models || []).find((m) => m.id === id) || { label: id }).label;
+  return `<div class="trace-tabs" id="${prefix}vtabs"><span class="fk">同一题的各版本回答</span>${vs.map((g) =>
+    `<button type="button" class="pill" data-k="${esc(g.key)}" aria-pressed="${g.key === S.session.key}">${esc(name(g.m))} · ${esc(ctx.forecast.result[g.res] || g.res || "")}</button>`).join("")}</div>`;
 }
 
 function renderIn() {
@@ -545,10 +586,12 @@ function renderIn() {
         ${group("规模", "is-scale", scale)}
       </div>
       ${hasChat(D) || rounds.length > 1 ? `<div class="trace-tabs" id="${prefix}ttabs">${traceTabsInner(rounds, D)}</div>` : ""}`}
+      ${versionTabs()}
       <div id="${prefix}ovBox" class="ov-box"></div>
       <div id="${prefix}sumBox">${summaryInner(D)}</div>
       <div id="${prefix}ov" class="ov-grid"></div>
     </div>`;
+  $$(`#${prefix}vtabs .pill`, root).forEach((b) => b.addEventListener("click", () => ctx.navigate({ case: b.dataset.k, p: null })));
   if (D.input.missing) {
     renderMissingState();
     return;

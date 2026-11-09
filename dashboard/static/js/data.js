@@ -23,7 +23,7 @@ let lastDetail = null;
 const UI = {};
 const ui = (product) =>
   (UI[product] = UI[product] || {
-    field: { w: null, pages: [] }, vol: {}, clu: {}, pred: "vol",
+    field: { w: null, pages: [] }, vol: {}, clu: {}, prd: {}, pred: "vol",
     mx: {
       rows: [], cols: [], trail: [], issuePath: [], analysisLevels: ["P0", "P1"], analysisPeriod: "day", analysisZoom: false,
       // 聚类矩阵格子的就地趋势图：口径 / 场景 + 来源·模型·等级的折线组 + 是否打开都活在这里，
@@ -164,6 +164,9 @@ const SAMPLE_RESET = {
   detail: null, ed: null, em: null, ep: null, edp: null, p: null, tab: null, q: null, w: null, split: null,
   date: null, model: null, scene: null, sub: null, stage: null, mech: null, pattern: null, case: null, trace: null,
 };
+function openForecast(slug) {
+  ctx.navigate({ ...SAMPLE_RESET, view: "forecast", product: ctx.product, case: slug, res: null, cls: null, typ: null, cause: null });
+}
 function openSamples(patch) {
   ctx.navigate({ ...SAMPLE_RESET, view: "samples", product: ctx.product, ...patch });
 }
@@ -1364,6 +1367,31 @@ function predSeries(pr) {
     .map((x) => x.v);
 }
 
+/* 标的类别 → 题型 over the verifiable questions (one count per question, however many versions answered it). */
+const qkey = (it) => (it.i != null ? it.i : it.q);
+function predTree(items) {
+  const all = new Set();
+  const byClass = new Map();
+  items.forEach((it) => {
+    const k = qkey(it);
+    const cls = it.c || "其他";
+    const typ = it.t || "其他";
+    const node = byClass.get(cls) || { id: `p/${cls}`, name: cls, qs: new Set(), kids: new Map() };
+    node.qs.add(k);
+    if (!node.kids.has(typ)) node.kids.set(typ, new Set());
+    node.kids.get(typ).add(k);
+    byClass.set(cls, node);
+    all.add(k);
+  });
+  return {
+    id: "p", name: "全部", n: all.size,
+    children: [...byClass.values()].sort((a, b) => b.qs.size - a.qs.size).map((c) => ({
+      id: c.id, name: c.name, n: c.qs.size,
+      children: [...c.kids].sort((a, b) => b[1].size - a[1].size).map(([name, qs]) => ({ id: `${c.id}/${name}`, name, n: qs.size, children: [] })),
+    })),
+  };
+}
+
 function predictCard(p) {
   const pr = p.prediction;
   if (!pr) {
@@ -1399,34 +1427,56 @@ function predictCard(p) {
   const bar = (items) =>
     `<div class="comp">${items.map((x) => `<span style="flex:${x.n} 1 0;--c:${x.c}" data-tip="${esc(x.l)}|${fmt(x.n)}"></span>`).join("")}</div>
     <div class="keys">${items.map((x) => `<span>${dot(x.c)}${esc(x.l)}<b class="num">${fmt(x.n)}</b></span>`).join("")}</div>`;
-  const rows = acc
-    .map((x) => `<div class="li vrow" data-pm="${esc(x.m)}" data-tip="${esc(modelName(p, x.m))} · 准确率|${x.n ? `${fmt(x.c)} / ${fmt(x.n)}` : `${fmt(x.r, 1)}%`}"><span>${esc(modelName(p, x.m))}</span><span class="vbar"><i style="width:${x.r}%"></i></span><b class="num">${fmt(x.r, 1)}%</b></div>`)
-    .join("");
   const right = sum(acc.map((x) => x.c));
+  // 能力: accuracy by 标的类别 × version, from the judged answers (items), with the sample size per cell.
+  const items = pr.items || [];
+  const versions = (p.models || []).map((m) => m.id).filter((id) => items.some((it) => it.v === id));
+  const grid = new Map();
+  const tally = (cls, v, it) => {
+    const e = grid.get(`${cls}|${v}`) || { ok: 0, bad: 0 };
+    if (it.r === "correct") e.ok += 1;
+    else if (it.r === "wrong") e.bad += 1;
+    grid.set(`${cls}|${v}`, e);
+  };
+  const classes = new Map();
+  items.forEach((it) => {
+    const cls = it.c || "其他";
+    classes.set(cls, (classes.get(cls) || 0) + (it.r === "correct" || it.r === "wrong" ? 1 : 0));
+    tally(cls, it.v, it);
+    tally("全部", it.v, it);
+    tally(cls, "*", it);
+    tally("全部", "*", it);
+  });
+  const classOrder = ["全部", ...[...classes].filter(([, n]) => n > 0).sort((x, y) => y[1] - x[1]).map(([c]) => c)];
+  const MIN_N = 10;
+  const cell = (cls, v) => {
+    const e = grid.get(`${cls}|${v}`) || { ok: 0, bad: 0 };
+    const n = e.ok + e.bad;
+    if (!n) return `<span class="cap-c is-empty">—</span>`;
+    const r = (100 * e.ok) / n;
+    const tone = Math.round(14 + Math.max(0, Math.min(1, (r - 35) / 45)) * 62);
+    return `<span class="cap-c${n < MIN_N ? " is-thin" : ""}" style="--t:${tone}%" data-cv="${esc(`${cls}|${v}`)}" data-tip="${esc(cls)} · ${esc(v === "*" ? "全部版本" : modelName(p, v))}|${fmt(e.ok)} / ${fmt(n)}${n < MIN_N ? " · 样本少" : ""}"><b class="num">${fmt(r, 0)}</b><small class="num">${fmt(n)}</small></span>`;
+  };
+  const capMatrix = classOrder.length > 1 && versions.length
+    ? `<div class="cap-mx" style="--cols:${versions.length}">
+        <span></span>${versions.map((v) => `<span class="cap-h" data-pm="${esc(v)}">${esc(modelName(p, v))}</span>`).join("")}<span class="cap-h">合计</span>
+        ${classOrder.map((cls) => `<span class="cap-r${cls === "全部" ? " is-all" : ""}">${esc(cls)}</span>${versions.map((v) => cell(cls, v)).join("")}${cell(cls, "*")}`).join("")}
+      </div><div class="cap-note">每道题由各版本分别作答。单元格：准确率 % 与回答数，浅色为不足 ${MIN_N} 份</div>`
+    : `<div class="empty">暂无准确率</div>`;
+  // 题量: 标的类别 → 题型 over the judged answers; opens the same star map as the other rings.
+  const predRoot = predTree(items);
   const causeTotal = sum(causes.map((x) => x.n));
   // Forecast questions = revealed + pending (questions[]) + those the export could not verify yet.
   const unver = Number.isFinite(pr.unverifiable) ? pr.unverifiable : 0;
   const forecast = qs.length + unver;
-  const rest = Math.max(0, allQ - forecast);
   const panes = `<div class="pred-pane is-on" data-pane="vol">
-      <div class="pred-top"><div class="hero"><b class="big">${counter(forecast)}</b><small>预测题</small></div>
-        <div class="hero"><b class="big num">${pct(forecast, allQ, 1)}</b><small>占题库</small></div></div>
-      ${bar([
-        { n: open, c: "var(--accent)", l: "已揭晓" },
-        { n: qs.length - open, c: "color-mix(in oklab, var(--accent) 38%, var(--card))", l: "待揭晓" },
-        { n: unver, c: "var(--t3)", l: "不可核验" },
-        { n: rest, c: "var(--t4)", l: "其他题" },
-      ].filter((x) => x.n))}
-      ${stats([["题库", counter(allQ)], ["已揭晓", counter(open)], ["待揭晓", counter(qs.length - open)], ["其他题", counter(rest)]])}
+      ${predRoot.n ? `<div class="duo" id="prd"></div>` : `<div class="empty">暂无预测数据</div>`}
+      ${stats([["预测题", counter(forecast)], ["已揭晓", counter(open)], ["待揭晓", counter(qs.length - open)], ["不可核验", counter(unver)]])}
     </div>
     <div class="pred-pane" data-pane="acc">
       <div class="pred-top"><div class="hero"><b class="big num">${pooledN ? `${fmt((100 * right) / pooledN, 1)}%` : "—"}</b><small>准确率</small></div>
         <div class="hero"><b class="big num">${fmt(pooledN)}</b><small>已判定</small></div></div>
-      ${rows ? `<div class="list pred-rows">${rows}</div>` : `<div class="empty">暂无准确率</div>`}
-      ${pooledN ? bar([
-        { n: right, c: "var(--accent)", l: "正确" },
-        { n: pooledN - right, c: "var(--t4)", l: "错误" },
-      ].filter((x) => x.n)) : ""}
+      ${capMatrix}
     </div>
     <div class="pred-pane" data-pane="cause">
       <div class="pred-top"><div class="hero"><b class="big">${counter(causeTotal)}</b><small>错误</small></div>
@@ -2473,7 +2523,7 @@ const WIDE = "(min-width: 1181px)";
 const LAYOUT_EASE = window.CSS && CSS.supports && CSS.supports("transition-timing-function", "linear(0, 1)")
   ? "linear(0, 0.012, 0.047 2.6%, 0.18 5.6%, 0.738 17.3%, 0.928 23.1%, 1.012 28.4%, 1.04 33%, 1.042 37.4%, 1.027 43.7%, 1.003 55.8%, 0.996 66.3%, 1)"
   : "cubic-bezier(0.16, 1, 0.3, 1)";
-const RESULT = { correct: "正确", wrong: "错误", undetermined: "无法判定", pending: "待揭晓", revealed: "已揭晓" };
+const RESULT = { correct: "正确", wrong: "错误", mixed: "各版本不一", undetermined: "无法判定", pending: "待揭晓", revealed: "已揭晓" };
 const sevIdx = (w) => {
   const i = WORST.indexOf(w);
   return i < 0 ? 5 : i;
@@ -2481,7 +2531,7 @@ const sevIdx = (w) => {
 /* The cases behind an opened card, worst first, beside its star map: a severity (or result) dot, the
    question and its problem count (or verdict). The head is the slice's size and its severity split. */
 const LEDGER_MAX = 120;
-const predDot = (it) => (it.r === "correct" ? "var(--accent)" : it.r === "wrong" ? "var(--sev-1)" : it.r === "pending" ? "var(--muted)" : "var(--faint)");
+const predDot = (it) => (it.r === "correct" ? "var(--accent)" : it.r === "wrong" ? "var(--sev-1)" : it.r === "mixed" ? "var(--sev-3)" : it.r === "pending" ? "var(--muted)" : "var(--faint)");
 function ledger(groups, pred, unit = null, rows = null, { count = true, strip = true, size = LEDGER_MAX, page = 0, sum = true } = {}) {
   const all = groups.flatMap((g) => g.items);
   const ordered = pred ? all : [...all].sort((a, b) => a.w - b.w || b.n - a.n || (b.d || "").localeCompare(a.d || ""));
@@ -2490,10 +2540,10 @@ function ledger(groups, pred, unit = null, rows = null, { count = true, strip = 
   // The summary always speaks about everything found; the list is one page of it.
   const items = rows ?? ordered.slice(at * size, (at + 1) * size);
   const parts = pred
-    ? ["correct", "wrong", "pending", "undetermined"].map((r) => ({ n: all.filter((it) => (r === "undetermined" ? !["correct", "wrong", "pending"].includes(it.r) : it.r === r)).length, c: predDot({ r }) }))
+    ? ["correct", "wrong", "mixed", "pending", "undetermined"].map((r) => ({ n: all.filter((it) => (r === "undetermined" ? !["correct", "wrong", "mixed", "pending"].includes(it.r) : it.r === r)).length, c: predDot({ r }) }))
     : WORST.map((_, i) => ({ n: all.filter((it) => it.w === i).length, c: sevColor(i) }));
   const rowHTML = (it, k) =>
-    `<button type="button" class="gl-r${pred ? " is-inert" : ""}" data-i="${k}" style="--i:${Math.min(k, 14)};--c:${pred ? predDot(it) : sevColor(it.w)}" title="${esc(it.q || "（无提问）")}"><i></i><span>${esc(it.q || "（无提问）")}</span>${count ? `<b class="num">${pred ? esc(RESULT[it.r] || "") : it.n ? fmt(it.n) : "—"}</b>` : ""}</button>`;
+    `<button type="button" class="gl-r${pred && !it.s ? " is-inert" : ""}" data-i="${k}" style="--i:${Math.min(k, 14)};--c:${pred ? predDot(it) : sevColor(it.w)}" title="${esc(it.q || "（无提问）")}"><i></i><span>${esc(it.q || "（无提问）")}</span>${count ? `<b class="num">${pred ? esc(RESULT[it.r] || "") : it.n ? fmt(it.n) : "—"}</b>` : ""}</button>`;
   const rowsHtml = items.slice(0, size).map(rowHTML);
   const sumHtml = `<div class="gl-sum"><b class="num">${fmt(all.length)}</b><small>${unit || (pred ? "道预测题" : "个 case")}</small>${strip ? `<span class="gl-strip" aria-hidden="true">${parts
     .filter((x) => x.n)
@@ -2904,7 +2954,7 @@ function pushPull(bento, p, tax, u) {
   function close(row) {
     const cur = u.deep[row];
     if (!cur) return;
-    if (rings[cur.card]) return rings[cur.card].up(); // the ring reports back through fromRing
+    if (rings[cur.card] && (cur.card !== "pred" || cur.kind === "class")) return rings[cur.card].up(); // the ring reports back through fromRing
     u.deep[row] = null;
     apply(row);
   }
@@ -2919,7 +2969,7 @@ function pushPull(bento, p, tax, u) {
      picked under a non-root focus. */
   function fromRing(card, focus, opened) {
     const row = ROW[card];
-    const spec = card === "vol" ? volSpec(focus, opened) : cluSpec(focus, opened);
+    const spec = card === "vol" ? volSpec(focus, opened) : card === "pred" ? predSpec(focus, opened) : cluSpec(focus, opened);
     const cur = u.deep[row];
     if (spec && openable[card] && openable[card]()) {
       // Same spec on a live board: only the highlight moved. While booting the DOM is new, so apply.
@@ -2932,7 +2982,7 @@ function pushPull(bento, p, tax, u) {
       apply(row);
     } else if (spec) {
       return; // nothing behind the drill: leave the row as it is
-    } else if (cur && cur.card === card) {
+    } else if (cur && cur.card === card && (card !== "pred" || cur.kind === "class")) {
       u.deep[row] = null;
       apply(row);
     }
@@ -2961,6 +3011,18 @@ function pushPull(bento, p, tax, u) {
     };
   }
 
+  /* The 题量 ring is 标的类别 → 题型: a class opens its star map, a type focuses that cluster. */
+  function predSpec(focus, opened) {
+    const at = innermost(focus, opened);
+    if (!at || at.other) return null;
+    const cls = at.parent && at.parent.parent ? at.parent : at;
+    if (cls.other) return null;
+    return {
+      card: "pred", id: `pred|k|${cls.name}`, kind: "class", key: cls.name,
+      focus: at !== cls ? at.name : at === focus && opened && !opened.other ? opened.name : null,
+    };
+  }
+
   function cluSpec(focus, opened) {
     const at = innermost(focus, opened);
     if (!at || at.other || !at.id.includes(".")) return null;
@@ -2978,11 +3040,26 @@ function pushPull(bento, p, tax, u) {
   async function groupsFor(spec) {
     if (spec.card === "pred") {
       const items = ((p.prediction || {}).items || []).filter((it) =>
-        spec.kind === "model" ? it.v === spec.key : spec.kind === "cause" ? it.e === spec.key : true);
-      const by = new Map();
+        spec.kind === "model" ? it.v === spec.key : spec.kind === "cause" ? it.e === spec.key
+          : spec.kind === "class" ? (it.c || "其他") === spec.key
+          : spec.kind === "cv" ? (spec.cls === "全部" || (it.c || "其他") === spec.cls) && (!spec.ver || it.v === spec.ver) : true);
+      // Clusters are the 标的类别; inside one class they are the question type.
+      const groupOf = spec.kind === "class" || (spec.kind === "cv" && spec.cls !== "全部") ? (it) => it.t : (it) => it.c || "其他";
+      // One star per question; its versions' answers ride along for the tooltip.
+      const qs = new Map();
       items.forEach((it) => {
-        if (!by.has(it.t)) by.set(it.t, { key: it.t, name: it.t, items: [] });
-        by.get(it.t).items.push({ ...it, inert: true, n: 0 });
+        const k = qkey(it);
+        if (!qs.has(k)) qs.set(k, { i: it.i, q: it.q, c: it.c, t: it.t, d: it.d, vers: [] });
+        qs.get(k).vers.push({ v: it.v, r: it.r, e: it.e, s: it.s });
+      });
+      const by = new Map();
+      qs.forEach((g) => {
+        const rs = g.vers.map((x) => x.r);
+        const pick = g.vers.find((x) => x.r === "wrong" && x.s) || g.vers.find((x) => x.s) || {};
+        const it = { ...g, r: rs.every((x) => x === rs[0]) ? rs[0] : "mixed", s: pick.s, f: undefined };
+        const key = groupOf(it);
+        if (!by.has(key)) by.set(key, { key, name: key, items: [] });
+        by.get(key).items.push({ ...it, inert: !it.s, n: 0 });
       });
       return [...by.values()];
     }
@@ -3016,8 +3093,9 @@ function pushPull(bento, p, tax, u) {
   const caseTip = (it) => `<div class="t-head">${esc(it.q || "（无提问）")}</div>
     <div class="t-row"><span class="sev" style="--c:${sevColor(it.w)}"><i></i>${SEV_NAME[WORST[it.w]]}</span><span>${esc(modelName(p, it.m))} · ${esc((it.d || "").slice(5))}</span><b class="num">${it.n ? `${fmt(it.n)} 个问题` : "无问题"}</b></div>`;
   const predTip = (it) => `<div class="t-head">${esc(it.q || "")}</div>
-    <div class="t-row"><span>${esc(modelName(p, it.v))}</span><span>${esc(RESULT[it.r] || it.r || "")}</span>${it.e ? `<span class="dim">${esc(it.e)}</span>` : ""}</div>`;
-  const predColor = (it, c) => (it.r === "correct" ? c.accent : it.r === "wrong" ? c.sev[1] : it.r === "pending" ? c.muted : c.faint);
+    <div class="t-row"><span>${esc(it.c || "其他")} · ${esc(it.t || "")}${it.d ? ` · ${esc(String(it.d).slice(5))}` : ""}</span></div>
+    ${(it.vers || []).map((x) => `<div class="t-row"><span>${esc(modelName(p, x.v))}</span>${x.e ? `<span class="dim">${esc(x.e)}</span>` : ""}<b>${esc(RESULT[x.r] || x.r || "")}</b></div>`).join("")}`;
+  const predColor = (it, c) => (it.r === "correct" ? c.accent : it.r === "wrong" ? c.sev[1] : it.r === "mixed" ? c.sev[3] : it.r === "pending" ? c.muted : c.faint);
 
   async function paintGalaxy(k, gx, spec) {
     if (maps[k] && maps[k].id === spec.id) return maps[k].map.focus(spec.focus);
@@ -3077,7 +3155,7 @@ function pushPull(bento, p, tax, u) {
       focus: spec.focus,
       tip: pred ? predTip : caseTip,
       colorOf: pred ? predColor : null,
-      onPick: pred ? null : (it) => openSamples({ case: it.s }),
+      onPick: (it) => (pred ? openForecast(it.s) : openSamples({ case: it.s })),
       onHover: light,
     });
     const rowItem = (e) => {
@@ -3101,7 +3179,7 @@ function pushPull(bento, p, tax, u) {
         return;
       }
       const it = rowItem(e);
-      if (it && !pred) openSamples({ case: it.s });
+      if (it) pred ? openForecast(it.s) : openSamples({ case: it.s });
     });
     maps[k] = { id: spec.id, map };
   }
@@ -3170,7 +3248,12 @@ function pushPull(bento, p, tax, u) {
       else toggle({ card: "pred", id: `pred|m|${pk.dataset.g}`, kind: "model", key: pk.dataset.g });
       return;
     }
-    if (e.target.closest('[data-card="pred"] [data-pane="vol"] .comp')) toggle({ card: "pred", id: "pred|all", kind: "all", key: null });
+    const pc = e.target.closest('[data-card="pred"] [data-cv]');
+    if (pc) {
+      const [cls, ver] = pc.dataset.cv.split("|");
+      toggle({ card: "pred", id: `pred|cv|${pc.dataset.cv}`, kind: "cv", cls, ver: ver === "*" ? null : ver });
+      return;
+    }
   });
   // A folded mate is a real button for the keyboard too: Enter / Space brings the row back.
   bento.addEventListener("keydown", (e) => {
@@ -3903,6 +3986,11 @@ function wire(bento, p, tax, u) {
   if (tax) {
     push.rings.clu = sunburst($("#clu", bento), cluTree(p, tax), {
       unit: "问题", sort: true, state: u.clu, animate: !ctx.refresh, onChange: (f, o) => push.fromRing("clu", f, o),
+    });
+  }
+  if (p.prediction && $("#prd", bento)) {
+    push.rings.pred = sunburst($("#prd", bento), predTree(p.prediction.items || []), {
+      unit: "可核验题", state: u.prd, animate: !ctx.refresh, onChange: (f, o) => push.fromRing("pred", f, o),
     });
   }
   push.start();

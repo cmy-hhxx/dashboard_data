@@ -51,3 +51,18 @@
   - 卡片用「模型 → 错因」的小型桑基图呈现各模型的数量。
 
 缺少某个字段时，卡片会隐藏对应部分，不会根据其他字段推算。
+
+## 预测数据页与导出的附加字段（2026-11-05 起）
+
+`prediction_items.jsonl` 每行是一道题的一个版本的回答。除上面的字段外，看板还读：
+
+- `asset_class`（`a_share/hk/us/index/etf/option/bond/commodity/crypto/other`）：题的标的类别，缺失时按
+  `targets[].instrument` 的 type / market 推（指数优先于市场）。
+- `trajectory`：`{file, line, offset, bytes, trace_index}`，`file` 相对数据根；看板按偏移读出这一行原始轨迹，
+  为没有归因样本的回答现生成详情（`/samples/<slug>.json`，`slug = forecast_slug(产品, 版本, trace_id)`）。
+- 条目进 `products.<p>.prediction.items` 时带：`c` 类别、`d` 批次日、`i` 题号（同一题各版本相同）、
+  `s` 点开用的样本 slug、`f` 有归因样本时对应的无归因详情 slug（取「预测核验」框用）。
+
+改了条目字段要升 `build.py` 的 `PAYLOAD_VERSION`，否则数据没变时构建会复用旧载荷。
+「预测数据」页（`?view=forecast`）一题一行、版本作该题的回答芯片；旭日图、星图、列表都按题计，
+能力矩阵按回答计。

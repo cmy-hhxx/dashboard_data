@@ -57,7 +57,7 @@
 :root:not([data-mode="dark"]) .i-moon { display: none; }
 
 main { padding: 8px var(--gutter) 48px; max-width: 1480px; margin: 0 auto; }
-html[data-view="samples"] main { max-width: none; padding-bottom: 16px; }
+html[data-view="samples"] main, html[data-view="forecast"] main { max-width: none; padding-bottom: 16px; }
 .view { display: none; }
 /* A view settles into place instead of fading up from the page background, so switching pages
    (e.g. from the cluster matrix into 具体数据) never flashes pale. */

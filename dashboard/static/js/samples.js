@@ -20,8 +20,10 @@ const F = () => {
     q: q.get("q") || "", w: q.get("w") || "", split: q.get("split") || "", model: q.get("model") || "",
     ut: q.get("ut") || "", date: q.get("date") || "",
     scene: q.get("scene") || "", sub: q.get("sub") || "", stage: q.get("stage") || "", mech: q.get("mech") || "", pattern: q.get("pattern") || "", sort: q.get("sort") || "sev",
+    res: q.get("res") || "", cls: q.get("cls") || "", typ: q.get("typ") || "", cause: q.get("cause") || "",
   };
 };
+const NO_FILTER = { q: "", w: "", split: "", model: "", ut: "", scene: "", sub: "", stage: "", mech: "", pattern: "", date: "", res: "", cls: "", typ: "", cause: "" };
 const dirty = () => Object.entries(F()).some(([k, v]) => k !== "sort" && v);
 // `sc` is the scene the matrix filed the sample under when it differs from task / skill (问财 B versions).
 const sceneOf = (r) => r.sc || r.task || r.skill || "未接入分类体系";
@@ -147,6 +149,26 @@ function whenFull() {
   return true;
 }
 
+/* A forecast answer without an attribution sample is not in the index: build its one-row
+   session from the generated detail (DetailBuilder.ensure_forecast) so the case can be opened. */
+async function addForecastSession(slug) {
+  if (!slug || !/^[0-9a-f]{10}$/.test(slug) || S.all.some((x) => x.key === slug || x.rows.some((r) => r.s === slug))) return;
+  let d;
+  try {
+    d = await getJSON(`samples/${slug}.json`);
+  } catch (e) {
+    return;
+  }
+  if (!d || !d.forecast) return;
+  const row = {
+    s: slug, q: d.question, m: d.model, sp: d.split || "daily", d: d.date, sid: d.ids?.session, tid: d.ids?.trace,
+    case: d.ids?.case, fc: 1, w: "none", n: 0, tr: d.input?.traces?.length || 1, r: [], st: [], pt: [], tg: [], lb: "", lang: d.lang,
+  };
+  const g = groupSessions([row])[0];
+  g.key = g.s = slug;
+  S.all.unshift(g);
+}
+
 export async function render(r, c) {
   ctx = c;
   root = r;
@@ -158,7 +180,10 @@ export async function render(r, c) {
     S.prod = prod;
     labelsP = null; // labels are index-aligned; a rebuilt index needs the new file
   }
-  if (S.product !== c.product || !$(".bench", root)) {
+  // 具体数据 and 预测数据 share this module but not a root: a root that last rendered the other view
+  // is rebuilt, or its detail pane would be driven by the wrong instance.
+  if (S.product !== c.product || !$(".bench", root) || S.root !== root) {
+    S.root = root;
     S.product = c.product;
     labelsP = null;
     S.all = prod ? groupSessions(prod.rows) : [];
@@ -175,13 +200,14 @@ export async function render(r, c) {
     S.product = null;
     return;
   }
+  if (c.forecast) await addForecastSession(params().get("case"));
   syncFilters();
   renderList();
   // lb is the only search field paint does not need, so it ships separately (4.8MB of
   // the AIME index). Search works without it and gets more accurate when it lands.
   // 5002 单样本页的索引只含该会话那几行（子集），行号对不上全量 labels，由 entry 传
   // oneSession 跳过；那边的调用方要标签直接取 /labels-<product>.json 按行号配对。
-  if (!c.oneSession && !prod.head) {
+  if (!c.oneSession && !prod.head && !c.forecast) {
     labelsP = labelsP || getJSON(`labels-${c.product}.json`)
       .then((payload) => {
         const labels = payload.labels || [];
@@ -233,12 +259,12 @@ function skeleton() {
     <aside class="pane pane-sticky compare-list" aria-label="样本列表">
       <button type="button" class="compare-rail-btn" id="srail" title="展开样本列表" aria-label="展开样本列表">${CHEV_RIGHT}<span class="compare-rail-label">样本列表</span></button>
       <div class="pane-head compare-list-head">
-        <input class="search" id="sq" type="search" placeholder="搜索问题 · Session ID · Trace ID" autocomplete="off">
+        <input class="search" id="sq" type="search" placeholder="${ctx.forecast ? "搜索预测问题" : "搜索问题 · Session ID · Trace ID"}" autocomplete="off">
         <div class="filters" id="sf"></div>
         <div class="list-meta"><span id="scount" class="num"></span>
           <span class="meta-end">
             <button type="button" class="reset" id="sreset" hidden>重置</button>
-            <select id="ssort" aria-label="排序"><option value="sev">严重度优先</option><option value="n">问题数</option><option value="date">日期新→旧</option></select>
+            <select id="ssort" aria-label="排序">${ctx.forecast ? `<option value="sev">默认</option><option value="date">日期新→旧</option>` : `<option value="sev">严重度优先</option><option value="n">问题数</option><option value="date">日期新→旧</option>`}</select>
             <button type="button" class="compare-icon-btn" id="scollapse" aria-expanded="true" title="折叠样本列表" aria-label="折叠样本列表">${CHEV_LEFT}</button>
           </span></div>
       </div>
@@ -274,7 +300,7 @@ function skeleton() {
   });
   $("#ssort", root).addEventListener("change", (e) => setFilter({ sort: e.target.value }));
   $("#sreset", root).addEventListener("click", () =>
-    setFilter({ q: "", w: "", split: "", model: "", ut: "", date: "", scene: "", sub: "", stage: "", mech: "", pattern: "", sort: "sev" }),
+    setFilter({ ...NO_FILTER, sort: "sev" }),
   );
   $("#sf", root).addEventListener("click", (e) => {
     const toggle = e.target.closest("[data-more]");
@@ -325,12 +351,13 @@ function skeleton() {
   const list = $("#slist", root);
   list.addEventListener("click", (e) => {
     const b = e.target.closest(".srow");
-    if (b) ctx.navigate({ case: b.dataset.s, p: null });
+    const chip = e.target.closest(".vchip");
+    if (b) ctx.navigate({ case: chip ? chip.dataset.s : b.dataset.s, p: null });
   });
   list.addEventListener("keydown", (e) => {
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
     e.preventDefault();
-    const i = S.rows.findIndex((x) => x.s === S.slug);
+    const i = S.rows.findIndex((x) => rowHas(x, S.slug));
     const next = S.rows[Math.max(0, Math.min(S.rows.length - 1, i + (e.key === "ArrowDown" ? 1 : -1)))];
     if (!next) return;
     S.refocusList = true;   // 换样本会整表重画，焦点要还回新的当前行，否则只能按一次
@@ -348,13 +375,37 @@ function setFilter(patch) {
 }
 
 function revealPage(slug) {
-  const at = S.rows.findIndex((r) => r.s === slug);
+  const at = S.rows.findIndex((r) => rowHas(r, slug));
   if (at < 0) return;
   const page = Math.floor(at / PAGE) + 1;
   if (page !== S.page) {
     S.page = page;
     renderList();
   }
+}
+
+function forecastFilters(f, p) {
+  const count = (key) => {
+    const m = new Map();
+    S.all.forEach((r) => m.set(r[key], (m.get(r[key]) || 0) + 1));
+    return [...m].sort((a, b) => b[1] - a[1]);
+  };
+  const btn = (k, v, label, color) =>
+    `<button type="button" data-k="${k}" data-v="${esc(v)}" aria-pressed="${f[k] === v}"${color ? ` style="--c:${color}"` : ""}>${color ? "<i></i>" : ""}${esc(label)}</button>`;
+  const row = (k, items) => `<div class="frow"><span class="fk">${k}</span>${items}</div>`;
+  const opt = (v, label, on) => `<option value="${esc(v)}"${on ? " selected" : ""}>${esc(label)}</option>`;
+  const R = ctx.forecast.result;
+  const resColor = { correct: "var(--accent)", wrong: "var(--sev-1)", pending: "var(--muted)" };
+  let html = row("回答结果", ["correct", "wrong", "pending"].map((k) => btn("res", k, R[k], resColor[k])).join(""));
+  html += row("回答版本", p.models.map((m) => btn("model", m.id, m.label)).join(""));
+  html += row("标的类别", count("c").map(([c]) => btn("cls", c, c)).join(""));
+  const types = count("t").map(([t]) => t);
+  const causes = [...new Set(S.all.map((r) => r.e).filter(Boolean))].sort((a, b) => a.localeCompare(b, "zh"));
+  html += `<div class="cascade">
+    <select data-k="typ" aria-label="题型"><option value="">全部题型</option>${types.map((t) => opt(t, t, f.typ === t)).join("")}</select>
+    <select data-k="cause" aria-label="错误归因"><option value="">全部归因</option>${causes.map((t) => opt(t, t, f.cause === t)).join("")}</select>
+  </div>`;
+  return html;
 }
 
 function syncFilters() {
@@ -364,6 +415,10 @@ function syncFilters() {
   $("#ssort", root).value = f.sort;
   const resetBtn = $("#sreset", root);
   if (resetBtn) resetBtn.hidden = !dirty();
+  if (ctx.forecast) {
+    $("#sf", root).innerHTML = forecastFilters(f, p);
+    return;
+  }
   const btn = (k, v, label, color) =>
     `<button type="button" data-k="${k}" data-v="${esc(v)}" aria-pressed="${f[k] === v}"${color ? ` style="--c:${color}"` : ""}>${color ? "<i></i>" : ""}${esc(label)}</button>`;
   const row = (cls, items) => `<div class="frow${cls ? ` ${cls}` : ""}">${items}</div>`;
@@ -433,12 +488,44 @@ function renderList() {
     !needle ||
     [r.q, r.lb, r.s, r.sid, r.tid, r.case, r.task, r.sub, r.skill].some((x) => x && String(x).toLowerCase().includes(needle)) ||
     r.rows.some((x) => [x.q, x.sid, x.tid, x.case, x.task, x.sub, x.skill].some((v) => v && String(v).toLowerCase().includes(needle)));
-  S.rows = S.all.filter(
-    (r) =>
-      listHit(r, f) &&
-      dateHit(r, f) &&
-      hit(r),
-  );
+  S.rows = ctx.forecast
+    ? S.all.filter(
+        (r) =>
+          (!f.res || r.res === f.res) && (!f.model || r.m === f.model) && (!f.cls || r.c === f.cls) &&
+          (!f.typ || r.t === f.typ) && (!f.cause || r.e === f.cause) &&
+          (!needle || [r.q, r.s].some((x) => x && String(x).toLowerCase().includes(needle))),
+      )
+    : S.all.filter(
+        (r) =>
+          listHit(r, f) &&
+          dateHit(r, f) &&
+          hit(r),
+      );
+  let questionTotal = 0;
+  let answerTotal = 0;
+  if (ctx.forecast) {
+    // One list row per question: its versions' answers are chips inside the row.
+    const order = new Map(S.prod.models.map((m, i) => [m.id, i]));
+    const versions = new Map();
+    S.all.forEach((r) => {
+      const k = r.qi != null ? r.qi : r.s;
+      if (!versions.has(k)) versions.set(k, []);
+      versions.get(k).push(r);
+    });
+    questionTotal = versions.size;
+    const hits = new Set(S.rows.map((r) => r.s));
+    const seen = new Set();
+    const rows = [];
+    S.rows.forEach((r) => {
+      const k = r.qi != null ? r.qi : r.s;
+      if (seen.has(k)) return;
+      seen.add(k);
+      const vs = versions.get(k).slice().sort((a, b) => (order.get(a.m) ?? 99) - (order.get(b.m) ?? 99));
+      answerTotal += vs.filter((x) => hits.has(x.s)).length;
+      rows.push({ ...r, s: (vs.find((x) => hits.has(x.s)) || r).s, slugs: vs.map((x) => x.s), vers: vs.map((x) => ({ ...x, hit: hits.has(x.s) })) });
+    });
+    S.rows = rows;
+  }
   if (f.sort === "n") S.rows = S.rows.slice().sort((a, b) => b.n - a.n);
   if (f.sort === "date") S.rows = S.rows.slice().sort((a, b) => (a.d < b.d ? 1 : -1));
   const pages = Math.max(1, Math.ceil(S.rows.length / PAGE));
@@ -447,12 +534,20 @@ function renderList() {
   const label = (id) => (S.prod.models.find((m) => m.id === id) || { label: id }).label;
   // The head holds only the first page; its counts come from the full index it was cut from.
   const total = S.prod.head ? S.prod.head.sessions : S.all.length;
-  $("#scount", root).textContent = `${fmt(S.prod.head ? total : S.rows.length)} / ${fmt(total)} 个会话`;
+  $("#scount", root).textContent = ctx.forecast
+    ? `${fmt(S.rows.length)} / ${fmt(questionTotal)} 道预测题 · ${fmt(answerTotal)} 份回答`
+    : `${fmt(S.prod.head ? total : S.rows.length)} / ${fmt(total)} 个会话`;
   $("#slist", root).removeAttribute("aria-busy");
+  const resColor = { correct: "var(--accent)", wrong: "var(--sev-1)", pending: "var(--muted)" };
   $("#slist", root).innerHTML = S.pageRows.length
     ? S.pageRows
         .map(
-          (r) => `<button type="button" class="srow" data-s="${r.s}" style="--c:${sevColor(r.w)}" aria-current="${r.s === S.slug}">
+          (r) => ctx.forecast
+            ? `<button type="button" class="srow" data-s="${r.s}" data-ss="${r.slugs.join(",")}" style="--c:${resColor[r.res] || "var(--faint)"}" aria-current="${r.slugs.includes(S.slug)}">
+      <span class="bar"></span><span class="srow-body"><span class="q">${esc(r.q || "（无提问）")}</span>
+      <span class="m num"><span>${esc((r.d || "").slice(5))}</span><span>${esc(r.c || "")} · ${esc(r.t || "")}</span></span>
+      <span class="vchips">${r.vers.map((x) => `<span class="vchip${x.hit ? "" : " is-off"}" data-s="${x.s}" style="--c:${resColor[x.res] || "var(--muted)"}" title="${esc(`${label(x.m)} · ${ctx.forecast.result[x.res] || x.res || ""}${x.e ? ` · ${x.e}` : ""}`)}"><i></i>${esc(label(x.m))}</span>`).join("")}</span></span></button>`
+            : `<button type="button" class="srow" data-s="${r.s}" style="--c:${sevColor(r.w)}" aria-current="${r.s === S.slug}">
       <span class="bar"></span><span class="srow-body"><span class="q">${esc(r.q || "（无提问）")}</span>
       <span class="m num"><span class="srow-model">${esc(label(r.m))}</span><span>${rowDate(r, f).slice(5)}</span>${r.tr > 1 ? `<span>${r.tr} 轮</span>` : ""}<span class="srow-sev" style="color:${r.w === "none" ? "var(--muted)" : sevColor(r.w)}">${r.w === "none" ? "无问题" : r.w}</span>${
             isLostRow(r) ? '<span class="tag-lost">流失</span>' : ""
@@ -462,7 +557,7 @@ function renderList() {
     : `<div class="empty">没有符合条件的会话<br><button type="button" class="link" id="sclear">清除筛选</button></div>`;
   renderPager(S.prod.head ? Math.max(1, Math.ceil(total / PAGE)) : pages, S.prod.head ? total : S.rows.length);
   const clear = $("#sclear", root);
-  clear && clear.addEventListener("click", () => setFilter({ q: "", w: "", split: "", model: "", ut: "", date: "", scene: "", sub: "", stage: "", mech: "", pattern: "" }));
+  clear && clear.addEventListener("click", () => setFilter({ ...NO_FILTER }));
 }
 
 function renderPager(pages, count) {
@@ -481,9 +576,13 @@ function renderPager(pages, count) {
     ${btn("next", "下一页", S.page === pages)}${btn("last", "»", S.page === pages)}`;
 }
 
+const rowHas = (r, slug) => r.s === slug || (r.slugs || []).includes(slug);
+const rowEl = (b) => b.dataset.s === S.slug || (b.dataset.ss || "").split(",").includes(S.slug);
+
 function markCurrent() {
-  $$(".srow", root).forEach((b) => b.setAttribute("aria-current", String(b.dataset.s === S.slug)));
-  const cur = $$(".srow", root).find((b) => b.dataset.s === S.slug);
+  $$(".srow", root).forEach((b) => b.setAttribute("aria-current", String(rowEl(b))));
+  $$(".vchip", root).forEach((c) => c.classList.toggle("is-cur", c.dataset.s === S.slug));
+  const cur = $$(".srow", root).find(rowEl);
   if (cur) {
     const list = $("#slist", root);
     const r = cur.getBoundingClientRect();

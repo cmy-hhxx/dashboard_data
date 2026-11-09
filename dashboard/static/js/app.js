@@ -1,14 +1,15 @@
 /* Router and shell: ?view=data|system|samples&product=wencai|aime (+ sample params). */
 import { $, $$, esc, segmented, getJSON, announce } from "./core.js";
 
-const VIEWS = ["data", "system", "samples", "compare"];
+const VIEWS = ["data", "system", "samples", "forecast", "compare"];
 const PRODUCTS = ["wencai", "aime"];
-const VIEW_NAME = { data: "数据看板", system: "评测体系", samples: "具体数据", compare: "版本对比" };
+const VIEW_NAME = { data: "数据看板", system: "评测体系", samples: "具体数据", forecast: "预测数据", compare: "版本对比" };
 // Sample params (case / trace / filters) and compare params (pair / round / online) never leak
 // across views, or a stale deep link would reopen the previous drill on the next page.
 const SAMPLE_PARAMS = {
   detail: null, ed: null, em: null, ep: null, edp: null, p: null, q: null, w: null, split: null,
   model: null, scene: null, sub: null, stage: null, mech: null, pattern: null, date: null, case: null, trace: null,
+  res: null, cls: null, typ: null, cause: null,
 };
 const COMPARE_PARAMS = { pair: null, online: null, round: null };
 // Views that read data-<product>.json (17 MB for AIME). The others only need the data.json shell,
@@ -25,7 +26,7 @@ const SITES = (() => {
 })();
 const state = { view: "data", product: "wencai", data: null, indexes: {}, indexP: {}, productData: {}, productP: {} };
 const modules = {};
-const loaders = { data: () => import("./data.js"), system: () => import("./system.js"), samples: () => import("./samples.js"), compare: () => import("./compare.js") };
+const loaders = { data: () => import("./data.js"), system: () => import("./system.js"), samples: () => import("./samples.js"), forecast: () => import("./forecast.js"), compare: () => import("./compare.js") };
 
 function readURL() {
   const q = new URLSearchParams(location.search);
@@ -236,7 +237,7 @@ async function poll() {
 async function boot() {
   viewSeg = segmented($("#viewSwitch"), (v) => {
     announce(`切换到${VIEW_NAME[v]}`);
-    navigate({ view: v, ...(v === "compare" ? SAMPLE_PARAMS : {}), ...(v === "data" ? { detail: null, ed: null, em: null, ep: null, edp: null } : {}), ...COMPARE_PARAMS });
+    navigate({ view: v, ...(v === "compare" || v === "forecast" ? SAMPLE_PARAMS : {}), ...(v === "data" ? { detail: null, ed: null, em: null, ep: null, edp: null } : {}), ...COMPARE_PARAMS });
   });
   productSeg = segmented($("#productSwitch"), (p) => {
     const away = awayURL(p, { view: state.view, product: p });

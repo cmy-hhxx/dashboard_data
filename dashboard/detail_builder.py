@@ -23,6 +23,76 @@ SLUG = re.compile(r"^[0-9a-f]{10}$")
 DETAIL_VERSION = "2026-11-13.1"
 
 
+class ForecastIndex:
+    """slug -> (product, byte span of its line in ``4_forecast/<p>/prediction_items.jsonl``).
+
+    Only forecast answers whose export carries a ``trajectory`` pointer are listed; the
+    index is rebuilt when a feed file changes, and lines are re-read on demand."""
+
+    def __init__(self, datasets: Path):
+        self.root = Path(datasets) / build.FORECAST_DIR
+        self._lock = threading.Lock()
+        self._stamp = None
+        self._index = {}
+
+    def _scan(self):
+        files = sorted(self.root.glob("*/prediction_items.jsonl"))
+        stamp = tuple((str(p), p.stat().st_mtime_ns, p.stat().st_size) for p in files)
+        if stamp == self._stamp:
+            return
+        index = {}
+        for path in files:
+            product = path.parent.name
+            offset = 0
+            with open(path, "rb") as fh:
+                for line in fh:
+                    size = len(line)
+                    try:
+                        item = json.loads(line)
+                    except ValueError:
+                        item = None
+                    if isinstance(item, dict) and item.get("trajectory") and item.get("trace_id"):
+                        slug = build.forecast_slug(product, item.get("version") or "", item["trace_id"])
+                        index[slug] = (path, offset, size, product)
+                    offset += size
+        self._index, self._stamp = index, stamp
+
+    def get(self, slug):
+        with self._lock:
+            try:
+                self._scan()
+            except OSError:
+                return None
+            hit = self._index.get(slug)
+        if not hit:
+            return None
+        path, offset, size, product = hit
+        with open(path, "rb") as fh:
+            fh.seek(offset)
+            return product, json.loads(fh.read(size))
+
+
+def _forecast_panel(item):
+    """What the sample pane shows above the trajectory: the question, per target the
+    prediction, what happened and the verdict."""
+    targets = []
+    for t in item.get("targets") or []:
+        inst = t.get("instrument") or {}
+        targets.append({
+            "desc": t.get("description"), "inst": " ".join(x for x in (inst.get("name"), inst.get("code")) if x),
+            "metric": t.get("metric"), "from": t.get("start_date"), "to": t.get("end_date"),
+            "pred": build.clip(t.get("prediction"), 400), "truth": build.clip(t.get("truth"), 700),
+            "verdict": t.get("verdict"), "note": build.clip(t.get("error_note"), 400),
+            "cls": t.get("asset_class"),
+        })
+    return {
+        "status": item.get("status_label"), "result": item.get("result_label"), "score": item.get("score"),
+        "answer_at": item.get("answer_at"), "type": item.get("forecast_type_label"),
+        "cls": item.get("asset_class_label"), "cause": item.get("error_cause_label"),
+        "note": build.clip(item.get("error_cause_note"), 500), "targets": targets,
+    }
+
+
 class DetailBuilder:
     def __init__(self, datasets: Path, store_path: Path, sample_dir: Path, cache_dir: Path):
         self.datasets = Path(datasets)
@@ -48,6 +118,7 @@ class DetailBuilder:
         self._trace_inputs_at = 0.0
         self._trace_inputs_lock = threading.Lock()
         self._slug_lock = KeyedLocks()
+        self._forecast = ForecastIndex(self.datasets)
 
     def _sync_version(self):
         try:
@@ -64,6 +135,40 @@ class DetailBuilder:
             return self.version_file.stat().st_mtime
         except OSError:
             return 0.0
+
+    def ensure_forecast(self, slug: str, path: Path):
+        """Detail of a forecast answer without an attribution sample: the trajectory is read
+        from the dataset line the export points at, with no problems attached."""
+        found = self._forecast.get(slug)
+        if not found:
+            return None
+        product, item = found
+        traj = item["trajectory"]
+        root = self.datasets.resolve()
+        src = (self.datasets / traj["file"]).resolve()
+        try:
+            src.relative_to(root)
+        except ValueError:
+            return None
+        try:
+            with open(src, "rb") as fh:
+                fh.seek(int(traj["offset"]))
+                inp = json.loads(fh.read(int(traj["bytes"])))
+        except (OSError, ValueError, KeyError) as exc:
+            build.debug(f"forecast {slug}: bad trajectory: {exc}")
+            return None
+        pair = {"product": product, "model": item.get("version"), "date": item.get("batch_id"), "split": "daily"}
+        attr = {"session_meta": {"session_id": item.get("session_id"), "trace_id": item.get("trace_id"),
+                                 "case_id": item.get("case_id"), "request_time": item.get("question_time")}}
+        try:
+            detail, _, _ = build.build_sample(pair, inp, attr, None, {}, Counter())
+        except Exception as exc:  # noqa: BLE001 - one sample must not break the server
+            build.debug(f"forecast {slug}: build failed: {exc}")
+            return None
+        detail["slug"] = slug
+        detail["forecast"] = _forecast_panel(item)
+        build.write_json(path, detail)
+        return path
 
     def _open(self):
         store = getattr(self._local, "store", None)
@@ -174,7 +279,7 @@ class DetailBuilder:
                 store = self._reopen()
                 row = store.sample_row(slug)
             if not row:
-                return None
+                return self.ensure_forecast(slug, path)
             (_, _, _, _, _, product, model, date, split,
              output, output_line, refs) = row
             refs = json.loads(refs) if refs else {}
