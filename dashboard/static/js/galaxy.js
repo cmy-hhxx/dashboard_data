@@ -9,6 +9,9 @@ const GOLDEN = Math.PI * (3 - Math.sqrt(5));
 const MAX_GROUPS = 12;
 const FLAT = 0.84;
 const INTRO_MS = 1100;
+/* Above this many stars the entry spiral and the idle twinkle cost more than they add: the map
+   draws once, statically, and hover only refreshes when the pointer actually changes star. */
+const DENSE_AT = 3000;
 const SEV_VARS = ["--sev-0", "--sev-1", "--sev-2", "--sev-3", "--sev-4", "--sev-none"];
 
 const label = (g) => (g.name.length > 9 ? `${g.name.slice(0, 8)}…` : g.name);
@@ -78,6 +81,8 @@ export function galaxy(host, groups, { onPick = null, tip = null, focus = null, 
 
   const folded = fold(groups);
   const total = folded.reduce((s, g) => s + g.items.length, 0);
+  const dense = total > DENSE_AT;
+  const animate = !still && !dense;
 
   function layout() {
     const rect = host.getBoundingClientRect();
@@ -135,7 +140,7 @@ export function galaxy(host, groups, { onPick = null, tip = null, focus = null, 
           x: gal.x + Math.cos(th) * rho,
           y: gal.y + Math.sin(th) * rho * FLAT,
           r: base * (0.78 + 0.13 * Math.sqrt(Math.min(it.n || 0, 25))),
-          tw: k % 7 === 3 ? 0.6 + ((k * 37) % 100) / 60 : 0,
+          tw: !dense && k % 7 === 3 ? 0.6 + ((k * 37) % 100) / 60 : 0,
           ph: (k * 2.17) % (Math.PI * 2),
         });
       });
@@ -174,7 +179,7 @@ export function galaxy(host, groups, { onPick = null, tip = null, focus = null, 
     let moving = false;
     stars.forEach((s) => {
       let x = s.x, y = s.y, a = 0.92;
-      if (!still) {
+      if (animate) {
         const delay = (s.k / Math.max(1, s.n)) * 420;
         const p = Math.min(1, Math.max(0, (t - delay) / (INTRO_MS - 420)));
         if (p < 1) {
@@ -206,7 +211,7 @@ export function galaxy(host, groups, { onPick = null, tip = null, focus = null, 
       ctx2d.stroke();
     }
     // Labels: name in ink, count in muted, centred under each galaxy.
-    const labelIn = still ? 1 : Math.min(1, Math.max(0, (t - 260) / 520));
+    const labelIn = !animate ? 1 : Math.min(1, Math.max(0, (t - 260) / 520));
     gals.forEach((gal) => {
       const lit = hoverGal ? gal === hoverGal : gal.on || !dimOthers;
       ctx2d.globalAlpha = labelIn * (lit ? 1 : 0.5);
@@ -236,7 +241,7 @@ export function galaxy(host, groups, { onPick = null, tip = null, focus = null, 
     if (!host.isConnected) return destroy();
     const moving = draw(now);
     // Entry runs at full rate; the idle twinkle is cheap and capped near 24 fps.
-    if (!still && visible && !document.hidden) {
+    if (animate && visible && !document.hidden) {
       if (moving) raf = requestAnimationFrame(loop);
       else setTimeout(() => !raf && alive && (raf = requestAnimationFrame(loop)), 42);
     }
@@ -276,8 +281,12 @@ export function galaxy(host, groups, { onPick = null, tip = null, focus = null, 
     } else hideTip();
     if (changed) {
       if (onHover) onHover(hover ? hover.it : null);
-      if (still || !visible) draw(performance.now());
-      else kick();
+      // A dense map is a static drawing: the ledger highlight and the tooltip are the feedback,
+      // redrawing tens of thousands of stars on every hover would undo the saving.
+      if (!dense) {
+        if (!animate || still || !visible) draw(performance.now());
+        else kick();
+      }
     }
   };
   const onLeave = () => {
@@ -285,7 +294,7 @@ export function galaxy(host, groups, { onPick = null, tip = null, focus = null, 
     hoverGal = null;
     if (onHover) onHover(null);
     hideTip();
-    draw(performance.now());
+    if (!dense) draw(performance.now());
   };
   const onClick = (e) => {
     const hit = pick(e);
@@ -331,7 +340,7 @@ export function galaxy(host, groups, { onPick = null, tip = null, focus = null, 
   layout();
   born = performance.now();
   draw(born);
-  kick();
+  if (animate) kick();
   return {
     destroy,
     total,
@@ -339,8 +348,10 @@ export function galaxy(host, groups, { onPick = null, tip = null, focus = null, 
     mark(it) {
       hover = (it && stars.find((s) => s.it === it)) || null;
       hoverGal = hover ? hover.gal : null;
-      if (still || !visible) draw(performance.now());
-      else kick();
+      if (!dense) {
+        if (!animate || still || !visible) draw(performance.now());
+        else kick();
+      }
     },
     /* Re-light one galaxy without replaying the entry. */
     focus(key) {

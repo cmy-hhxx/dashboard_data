@@ -62,26 +62,159 @@ const roundMeta = (round) => {
   return [models, roundDate(round), pairs ? `${fmt(pairs)} 道同题` : ""].filter(Boolean).join(" · ");
 };
 
+/* ---------------------------------------------------------------- testset timeline */
+const DAY = 86400000;
+const monthStart = (ms) => {
+  const d = new Date(ms);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
+};
+const nextMonth = (ms) => {
+  const d = new Date(ms);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
+};
+
+/* The first screen is one wide release timeline. Rounds sit on a single time scale padded on
+   both sides (a lone round lands near the middle, never in a corner); nodes alternate above and
+   below the axis, and each side is pushed apart just enough for its labels not to collide. */
+export function timelineModel(rounds, width = 1200) {
+  const list = (Array.isArray(rounds) ? rounds : []).map((round, order) => {
+    const ms = Date.parse(roundDate(round));
+    return { round, order, time: Number.isFinite(ms) ? ms : null };
+  });
+  if (!list.length) return { nodes: [], months: [] };
+  const dated = list.filter((item) => item.time != null).sort((a, b) => a.time - b.time);
+  const anchor = dated.length ? dated[dated.length - 1].time : Date.now();
+  list.forEach((item) => { if (item.time == null) item.time = anchor; });
+  const ordered = list.slice().sort((a, b) => a.time - b.time || a.order - b.order);
+  const min = ordered[0].time;
+  const max = ordered[ordered.length - 1].time;
+  const span = max - min;
+  const pad = span > 0 ? Math.max(40 * DAY, span * 0.12) : 78 * DAY;
+  const start = monthStart(min - pad);
+  const end = nextMonth(monthStart(max + pad));
+  const total = Math.max(1, end - start);
+  const inset = Math.max(48, Math.min(110, width * 0.06));
+  const usable = Math.max(1, width - inset * 2);
+  const at = (ms) => ((inset + ((ms - start) / total) * usable) / width) * 100;
+  const nodes = ordered.map((item, i) => ({
+    round: item.round, time: item.time,
+    side: i % 2 ? "down" : "up", x: at(item.time),
+  }));
+  const lo = (inset / width) * 100;
+  const hi = 100 - lo;
+  const gap = (Math.max(150, Math.min(190, width * 0.13)) / width) * 100;
+  const spread = (side) => {
+    const items = nodes.filter((node) => node.side === side).sort((a, b) => a.x - b.x);
+    if (items.length < 2) return;
+    const room = (items.length - 1) * gap <= hi - lo;
+    if (room) {
+      let prev = -Infinity;
+      items.forEach((item) => { item.x = Math.max(item.x, lo, prev + gap); prev = item.x; });
+      const over = items[items.length - 1].x - hi;
+      if (over > 0) {
+        items.forEach((item) => { item.x -= over; });
+        prev = -Infinity;
+        items.forEach((item) => { item.x = Math.max(item.x, lo, prev + gap); prev = item.x; });
+      }
+    }
+    // Too many rounds for the width: even spacing still reads, an overlap does not.
+    if (!room || items[items.length - 1].x > hi + 1e-9) {
+      const step = (hi - lo) / (items.length - 1);
+      items.forEach((item, i) => { item.x = lo + step * i; });
+    }
+  };
+  spread("up");
+  spread("down");
+  const months = [];
+  for (let cursor = start; cursor < end; cursor = nextMonth(cursor)) {
+    const d = new Date(cursor);
+    months.push({ x: at(cursor), year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, label: null });
+  }
+  const every = Math.max(1, Math.ceil(months.length / Math.max(4, Math.floor(usable / 112))));
+  months.forEach((month, i) => {
+    const first = i === 0;
+    const yearStart = !first && month.year !== months[i - 1].year;
+    if (first || yearStart) month.label = `${month.year}.${String(month.month).padStart(2, "0")}`;
+    else if (i % every === 0) month.label = `${month.month}月`;
+  });
+  return { nodes, months };
+}
+
+const timelineShell = (single, still) => `<section class="compare-tl${single ? " is-single" : ""}${still ? " is-still" : ""}" aria-label="测试集时间轴"><div class="compare-tl-plot"></div></section>`;
+
+function timelinePlotHTML(model) {
+  const ticks = model.months.map((month, i) => `<span class="compare-tl-tick" style="--x:${month.x.toFixed(3)}%;--i:${i}" aria-hidden="true"><i></i><b>${esc(month.label || "")}</b></span>`).join("");
+  const nodes = model.nodes.map((node, i) => {
+    const round = node.round;
+    const name = roundName(round, i);
+    const date = roundDate(round);
+    const models = (Array.isArray(round.models) ? round.models : []).join(" + ");
+    const pairs = Array.isArray(round.pairs) ? round.pairs.length : 0;
+    const meta = [models, pairs ? `${fmt(pairs)} 道同题` : ""].filter(Boolean).join(" · ");
+    return `<button type="button" class="compare-tl-node" data-round="${esc(round.id)}" data-side="${node.side}" style="--x:${node.x.toFixed(3)}%;--i:${i};--dir:${node.side === "up" ? -1 : 1}" aria-label="${esc([name, date, meta].filter(Boolean).join("，"))}">
+      <span class="compare-tl-body">
+        <span class="compare-tl-name">${esc(name)}</span>
+        ${date ? `<span class="compare-tl-date num">${esc(date)}</span>` : ""}
+        ${meta ? `<span class="compare-tl-meta">${esc(meta)}</span>` : ""}
+      </span>
+      <span class="compare-tl-stem" aria-hidden="true"></span>
+      <span class="compare-tl-dot" aria-hidden="true"></span>
+    </button>`;
+  }).join("");
+  // 只有一个 round 时，一条贯穿高度的淡竖线把这一天钉在轴上，避免上下留白显得空。
+  const guide = model.nodes.length === 1
+    ? `<span class="compare-tl-guide" style="--x:${model.nodes[0].x.toFixed(3)}%" aria-hidden="true"></span>`
+    : "";
+  return `<span class="compare-tl-axis" aria-hidden="true"></span>${guide}
+    <div class="compare-tl-ruler" aria-hidden="true">${ticks}</div>
+    <div class="compare-tl-nodes">${nodes}</div>`;
+}
+
+/* Resizing only moves the existing nodes: rebuilding them would replay the entrance. */
+function positionTimeline(root, model) {
+  const plot = $(".compare-tl-plot", root);
+  if (!plot) return;
+  $$(".compare-tl-node", plot).forEach((el, i) => {
+    if (model.nodes[i]) el.style.setProperty("--x", `${model.nodes[i].x.toFixed(3)}%`);
+  });
+  const guide = $(".compare-tl-guide", plot);
+  if (guide && model.nodes.length === 1) guide.style.setProperty("--x", `${model.nodes[0].x.toFixed(3)}%`);
+  $$(".compare-tl-tick", plot).forEach((el, i) => {
+    const month = model.months[i];
+    const label = el.lastElementChild;
+    if (!month || !label) return;
+    el.style.setProperty("--x", `${month.x.toFixed(3)}%`);
+    label.textContent = month.label || "";
+    label.hidden = !month.label;
+  });
+}
+
+let pickerRO = null;
+function stopPickerObserver() {
+  if (pickerRO) { pickerRO.disconnect(); pickerRO = null; }
+}
+
 function testsetPicker(root, ctx, rounds) {
   destroyDetails();
   C.skelKey = ""; C.listKey = ""; C.sidesKey = "";
-  const cards = (Array.isArray(rounds) ? rounds : []).map((round, i) => {
-    const name = roundName(round, i);
-    return `<button type="button" class="compare-picker-card" data-round="${esc(round.id)}">
-      <span class="compare-picker-name">${esc(name)}</span>
-      <span class="compare-picker-meta">${esc(roundMeta(round))}</span>
-      ${CHEV_RIGHT}
-    </button>`;
-  }).join("");
-  root.innerHTML = `<section class="compare-picker">
-    <h1>版本对比</h1>
-    <div class="compare-picker-lead">选择测试集</div>
-    <div class="compare-picker-grid">${cards || `<div class="empty">暂无测试集</div>`}</div>
-  </section>`;
-  $(".compare-picker", root).addEventListener("click", (event) => {
-    const card = event.target.closest("[data-round]");
-    if (card && C.ctx) C.ctx.navigate({ round: card.dataset.round, pair: null, online: null });
+  stopPickerObserver();
+  const list = Array.isArray(rounds) ? rounds : [];
+  if (!list.length) {
+    root.innerHTML = `<section class="compare-tl compare-tl-empty"><div class="empty">暂无测试集</div></section>`;
+    return;
+  }
+  root.innerHTML = timelineShell(list.length === 1, !!ctx?.refresh);
+  const plot = $(".compare-tl-plot", root);
+  plot.innerHTML = timelinePlotHTML(timelineModel(list, plot.clientWidth || 1200));
+  $(".compare-tl", root).addEventListener("click", (event) => {
+    const node = event.target.closest("[data-round]");
+    if (node && C.ctx) C.ctx.navigate({ round: node.dataset.round, pair: null, online: null });
   });
+  pickerRO = new ResizeObserver(() => {
+    if (!C.root || C.root !== root) return;
+    positionTimeline(root, timelineModel(list, plot.clientWidth || 1200));
+  });
+  pickerRO.observe(plot);
 }
 
 /* The list sorts by how comparable a question is, then by how much it moved: both sides
@@ -467,6 +600,7 @@ async function paintSides(round, pair, online) {
 
 /* ---------------------------------------------------------------- render */
 export async function render(root, ctx) {
+  stopPickerObserver();
   C.root = root;
   C.ctx = ctx;
   C.product = ctx.product;

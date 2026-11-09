@@ -67,7 +67,8 @@ export async function render(root, c) {
   const tax = c.data.taxonomy;
   const u = ui(c.product);
   if (c.refresh) root.classList.add("is-refresh");
-  root.innerHTML = `<div class="bento">${fieldCard(p, u)}${matrixCard(p, tax)}${volumeCard(p)}${evalCard(p)}${attrCard(p)}${clusterCard(p, tax)}${predictCard(p)}</div>`;
+  // 数据页顺序：规模/质量读数 → 聚类矩阵 → 三个分析体系 → 会话场（最重、放最后）。
+  root.innerHTML = `<div class="bento">${volumeCard(p)}${evalCard(p)}${matrixCard(p, tax)}${attrCard(p)}${clusterCard(p, tax)}${predictCard(p)}${fieldCard(p, u)}</div>`;
   wire($(".bento", root), p, tax, u);
   if (c.refresh) requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove("is-refresh")));
   else runCounters(root);
@@ -2556,21 +2557,25 @@ const sevIdx = (w) => {
    question and its problem count (or verdict). The head is the slice's size and its severity split. */
 const LEDGER_MAX = 120;
 const predDot = (it) => (it.r === "correct" ? "var(--accent)" : it.r === "wrong" ? "var(--sev-1)" : it.r === "pending" ? "var(--muted)" : "var(--faint)");
-function ledger(groups, pred, unit = null, rows = null, { count = true, strip = true } = {}) {
+function ledger(groups, pred, unit = null, rows = null, { count = true, strip = true, size = LEDGER_MAX, page = 0 } = {}) {
   const all = groups.flatMap((g) => g.items);
   const ordered = pred ? all : [...all].sort((a, b) => a.w - b.w || b.n - a.n || (b.d || "").localeCompare(a.d || ""));
-  // The summary always speaks about everything found; the list can be one page of it.
-  const items = rows ?? ordered.slice(0, LEDGER_MAX);
+  const pages = Math.max(1, Math.ceil(ordered.length / size));
+  const at = Math.max(0, Math.min(pages - 1, page));
+  // The summary always speaks about everything found; the list is one page of it.
+  const items = rows ?? ordered.slice(at * size, (at + 1) * size);
   const parts = pred
     ? ["correct", "wrong", "pending", "undetermined"].map((r) => ({ n: all.filter((it) => (r === "undetermined" ? !["correct", "wrong", "pending"].includes(it.r) : it.r === r)).length, c: predDot({ r }) }))
     : WORST.map((_, i) => ({ n: all.filter((it) => it.w === i).length, c: sevColor(i) }));
-  const rowsHtml = items.slice(0, LEDGER_MAX).map((it, k) =>
-    `<button type="button" class="gl-r${pred ? " is-inert" : ""}" data-i="${k}" style="--i:${Math.min(k, 14)};--c:${pred ? predDot(it) : sevColor(it.w)}" title="${esc(it.q || "（无提问）")}"><i></i><span>${esc(it.q || "（无提问）")}</span>${count ? `<b class="num">${pred ? esc(RESULT[it.r] || "") : it.n ? fmt(it.n) : "—"}</b>` : ""}</button>`);
-  const body = `<div class="gl-sum"><b class="num">${fmt(all.length)}</b><small>${unit || (pred ? "道预测题" : "个 case")}</small>${strip ? `<span class="gl-strip" aria-hidden="true">${parts
+  const rowHTML = (it, k) =>
+    `<button type="button" class="gl-r${pred ? " is-inert" : ""}" data-i="${k}" style="--i:${Math.min(k, 14)};--c:${pred ? predDot(it) : sevColor(it.w)}" title="${esc(it.q || "（无提问）")}"><i></i><span>${esc(it.q || "（无提问）")}</span>${count ? `<b class="num">${pred ? esc(RESULT[it.r] || "") : it.n ? fmt(it.n) : "—"}</b>` : ""}</button>`;
+  const rowsHtml = items.slice(0, size).map(rowHTML);
+  const sumHtml = `<div class="gl-sum"><b class="num">${fmt(all.length)}</b><small>${unit || (pred ? "道预测题" : "个 case")}</small>${strip ? `<span class="gl-strip" aria-hidden="true">${parts
     .filter((x) => x.n)
     .map((x) => `<i style="flex:${x.n} 1 0;background:${x.c}"></i>`)
-    .join("")}</span>` : ""}</div><div class="gx-list">${rowsHtml.join("")}</div>`;
-  return { items, all, body, html: `<div class="gx-side">${body}</div>` };
+    .join("")}</span>` : ""}</div>`;
+  const body = `${sumHtml}<div class="gx-list">${rowsHtml.join("")}</div>`;
+  return { items, all, ordered, parts, pages, page: at, size, rowHTML, sumHtml, body, html: `<div class="gx-side">${body}</div>` };
 }
 const caseItem = (r) => ({ s: r.s, w: sevIdx(r.w), n: r.n || 0, q: r.q || "", m: r.m, sp: r.sp, d: r.d || "" });
 function groupCases(rows, keyOf, nameOf = (k) => k) {
@@ -3111,11 +3116,31 @@ function pushPull(bento, p, tax, u) {
       return;
     }
     const pred = spec.card === "pred";
-    const led = ledger(groups, pred);
-    gx.innerHTML = `<div class="gx-in"><div class="gx-map"></div>${led.html}</div>`;
-    const list = $(".gx-list", gx);
-    const rowOf = new Map(led.items.slice(0, LEDGER_MAX).map((it, i) => [it, i]));
+    // The star map still reads the whole slice; the case list beside it is paged so a 20k-case
+    // selection only puts one page of rows in the DOM (and the page is reachable without a cap).
+    const GX_PAGE = 40;
+    let page = 0;
+    const pagerHTML = (n) => (n <= 1 ? "" : `<div class="gx-pager mxt-sample-pager" role="group" aria-label="case 分页">
+      <button type="button" data-gxpage="prev" aria-label="上一页"${page === 0 ? " disabled" : ""}>‹</button>
+      <span class="mxt-sample-page num">第 <b>${page + 1}</b> / ${n} 页</span>
+      <button type="button" data-gxpage="next" aria-label="下一页"${page === n - 1 ? " disabled" : ""}>›</button>
+    </div>`);
+    let led = ledger(groups, pred, null, null, { size: GX_PAGE, page });
+    gx.innerHTML = `<div class="gx-in"><div class="gx-map"></div><div class="gx-side">${led.sumHtml}<div class="gx-list"></div><div class="gx-pager-slot"></div></div></div>`;
+    const side = $(".gx-side", gx);
+    let list = $(".gx-list", side);
+    let rowOf = new Map();
     let lit = null;
+    const paintPage = (next) => {
+      led = ledger(groups, pred, null, null, { size: GX_PAGE, page: next });
+      page = led.page;
+      list.innerHTML = led.items.map(led.rowHTML).join("");
+      rowOf = new Map(led.items.map((it, i) => [it, i]));
+      lit = null;
+      $(".gx-pager-slot", side).innerHTML = pagerHTML(led.pages);
+      list.scrollTop = 0;
+    };
+    paintPage(0);
     // A star under the pointer lights its row, scrolling the ledger only when the row is out of view.
     const light = (it) => {
       if (lit) lit.classList.remove("is-hl");
@@ -3138,17 +3163,22 @@ function pushPull(bento, p, tax, u) {
       const r = e.target.closest(".gl-r");
       return r ? led.items[Number(r.dataset.i)] : null;
     };
-    list.addEventListener("pointermove", (e) => {
+    side.addEventListener("pointermove", (e) => {
       const it = rowItem(e);
       if (!it) return;
       map.mark(it);
       showTip((pred ? predTip : caseTip)(it), e.clientX, e.clientY);
     });
-    list.addEventListener("pointerleave", () => {
+    side.addEventListener("pointerleave", () => {
       map.mark(null);
       hideTip();
     });
-    list.addEventListener("click", (e) => {
+    side.addEventListener("click", (e) => {
+      const flip = e.target.closest("[data-gxpage]");
+      if (flip) {
+        paintPage(flip.dataset.gxpage === "prev" ? page - 1 : page + 1);
+        return;
+      }
       const it = rowItem(e);
       if (it && !pred) openSamples({ case: it.s });
     });
