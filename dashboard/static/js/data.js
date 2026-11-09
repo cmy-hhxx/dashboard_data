@@ -1518,7 +1518,9 @@ function matrixTable(view) {
   const grand = sum(colTotals);
   const grandTraces = sum(traces) || 0;
   cells.forEach((row) => row.forEach((x) => (max = Math.max(max, x.n))));
-  const cellData = (n, den) => `<span class="cell-data"><span class="cell-main"><b>${fmt(n)}</b><span class="cell-den">/ ${fmt(den)}</span></span><span class="cell-pct">${pct(n, den, 1)}</span></span>`;
+  // The scene's trace total lives once on its row label; a cell only carries its problem count
+  // and that scene's rate.
+  const cellData = (n, den) => `<span class="cell-data"><span class="cell-main"><b>${fmt(n)}</b></span><span class="cell-pct">${pct(n, den, 1)}</span></span>`;
   const heads = cols
     .map((c, ci) => {
       const title = `${c.id ? `${c.id} · ` : ""}${c.name}`;
@@ -1531,7 +1533,7 @@ function matrixTable(view) {
   let rowLabels = "", gridCells = "", tots = "";
   rows.forEach((r, ri) => {
     const drill = r.children.length;
-    const label = `<span class="mx-lab">${esc(r.name)}</span>${drill ? `<i class="mx-caret" aria-hidden="true"></i>` : ""}`;
+    const label = `<span class="mx-lab">${esc(r.name)}<em class="mx-vol">（${fmt(traces[ri])}条）</em></span>${drill ? `<i class="mx-caret" aria-hidden="true"></i>` : ""}`;
     rowLabels += drill
       ? `<button type="button" class="rh" data-row="${ri}" title="${esc(r.name)}" aria-label="下钻 ${esc(r.name)}">${label}</button>`
       : `<span class="rh" title="${esc(r.name)}">${label}</span>`;
@@ -1539,7 +1541,7 @@ function matrixTable(view) {
       const cell = cells[ri][ci];
       const v = cell.n ? 0.08 + 0.72 * Math.sqrt(cell.n / max) : 0;
       gridCells += cell.n
-        ? `<span class="cell num${v > 0.5 ? " hot" : ""}" style="--v:${v.toFixed(3)}" data-mx="${ri}:${ci}" title="${esc(r.name)} · ${esc(c.name)}：${fmt(cell.n)} 个问题 / ${fmt(traces[ri])} 条 Trace · ${pct(cell.n, traces[ri], 1)}">${cellData(cell.n, traces[ri])}</span>`
+        ? `<span class="cell num${v > 0.5 ? " hot" : ""}" style="--v:${v.toFixed(3)}" data-mx="${ri}:${ci}" title="${esc(r.name)} · ${esc(c.name)}：${fmt(cell.n)} 个问题 · ${fmt(traces[ri])} 条 Trace · ${pct(cell.n, traces[ri], 1)}">${cellData(cell.n, traces[ri])}</span>`
         : `<span class="cell is-empty" data-mx="${ri}:${ci}"></span>`;
     });
     tots += `<span class="rowtot num">${fmt(totals[ri])}</span>`;

@@ -269,6 +269,7 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 }
 /* Safety only; the panes are sized so labels always fit. */
 .matrix .mx-lab { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.matrix .mx-vol { color: var(--faint); font-style: normal; font-weight: var(--w-body); }
 .matrix .mx-total-lab { color: var(--accent); font-weight: var(--w-medium); }
 .matrix .mx-caret {
   flex: none; width: 5px; height: 5px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor;
@@ -304,10 +305,16 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .matrix .cell-data { display: grid; place-items: center; gap: 1px; line-height: 1.08; }
 .matrix .cell-main { display: inline-flex; align-items: baseline; gap: 2px; font-size: var(--fs-small); white-space: nowrap; }
 .matrix .cell-main b { color: var(--ink); font-weight: var(--w-medium); }
-.matrix .cell-den { color: var(--faint); font-size: 10px; font-weight: var(--w-body); }
 .matrix .cell-pct { min-width: 40px; color: var(--muted); font-size: 10px; text-align: center; font-variant-numeric: tabular-nums; }
 .matrix .cell.hot .cell-main b { color: var(--card); }
-.matrix .cell.hot .cell-den, .matrix .cell.hot .cell-pct { color: color-mix(in oklab, var(--card) 76%, transparent); }
+.matrix .cell.hot .cell-pct { color: color-mix(in oklab, var(--card) 76%, transparent); }
+/* 变化矩阵: every cell carries its own before → after, the net move and that move's rate. */
+.matrix .cell-pair { display: inline-flex; align-items: baseline; gap: 2px; font-size: var(--fs-small); white-space: nowrap; }
+.matrix .cell-pair b { color: var(--ink); font-weight: var(--w-medium); }
+.matrix .cell-arrow { color: var(--faint); font-style: normal; font-size: 9px; }
+.matrix .cell-delta { display: inline-flex; align-items: baseline; justify-content: center; gap: 4px; font-size: 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.matrix .cell-delta .cell-ratio { color: var(--muted); }
+.matrix .rowtot .cell-data, .matrix .rowtot-foot .cell-data { place-items: center; }
 .matrix .rowtot-foot { display: flex; align-items: center; justify-content: flex-end; padding: 0 8px; color: var(--ink); font-size: var(--fs-small); font-weight: var(--w-medium); background: color-mix(in oklab, var(--accent) 12%, transparent); }
 
 /* Matrix disclosures share the sunburst motion. Only surfaces and transforms move. */
