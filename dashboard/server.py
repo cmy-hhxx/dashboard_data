@@ -57,22 +57,31 @@ def prewarm_details():
             return
         _prewarm_running = True
     try:
+        # build.py writes this tiny list; parsing the 20 MB samples index here
+        # blocks the request threads on the GIL for a few hundred ms after every build.
+        try:
+            with open(os.path.join(HERE, "cache", "prewarm.json"), encoding="utf-8") as fh:
+                prewarm = json.load(fh)
+        except (OSError, ValueError):
+            prewarm = {}
         for product in ("wencai", "aime"):
-            path = os.path.join(STATIC, f"samples-{product}.json")
-            try:
-                with open(path, encoding="utf-8") as fh:
-                    rows = json.load(fh)["products"][product]["rows"]
-            except (OSError, ValueError, KeyError):
-                continue
-            # Index rows are already severity-sorted; add the newest dates too.
-            picks = rows[:PREWARM]
-            picks += sorted(rows, key=lambda r: r.get("d") or "", reverse=True)[:10]
-            seen, slugs = set(), []
-            for row in picks:
-                slug = row.get("s")
-                if slug and slug not in seen:
-                    seen.add(slug)
-                    slugs.append(slug)
+            slugs = [slug for slug in (prewarm.get(product) or []) if slug][:PREWARM + 10]
+            if not slugs:
+                path = os.path.join(STATIC, f"samples-{product}.json")
+                try:
+                    with open(path, encoding="utf-8") as fh:
+                        rows = json.load(fh)["products"][product]["rows"]
+                except (OSError, ValueError, KeyError):
+                    continue
+                picks = rows[:PREWARM]
+                picks += sorted(rows, key=lambda r: r.get("d") or "", reverse=True)[:10]
+                seen = set()
+                slugs = []
+                for row in picks:
+                    slug = row.get("s")
+                    if slug and slug not in seen:
+                        seen.add(slug)
+                        slugs.append(slug)
             if slugs:
                 made = _builder.prewarm(slugs)
                 print(f"[serve] prewarmed {made}/{len(slugs)} {product} details", flush=True)

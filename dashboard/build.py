@@ -3113,6 +3113,25 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
                 stale.unlink(missing_ok=True)
         timers["write"] = round(time.time() - t0, 1)
 
+        # The server needs 40 first-page slugs after every build.  Recounting them
+        # from the 28 MB samples index stalls the request threads while json parses;
+        # write the tiny list here instead.
+        try:
+            prewarm = {}
+            for product, payload in indexes.items():
+                rows = ((payload.get("products") or {}).get(product) or {}).get("rows") or []
+                picks = [row.get("s") for row in rows[:40]]
+                picks += [row.get("s") for row in sorted(rows, key=lambda row: row.get("d") or "", reverse=True)[:10]]
+                seen = set()
+                prewarm[product] = [slug for slug in picks if slug and not (slug in seen or seen.add(slug))]
+            prewarm_path = out_dir.parent / "cache" / "prewarm.json"
+            prewarm_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = prewarm_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(prewarm, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, prewarm_path)
+        except (OSError, ValueError):
+            pass
+
         slugs = [s[0] for rows in samples.values() for s in rows]
         cleanup_samples(out_dir / "samples", slugs)
         for stale in out_dir.glob(".samples-*"):
