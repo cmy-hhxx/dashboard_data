@@ -390,7 +390,7 @@ async function paintSides(round, pair, online) {
       <span class="compare-cap-label">预测能力</span>
       <div class="compare-cap-row" style="--cols:${columns.length}">${caps}</div>
     </div>
-    <div class="compare-side-row" style="--cols:${columns.length}">${columns.map((column) => sideHTML(column.prefix, column.label, column.ref, column.gap, column.model)).join("")}</div>`;
+    <div class="compare-side-row${columns.length === 1 ? " is-single" : ""}" style="--cols:${columns.length}">${columns.map((column) => sideHTML(column.prefix, column.label, column.ref, column.gap, column.model)).join("")}</div>`;
   applyLayout();
   const jobs = [];
   if (online) {
