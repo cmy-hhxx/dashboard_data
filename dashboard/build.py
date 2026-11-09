@@ -1962,13 +1962,16 @@ def trend_payload(product, samples, releases=(), generated=None):
     """
     scene = scene_votes(product, samples)
 
-    def scene_pair(detail):
-        return scene_of(detail, scene), detail["meta"].get("subtask") or ""
+    # One scene lookup per sample: the same pair is used by the denominator pass,
+    # the clustered-problem pass and the trace pass.
+    prepared = []
+    for slug, detail, row, facts in samples:
+        pair = (scene_of(detail, scene), detail["meta"].get("subtask") or "")
+        prepared.append((slug, detail, row, facts, pair))
 
     dates, uts, models, scenes, base = set(), set(), set(), set(), Counter()
-    for slug, detail, row, facts in samples:
+    for slug, detail, row, facts, pair in prepared:
         ut = row.get("ut") or "unknown"
-        pair = scene_pair(detail)
         dates.add(row["d"])
         uts.add(ut)
         models.add(row["m"])
@@ -1985,7 +1988,7 @@ def trend_payload(product, samples, releases=(), generated=None):
     scene_idx = {pair: i for i, pair in enumerate(scenes)}
 
     nodes = set()
-    for slug, detail, row, facts in samples:
+    for slug, detail, row, facts, pair in prepared:
         for p in detail["attribution"]["problems"]:
             if p["cl"]:
                 parts = p["cl"]["path"].split(".")
@@ -1993,9 +1996,13 @@ def trend_payload(product, samples, releases=(), generated=None):
     nodes = sorted(nodes)
     node_idx = {node: i for i, node in enumerate(nodes)}
 
+    # A cell needs per-severity problem counts plus, per session, the mask of levels
+    # it hit.  The masks alone give the hit-session union for each severity and for
+    # any level combination, so the old five sets per cell (and their inserts) are
+    # redundant.
     cells = {}
-    for slug, detail, row, facts in samples:
-        day, scene_i = day_idx[row["d"]], scene_idx[scene_pair(detail)]
+    for slug, detail, row, facts, pair in prepared:
+        day, scene_i = day_idx[row["d"]], scene_idx[pair]
         model, ut = model_idx[row["m"]], ut_idx[row.get("ut") or "unknown"]
         for p in detail["attribution"]["problems"]:
             if not p["cl"] or p["sev"] not in TREND_SEVERITIES:
@@ -2004,28 +2011,26 @@ def trend_payload(product, samples, releases=(), generated=None):
             parts = p["cl"]["path"].split(".")
             for n in range(1, len(parts) + 1):
                 key = (day, scene_i, node_idx[".".join(parts[:n])], model, ut)
-                cell = cells.setdefault(key, [0, 0, 0, 0, 0, set(), set(), set(), set(), set(), set(), {}])
-                cell[sev] += 1
-                cell[5 + sev].add(slug)
-                # 合计口径要的是「出现过任意等级问题的会话」，各级命中会话并集不能相加。
-                cell[10].add(slug)
-                # 同一会话可能命中多个等级；记录 mask，任意等级组合的命中会话并集都能精确算。
-                cell[11][slug] = cell[11].get(slug, 0) | (1 << sev)
+                cell = cells.setdefault(key, [[0, 0, 0, 0, 0], {}])
+                cell[0][sev] += 1
+                cell[1][slug] = cell[1].get(slug, 0) | (1 << sev)
 
     base_out = sorted([day_idx[day], scene_idx[pair], model_idx[model], ut_idx[ut], n]
                       for (day, pair, model, ut), n in base.items())
     cells_out = []
     for key in sorted(cells):
-        counts, hits, any_hit, mask_of = cells[key][:5], cells[key][5:10], cells[key][10], cells[key][11]
-        if any(counts):
-            hist = sorted(Counter(mask_of.values()).items())
-            cells_out.append([*key, *counts, *(len(slugs) for slugs in hits), len(any_hit),
-                              *(v for pair in hist for v in pair)])
+        counts, mask_of = cells[key]
+        if not any(counts):
+            continue
+        hit_counts = [sum(1 for mask in mask_of.values() if mask & (1 << k)) for k in range(len(TREND_SEVERITIES))]
+        hist = sorted(Counter(mask_of.values()).items())
+        cells_out.append([*key, *counts, *hit_counts, len(mask_of),
+                          *(v for pair in hist for v in pair)])
 
     trace_days = [[0] * 6 for _ in dates]
     trace_refs = []
     unresolved = 0
-    for slug, detail, row, _ in samples:
+    for slug, detail, row, _, _pair in prepared:
         trace = detail.get("trace_severity") or trace_severity(detail, include_refs=True)
         for level, count in enumerate(trace["counts"]):
             trace_days[day_idx[row["d"]]][level] += count
