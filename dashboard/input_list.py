@@ -49,17 +49,19 @@ class InputLister:
         self.static = Path(static_dir) if static_dir else None
         self.cache = Path(cache_dir) / "inputs"
         self.cache.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.RLock()
-        self._store = None
+        self._local = threading.local()
+        self._key_guard = threading.Lock()
+        self._key_locks = {}
         self._files = {}
         self._paired = {}
         self._index = {}
 
     # ---------------------------------------------------------------- discovery
     def _open(self):
-        if self._store is None:
-            self._store = bs.BuildStore(self.store_path, readonly=True)
-        return self._store
+        store = getattr(self._local, "store", None)
+        if store is None:
+            store = self._local.store = bs.BuildStore(self.store_path, readonly=True)
+        return store
 
     def _top(self, product: str):
         for path in sorted(self.datasets.glob(f"*_{product}")):
@@ -212,9 +214,8 @@ class InputLister:
         hit = self._paired.get(product)
         if hit and hit[0] == stamp:
             return hit[1]
-        with self._lock:
-            store = self._open()
-            rows = store.db.execute("SELECT ih,slug FROM samples WHERE product=? AND ih IS NOT NULL", (product,)).fetchall()
+        store = self._open()
+        rows = store.db.execute("SELECT ih,slug FROM samples WHERE product=? AND ih IS NOT NULL", (product,)).fetchall()
         mapping = {row[0]: row[1] for row in rows}
         self._paired[product] = (stamp, mapping)
         return mapping
@@ -257,6 +258,13 @@ class InputLister:
             sig.append([rel, stat.st_size, stat.st_mtime_ns])
         return sig
 
+    def _listing_lock(self, key: str):
+        with self._key_guard:
+            lock = self._key_locks.get(key)
+            if lock is None:
+                lock = self._key_locks[key] = threading.Lock()
+            return lock
+
     def listing(self, product: str, day: str, model: str, split: str):
         files = self._files_for(product, day, model, split)
         if not files:
@@ -271,7 +279,7 @@ class InputLister:
                 return cached
         except (OSError, ValueError):
             pass
-        with self._lock:
+        with self._listing_lock(path.name):
             try:
                 cached = json.loads(path.read_text(encoding="utf-8"))
                 if cached.get("version") == LIST_VERSION and cached.get("sig") == sig:
@@ -299,49 +307,48 @@ class InputLister:
         index_rows = self._index_rows(product)
         rows = []
         paired_slugs = []
-        with self._lock:
-            store = self._open()
-            for fi, (rel, path) in enumerate(files):
-                index = store.get_file(rel) or {}
-                offsets = index.get("offsets") or []
-                hashes = index.get("hashes") or []
-                tids = index.get("tids") or []
-                lines = len(offsets) - 1
-                if lines < 1:
-                    # 构建的 files 表里没有这个文件（例如文件在构建之后才落地）：按磁盘自己读一遍。
-                    extra = self._scan_unknown(fi, path, paired, index_rows)
-                    rows.extend(extra)
-                    for row in extra:
-                        if row.get("s"):
-                            paired_slugs.append(row["s"])
-                    continue
-                pending = {}
-                for number in range(1, lines + 1):
-                    ih = f"{hashes[number - 1]:016x}" if number - 1 < len(hashes) else None
-                    slug = paired.get(ih) if ih else None
-                    if slug and slug in index_rows:
-                        hit = index_rows[slug]
-                        rows.append({
-                            "r": f"{fi}:{number}", "q": hit["q"][:Q_LIMIT], "sid": hit["sid"],
-                            "tid": hit["tid"], "cat": hit["cat"],
-                            "tr": hit["tr"] or 1, "rq": "", "ev": 1, "s": slug,
-                        })
-                        paired_slugs.append(slug)
-                    else:
-                        pending[number] = slug
-                if not pending:
-                    continue
-                try:
-                    size = path.stat().st_size
-                except OSError:
-                    continue
-                # 逐行 pread 的估算代价（最坏 2 次读/行）对上整文件顺序读。
-                pread_cost = len(pending) * 2 * PREAD_SECONDS
-                stream_cost = size / STREAM_BYTES_PER_SECOND
-                if pread_cost > stream_cost:
-                    rows.extend(self._scan_stream(fi, path, pending, tids, lines))
+        store = self._open()
+        for fi, (rel, path) in enumerate(files):
+            index = store.get_file(rel) or {}
+            offsets = index.get("offsets") or []
+            hashes = index.get("hashes") or []
+            tids = index.get("tids") or []
+            lines = len(offsets) - 1
+            if lines < 1:
+                # 构建的 files 表里没有这个文件（例如文件在构建之后才落地）：按磁盘自己读一遍。
+                extra = self._scan_unknown(fi, path, paired, index_rows)
+                rows.extend(extra)
+                for row in extra:
+                    if row.get("s"):
+                        paired_slugs.append(row["s"])
+                continue
+            pending = {}
+            for number in range(1, lines + 1):
+                ih = f"{hashes[number - 1]:016x}" if number - 1 < len(hashes) else None
+                slug = paired.get(ih) if ih else None
+                if slug and slug in index_rows:
+                    hit = index_rows[slug]
+                    rows.append({
+                        "r": f"{fi}:{number}", "q": hit["q"][:Q_LIMIT], "sid": hit["sid"],
+                        "tid": hit["tid"], "cat": hit["cat"],
+                        "tr": hit["tr"] or 1, "rq": "", "ev": 1, "s": slug,
+                    })
+                    paired_slugs.append(slug)
                 else:
-                    rows.extend(self._scan_sparse(fi, path, pending, offsets, tids))
+                    pending[number] = slug
+            if not pending:
+                continue
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            # 逐行 pread 的估算代价（最坏 2 次读/行）对上整文件顺序读。
+            pread_cost = len(pending) * 2 * PREAD_SECONDS
+            stream_cost = size / STREAM_BYTES_PER_SECOND
+            if pread_cost > stream_cost:
+                rows.extend(self._scan_stream(fi, path, pending, tids, lines))
+            else:
+                rows.extend(self._scan_sparse(fi, path, pending, offsets, tids))
         if paired_slugs:
             sev = self._sev_counts(paired_slugs)
             for row in rows:
@@ -399,24 +406,23 @@ class InputLister:
     def _sev_counts(self, slugs):
         """已配对样本的 P0–P4 问题数：samples.row 里存了 sv，按 slug 批量取。"""
         out = {}
-        with self._lock:
-            store = self._open()
-            for start in range(0, len(slugs), CHUNK):
-                chunk = slugs[start:start + CHUNK]
-                marks = ",".join("?" * len(chunk))
+        store = self._open()
+        for start in range(0, len(slugs), CHUNK):
+            chunk = slugs[start:start + CHUNK]
+            marks = ",".join("?" * len(chunk))
+            try:
+                rows = store.db.execute(
+                    f"SELECT slug,row FROM samples WHERE slug IN ({marks})", chunk).fetchall()
+            except Exception:  # noqa: BLE001
+                return out
+            for slug, row_json in rows:
                 try:
-                    rows = store.db.execute(
-                        f"SELECT slug,row FROM samples WHERE slug IN ({marks})", chunk).fetchall()
-                except Exception:  # noqa: BLE001
-                    return out
-                for slug, row_json in rows:
-                    try:
-                        row = json.loads(row_json)
-                    except (TypeError, ValueError):
-                        continue
-                    sv = row.get("sv") if isinstance(row, dict) else None
-                    if isinstance(sv, list) and len(sv) >= 5:
-                        out[slug] = [int(v or 0) for v in sv[:5]]
+                    row = json.loads(row_json)
+                except (TypeError, ValueError):
+                    continue
+                sv = row.get("sv") if isinstance(row, dict) else None
+                if isinstance(sv, list) and len(sv) >= 5:
+                    out[slug] = [int(v or 0) for v in sv[:5]]
         return out
 
     @staticmethod
@@ -518,16 +524,15 @@ class InputLister:
                 return cached
         except (OSError, ValueError):
             pass
-        with self._lock:
-            store = self._open()
-            span = store.line_span(rel, number)
-            if not span:
-                return None
-            reader = build.LineReader(self.datasets, store)
-            try:
-                raw = reader.read_span(rel, *span)
-            finally:
-                reader.close()
+        store = self._open()
+        span = store.line_span(rel, number)
+        if not span:
+            return None
+        reader = build.LineReader(self.datasets, store)
+        try:
+            raw = reader.read_span(rel, *span)
+        finally:
+            reader.close()
         try:
             inp = json.loads(raw)
         except ValueError:
