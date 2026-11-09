@@ -26,7 +26,7 @@ LIST_VERSION = 5
 Q_LIMIT = 200
 # 每行只读开头这几 KB：question / session_id / n_traces 都在 meta 里靠前。
 # AIME 单日输入文件 1.6 GB，整文件读一遍要两分钟；按行读前缀是十几 MB、一秒级。
-FILES_TTL = 3600
+FILES_TTL = 600
 PREAD_SECONDS = 0.014
 STREAM_BYTES_PER_SECOND = 27 * 1024 * 1024
 PREFIX = 1024

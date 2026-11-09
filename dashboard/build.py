@@ -2502,6 +2502,7 @@ def _sample_batch(task):
                     results.append(one(pair, inp))
     finally:
         reader.close()
+        store.checkpoint()
         store.close()
     return results
 
@@ -3143,6 +3144,7 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
         return (shared, index), summary
     finally:
         reader.close()
+        store.checkpoint()
         store.close()
 
 

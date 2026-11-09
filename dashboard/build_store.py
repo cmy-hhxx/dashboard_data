@@ -550,6 +550,13 @@ class BuildStore:
         if not self.readonly:
             self.db.commit()
 
+    def checkpoint(self) -> None:
+        """Fold committed WAL pages back into the main DB without blocking readers."""
+        try:
+            self.db.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        except Exception:  # noqa: BLE001 - a busy checkpoint must not fail the build
+            pass
+
     def close(self) -> None:
         self.commit()
         self.db.close()

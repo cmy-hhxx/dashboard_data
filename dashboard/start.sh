@@ -6,6 +6,13 @@ cd "$(dirname "$0")"
 # Settings this copy was deployed with (deploy.sh writes deploy.env): port, data root, products.
 if [ -f deploy.env ]; then . ./deploy.env; fi
 mkdir -p logs
+# Keep a runaway access log from filling the container disk; rotate once at
+# restart when a log passed 20 MB.
+for f in logs/server.log logs/stats.log logs/backup-stats.log; do
+  [ -f "$f" ] || continue
+  size=$(stat -c%s "$f" 2>/dev/null || echo 0)
+  if [ "$size" -gt 20000000 ]; then mv -f "$f" "$f.1"; fi
+done
 PORT="${PORT:-5001}"
 
 # The stats sidecar is independent of the HTTP server and keeps
