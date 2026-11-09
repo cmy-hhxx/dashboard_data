@@ -122,15 +122,11 @@ export function mountProblemTrends(host, trend, state = {}, names = new Map(), l
         <span class="seg-knob" aria-hidden="true"></span>
         ${["7", "30", "all"].map((v) => `<button type="button" data-value="${v}" aria-pressed="${state.range === v}">${RANGE_LABEL[v]}</button>`).join("")}
       </div>
-      <div class="mpt-path" id="mptPath"></div>
-      <span class="mpt-meta num" id="mptMeta"></span>
     </div>
     <div class="mpt-grid" id="mptGrid"></div>
   </div>`;
 
   const grid = host.querySelector("#mptGrid");
-  const pathEl = host.querySelector("#mptPath");
-  const meta = host.querySelector("#mptMeta");
   const range = host.querySelector("#mptRange");
   const paint = (animate = false, source = null) => {
     hideTip();
@@ -154,19 +150,14 @@ export function mountProblemTrends(host, trend, state = {}, names = new Map(), l
       const chart = problemTrendChart(model, node, idx, expanded ? host.clientWidth - 32 : chartWidth, expanded);
       charts.push({ node, chart });
       const tag = `${node.children.filter(hasObservations).length} 个子类`;
-      const drill = branch && !expanded;
-      const plot = `${drill ? `<button type="button" data-trend-node="${esc(node.id)}" aria-label="下钻 ${esc(node.name)}"` : "<div"} class="mpt-chart${expanded ? " mpt-chart-detail" : ""}" data-own-tip>${chart.html}${drill ? "</button>" : "</div>"}`;
+      // The heatmap owns the drill; the cards only show the current level.
+      const plot = `<div class="mpt-chart${expanded ? " mpt-chart-detail" : ""}" data-own-tip>${chart.html}</div>`;
       return `<article class="mpt-card${branch ? " is-branch" : ""}${expanded ? " is-expanded" : ""}" data-trend-card="${esc(node.id)}">
         <header><h4 title="${esc(node.name)}">${esc(node.name)}</h4><button type="button" class="icon-btn mpt-action" data-trend-zoom="${esc(node.id)}" aria-expanded="${expanded}" aria-label="${expanded ? "还原" : "放大"} ${esc(node.name)}" title="${expanded ? "还原" : "放大"}"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="${expanded ? "M6 3v3H3m7-3v3h3m0 4h-3v3m-4 0v-3H3" : "M3 6V3h3M10 3h3v3M13 10v3h-3M6 13H3v-3"}" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button></header>
         ${expanded ? trendSampleFrame(plot) : plot}
         <footer><span class="num">${fmt(total)} 个问题</span><b class="num" title="最近观测日的问题发生率">${latest == null ? "—" : `${fmt(latest, latest < 1 ? 2 : 1)}%`}</b>${branch ? `<span class="mpt-children">${tag}</span>` : ""}</footer>
       </article>`;
     }).join("");
-    const crumbs = path.nodes.map((node, i) => `${i ? '<i aria-hidden="true">›</i>' : ""}<button type="button" class="mpt-crumb" data-path="${i + 1}"${i === path.nodes.length - 1 ? ' aria-current="page"' : ""}>${esc(node.name)}</button>`)
-      .join("");
-    pathEl.hidden = !path.nodes.length;
-    pathEl.innerHTML = `${path.nodes.length ? '<button type="button" class="mpt-back" data-trend-back="1" aria-label="返回上一级">←</button>' : ""}${crumbs}`;
-    meta.textContent = `全部场景 · ${children.length} 类 · ${RANGE_LABEL[state.range]}`;
     if (host._mptCancel) host._mptCancel();
     let transitioning = animate;
     const disposeCharts = [];
@@ -224,28 +215,6 @@ export function mountProblemTrends(host, trend, state = {}, names = new Map(), l
       paint(true, zoom.closest(".mpt-card"));
       [...grid.querySelectorAll("[data-trend-zoom]")].find((el) => el.dataset.trendZoom === id)?.focus({ preventScroll: true });
       return;
-    }
-    const down = e.target.closest("[data-trend-node]");
-    if (down) {
-      state.issueZoom = null;
-      state.issuePath = [...state.issuePath, down.dataset.trendNode];
-      paint(true, down);
-      pathEl.querySelector("[data-trend-back]")?.focus({ preventScroll: true });
-      return;
-    }
-    if (e.target.closest("[data-trend-back]")) {
-      const previous = state.issuePath[state.issuePath.length - 1];
-      state.issueZoom = null;
-      state.issuePath = state.issuePath.slice(0, -1);
-      paint(true, e.target.closest("[data-trend-back]"));
-      [...grid.querySelectorAll("[data-trend-node]")].find((el) => el.dataset.trendNode === previous)?.focus({ preventScroll: true });
-      return;
-    }
-    const crumb = e.target.closest("[data-path]");
-    if (crumb) {
-      state.issueZoom = null;
-      state.issuePath = state.issuePath.slice(0, Number(crumb.dataset.path));
-      paint(true, crumb);
     }
   };
   host._mptClick = onClick;

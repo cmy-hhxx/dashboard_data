@@ -226,7 +226,9 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
   grid-template-rows: var(--mx-headh) repeat(var(--rows), var(--mx-rowh)) var(--mx-rowh);
 }
 .mx-tots { width: max-content; min-width: 120px; }
-.mx-scroll { flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; }
+/* Keep the horizontal scrollbar off the total row: the native bar sits at the padding edge,
+   so this padding is the visible gap between the last row and the bar. */
+.mx-scroll { flex: 1; min-width: 0; padding-bottom: 12px; overflow-x: auto; overflow-y: hidden; }
 /* A fade on the pane edge says "there are more columns"; it goes away at the end of the scroll. */
 .mx-scroll.is-overflow:not(.is-at-end) {
   -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
@@ -316,18 +318,17 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
   margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--well-2);
 }
 .mx-panels[hidden] { display: none; }
-.mx-panels.is-both { grid-template-columns: minmax(0, 1.18fr) minmax(0, 0.82fr); }
+.mx-panels.is-both { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); }
 .mx-panels.is-issue, .mx-panels.is-perspective { grid-template-columns: minmax(0, 1fr); }
 .mx-panels .mx-perspective-inner, .mx-panels .mx-issue-trends-shell > .mpt { margin-top: 0; padding-top: 0; border-top: 0; }
 .mx-issue-loading .empty { min-height: 180px; display: grid; place-items: center; padding: 0; }
 .mxp { display: grid; gap: 12px; min-width: 0; }
-/* 右栏工具条与左栏 mpt-toolbar 同高（30 + 12），所以两栏第一张卡的上沿在同一条线上。 */
-.mxp-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; min-height: 30px; }
-.mxp-title { flex: none; color: var(--ink-2); font-size: var(--fs-small); font-weight: var(--w-medium); white-space: nowrap; }
+/* The left issue grid starts under its range bar; the lens top must meet that same line. */
+.mx-panels.is-both .mxp { margin-top: 42px; }
 .mxp-lens { min-width: 0; padding: 16px; border-radius: 12px; background: var(--well); }
 /* 等级分布（环形，合计 100%）+ Trace 趋势：左右并排，给下面的热力图让出高度。 */
-.mxp-overview { display: grid; grid-template-columns: minmax(0, 190px) minmax(0, 1fr); align-items: center; gap: 16px; }
-.mxp-dist { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.mxp-overview { display: grid; grid-template-columns: minmax(0, 1fr); align-items: stretch; gap: 12px; }
+.mxp-dist { display: flex; align-items: center; gap: 16px; min-width: 0; }
 .mxp-ring-wrap { position: relative; flex: none; width: 84px; height: 84px; }
 .mxp-ring { display: block; width: 84px; height: 84px; }
 .mxp-ring circle { fill: none; stroke-width: 12; }
@@ -339,13 +340,14 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
   animation: mxp-ring-draw 560ms cubic-bezier(0.16, 1, 0.3, 1) both;
   animation-delay: calc(var(--ring-i, 0) * 70ms);
 }
-.mxp-ring-arc.is-off { opacity: 0.22; }
-.mxp-ring-arc:not(.is-off) { stroke-width: 13; }
+.mxp-ring-arc.is-off { opacity: 0.16; stroke-width: 6; }
+.mxp-ring-arc:not(.is-off) { stroke-width: 15; }
 @keyframes mxp-ring-draw { from { stroke-dasharray: 0 100; } }
 .mxp-ring-center { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 1px; text-align: center; }
 .mxp-ring-center b { color: var(--ink); font-size: var(--fs-meta); font-weight: var(--w-light); line-height: 1.1; }
 .mxp-ring-center small { color: var(--muted); font-size: 9px; }
-.mxp-legend { display: grid; align-content: center; gap: 2px; min-width: 0; }
+.mxp-legend { flex: 1 1 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-content: center; gap: 2px 12px; min-width: 0; }
+.mx-panels.is-perspective .mxp-legend { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 2px 8px; }
 .mxp-legend-row {
   display: grid; grid-template-columns: 7px minmax(0, 1fr) auto;
   grid-template-areas: "dot name share" ". count count";
@@ -361,25 +363,42 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .mxp-legend-count { grid-area: count; overflow: hidden; color: var(--faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .mxp-legend-share { grid-area: share; color: var(--ink-2); font-weight: var(--w-medium); text-align: right; }
 .mxp-legend-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
-.mxp-trend { display: grid; gap: 8px; min-width: 0; padding-left: 16px; border-left: 1px solid var(--well-2); }
+.mxp-trend { display: grid; gap: 8px; min-width: 0; padding: 12px 0 0; border-top: 1px solid var(--well-2); }
 .mxp-trend-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; color: var(--muted); font-size: var(--fs-meta); }
 .mxp-trend-head b { color: var(--ink-2); font-weight: var(--w-medium); }
 .mxp .is-up { color: var(--sev-1); }
 .mxp .is-down { color: var(--loc-ulq); }
-.mxp-levels { display: flex; flex-wrap: wrap; gap: 4px; }
-.mxp-levels .mxt-chip { cursor: pointer; }
-.mxp-levels .mxt-chip:hover { transform: none; }
-.mxp-overview .mxp-rate-chart { height: auto; min-height: 192px; display: grid; align-items: center; transition: opacity 120ms cubic-bezier(0.2, 0, 0, 1); }
+.mxp-overview .mxp-rate-chart { height: auto; min-height: 160px; display: grid; align-items: center; transition: opacity 120ms cubic-bezier(0.2, 0, 0, 1); }
 .mxp-rate-chart svg { height: auto; }
 .mxp-rate-chart .empty { padding: 24px 0; }
-.mxp-chart-panel { min-width: 0; padding: 4px 0 8px; overflow-x: auto; overflow-y: hidden; }
+.mxp-heat-wrap { position: relative; min-width: 0; }
+.mxp-chart-panel { min-width: 0; padding: 10px 12px; border: 1px solid var(--well-2); border-radius: 10px; overflow-x: auto; overflow-y: hidden; }
 /* 问题发生率：30 天 × 聚类。格子只靠颜色读数，所以行高固定、宽度吃满，不跟着卡片无限长高；
    有命中的格子是按钮，点开就是「当天 × 当前场景 × 该聚类」的具体数据查询。 */
 .mxp-heat { display: grid; gap: var(--tile-gap); min-width: 0; }
 .mxp-heat-head, .mxp-heat-row { display: grid; grid-template-columns: minmax(88px, 120px) minmax(0, 1fr) 60px 48px; gap: 12px; align-items: center; }
 .mxp-heat-head { min-height: 24px; color: var(--muted); font-size: 11px; }
+.mxp-heat-label { display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mxp-heat-head > span:nth-last-child(-n+2) { text-align: right; }
-.mxp-heat-dates, .mxp-heat-days.tiles { display: grid; grid-template-columns: repeat(30, minmax(0, 1fr)); gap: var(--tile-gap); }
+.mxp-heat-dates, .mxp-heat-days.tiles { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+/* Drilled, single-column heat: a report table, not a stretched grid. 32px squares sit in 40px
+   day columns so the seven dates read as a row and the 240px name column never truncates. */
+.mx-panels.is-issue .mxp-heat, .mx-panels.is-perspective .mxp-heat { gap: 0; }
+.mx-panels.is-issue .mxp-heat-head, .mx-panels.is-issue .mxp-heat-row,
+.mx-panels.is-perspective .mxp-heat-head, .mx-panels.is-perspective .mxp-heat-row { grid-template-columns: 240px minmax(0, 1fr) 64px 56px; gap: 16px; }
+/* A drilled, full-width panel is a focused report: cap it at a readable measure and center
+   both cards instead of stretching six rows across a 1344px surface. */
+.mx-panels.is-perspective .mxp { max-width: 980px; margin-inline: auto; }
+.mx-panels.is-perspective .mxp-heat-nav, .mx-panels.is-perspective .mxp-heat { max-width: 900px; margin-inline: auto; }
+.mx-panels.is-issue .mxp-heat-head, .mx-panels.is-perspective .mxp-heat-head { min-height: 32px; border-bottom: 1px solid var(--well-2); }
+.mx-panels.is-issue .mxp-heat-row, .mx-panels.is-perspective .mxp-heat-row { min-height: 44px; font-size: 14px; }
+.mx-panels.is-issue .mxp-heat-row + .mxp-heat-row, .mx-panels.is-perspective .mxp-heat-row + .mxp-heat-row { border-top: 1px solid var(--well-2); }
+.mx-panels.is-issue .mxp-heat-head, .mx-panels.is-perspective .mxp-heat-head { font-size: 12px; }
+.mx-panels.is-issue .mxp-heat-dates, .mx-panels.is-issue .mxp-heat-days.tiles,
+.mx-panels.is-perspective .mxp-heat-dates, .mx-panels.is-perspective .mxp-heat-days.tiles { grid-template-columns: repeat(7, 40px); gap: 8px; justify-content: center; }
+.mx-panels.is-issue .mxp-heat-days.tiles > span, .mx-panels.is-issue .mxp-heat-days.tiles > button,
+.mx-panels.is-perspective .mxp-heat-days.tiles > span, .mx-panels.is-perspective .mxp-heat-days.tiles > button { width: 32px; height: 32px; justify-self: center; align-self: center; border-radius: 4px; }
+
 .mxp-heat-dates { font-size: 11px; white-space: nowrap; }
 .mxp-heat-dates > span { overflow: visible; }
 .mxp-heat-row { min-height: 0; font-size: 12px; line-height: 1; }
@@ -390,18 +409,18 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 /* 整行一起应答：悬浮日期格或行名时，行名和两个数值同时提亮，读者能沿着同一行横向走到数字。 */
 .mxp-heat-row:hover .mxp-heat-name, .mxp-heat-row:hover > b { color: var(--ink); }
 .mxp-heat-row:hover .mxp-delta { color: var(--ink-2); }
-.mxp-heat-name .mx-caret { flex: none; width: 4px; height: 4px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(-45deg); color: var(--muted); }
-/* 双栏时右栏只有 544px：等级表与趋势叠在同一张卡里，热力图拿到整行。 */
-.mx-panels.is-both .mxp-lens { padding: 12px; border-radius: var(--r-well); }
-.mx-panels.is-both .mxp-chart-panel { font-size: var(--fs-meta); }
+.mxp-heat-name .mx-caret { flex: none; width: 4px; height: 4px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(135deg); color: var(--muted); }
+.mxp-heat-nav { display: flex; align-items: center; gap: 10px; min-height: 28px; margin-bottom: 14px; color: var(--muted); font-size: var(--fs-meta); }
+.mxp-heat-nav > span { color: var(--ink); font-size: 16px; font-weight: var(--w-medium); }
+/* The right column only has ~577px: keep the 12×30 heat readable beside the trend cards. */
 .mx-panels.is-both .mxp-heat-head, .mx-panels.is-both .mxp-heat-row { grid-template-columns: minmax(72px, 96px) minmax(0, 1fr) 52px 48px; gap: 8px; }
 .mx-panels.is-both .mxp-heat-head { min-height: 20px; }
-/* 30 天 × 聚类：格子回到近方形，宽高由列宽决定，不再固定 20px 拉成竖条。 */
+.mx-panels.is-both .mxp-heat-days { grid-template-columns: repeat(7, 20px); gap: 4px; justify-content: start; }
+.mx-panels.is-both .mxp-heat-dates > span:not(:first-child):not(:last-child) { visibility: hidden; }
 .mx-panels.is-both .mxp-heat-days.tiles { grid-auto-rows: auto; }
 .mx-panels.is-both .mxp-heat-days.tiles > span,
 .mx-panels.is-both .mxp-heat-days.tiles > button { height: auto; aspect-ratio: 1; }
-.mxp-heat-nav { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--muted); font-size: var(--fs-meta); }
-/* 整宽时 20px 行高：12 行从 ~480px 收到 ~290px；双栏时改回近方形（见上面的 is-both 规则）。 */
+/* 整宽时 28px 行高：30 天 × 聚类的宽条，格子和悬浮放大都有落点。 */
 .mxp-heat-days.tiles { grid-auto-rows: 28px; }
 .mxp-heat-days.tiles > span, .mxp-heat-days.tiles > button {
   width: 100%; height: 100%; min-width: 0; padding: 0; border-radius: 2px; background: var(--c);
@@ -426,12 +445,8 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .mxp-delta { text-align: right; color: var(--muted); }
 .mxp-chart-empty { display: grid; place-items: center; min-height: 200px; color: var(--faint); font-size: var(--fs-meta); }
 .mx-trend-loading .empty { min-height: 220px; display: grid; place-items: center; padding: 0; }
-/* 三列类型卡放不下时（左栏 < 631px）两段改成上下排；右栏拿回整宽，热力图恢复宽条。 */
 @media (max-width: 1160px) {
   .mx-panels.is-both { grid-template-columns: minmax(0, 1fr); }
-  .mx-panels.is-both .mxp-heat-days.tiles { grid-auto-rows: 28px; }
-  .mx-panels.is-both .mxp-heat-days.tiles > span,
-  .mx-panels.is-both .mxp-heat-days.tiles > button { height: 100%; aspect-ratio: auto; }
 }
 
 /* Global problem-type trends: one time curve per type, all scenes aggregated. */
@@ -440,14 +455,6 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .mpt-range { height: 30px; padding: 2px; }
 .mpt-range button { padding: 0 10px; font-size: var(--fs-meta); }
 .mpt-range .seg-knob { top: 2px; bottom: 2px; }
-.mpt-path { display: flex; align-items: center; gap: 4px; min-width: 0; color: var(--muted); font-size: var(--fs-meta); }
-.mpt-path[hidden] { display: none; }
-.mpt-crumb { min-width: 0; overflow: hidden; padding: 2px 4px; border-radius: 5px; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
-.mpt-crumb:hover, .mpt-crumb[aria-current="page"] { background: var(--well); color: var(--ink-2); }
-.mpt-path i { color: var(--faint); font-style: normal; }
-.mpt-back { flex: none; width: 24px; height: 24px; border-radius: 6px; color: var(--muted); }
-.mpt-back:hover { background: var(--hover); color: var(--ink); }
-.mpt-meta { margin-left: auto; color: var(--faint); font-size: var(--fs-meta); white-space: nowrap; }
 .mpt-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(205px, 1fr)); gap: 8px;
   align-items: start; align-content: start; padding: 0; overflow: visible; scroll-margin-top: 116px;
@@ -470,12 +477,9 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .mpt-action svg { width: 14px; height: 14px; }
 .mpt-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .mpt-chart { min-width: 0; height: 76px; }
-.mpt-chart:is(button) { display: block; width: 100%; border-radius: 4px; cursor: pointer; }
-.mpt-chart:is(button):focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
 .mpt-chart.mpt-chart-detail { height: auto; min-height: 280px; }
 .mpt-card .mpt-chart-detail svg { height: auto; min-height: 280px; }
 /* 趋势图固定 192px：样本抽屉的画布底高跟着图表走，不再把整张卡撑高。 */
-.mx-panels.is-both .mxp-overview .mxt-sample-layout > .gx-map { min-height: 0; }
 .mpt-chart svg { display: block; width: 100%; height: 100%; }
 .mpt-chart .mxt-xlab { font-size: 11px; }
 /* 三个读数各占一列：总数左、发生率右、子类数右，四行卡片之间形成三条对齐的列。 */
@@ -487,8 +491,6 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
   .mx-card-head { align-items: center; }
   .mx-head-actions { width: 100%; justify-content: flex-start; margin-left: 0; }
   .mpt-toolbar { align-items: flex-start; }
-  .mpt-path { order: 3; width: 100%; overflow-x: auto; }
-  .mpt-meta { margin-left: 0; }
   .mxp-overview { grid-template-columns: minmax(0, 1fr); }
   .mxp-trend { border-top: 1px solid var(--well-2); border-left: 0; padding: 12px 0 0; }
 }
@@ -505,8 +507,7 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 }
 
 @media (max-width: 600px) {
-  .mxp-heat-head, .mxp-heat-row,
-  .mx-panels.is-both .mxp-heat-head, .mx-panels.is-both .mxp-heat-row { grid-template-columns: 76px minmax(0, 1fr) 48px; gap: 8px; }
+  .mxp-heat-head, .mxp-heat-row { grid-template-columns: 76px minmax(0, 1fr) 48px; gap: 8px; }
   .mxp-heat-head > span:last-child, .mxp-heat-row > .mxp-delta { display: none; }
   .mxp-heat-dates > span:nth-child(2n) { visibility: hidden; }
 }
@@ -844,6 +845,9 @@ body.is-modal { overflow: hidden; }
 .mxt-sample-layout > .gx-map { min-height: 280px; display: grid; align-items: center; }
 .mxp-lens .mxt-samples { flex: 1; }
 .mxp-lens .mxt-sample-layout > .gx-map { min-height: 252px; }
+/* The analysis trend is measured against the left card grid; a fixed 252px floor would leave
+   the right column 58px past it. Keep the sample drawer's floor, drop it for the chart. */
+.mxp-lens .mxp-trend .mxt-sample-layout > .gx-map { min-height: 0; }
 .mxt-sample-side.gx-side { display: flex; position: absolute; inset: 0 0 0 auto; width: clamp(188px, 36%, 280px); padding: 0 0 0 12px; gap: 8px; border-left: 1px solid var(--well-2); background: var(--card); animation: none; overflow: hidden; }
 .mxp-lens .mxt-sample-side, .mpt-card .mxt-sample-side { background: var(--well); }
 /* The narrow-container rules below deliberately force the drawer back to flex; [hidden] must

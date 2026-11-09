@@ -5,9 +5,36 @@
 html[data-view="compare"] main { max-width: none; padding-bottom: 24px; }
 
 /* ---------------------------------------------------------------- shell */
+.compare-top {
+  display: flex; align-items: center; gap: 4px 12px; min-height: 32px; margin-bottom: 8px; min-width: 0;
+}
+.compare-back {
+  display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 6px 0 2px;
+  border-radius: 6px; color: var(--muted); font-size: var(--fs-meta); white-space: nowrap;
+  transition: background var(--snap), color var(--snap);
+}
+.compare-back:hover { background: var(--hover); color: var(--ink); }
+.compare-back svg { width: 14px; height: 14px; }
+.compare-top-name { color: var(--ink); font-size: var(--fs-small); font-weight: var(--w-medium); }
+.compare-top-meta { min-width: 0; overflow: hidden; color: var(--muted); font-size: var(--fs-meta); text-overflow: ellipsis; white-space: nowrap; }
+.compare-sync {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px;
+  border-radius: 999px; color: var(--muted); font-size: var(--fs-meta); white-space: nowrap;
+  transition: background var(--snap), color var(--snap);
+}
+.compare-sync:hover { background: var(--hover); color: var(--ink-2); }
+.compare-sync[aria-pressed="true"] { color: var(--ink-2); }
+.compare-sync-knob { position: relative; width: 24px; height: 14px; border-radius: 999px; background: var(--well-2); transition: background var(--snap); }
+.compare-sync-knob::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--muted); transition: transform var(--snap), background var(--snap);
+}
+.compare-sync[aria-pressed="true"] .compare-sync-knob { background: color-mix(in oklab, var(--accent) 26%, var(--well-2)); }
+.compare-sync[aria-pressed="true"] .compare-sync-knob::after { transform: translateX(10px); background: var(--accent); }
+
 .bench-compare { grid-template-columns: 300px minmax(0, 1fr); height: auto; min-height: 0; align-items: start; }
 .bench-compare.is-list-off { grid-template-columns: 44px minmax(0, 1fr); }
-.bench-compare > .compare-list { position: sticky; top: 72px; height: calc(100vh - 88px); }
+.bench-compare > .compare-list { position: sticky; top: 72px; height: calc(100vh - 128px); }
 
 .compare-list-head .list-meta { align-items: center; }
 .compare-list .pane-head { padding-bottom: 8px; }
@@ -38,43 +65,31 @@ html[data-view="compare"] main { max-width: none; padding-bottom: 24px; }
 
 /* ---------------------------------------------------------------- panes */
 /* 默认：上下对照。两块各占一半高度，各自内部滚动，首屏都能看到。 */
-.compare-panes { display: flex; flex-direction: column; gap: var(--gap); min-width: 0; height: calc(100vh - 88px); }
-.compare-panes > .pane { position: static; top: auto; flex: 1 1 0; min-height: 0; min-width: 0; }
-.compare-panes.is-single > .pane { flex: 1 1 0; }
-/* 一条发丝线把两块分开；它和上下 gap 一起把两块压在同一屏里。 */
-.compare-split { flex: none; height: 1px; margin: 0 16px; background: var(--t4); }
+.compare-panes { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 8px; min-width: 0; height: calc(100vh - 128px); }
+.compare-pred { display: grid; gap: 4px; min-width: 0; }
+.compare-cap-label { color: var(--muted); font-size: var(--fs-meta); line-height: 1.3; }
+.compare-cap-row { display: grid; grid-template-columns: repeat(var(--cols), minmax(0, 480px)); gap: var(--gap); }
+.compare-cap-cell { color: var(--ink-2); font-size: var(--fs-small); font-variant-numeric: tabular-nums; }
+.compare-side-row {
+  display: grid; grid-template-columns: repeat(var(--cols), minmax(0, 480px)); gap: var(--gap);
+  min-height: 0; align-items: stretch;
+}
+.compare-side-row > .compare-side { position: static; top: auto; height: 100%; min-height: 0; min-width: 0; }
+.compare-side-row .anatomy,
+.compare-side-row .anatomy.is-session { grid-template-columns: minmax(0, 1fr); }
+.compare-side-row .threads { display: none; }
 .compare-side-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 16px 8px; }
-.compare-side-head > .cg { min-width: 0; }
-
-/* 折叠一侧：留下一条 40px 的标题行到底部，另一侧占满。 */
-.compare-panes.has-fold > .compare-side { order: 0; }
-.compare-panes.has-fold > .compare-side.is-folded { order: 2; flex: 0 0 40px; }
-.compare-panes.has-fold > .compare-split { order: 1; }
-.compare-side.is-folded > .pane-scroll { display: none; }
-.compare-side.is-folded > .compare-side-head { height: 100%; padding: 0 16px; }
-.compare-side.is-folded .compare-fold-btn svg { transform: rotate(180deg); }
-.compare-side.is-folded { cursor: pointer; }
-
-/* 收起列表后：左右并列，两块都占满高度。并列时详情用单列降级，避免三列挤在 700px 里。 */
-.compare-panes.is-split { flex-direction: row; }
-.compare-panes.is-split > .pane { flex: 1 1 0; }
-.compare-panes.is-split > .compare-split { width: 1px; height: auto; margin: 16px 0; align-self: stretch; }
-.compare-panes.is-split .anatomy,
-.compare-panes.is-split .anatomy.is-session { grid-template-columns: minmax(0, 1fr); }
-.compare-panes.is-split .threads { display: none; }
-.compare-panes.is-split .compare-fold-btn { display: none; }
-
-/* 缺详情的一侧只留标题与一句空态，不占半屏。 */
-.compare-panes > .pane.is-gap { flex: 0 0 auto; }
+.compare-side-head > .cg { min-width: 0; display: flex; align-items: baseline; gap: 6px; }
+.compare-model-tag { color: var(--faint); font-size: 10px; font-weight: var(--w-body); }
 .compare-side.is-gap > .empty { padding: 24px 16px; }
 .compare-panes .pane-scroll { overscroll-behavior: auto; }
 
 /* ---------------------------------------------------------------- responsive */
 /* 窄一点就不并列了：两块各占 340px 没法读，回到上下；列表收起状态仍保留。 */
 @media (max-width: 1180px) {
-  .compare-panes.is-split { flex-direction: column; }
-  .compare-panes.is-split > .pane { flex: 1 1 0; }
-  .compare-panes.is-split > .compare-split { width: auto; height: 1px; margin: 0 16px; }
+  /* The model columns stay left/right by default; narrow screens scroll them instead of stacking. */
+  .compare-panes { height: auto; }
+  .compare-side-row > .compare-side { height: auto; max-height: 760px; }
 }
 @media (max-width: 860px) {
   html[data-view="compare"] main { padding-bottom: 48px; }
@@ -82,12 +97,26 @@ html[data-view="compare"] main { max-width: none; padding-bottom: 24px; }
   .bench-compare.is-list-off { grid-template-columns: 44px minmax(0, 1fr); }
   .bench-compare > .compare-list { position: static; height: auto; max-height: 420px; }
   .compare-panes { height: auto; }
-  .compare-panes > .pane { flex: none; height: auto; max-height: 760px; }
-  .compare-panes.is-split { flex-direction: column; }
-  .compare-panes.is-split > .compare-split { width: auto; height: 1px; margin: 0 16px; }
+  .compare-side-row > .compare-side { height: auto; max-height: 760px; }
   .compare-side-head { padding: 12px 12px 8px; }
 }
 
 @media (min-width: 1800px) {
   html[data-view="compare"] main { max-width: 2100px; }
 }
+
+/* ---------------------------------------------------------------- testset chooser */
+.compare-picker { padding: 24px 4px 48px; max-width: 880px; }
+.compare-picker h1 { color: var(--ink); font-size: 20px; font-weight: var(--w-medium); }
+.compare-picker-lead { margin: 4px 0 20px; color: var(--muted); font-size: var(--fs-small); }
+.compare-picker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+.compare-picker-card {
+  display: flex; align-items: center; gap: 12px; min-width: 0; min-height: 72px; padding: 16px 18px;
+  border-radius: var(--r-card); background: var(--card); box-shadow: var(--shadow); color: var(--ink); text-align: left;
+  transition: background var(--snap), box-shadow var(--snap), transform var(--snap);
+}
+.compare-picker-card:hover { background: var(--lift); box-shadow: var(--shadow-pop, var(--shadow)); }
+.compare-picker-card:active { transform: scale(0.99); }
+.compare-picker-name { flex: none; font-size: var(--fs-body); font-weight: var(--w-medium); }
+.compare-picker-meta { min-width: 0; overflow: hidden; color: var(--muted); font-size: var(--fs-meta); text-overflow: ellipsis; white-space: nowrap; }
+.compare-picker-card svg { flex: none; margin-left: auto; color: var(--muted); }

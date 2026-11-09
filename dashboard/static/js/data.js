@@ -1583,23 +1583,30 @@ const mxDeltaText = (v) => v == null ? "—" : `${v > 0 ? "+" : v < 0 ? "−" : 
 function mxPerspectiveTimeline(summary, loading) {
   if (!summary) return `<div class="mxp-chart-empty">${loading ? "正在读取趋势…" : "暂无趋势数据"}</div>`;
   const { dates, daily } = summary;
-  const end = dayMs(dates[dates.length - 1]);
-  const calendar = Array.from({ length: 30 }, (_, i) => isoDay(end - (29 - i) * DAY_MS));
+  // The heat is a record of evaluated days, not a calendar. Use the last seven dates that
+  // actually carry traces for this scope; skipped days never become empty columns.
+  const dataIdx = dates.map((_, i) => i).filter((i) => daily[i].sessions > 0 && summary.groups.some((g) => g.days[i].observed));
+  const recentIdx = (dataIdx.length ? dataIdx : dates.map((_, i) => i)).slice(-7);
+  const priorIdx = dataIdx.slice(-14, -7);
+  const totalIdx = dataIdx.slice(-30);
+  const calendar = recentIdx.map((i) => dates[i]);
   const index = new Map(dates.map((d, i) => [d, i]));
   const heat = (v) => (0.06 + 0.84 * Math.sqrt(Math.min(100, v) / 100)).toFixed(3);
-  const periodRate = (group, start, stop) => {
+  const periodRate = (group, idxs) => {
     let hits = 0, sessions = 0;
-    dates.forEach((d, i) => {
-      if (dayMs(d) < start || dayMs(d) > stop || !group.days[i].observed) return;
+    idxs.forEach((i) => {
+      const day = group.days[i];
+      if (!day.observed) return;
       sessions += daily[i].sessions;
-      hits += group.days[i].hits;
+      hits += day.hits;
     });
     return sessions > 0 ? 100 * Math.min(hits, sessions) / sessions : null;
   };
   const rows = summary.groups.map((group) => {
-    const recent = periodRate(group, end - 6 * DAY_MS, end);
-    const prior = periodRate(group, end - 13 * DAY_MS, end - 7 * DAY_MS);
+    const recent = periodRate(group, recentIdx);
+    const prior = periodRate(group, priorIdx);
     const delta = recent != null && prior != null ? recent - prior : null;
+    const total = totalIdx.reduce((sum, i) => sum + (group.days[i].observed ? Number(group.days[i].n) || 0 : 0), 0);
     const cells = calendar.map((d) => {
       const i = index.get(d);
       const day = i == null ? null : group.days[i];
@@ -1611,12 +1618,12 @@ function mxPerspectiveTimeline(summary, loading) {
       if (!hits) return `<span class="${rate == null ? "is-missing" : ""}" style="--c:${color}" data-tip="${esc(tip)}"></span>`;
       return `<button type="button" class="mxp-cell" style="--c:${color}" data-tip="${esc(tip)}" data-heat-date="${d}" data-heat-node="${esc(group.node.prefix)}" aria-label="${esc(`${d} ${group.name} ${mxRateText(rate)}，查看当天具体数据`)}"></button>`;
     }).join("");
-    return { group, recent, html: `<div class="mxp-heat-row">${group.node.children?.length ? `<button type="button" class="mxp-heat-name" data-heat-node="${esc(group.node.prefix)}" aria-label="下钻 ${esc(group.name)}" title="${esc(group.name)}">${esc(group.name)}<i class="mx-caret" aria-hidden="true"></i></button>` : `<span class="mxp-heat-name" title="${esc(group.name)}">${esc(group.name)}</span>`}<div class="tiles mxp-heat-days">${cells}</div><b class="num">${mxRateText(recent)}</b><span class="mxp-delta num ${delta == null || Math.abs(delta) < 0.05 ? "" : delta > 0 ? "is-up" : "is-down"}" title="较前 7 天变化，单位：百分点">${mxDeltaText(delta)}</span></div>` };
-  }).filter(({ group }) => group.days.some((d, i) => d.n > 0 && dayMs(dates[i]) >= end - 29 * DAY_MS))
-    .sort((a, b) => (b.recent || 0) - (a.recent || 0));
-  const ticks = [0, 7, 14, 21].map((i) => `<span style="grid-column:${i + 1}">${calendar[i].slice(5)}</span>`).join("");
-  return `${summary.path.length ? `<div class="mxp-heat-nav"><button type="button" class="mx-back" data-heat-back aria-label="返回上一级问题分类">← 返回</button><span>${esc(summary.path[summary.path.length - 1].name)}</span></div>` : ""}<div class="mxp-heat" role="group" aria-label="近 30 天各类问题发生率">
-    <div class="mxp-heat-head"><span>问题发生率</span><div class="mxp-heat-dates num">${ticks}</div><span>近 7 天</span><span>变化</span></div>
+    return { group, recent, total, html: `<div class="mxp-heat-row">${group.node.children?.length ? `<button type="button" class="mxp-heat-name" data-heat-node="${esc(group.node.prefix)}" aria-label="下钻 ${esc(group.name)}" title="${esc(group.name)}">${esc(group.name)}<i class="mx-caret" aria-hidden="true"></i></button>` : `<span class="mxp-heat-name" title="${esc(group.name)}">${esc(group.name)}</span>`}<div class="tiles mxp-heat-days">${cells}</div><b class="num">${mxRateText(recent)}</b><span class="mxp-delta num ${delta == null || Math.abs(delta) < 0.05 ? "" : delta > 0 ? "is-up" : "is-down"}" title="较前 7 个评测日变化，单位：百分点">${mxDeltaText(delta)}</span></div>` };
+  }).filter(({ group }) => recentIdx.some((i) => group.days[i].observed && group.days[i].n > 0))
+    .sort((a, b) => b.total - a.total || a.group.node.prefix.localeCompare(b.group.node.prefix));
+  const ticks = calendar.map((d) => `<span>${d.slice(5)}</span>`).join("");
+  return `${summary.path.length ? `<div class="mxp-heat-nav"><button type="button" class="mx-back" data-heat-back aria-label="返回上一级问题分类">← 返回</button><span>${esc(summary.path[summary.path.length - 1].name)}</span></div>` : ""}<div class="mxp-heat" role="group" aria-label="最近 7 个评测日各类问题发生率">
+    <div class="mxp-heat-head"><span class="mxp-heat-label">问题发生率</span><div class="mxp-heat-dates num">${ticks}</div><span>近 7 天</span><span>变化</span></div>
     ${rows.map((row) => row.html).join("") || '<div class="mxp-chart-empty">暂无带日期的问题</div>'}
   </div>`;
 }
@@ -1636,21 +1643,35 @@ function mxRateTrendChart(model, width, selected, height = 232) {
   });
 }
 
+/* The right lens and heat share the left card grid's baseline. Measure the left grid, subtract
+   the heat and the lens chrome, and give the trend exactly the remaining height. */
+function analysisChartHeight(panel, chartHost) {
+  const panels = panel.closest(".mx-panels");
+  const issueShell = document.getElementById("mxIssueTrends");
+  if (!panels?.classList.contains("is-both") || !issueShell || issueShell.hidden) return 240;
+  const lens = panel.querySelector(".mxp-lens");
+  const heat = panel.querySelector(".mxp-chart-panel");
+  if (!lens || !heat) return 240;
+  const lr = issueShell.getBoundingClientRect();
+  const pr = lens.getBoundingClientRect();
+  const hr = heat.getBoundingClientRect();
+  if (!lr.height || !pr.height) return 240;
+  const chrome = pr.height - chartHost.getBoundingClientRect().height;
+  return Math.max(160, Math.round(lr.bottom - pr.top - 12 - hr.height - chrome));
+}
+
 function wireMatrixAnalysis(panel, model, state, trend) {
   const chartHost = $(".mxp-rate-chart", panel);
   if (!chartHost) return;
-  const toolbar = $(".mxp-levels", panel);
   const rows = $$(".mxp-overview .mxp-legend-row[data-level]", panel);
   const levels = model?.levels || WORST;
   state.analysisLevels ||= ["P0", "P1"];
   let paintToken = 0;
   let firstPaint = true;
-  // One source of truth: a chip and a severity row are two handles on the same set.
+  // The severity rows are the only filter; the ring is the same set drawn as shares.
   const sync = () => {
     const on = new Set(state.analysisLevels);
-    toolbar?.querySelectorAll(".mxt-chip").forEach((el) => el.setAttribute("aria-pressed", String(on.has(el.dataset.value))));
     rows.forEach((el) => el.setAttribute("aria-pressed", String(on.has(el.dataset.level))));
-    // The ring is the third handle on the same set: selected levels stay full, the rest recede.
     const focus = on.size ? on : new Set(levels);
     $$(".mxp-ring-arc", panel).forEach((arc) => arc.classList.toggle("is-off", !focus.has(arc.dataset.level)));
   };
@@ -1660,7 +1681,7 @@ function wireMatrixAnalysis(panel, model, state, trend) {
     const token = ++paintToken;
     const draw = () => {
       if (token !== paintToken) return;
-      const chart = mxRateTrendChart(model, chartHost.clientWidth, state.analysisLevels, 192);
+      const chart = mxRateTrendChart(model, chartHost.clientWidth, state.analysisLevels, analysisChartHeight(panel, chartHost));
       chartHost.innerHTML = state.analysisLevels.length ? chart.html : '<div class="empty">选择问题等级</div>';
       wireLineTrendChart(chartHost, chart, "", (pick) => drawer.open(pick));
       chartHost.style.opacity = "";
@@ -1683,11 +1704,19 @@ function wireMatrixAnalysis(panel, model, state, trend) {
   };
   sync();
   paint();
-  toolbar?.addEventListener("click", (event) => {
-    const button = event.target.closest(".mxt-chip");
-    if (button) toggle(button.dataset.value);
-  });
   rows.forEach((row) => row.addEventListener("click", () => toggle(row.dataset.level)));
+  let lastChartH = 0;
+  const fit = () => {
+    if (!panel.isConnected) return;
+    const h = analysisChartHeight(panel, chartHost);
+    if (h !== lastChartH) { lastChartH = h; paint(); }
+  };
+  panel._mxFitObserver?.disconnect();
+  const ro = new ResizeObserver(fit);
+  ro.observe(panel);
+  const issueShell = document.getElementById("mxIssueTrends");
+  if (issueShell) ro.observe(issueShell);
+  panel._mxFitObserver = ro;
 }
 
 function matrixPerspectiveHTML(view, trend, loading = false, state = {}, clusterRoot) {
@@ -1697,7 +1726,7 @@ function matrixPerspectiveHTML(view, trend, loading = false, state = {}, cluster
   const levels = model?.levels || WORST;
   const selected = state.analysisLevels || ["P0", "P1"];
   const empty = loading ? "正在读取趋势…" : model ? "暂无已评测 Trace" : "当前快照缺少 Trace 等级统计";
-  // 环形图负责「占比」，折线图负责「时间」；两边的等级行与工具栏 chip 共用 analysisLevels。
+  // 环形图负责「占比」，折线图负责「时间」；等级行是唯一开关，两边共用 analysisLevels。
   // 空白选择视为「全部」：没有筛选时整圈保持同等亮度，不把环形图做成禁用态。
   const focus = new Set(selected.length ? selected : levels);
   let at = 0;
@@ -1716,10 +1745,6 @@ function matrixPerspectiveHTML(view, trend, loading = false, state = {}, cluster
     return `<button type="button" class="mxp-legend-row" data-level="${key}" aria-pressed="${on}" title="${esc(`${SEV_NAME[key]} · ${count} Trace · ${share}`)}" aria-label="${esc(`${SEV_NAME[key]}，${count} Trace，${share}，${on ? "正在" : "不在"}趋势中显示`)}"><i style="--c:${sevColor(key)}" aria-hidden="true"></i><span>${SEV_NAME[key]}</span><b class="num mxp-legend-share">${share}</b><small class="num mxp-legend-count">${count} Trace</small></button>`;
   }).join("");
   return `<div class="mxp">
-    <div class="mxp-toolbar">
-      <b class="mxp-title">问题等级与趋势</b>
-      <div class="mxp-levels" role="group" aria-label="选择 Trace 趋势的问题等级">${levels.map((level) => trendChip("analysis-level", level, SEV_NAME[level], selected.includes(level), false)).join("")}</div>
-    </div>
     <section class="mxp-lens mxp-overview" aria-label="问题等级与 Trace 趋势">
       <div class="mxp-dist" role="group" aria-label="按最严重等级归类的 Trace 数量与占比；点一行可在 Trace 趋势中显示或隐藏">
         <div class="mxp-ring-wrap">
@@ -1733,10 +1758,12 @@ function matrixPerspectiveHTML(view, trend, loading = false, state = {}, cluster
       </div>
       <div class="mxp-trend">
         <div class="mxp-trend-head"><b>Trace 趋势</b><span class="num">近 30 天</span></div>
-        ${trendSampleFrame(`<div class="mpt-chart mxp-rate-chart" data-own-tip>${model?.total ? mxRateTrendChart(model, 340, selected, 192).html : `<div class="empty">${empty}</div>`}</div>`)}
+        ${trendSampleFrame(`<div class="mpt-chart mxp-rate-chart" data-own-tip>${model?.total ? mxRateTrendChart(model, 340, selected, 240).html : `<div class="empty">${empty}</div>`}</div>`)}
       </div>
     </section>
-    <section class="mxp-chart-panel">${mxPerspectiveTimeline(summary, loading)}</section>
+    <section class="mxp-heat-wrap">
+      <section class="mxp-chart-panel">${mxPerspectiveTimeline(summary, loading)}</section>
+    </section>
   </div>`;
 }
 
@@ -3462,6 +3489,8 @@ function wire(bento, p, tax, u) {
 
     function renderIssueTrends(reveal = true) {
       if (!issueEl || !u.mx.issueOpen || !issueData) return;
+      u.mx.issuePath = Array.isArray(u.mx.heatPath) ? u.mx.heatPath.slice() : [];
+      u.mx.issueZoom = null;
       const names = new Map();
       (tax.stages || []).forEach((node) => { if (node && node.id) names.set(node.id, node.name); });
       (tax.stages || []).forEach((stage) => (tax.mechanisms || []).forEach((mech) => {
@@ -3528,7 +3557,10 @@ function wire(bento, p, tax, u) {
         const keys = (current?.path || []).map((node) => node.prefix);
         u.mx.heatPath = down ? [...keys, down.dataset.heatNode] : keys.slice(0, -1);
         heatPanel._cancelHeat?.();
-        layoutPanels(() => { heatPanel.innerHTML = mxPerspectiveTimeline(mxTrendSummary(trendData, mxView, clusterRoot, u.mx), false); });
+        layoutPanels(() => {
+          if (u.mx.issueOpen && issueData) renderIssueTrends(false);
+          heatPanel.innerHTML = mxPerspectiveTimeline(mxTrendSummary(trendData, mxView, clusterRoot, u.mx), false);
+        });
         const clear = () => { heatPanel.style.opacity = ""; heatPanel.style.transform = ""; };
         const cancel = sunburstTween((k) => { heatPanel.style.opacity = String(.4 + .6 * k); heatPanel.style.transform = `translateY(${-4 * (1 - k)}px)`; }, { finish: clear });
         heatPanel._cancelHeat = () => { cancel(); clear(); };

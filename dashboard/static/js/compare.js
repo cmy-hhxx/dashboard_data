@@ -18,7 +18,7 @@ const SAMPLE_VIEW_RESET = {
 const C = {
   root: null, ctx: null, product: null, round: null, pairs: [], list: [], page: 1, query: "",
   online: null, pairId: null, gen: "", skelKey: "", listKey: "", sidesKey: "", token: 0, details: [],
-  listOff: false, fold: { b: false, a: false },
+  listOff: false, syncScroll: false, fold: { b: false, a: false },
 };
 
 /* ---------------------------------------------------------------- pure helpers (tested) */
@@ -36,6 +36,52 @@ export function pickRound(rounds, id) {
     if (hit) return hit;
   }
   return list[list.length - 1];
+}
+
+/* Latest prediction accuracy for one model. The compare page only reads the same optional
+   prediction feed as 预测体系; when it is absent the row still exists and reads —. */
+export function predictionRate(productData, model) {
+  const rows = Array.isArray(productData?.prediction?.accuracy) ? productData.prediction.accuracy : [];
+  let latest = null;
+  rows.forEach((row) => {
+    if (model && row.model && String(row.model) !== String(model)) return;
+    const total = Number(row.total) || 0;
+    const rate = total > 0 ? (100 * (Number(row.correct) || 0)) / total : Number(row.accuracy) * 100;
+    if (!Number.isFinite(rate)) return;
+    const at = Date.parse(row.at || "") || 0;
+    if (!latest || at >= latest.at) latest = { at, rate };
+  });
+  return latest ? latest.rate : null;
+}
+
+const roundName = (round, i = 0) => round?.label || round?.title || round?.version || `第 ${i + 1} 期`;
+const roundDate = (round) => String(round?.released_at || round?.release_label || "").slice(0, 10);
+const roundMeta = (round) => {
+  const models = (Array.isArray(round?.models) ? round.models : []).join(" + ");
+  const pairs = Array.isArray(round?.pairs) ? round.pairs.length : 0;
+  return [models, roundDate(round), pairs ? `${fmt(pairs)} 道同题` : ""].filter(Boolean).join(" · ");
+};
+
+function testsetPicker(root, ctx, rounds) {
+  destroyDetails();
+  C.skelKey = ""; C.listKey = ""; C.sidesKey = "";
+  const cards = (Array.isArray(rounds) ? rounds : []).map((round, i) => {
+    const name = roundName(round, i);
+    return `<button type="button" class="compare-picker-card" data-round="${esc(round.id)}">
+      <span class="compare-picker-name">${esc(name)}</span>
+      <span class="compare-picker-meta">${esc(roundMeta(round))}</span>
+      ${CHEV_RIGHT}
+    </button>`;
+  }).join("");
+  root.innerHTML = `<section class="compare-picker">
+    <h1>版本对比</h1>
+    <div class="compare-picker-lead">选择测试集</div>
+    <div class="compare-picker-grid">${cards || `<div class="empty">暂无测试集</div>`}</div>
+  </section>`;
+  $(".compare-picker", root).addEventListener("click", (event) => {
+    const card = event.target.closest("[data-round]");
+    if (card && C.ctx) C.ctx.navigate({ round: card.dataset.round, pair: null, online: null });
+  });
 }
 
 /* The list sorts by how comparable a question is, then by how much it moved: both sides
@@ -88,8 +134,14 @@ const CHEV_RIGHT = ICON("M6 3.5 10.5 8 6 12.5");
 const CHEV_UP = ICON("M3.5 10 8 5.5 12.5 10");
 
 /* ---------------------------------------------------------------- shell */
-function skeleton(root) {
-  root.innerHTML = `<div class="bench bench-compare">
+function skeleton(root, round) {
+  root.innerHTML = `<div class="compare-top">
+    <button type="button" class="compare-back" data-act="testsets">${CHEV_LEFT}<span>测试集</span></button>
+    <b class="compare-top-name">${esc(roundName(round))}</b>
+    <span class="compare-top-meta">${esc(roundMeta(round))}</span>
+    <button type="button" class="compare-sync" data-act="sync" aria-pressed="${C.syncScroll}"><span class="compare-sync-knob" aria-hidden="true"></span>同步滚动</button>
+  </div>
+  <div class="bench bench-compare">
     <aside class="pane pane-sticky compare-list" aria-label="同题列表">
       <button type="button" class="compare-rail-btn" data-act="toggle-list" title="展开同题列表" aria-label="展开同题列表">${CHEV_RIGHT}<span class="compare-rail-label">同题列表</span></button>
       <div class="pane-head compare-list-head">
@@ -140,53 +192,30 @@ function wireSkeleton(root) {
     const act = e.target.closest("[data-act]");
     if (act?.dataset.act === "toggle-list") {
       C.listOff = !C.listOff;
-      if (C.listOff) C.fold = { b: false, a: false };
       applyLayout();
+    }
+  });
+  $(".compare-top", root).addEventListener("click", (e) => {
+    const act = e.target.closest("[data-act]");
+    if (act?.dataset.act === "testsets") {
+      if (C.ctx) C.ctx.navigate({ round: null, pair: null, online: null });
       return;
     }
-    if (act?.dataset.act === "fold-side") {
-      const side = act.dataset.side;
-      if (!(side in C.fold)) return;
-      const next = !C.fold[side];
-      C.fold = { b: side === "b" && next, a: side === "a" && next };
-      applyLayout();
-      return;
-    }
-    // A folded bar still opens on click, the small chevron is only the visible affordance.
-    const folded = e.target.closest(".compare-side.is-folded");
-    if (folded?.dataset.side in C.fold) {
-      C.fold[folded.dataset.side] = false;
-      applyLayout();
+    if (act?.dataset.act === "sync") {
+      C.syncScroll = !C.syncScroll;
+      act.setAttribute("aria-pressed", String(C.syncScroll));
+      wireSyncScroll();
     }
   });
 }
 
-/* stack ⇄ split and folded bars: one place owns every layout class. */
+/* The question list can fold to a rail; the model columns always stay side by side. */
 function applyLayout() {
   const bench = $(".bench-compare", C.root);
-  const panes = $("#cmppanes", C.root);
   const list = $(".compare-list", C.root);
-  if (!bench || !panes || !list) return;
+  if (!bench || !list) return;
   bench.classList.toggle("is-list-off", C.listOff);
   list.classList.toggle("is-collapsed", C.listOff);
-  const single = panes.classList.contains("is-single");
-  panes.classList.toggle("is-split", C.listOff && !single);
-  let foldedAny = false;
-  panes.querySelectorAll(".compare-side").forEach((el) => {
-    const side = el.dataset.side;
-    const canFold = side === "b" || side === "a";
-    const folded = canFold && !C.listOff && !!C.fold[side];
-    if (folded) foldedAny = true;
-    el.classList.toggle("is-folded", folded);
-    const btn = el.querySelector(".compare-fold-btn");
-    if (btn) {
-      const name = side === "b" ? "改版前" : "改版后";
-      btn.setAttribute("aria-pressed", String(folded));
-      btn.title = `${folded ? "展开" : "折叠"}${name}`;
-      btn.setAttribute("aria-label", btn.title);
-    }
-  });
-  panes.classList.toggle("has-fold", foldedAny);
 }
 
 function rowHTML(pair) {
@@ -228,18 +257,41 @@ function renderPager(pages) {
 }
 
 /* ---------------------------------------------------------------- detail panes */
-function sideHeadHTML(label, n, side, canFold = true) {
+function sideHeadHTML(label, n, side, model) {
   const count = n == null ? "" : `<span class="pill">${fmt(n)} 个落点</span>`;
-  const fold = canFold
-    ? `<button type="button" class="compare-icon-btn compare-fold-btn" data-act="fold-side" data-side="${side}" aria-pressed="false" title="折叠${esc(label)}" aria-label="折叠${esc(label)}">${CHEV_UP}</button>`
-    : "";
-  return `<div class="pane-head compare-side-head"><span class="cg"><span class="cg-k">${esc(label)}</span>${count}</span>${fold}</div>`;
+  const tag = model ? `<small class="compare-model-tag">${esc(model)}</small>` : "";
+  return `<div class="pane-head compare-side-head"><span class="cg"><span class="cg-k">${esc(label)}</span>${tag}${count}</span></div>`;
 }
 
-function sideHTML(prefix, label, ref, gap) {
+function sideHTML(prefix, label, ref, gap, model) {
   const n = ref && !gap ? Number(ref.n || 0) : null;
   const body = gap ? `<div class="empty">这一侧没有可用的评测详情</div>` : detailPaneHTML(prefix);
-  return `<section class="pane pane-out pane-sticky compare-side${gap ? " is-gap" : ""}" data-side="${prefix}" aria-label="${esc(label)}">${sideHeadHTML(label, n, prefix, !gap)}${body}</section>`;
+  return `<section class="pane pane-out pane-sticky compare-side${gap ? " is-gap" : ""}" data-side="${prefix}" aria-label="${esc(label)}">${sideHeadHTML(label, n, prefix, model)}${body}</section>`;
+}
+
+/* One switch mirrors the two model columns. Ratio keeps the same part of both details visible
+   even when their collapsed heights differ; the lock prevents the mirrored scroll from echoing. */
+function wireSyncScroll() {
+  const panes = $("#cmppanes", C.root);
+  if (!panes) return;
+  if (panes._syncCleanup) { panes._syncCleanup(); panes._syncCleanup = null; }
+  if (!C.syncScroll) return;
+  const scrollers = [...panes.querySelectorAll(".compare-side .pane-scroll")];
+  if (scrollers.length < 2) return;
+  let lock = false;
+  const onScroll = (event) => {
+    if (lock) return;
+    const source = event.currentTarget;
+    const max = source.scrollHeight - source.clientHeight;
+    const ratio = max > 0 ? source.scrollTop / max : 0;
+    lock = true;
+    scrollers.forEach((target) => {
+      if (target !== source) target.scrollTop = ratio * Math.max(0, target.scrollHeight - target.clientHeight);
+    });
+    requestAnimationFrame(() => { lock = false; });
+  };
+  scrollers.forEach((el) => el.addEventListener("scroll", onScroll, { passive: true }));
+  panes._syncCleanup = () => scrollers.forEach((el) => el.removeEventListener("scroll", onScroll));
 }
 
 function destroyDetails() {
@@ -291,46 +343,54 @@ async function paintSides(round, pair, online) {
   C.sidesKey = key;
   destroyDetails();
   const token = ++C.token;
+  const productData = C.ctx.data?.products?.[C.product];
+  const fallbackModel = Array.isArray(round.models) && round.models.length === 1 ? round.models[0] : "";
+  const before = online ? null : (pair.before || {});
+  const after = online ? null : (pair.after || null);
+  const gaps = online ? { before: true, after: true } : pairGaps(pair);
+  const onlineSource = online ? onlineRef(round, online) : null;
+  const columns = online
+    ? [{ prefix: "o", label: "线上真实", ref: onlineSource, gap: false, model: onlineSource?.model || fallbackModel, online: true }]
+    : [
+        { prefix: "b", label: "改版前", ref: before, gap: gaps.before, model: before?.model || fallbackModel },
+        { prefix: "a", label: "改版后", ref: after, gap: gaps.after, model: after?.model || fallbackModel },
+      ];
+  panes.classList.toggle("is-single", !!online);
+  const caps = columns.map((column) => {
+    const rate = predictionRate(productData, column.model);
+    return `<div class="compare-cap-cell">${rate == null ? "—" : `${fmt(rate, 1)}%`}</div>`;
+  }).join("");
+  panes.innerHTML = `<div class="compare-pred">
+      <span class="compare-cap-label">预测能力</span>
+      <div class="compare-cap-row" style="--cols:${columns.length}">${caps}</div>
+    </div>
+    <div class="compare-side-row" style="--cols:${columns.length}">${columns.map((column) => sideHTML(column.prefix, column.label, column.ref, column.gap, column.model)).join("")}</div>`;
+  applyLayout();
+  const jobs = [];
   if (online) {
-    panes.classList.add("is-single");
-    const ref = onlineRef(round, online);
-    panes.innerHTML = `<section class="pane pane-out pane-sticky compare-side" data-side="o" aria-label="线上真实">
-      ${sideHeadHTML("线上真实", ref && Array.isArray(ref.paths) ? ref.paths.length : null, "o", false)}
-      ${detailPaneHTML("o")}
-    </section>`;
-    applyLayout();
-    await mountDetail(panes.querySelector('[data-side="o"]'), {
+    const ref = onlineSource;
+    jobs.push(mountDetail(panes.querySelector('[data-side="o"]'), {
       prefix: "o", session: onlineSession(online, ref),
       focus: {},
       loadDetail: (slug) => getJSON(`samples/${encodeURIComponent(slug)}.json`),
-    });
-    if (token !== C.token) return;
-    return;
-  }
-  panes.classList.remove("is-single");
-  const before = pair.before || {};
-  const after = pair.after || null;
-  const gaps = pairGaps(pair);
-  // 改版前 / 改版后上下两块，用一条发丝线分开；两块都留在首屏里（各自内部滚动）。
-  panes.innerHTML = sideHTML("b", "改版前", before, gaps.before)
-    + '<div class="compare-split" role="separator" aria-hidden="true"></div>'
-    + sideHTML("a", "改版后", after, gaps.after);
-  applyLayout();
-  const jobs = [];
-  if (!gaps.before) {
-    jobs.push(mountDetail(panes.querySelector('[data-side="b"]'), {
-      prefix: "b", session: beforeSession(pair, before),
-      focus: { focusTrace: before.trace },
-      loadDetail: (slug) => getJSON(`samples/${encodeURIComponent(slug)}.json`),
     }));
+  } else {
+    if (!gaps.before) {
+      jobs.push(mountDetail(panes.querySelector('[data-side="b"]'), {
+        prefix: "b", session: beforeSession(pair, before),
+        focus: { focusTrace: before.trace },
+        loadDetail: (slug) => getJSON(`samples/${encodeURIComponent(slug)}.json`),
+      }));
+    }
+    if (!gaps.after) {
+      jobs.push(mountDetail(panes.querySelector('[data-side="a"]'), {
+        prefix: "a", session: afterSession(round, pair, after),
+        focus: {},
+        loadDetail: (eq) => getJSON(`ab_samples/${encodeURIComponent(round.id)}/${encodeURIComponent(eq)}.json`),
+      }));
+    }
   }
-  if (!gaps.after) {
-    jobs.push(mountDetail(panes.querySelector('[data-side="a"]'), {
-      prefix: "a", session: afterSession(round, pair, after),
-      focus: {},
-      loadDetail: (eq) => getJSON(`ab_samples/${encodeURIComponent(round.id)}/${encodeURIComponent(eq)}.json`),
-    }));
-  }
+  wireSyncScroll();
   await Promise.all(jobs);
   if (token !== C.token) return;
 }
@@ -343,20 +403,33 @@ export async function render(root, ctx) {
   const payload = await loadAB(ctx);
   const rounds = Array.isArray(payload?.rounds) ? payload.rounds : [];
   const url = parseCompareURL(location.search);
-  const round = pickRound(rounds, url.round);
-  const pairs = round && Array.isArray(round.pairs) ? round.pairs : [];
-  if (!round || !pairs.length) {
-    destroyDetails();
-    C.skelKey = ""; C.listKey = ""; C.sidesKey = "";
-    root.innerHTML = `<div class="bento"><div class="card" style="--span:12"><div class="empty">暂无版本对比数据</div></div></div>`;
+  const round = url.round ? rounds.find((item) => String(item.id) === String(url.round)) : null;
+  if (!round) {
+    testsetPicker(root, ctx, rounds);
     return;
   }
+  const pairs = Array.isArray(round.pairs) ? round.pairs : [];
+  if (!pairs.length) {
+    destroyDetails();
+    C.skelKey = ""; C.listKey = ""; C.sidesKey = "";
+    C.round = round;
+    root.innerHTML = `<div class="compare-top">
+      <button type="button" class="compare-back" data-act="testsets">${CHEV_LEFT}<span>测试集</span></button>
+      <b class="compare-top-name">${esc(roundName(round))}</b>
+      <span class="compare-top-meta">${esc(roundMeta(round))}</span>
+    </div><div class="bento"><div class="card" style="--span:12"><div class="empty">暂无同题详情</div></div></div>`;
+    $(".compare-top", root).addEventListener("click", (event) => {
+      if (event.target.closest("[data-act='testsets']")) ctx.navigate({ round: null, pair: null, online: null });
+    });
+    return;
+  }
+  C.round = round;
   const skelKey = `${ctx.product}|${round.id}`;
   if (C.skelKey !== skelKey || !root.querySelector(".bench-compare")) {
     destroyDetails();
     C.query = "";
     C.page = 1;
-    skeleton(root);
+    skeleton(root, round);
     C.skelKey = skelKey;
     C.listKey = "";
     C.sidesKey = "";

@@ -209,8 +209,24 @@ body.is-ab-full { overflow: hidden; }
 .abmatrix .cell.is-better { color: var(--accent); background: color-mix(in oklab, var(--accent) calc(var(--v) * 56%), transparent); }
 .abmatrix .cell.is-worse { color: var(--sev-1); background: color-mix(in oklab, var(--sev-1) calc(var(--v) * 50%), transparent); }
 .abmatrix .cell.coltot { background: color-mix(in oklab, var(--accent) 10%, transparent); }
+/* The scene/column totals are the same readout as the cells: semantic tone, same heat ramp,
+   with the neutral accent only when the reading has no direction (发版前/发版后). */
+.abmatrix .cell.coltot.is-better, .abmatrix .rowtot.is-better {
+  color: var(--accent);
+  background: color-mix(in oklab, var(--accent) calc(var(--v, 0.08) * 56%), transparent);
+}
+.abmatrix .cell.coltot.is-worse, .abmatrix .rowtot.is-worse {
+  color: var(--sev-1);
+  background: color-mix(in oklab, var(--sev-1) calc(var(--v, 0.08) * 50%), transparent);
+}
+.abmatrix .cell.coltot.is-zero, .abmatrix .rowtot.is-zero { background: var(--well); color: var(--faint); }
 .abmatrix .cell.is-zero { background: var(--well); color: var(--faint); }
 .abmatrix .cell.is-sel { box-shadow: inset 0 0 0 1.5px color-mix(in oklab, currentColor 55%, transparent); }
+
+/* The scene totals are a readout, not a second pane. Keep the edge fade as the scroll hint,
+   but the native bar must not cut the last row off the card. */
+.abmatrix .mx-scroll { scrollbar-width: none; -ms-overflow-style: none; }
+.abmatrix .mx-scroll::-webkit-scrollbar { display: none; }
 
 /* ---------------------------------------------------------------- 选中格趋势 */
 .ab-trend { display: grid; gap: 8px; min-width: 0; margin-top: 1px; padding-top: 12px; border-top: 1px solid var(--well-2); }
@@ -253,8 +269,7 @@ body.is-ab-full { overflow: hidden; }
   .ab-batch { padding-left: 6px; }
   .mx-card.is-full { padding: 12px 16px 32px; }
 }
-.abmatrix .coltot.is-better, .abmatrix .rowtot-foot.is-better { color: var(--accent); }
-.abmatrix .coltot.is-worse, .abmatrix .rowtot-foot.is-worse { color: var(--sev-1); }
-
-/* The AB grid's own coltot base outranks the generic is-hl tint, so restate it here. */
-.abmatrix .cell.coltot.is-hl { background: color-mix(in oklab, var(--accent) 16%, transparent); }
+/* Highlight the total with a hairline, never by replacing its semantic tint. */
+.abmatrix .cell.coltot.is-hl, .abmatrix .cell.coltot:hover, .abmatrix .rowtot.is-hl {
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, currentColor 32%, transparent);
+}

@@ -260,6 +260,9 @@ function matrixTableAb(view, rnd, metric, selected) {
   const cellData = (v, den) => `<span class="cell-data"><span class="cell-main"><b>${change ? signed(v) : fmt(v)}</b><span class="cell-den">/ ${fmt(den)}</span></span><span class="cell-pct">${pct(v, den, 1)}</span></span>`;
   let max = 1;
   cells.forEach((row) => row.forEach((x) => { if (x.n != null) max = Math.max(max, Math.abs(x.n)); }));
+  // The totals are the same readout as the cells: same semantic tone classes, same heat ramp.
+  const toneOf = (v) => change && v != null ? (v < 0 ? " is-better" : v > 0 ? " is-worse" : " is-zero") : "";
+  const heat = (v) => (change ? (0.08 + 0.62 * Math.sqrt(Math.min(1, Math.abs(v) / max))).toFixed(3) : "0.08");
   const totals = rows.map((_, ri) => sumOf(cells[ri].map((x) => x.n == null ? 0 : x.n)));
   const colTotals = cols.map((_, ci) => sumOf(rows.map((_, ri) => cells[ri][ci].n == null ? 0 : cells[ri][ci].n)));
   const grand = sumOf(colTotals);
@@ -279,7 +282,7 @@ function matrixTableAb(view, rnd, metric, selected) {
     cols.forEach((c, ci) => {
       const cell = cells[ri][ci];
       const v = cell.n;
-      const tone = change && v != null ? (v < 0 ? " is-better" : v > 0 ? " is-worse" : " is-zero") : "";
+      const tone = toneOf(v);
       const zero = !change && v != null && v === 0;
       const on = selected && selected.ri === ri && selected.ci === ci;
       const tipParts = metricTip(cell, metric, rnd);
@@ -287,20 +290,19 @@ function matrixTableAb(view, rnd, metric, selected) {
       const tip = `${r.name} · ${c.name}|${tipParts.value} / ${fmt(den)} Trace · ${pct(v, den, 1)}|${tipParts.note}`;
       gridCells += v == null || zero
         ? `<span class="cell is-empty" data-abmx="${ri}:${ci}"></span>`
-        : `<span class="cell num${tone}${on ? " is-sel" : ""}" style="--v:${(0.08 + 0.62 * Math.sqrt(Math.abs(v) / max)).toFixed(3)}" data-act="cell" data-ri="${ri}" data-ci="${ci}" data-abmx="${ri}:${ci}" data-tip="${esc(tip)}">${cellData(v, den)}</span>`;
+        : `<span class="cell num${tone}${on ? " is-sel" : ""}" style="--v:${heat(v)}" data-act="cell" data-ri="${ri}" data-ci="${ci}" data-abmx="${ri}:${ci}" data-tip="${esc(tip)}">${cellData(v, den)}</span>`;
     });
-    tots += `<span class="rowtot num">${change ? signed(totals[ri]) : fmt(totals[ri])}</span>`;
+    tots += `<span class="rowtot num${toneOf(totals[ri])}" style="--v:${heat(totals[ri])}">${change ? signed(totals[ri]) : fmt(totals[ri])}</span>`;
   });
   const foot = cols.map((c, ci) => {
     const v = colTotals[ci];
-    const tone = change ? (v < 0 ? " is-better" : v > 0 ? " is-worse" : "") : "";
-    return `<button type="button" class="cell coltot num${tone}" style="--v:0.08" data-act="cell" data-ri="total" data-ci="${ci}" title="全部场景 · ${esc(c.name)}">${cellData(v, grandDen)}</button>`;
+    return `<button type="button" class="cell coltot num${toneOf(v)}" style="--v:${heat(v)}" data-act="cell" data-ri="total" data-ci="${ci}" title="全部场景 · ${esc(c.name)}">${cellData(v, grandDen)}</button>`;
   }).join("");
-  const grandTone = change ? (grand < 0 ? " is-better" : grand > 0 ? " is-worse" : "") : "";
+  const grandTone = toneOf(grand);
   return `<div class="matrix abmatrix" style="--cols:${cols.length};--rows:${rows.length}">
     <div class="mx-rows"><span class="mx-corner" aria-hidden="true"></span>${rowLabels}<span class="rh"><span class="mx-lab mx-total-lab">场景合计</span></span></div>
     <div class="mx-scroll"><div class="mx-grid">${heads}${gridCells}${foot}</div></div>
-    <div class="mx-tots"><span class="rowtot-head" title="该场景在当前口径下的问题数合计"><span class="mx-lab mx-total-lab">${change ? "变化合计" : "问题合计"}</span></span>${tots}<span class="rowtot rowtot-foot">${change ? signed(grand) : fmt(grand)}</span></div>
+    <div class="mx-tots"><span class="rowtot-head" title="该场景在当前口径下的问题数合计"><span class="mx-lab mx-total-lab">${change ? "变化合计" : "问题合计"}</span></span>${tots}<span class="rowtot rowtot-foot num${grandTone}" style="--v:${heat(grand)}">${change ? signed(grand) : fmt(grand)}</span></div>
   </div>`;
 }
 
