@@ -1586,8 +1586,8 @@ function mxPerspectiveTimeline(summary, loading) {
   // The heat is a record of evaluated days, not a calendar. Use the last seven dates that
   // actually carry traces for this scope; skipped days never become empty columns.
   const dataIdx = dates.map((_, i) => i).filter((i) => daily[i].sessions > 0 && summary.groups.some((g) => g.days[i].observed));
-  const recentIdx = (dataIdx.length ? dataIdx : dates.map((_, i) => i)).slice(-7);
-  const priorIdx = dataIdx.slice(-14, -7);
+  const recentIdx = (dataIdx.length ? dataIdx : dates.map((_, i) => i)).slice(-14);
+  const priorIdx = dataIdx.slice(-28, -14);
   const totalIdx = dataIdx.slice(-30);
   const calendar = recentIdx.map((i) => dates[i]);
   const index = new Map(dates.map((d, i) => [d, i]));
@@ -1618,12 +1618,13 @@ function mxPerspectiveTimeline(summary, loading) {
       if (!hits) return `<span class="${rate == null ? "is-missing" : ""}" style="--c:${color}" data-tip="${esc(tip)}"></span>`;
       return `<button type="button" class="mxp-cell" style="--c:${color}" data-tip="${esc(tip)}" data-heat-date="${d}" data-heat-node="${esc(group.node.prefix)}" aria-label="${esc(`${d} ${group.name} ${mxRateText(rate)}，查看当天具体数据`)}"></button>`;
     }).join("");
-    return { group, recent, total, html: `<div class="mxp-heat-row">${group.node.children?.length ? `<button type="button" class="mxp-heat-name" data-heat-node="${esc(group.node.prefix)}" aria-label="下钻 ${esc(group.name)}" title="${esc(group.name)}">${esc(group.name)}<i class="mx-caret" aria-hidden="true"></i></button>` : `<span class="mxp-heat-name" title="${esc(group.name)}">${esc(group.name)}</span>`}<div class="tiles mxp-heat-days">${cells}</div><b class="num">${mxRateText(recent)}</b><span class="mxp-delta num ${delta == null || Math.abs(delta) < 0.05 ? "" : delta > 0 ? "is-up" : "is-down"}" title="较前 7 个评测日变化，单位：百分点">${mxDeltaText(delta)}</span></div>` };
+    return { group, recent, total, html: `<div class="mxp-heat-row">${group.node.children?.length ? `<button type="button" class="mxp-heat-name" data-heat-node="${esc(group.node.prefix)}" aria-label="下钻 ${esc(group.name)}" title="${esc(group.name)}">${esc(group.name)}<i class="mx-caret" aria-hidden="true"></i></button>` : `<span class="mxp-heat-name" title="${esc(group.name)}">${esc(group.name)}</span>`}<div class="tiles mxp-heat-days">${cells}</div><b class="num">${mxRateText(recent)}</b><span class="mxp-delta num ${delta == null || Math.abs(delta) < 0.05 ? "" : delta > 0 ? "is-up" : "is-down"}" title="较前 14 个评测日变化，单位：百分点">${mxDeltaText(delta)}</span></div>` };
   }).filter(({ group }) => recentIdx.some((i) => group.days[i].observed && group.days[i].n > 0))
     .sort((a, b) => b.total - a.total || a.group.node.prefix.localeCompare(b.group.node.prefix));
-  const ticks = calendar.map((d) => `<span>${d.slice(5)}</span>`).join("");
-  return `${summary.path.length ? `<div class="mxp-heat-nav"><button type="button" class="mx-back" data-heat-back aria-label="返回上一级问题分类">← 返回</button><span>${esc(summary.path[summary.path.length - 1].name)}</span></div>` : ""}<div class="mxp-heat" role="group" aria-label="最近 7 个评测日各类问题发生率">
-    <div class="mxp-heat-head"><span class="mxp-heat-label">问题发生率</span><div class="mxp-heat-dates num">${ticks}</div><span>近 7 天</span><span>变化</span></div>
+  const tickAt = calendar.length > 7 ? [0, Math.floor((calendar.length - 1) / 2), calendar.length - 1] : calendar.map((_, i) => i);
+  const ticks = tickAt.map((i) => `<span style="grid-column:${i + 1}">${calendar[i].slice(5)}</span>`).join("");
+  return `${summary.path.length ? `<div class="mxp-heat-nav"><button type="button" class="mx-back" data-heat-back aria-label="返回上一级问题分类">← 返回</button><span>${esc(summary.path[summary.path.length - 1].name)}</span></div>` : ""}<div class="mxp-heat" role="group" aria-label="最近 14 个评测日各类问题发生率">
+    <div class="mxp-heat-head"><span class="mxp-heat-label">问题发生率</span><div class="mxp-heat-dates num">${ticks}</div><span>近 14 天</span><span>变化</span></div>
     ${rows.map((row) => row.html).join("") || '<div class="mxp-chart-empty">暂无带日期的问题</div>'}
   </div>`;
 }

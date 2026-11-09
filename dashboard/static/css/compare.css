@@ -17,6 +17,17 @@ html[data-view="compare"] main { max-width: none; padding-bottom: 24px; }
 .compare-back svg { width: 14px; height: 14px; }
 .compare-top-name { color: var(--ink); font-size: var(--fs-small); font-weight: var(--w-medium); }
 .compare-top-meta { min-width: 0; overflow: hidden; color: var(--muted); font-size: var(--fs-meta); text-overflow: ellipsis; white-space: nowrap; }
+.compare-models { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.compare-models[hidden] { display: none; }
+.compare-model {
+  display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 999px;
+  color: var(--muted); font-size: var(--fs-meta); white-space: nowrap;
+  transition: background var(--snap), color var(--snap);
+}
+.compare-model:hover { background: var(--hover); color: var(--ink-2); }
+.compare-model[aria-pressed="true"] { background: var(--active); color: var(--ink); }
+.compare-model small { color: var(--faint); font-size: 10px; font-weight: var(--w-body); }
+.compare-model[aria-pressed="true"] small { color: var(--muted); }
 .compare-sync {
   margin-left: auto; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px;
   border-radius: 999px; color: var(--muted); font-size: var(--fs-meta); white-space: nowrap;

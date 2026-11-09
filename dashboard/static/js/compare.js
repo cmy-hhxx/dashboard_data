@@ -18,7 +18,7 @@ const SAMPLE_VIEW_RESET = {
 const C = {
   root: null, ctx: null, product: null, round: null, pairs: [], list: [], page: 1, query: "",
   online: null, pairId: null, gen: "", skelKey: "", listKey: "", sidesKey: "", token: 0, details: [],
-  listOff: false, syncScroll: false, fold: { b: false, a: false },
+  listOff: false, syncScroll: false, sides: { b: true, a: true }, fold: { b: false, a: false },
 };
 
 /* ---------------------------------------------------------------- pure helpers (tested) */
@@ -139,6 +139,7 @@ function skeleton(root, round) {
     <button type="button" class="compare-back" data-act="testsets">${CHEV_LEFT}<span>测试集</span></button>
     <b class="compare-top-name">${esc(roundName(round))}</b>
     <span class="compare-top-meta">${esc(roundMeta(round))}</span>
+    <span class="compare-models" role="group" aria-label="选择要展示的模型"></span>
     <button type="button" class="compare-sync" data-act="sync" aria-pressed="${C.syncScroll}"><span class="compare-sync-knob" aria-hidden="true"></span>同步滚动</button>
   </div>
   <div class="bench bench-compare">
@@ -205,6 +206,16 @@ function wireSkeleton(root) {
       C.syncScroll = !C.syncScroll;
       act.setAttribute("aria-pressed", String(C.syncScroll));
       wireSyncScroll();
+    }
+    if (act?.dataset.act === "side") {
+      const side = act.dataset.side;
+      if (!C.sides || !(side in C.sides)) return;
+      const next = { ...C.sides, [side]: !C.sides[side] };
+      if (!next.b && !next.a) return;
+      C.sides = next;
+      C.sidesKey = "";
+      const pair = (C.pairs || []).find((item) => String(item.id) === String(C.pairId));
+      if (!C.online && pair) paintSides(C.round, pair, null);
     }
   });
 }
@@ -336,9 +347,10 @@ function onlineSession(slug, ref) {
 
 async function paintSides(round, pair, online) {
   const panes = $("#cmppanes", C.root);
+  const sidesKey = `${C.sides.b ? 1 : 0}${C.sides.a ? 1 : 0}`;
   const key = online
     ? `${C.gen}|online|${C.product}|${round.id}|${online}`
-    : `${C.gen}|pair|${C.product}|${round.id}|${pair.id}`;
+    : `${C.gen}|pair|${C.product}|${round.id}|${pair.id}|${sidesKey}`;
   if (C.sidesKey === key) return;
   C.sidesKey = key;
   destroyDetails();
@@ -349,13 +361,27 @@ async function paintSides(round, pair, online) {
   const after = online ? null : (pair.after || null);
   const gaps = online ? { before: true, after: true } : pairGaps(pair);
   const onlineSource = online ? onlineRef(round, online) : null;
-  const columns = online
+  const allColumns = online
     ? [{ prefix: "o", label: "线上真实", ref: onlineSource, gap: false, model: onlineSource?.model || fallbackModel, online: true }]
     : [
         { prefix: "b", label: "改版前", ref: before, gap: gaps.before, model: before?.model || fallbackModel },
         { prefix: "a", label: "改版后", ref: after, gap: gaps.after, model: after?.model || fallbackModel },
       ];
-  panes.classList.toggle("is-single", !!online);
+  const columns = online ? allColumns : allColumns.filter((column) => C.sides[column.prefix] !== false);
+  panes.classList.toggle("is-single", columns.length === 1);
+  const modelHost = $(".compare-models", C.root);
+  if (modelHost) {
+    modelHost.hidden = !!online;
+    if (!online) {
+      const distinct = new Set(allColumns.map((column) => column.model).filter(Boolean)).size > 1;
+      modelHost.innerHTML = allColumns.map((column) => {
+        const on = C.sides[column.prefix] !== false;
+        const main = distinct ? (column.model || column.label) : column.label;
+        const sub = distinct ? column.label : (column.model || "");
+        return `<button type="button" class="compare-model" data-act="side" data-side="${column.prefix}" aria-pressed="${on}" title="${esc(`${on ? "隐藏" : "显示"} ${column.label}${column.model ? ` · ${column.model}` : ""}`)}">${esc(main)}${sub ? `<small>${esc(sub)}</small>` : ""}</button>`;
+      }).join("");
+    }
+  }
   const caps = columns.map((column) => {
     const rate = predictionRate(productData, column.model);
     return `<div class="compare-cap-cell">${rate == null ? "—" : `${fmt(rate, 1)}%`}</div>`;
@@ -375,14 +401,14 @@ async function paintSides(round, pair, online) {
       loadDetail: (slug) => getJSON(`samples/${encodeURIComponent(slug)}.json`),
     }));
   } else {
-    if (!gaps.before) {
+    if (!gaps.before && C.sides.b) {
       jobs.push(mountDetail(panes.querySelector('[data-side="b"]'), {
         prefix: "b", session: beforeSession(pair, before),
         focus: { focusTrace: before.trace },
         loadDetail: (slug) => getJSON(`samples/${encodeURIComponent(slug)}.json`),
       }));
     }
-    if (!gaps.after) {
+    if (!gaps.after && C.sides.a) {
       jobs.push(mountDetail(panes.querySelector('[data-side="a"]'), {
         prefix: "a", session: afterSession(round, pair, after),
         focus: {},

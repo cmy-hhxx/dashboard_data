@@ -380,7 +380,7 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .mxp-heat-head { min-height: 24px; color: var(--muted); font-size: 11px; }
 .mxp-heat-label { display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mxp-heat-head > span:nth-last-child(-n+2) { text-align: right; }
-.mxp-heat-dates, .mxp-heat-days.tiles { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.mxp-heat-dates, .mxp-heat-days.tiles { display: grid; grid-template-columns: repeat(14, minmax(0, 1fr)); gap: 4px; }
 /* Drilled, single-column heat: a report table, not a stretched grid. 32px squares sit in 40px
    day columns so the seven dates read as a row and the 240px name column never truncates. */
 .mx-panels.is-issue .mxp-heat, .mx-panels.is-perspective .mxp-heat { gap: 0; }
@@ -394,10 +394,6 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .mx-panels.is-issue .mxp-heat-row, .mx-panels.is-perspective .mxp-heat-row { min-height: 44px; font-size: 14px; }
 .mx-panels.is-issue .mxp-heat-row + .mxp-heat-row, .mx-panels.is-perspective .mxp-heat-row + .mxp-heat-row { border-top: 1px solid var(--well-2); }
 .mx-panels.is-issue .mxp-heat-head, .mx-panels.is-perspective .mxp-heat-head { font-size: 12px; }
-.mx-panels.is-issue .mxp-heat-dates, .mx-panels.is-issue .mxp-heat-days.tiles,
-.mx-panels.is-perspective .mxp-heat-dates, .mx-panels.is-perspective .mxp-heat-days.tiles { grid-template-columns: repeat(7, 40px); gap: 8px; justify-content: center; }
-.mx-panels.is-issue .mxp-heat-days.tiles > span, .mx-panels.is-issue .mxp-heat-days.tiles > button,
-.mx-panels.is-perspective .mxp-heat-days.tiles > span, .mx-panels.is-perspective .mxp-heat-days.tiles > button { width: 32px; height: 32px; justify-self: center; align-self: center; border-radius: 4px; }
 
 .mxp-heat-dates { font-size: 11px; white-space: nowrap; }
 .mxp-heat-dates > span { overflow: visible; }
@@ -412,18 +408,12 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .mxp-heat-name .mx-caret { flex: none; width: 4px; height: 4px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(135deg); color: var(--muted); }
 .mxp-heat-nav { display: flex; align-items: center; gap: 10px; min-height: 28px; margin-bottom: 14px; color: var(--muted); font-size: var(--fs-meta); }
 .mxp-heat-nav > span { color: var(--ink); font-size: 16px; font-weight: var(--w-medium); }
-/* The right column only has ~577px: keep the 12×30 heat readable beside the trend cards. */
+/* The heat is a width-filling strip: equal day columns span the whole heat area and each cell
+   is square, so the row height follows the column width. No empty half-column, no hidden dates. */
 .mx-panels.is-both .mxp-heat-head, .mx-panels.is-both .mxp-heat-row { grid-template-columns: minmax(72px, 96px) minmax(0, 1fr) 52px 48px; gap: 8px; }
 .mx-panels.is-both .mxp-heat-head { min-height: 20px; }
-.mx-panels.is-both .mxp-heat-days { grid-template-columns: repeat(7, 20px); gap: 4px; justify-content: start; }
-.mx-panels.is-both .mxp-heat-dates > span:not(:first-child):not(:last-child) { visibility: hidden; }
-.mx-panels.is-both .mxp-heat-days.tiles { grid-auto-rows: auto; }
-.mx-panels.is-both .mxp-heat-days.tiles > span,
-.mx-panels.is-both .mxp-heat-days.tiles > button { height: auto; aspect-ratio: 1; }
-/* 整宽时 28px 行高：30 天 × 聚类的宽条，格子和悬浮放大都有落点。 */
-.mxp-heat-days.tiles { grid-auto-rows: 28px; }
 .mxp-heat-days.tiles > span, .mxp-heat-days.tiles > button {
-  width: 100%; height: 100%; min-width: 0; padding: 0; border-radius: 2px; background: var(--c);
+  width: 100%; height: auto; aspect-ratio: 1; min-width: 0; padding: 0; border-radius: 2px; background: var(--c);
 }
 .mxp-heat-days.tiles > span { cursor: default; }
 .mxp-heat-days.tiles > span:hover, .mxp-heat-days.tiles > span:active { transform: none; box-shadow: none; }
