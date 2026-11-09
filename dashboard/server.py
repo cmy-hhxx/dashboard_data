@@ -84,9 +84,12 @@ def refresh_once():
         _state["running"] = True
     started = time.time()
     try:
+        # A data-changing rebuild takes 30-60s.  Keep it below the HTTP request
+        # threads so pages stay responsive while it runs.
+        nice = shutil.which("nice")
+        cmd = ([nice, "-n", "10"] if nice else []) + [sys.executable, BUILD, "--keep-on-empty"]
         proc = subprocess.run(
-            [sys.executable, BUILD, "--keep-on-empty"],
-            capture_output=True, text=True, timeout=1800, cwd=HERE,
+            cmd, capture_output=True, text=True, timeout=1800, cwd=HERE,
         )
         line = (proc.stdout.strip().splitlines() or [""])[-1]
         if proc.returncode == 0:
@@ -233,14 +236,25 @@ class Handler(SimpleHTTPRequestHandler):
                 if int(last_modified) <= int(parsed.timestamp()):
                     self.send_response(304)
                     self.send_header("Vary", "Accept-Encoding")
+                    self.send_header("ETag", f'"{int(last_modified * 1000)}-{stat.st_size}"')
                     self.send_header("Last-Modified", self.date_time_string(last_modified))
                     self.end_headers()
                     return True
             except (TypeError, ValueError, OverflowError):
                 pass
         ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"
+        etag = f'"{int(last_modified * 1000)}-{stat.st_size}"'
+        inm = self.headers.get("If-None-Match")
+        if inm and etag in {part.strip() for part in inm.split(",")}:
+            self.send_response(304)
+            self.send_header("Vary", "Accept-Encoding")
+            self.send_header("ETag", etag)
+            self.send_header("Last-Modified", self.date_time_string(last_modified))
+            self.end_headers()
+            return True
         self.send_response(200)
         self.send_header("Vary", "Accept-Encoding")
+        self.send_header("ETag", etag)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Encoding", "gzip")
         self.send_header("Content-Length", str(stat.st_size))
