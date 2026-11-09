@@ -244,7 +244,10 @@ function matrixTableAb(view, rnd, metric, selected) {
   // The totals are the same readout as the cells: same semantic tone classes, same heat ramp.
   const toneOf = (v) => change && v != null ? (v < 0 ? " is-better" : v > 0 ? " is-worse" : " is-zero") : "";
   const maxDelta = Math.max(1, ...cells.flatMap((row) => row.map((x) => (x.n == null ? 0 : Math.abs(x.n)))));
-  const heat = (v) => (change ? (0.08 + 0.62 * Math.sqrt(Math.min(1, Math.abs(v) / maxDelta))).toFixed(3) : "0.08");
+  const maxCount = Math.max(1, ...cells.flatMap((row) => row.map((x) => num(x[side]))));
+  const heatDelta = (v) => (0.08 + 0.62 * Math.sqrt(Math.min(1, Math.abs(v) / maxDelta))).toFixed(3);
+  // 发版前 / 发版后同题 / 线上真实 和外部矩阵用同一条热力坡道。
+  const heatCount = (v) => (0.08 + 0.72 * Math.sqrt(Math.min(1, v / maxCount))).toFixed(3);
   const rowBefore = rows.map((_, ri) => sumOf(cells[ri].map((x) => num(x.before))));
   const rowAfter = rows.map((_, ri) => sumOf(cells[ri].map((x) => num(x.after))));
   const rowCount = rows.map((_, ri) => sumOf(cells[ri].map((x) => num(x[side]))));
@@ -255,11 +258,15 @@ function matrixTableAb(view, rnd, metric, selected) {
       ? `<button type="button" class="mh" data-act="abcol" data-ci="${ci}" title="${esc(title)}" aria-label="下钻 ${esc(c.name)}">${label}<i class="mx-caret" aria-hidden="true"></i></button>`
       : `<span class="mh" title="${esc(title)}">${label}</span>`;
   }).join("");
+  // 同题变化比的是同一批固定题，场景在固定题集里的 trace 数前后不变；只有各侧的
+  // 问题 trace 才会增减，所以这里不再写 前→后，固定题集不可得时退回发版前。
+  const fixedCount = (row) => (Array.isArray(rnd.pairs)
+    ? rnd.pairs.reduce((n, pair) => n + (sceneMatches(row, pair.scene || NO_SCENE, pair.sub || "") ? 1 : 0), 0)
+    : null);
   let rowLabels = "", gridCells = "", tots = "";
   rows.forEach((r, ri) => {
-    const volume = change
-      ? `${fmt(traces?.before?.[ri] || 0)}→${fmt(traces?.after?.[ri] || 0)}条`
-      : `${fmt(rowDen(ri))}条`;
+    const fixed = change ? fixedCount(r) : null;
+    const volume = `${fmt(fixed == null ? (change ? (traces?.before?.[ri] || 0) : rowDen(ri)) : fixed)}条`;
     const label = `<span class="mx-lab">${esc(r.name)}<em class="mx-vol">（${volume}）</em></span>`;
     rowLabels += r.children?.length
       ? `<button type="button" class="rh" data-act="abrow" data-ri="${ri}" title="${esc(r.name)}" aria-label="下钻 ${esc(r.name)}">${label}<i class="mx-caret" aria-hidden="true"></i></button>`
@@ -271,20 +278,21 @@ function matrixTableAb(view, rnd, metric, selected) {
         const b = num(cell.before), a = num(cell.after), d = a - b;
         if (!b && !a) { gridCells += `<span class="cell is-empty" data-abmx="${ri}:${ci}"></span>`; return; }
         const tip = `${r.name} · ${c.name}|同题变化 ${signed(d)} · ${ratioText(d, b)}|同题基线 ${fmt(b)} → 同题复测 ${fmt(a)}`;
-        gridCells += `<span class="cell num${toneOf(d)}${on}" style="--v:${heat(d)}" data-act="cell" data-ri="${ri}" data-ci="${ci}" data-abmx="${ri}:${ci}" data-tip="${esc(tip)}">${changeCellData(b, a)}</span>`;
+        gridCells += `<span class="cell num${toneOf(d)}${on}" style="--v:${heatDelta(d)}" data-act="cell" data-ri="${ri}" data-ci="${ci}" data-abmx="${ri}:${ci}" data-tip="${esc(tip)}">${changeCellData(b, a)}</span>`;
         return;
       }
       const v = num(cell[side]);
       const den = rowDen(ri);
       if (!v) { gridCells += `<span class="cell is-empty" data-abmx="${ri}:${ci}"></span>`; return; }
+      const hv = heatCount(v);
       const tip = `${r.name} · ${c.name}|${fmt(v)} 个问题 · ${pct(v, den, 1)}|${metricLabel(metric)} · ${fmt(den)} 条 Trace`;
-      gridCells += `<span class="cell num${on}" style="--v:0.08" data-act="cell" data-ri="${ri}" data-ci="${ci}" data-abmx="${ri}:${ci}" data-tip="${esc(tip)}">${countCellData(v, den)}</span>`;
+      gridCells += `<span class="cell num${Number(hv) > 0.5 ? " hot" : ""}${on}" style="--v:${hv}" data-act="cell" data-ri="${ri}" data-ci="${ci}" data-abmx="${ri}:${ci}" data-tip="${esc(tip)}">${countCellData(v, den)}</span>`;
     });
     if (change) {
       const d = rowAfter[ri] - rowBefore[ri];
-      tots += `<span class="rowtot num${toneOf(d)}" style="--v:${heat(d)}">${changeCellData(rowBefore[ri], rowAfter[ri])}</span>`;
+      tots += `<span class="rowtot num${toneOf(d)}" style="--v:${heatDelta(d)}">${changeCellData(rowBefore[ri], rowAfter[ri])}</span>`;
     } else {
-      tots += `<span class="rowtot num" style="--v:0.08">${fmt(rowCount[ri])}</span>`;
+      tots += `<span class="rowtot num">${fmt(rowCount[ri])}</span>`;
     }
   });
   const foot = cols.map((c, ci) => {
@@ -292,7 +300,7 @@ function matrixTableAb(view, rnd, metric, selected) {
       const before = sumOf(rows.map((_, ri) => num(cells[ri][ci].before)));
       const after = sumOf(rows.map((_, ri) => num(cells[ri][ci].after)));
       const d = after - before;
-      return `<button type="button" class="cell coltot num${toneOf(d)}" style="--v:${heat(d)}" data-act="cell" data-ri="total" data-ci="${ci}" title="全部场景 · ${esc(c.name)}">${changeCellData(before, after)}</button>`;
+      return `<button type="button" class="cell coltot num${toneOf(d)}" style="--v:${heatDelta(d)}" data-act="cell" data-ri="total" data-ci="${ci}" title="全部场景 · ${esc(c.name)}">${changeCellData(before, after)}</button>`;
     }
     const v = sumOf(rows.map((_, ri) => num(cells[ri][ci][side])));
     return `<button type="button" class="cell coltot num" style="--v:0.08" data-act="cell" data-ri="total" data-ci="${ci}" title="全部场景 · ${esc(c.name)}">${countCellData(v, grandDen)}</button>`;
@@ -300,11 +308,11 @@ function matrixTableAb(view, rnd, metric, selected) {
   let footTotal;
   if (change) {
     const before = sumOf(rowBefore), after = sumOf(rowAfter), d = after - before;
-    footTotal = `<span class="rowtot rowtot-foot num${toneOf(d)}" style="--v:${heat(d)}">${changeCellData(before, after)}</span>`;
+    footTotal = `<span class="rowtot rowtot-foot num${toneOf(d)}" style="--v:${heatDelta(d)}">${changeCellData(before, after)}</span>`;
   } else {
     footTotal = `<span class="rowtot rowtot-foot num" style="--v:0.08">${fmt(sumOf(rowCount))}</span>`;
   }
-  return `<div class="matrix abmatrix" style="--cols:${cols.length};--rows:${rows.length}">
+  return `<div class="matrix abmatrix${change ? " is-change" : ""}" style="--cols:${cols.length};--rows:${rows.length}">
     <div class="mx-rows"><span class="mx-corner" aria-hidden="true"></span>${rowLabels}<span class="rh"><span class="mx-lab mx-total-lab">场景合计</span></span></div>
     <div class="mx-scroll"><div class="mx-grid">${heads}${gridCells}${foot}</div></div>
     <div class="mx-tots"><span class="rowtot-head" title="该场景在当前口径下的问题数合计"><span class="mx-lab mx-total-lab">${change ? "变化合计" : "问题合计"}</span></span>${tots}${footTotal}</div>

@@ -409,10 +409,12 @@ test("AB matrix offers the four readings and paints four numbers in every change
   const rowBefore = [row.task, "", [["S4.M1.1", 95]], 95];
   const rowAfter = [row.task, "", [["S4.M1.1", 60]], 60];
   const rowOnline = [row.task, "", [["S4.M1.1", 40]], 40];
+  const pairs = Array.from({ length: 120 }, () => ({ scene: row.task, sub: "" }));
   const post = {
     label: "v1106",
     sides: { before: { hits: 95, traces: 95 }, after: { hits: 60, traces: 60 }, online: { hits: 40, traces: 40 } },
     matrix: { before: [rowBefore], after: [rowAfter], online: [rowOnline] },
+    pairs,
     nodes: [],
   };
   const host = { innerHTML: "", getBoundingClientRect: () => ({ width: 720 }),
@@ -433,8 +435,10 @@ test("AB matrix offers the four readings and paints four numbers in every change
     assert.doesNotMatch(host.innerHTML, /同题\+线上变化|发版后（同题回测\+线上真实）/);
     assert.doesNotMatch(host.innerHTML, /class="ab-round"/); // the records live in the card head
     assert.doesNotMatch(host.innerHTML, /ab-mxnote|ab-scope/);
-    // The scene's trace volume sits once on its row, not on every cell.
-    assert.match(host.innerHTML, /未接入分类体系<em class="mx-vol">（95→60条）<\/em>/);
+    // The change matrix compares one fixed set: the scene volume is that set's count, and it
+    // must not swing with the two batches.
+    assert.match(host.innerHTML, /未接入分类体系<em class="mx-vol">（120条）<\/em>/);
+    assert.doesNotMatch(host.innerHTML, /（95→60条）|（95→199条）/);
     // Each change cell carries 发版前 → 发版后, the net move and that move's rate.
     assert.match(host.innerHTML, /<span class="cell-pair"><b>95<\/b><i class="cell-arrow"[^>]*>→<\/i><b>60<\/b><\/span><span class="cell-delta"><span>−35<\/span><span class="cell-ratio">−36.8%<\/span><\/span>/);
     assert.match(host.innerHTML, /变化合计/);
