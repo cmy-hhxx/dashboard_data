@@ -82,7 +82,8 @@ body.is-ab-full { overflow: hidden; }
 .ab-orbit-sunburst .sb-view { grid-template-columns: 150px minmax(0, 1fr); gap: 10px; }
 .ab-orbit-sunburst .sb { width: 150px; }
 .ab-orbit-sunburst .sb-c b { font-size: 22px; }
-.ab-orbit-sunburst .sb-list { max-height: 200px; overflow-y: auto; align-content: safe center; scrollbar-width: thin; }
+.ab-orbit-sunburst .sb-list { max-height: 200px; overflow-y: auto; align-content: safe center; scrollbar-width: none; -ms-overflow-style: none; }
+.ab-orbit-sunburst .sb-list::-webkit-scrollbar { display: none; }
 .ab-orbit-sunburst .sb-r { min-height: 26px; font-size: var(--fs-meta); }
 .ab-orbit-card.is-deep .ab-orbit-sunburst .sb-view { grid-template-columns: 190px minmax(0, 1fr); gap: 16px; }
 .ab-orbit-card.is-deep .ab-orbit-sunburst .sb { width: 190px; }

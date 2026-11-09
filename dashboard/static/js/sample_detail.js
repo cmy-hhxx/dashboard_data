@@ -450,13 +450,18 @@ function renderIn() {
   const m = D.meta || {};
   const models = S.prod?.models || [];
   // A/B retest details carry the bare model name (expert / fast); the board ids are prefixed.
-  const modelHit = models.find((x) => x.id === D.model) || models.find((x) => x.id.endsWith(`_${D.model}`));
-  const label = (modelHit || { label: D.model }).label;
+  const modelLabel = (id) => (models.find((x) => x.id === id) || models.find((x) => x.id.endsWith(`_${id}`)) || { label: id }).label;
+  const traceLabel = modelLabel(D.model);
   const scene = [m.task, m.subtask, m.difficulty, m.skill, m.mode].filter(Boolean);
   const scale = [m.tokens_in ? `${compact((m.tokens_in || 0) + (m.tokens_out || 0))} tokens` : null,
     m.finish_ms ? `${fmt(m.finish_ms / 1000, 1)} s` : null].filter(Boolean);
   const ids = [["会话 ID", D.ids.session], ["Trace ID", D.ids.trace], ["Case ID", D.ids.case]].filter((x) => x[1]);
   const session = S.all.find((x) => x.key === S.sessionKey) || S.session || {};
+  // One session can mix models across its traces; the list keeps one row per model, so read
+  // the sibling groups sharing this session id, not only the current group's rows.
+  const sessionPeers = S.all.filter((x) => x.sid && session.sid && String(x.sid) === String(session.sid));
+  const sessionModels = [...new Set((sessionPeers.length ? sessionPeers : [session]).map((x) => x.m).filter(Boolean))];
+  const sessionLabel = sessionModels.length > 1 ? "混合" : modelLabel(sessionModels[0] || D.model);
   const uid = String(session.uid || "");
   const ut = utOf(session);
   const userItem = uid
@@ -477,7 +482,8 @@ function renderIn() {
       </div>
       <div class="chip-groups">
         ${isLostRow(session) ? `<span class="cg"><span class="pill lost">流失用户</span></span>` : ""}
-        ${group("模型", "is-model", [label])}
+        ${group("会话模型", "is-model", [sessionLabel])}
+        ${group("当前 trace", "is-model", [traceLabel])}
         ${group("日期", "is-plain", [D.date])}
         ${group("场景", "is-scene", scene)}
         ${group("规模", "is-scale", scale)}
