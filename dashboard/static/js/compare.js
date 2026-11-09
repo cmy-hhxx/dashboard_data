@@ -328,6 +328,7 @@ async function mountDetail(host, spec) {
   });
   C.details.push(detail);
   await detail.load(spec.session, spec.focus);
+  detail.refreshThreads?.();
 }
 
 function beforeSession(pair, ref) {

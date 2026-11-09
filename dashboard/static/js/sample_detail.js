@@ -1491,6 +1491,9 @@ function onOutClick(e) {
       if (next.sessions) S.all = next.sessions;
     },
     data: () => S.D,
+    // Re-run the evidence-thread geometry after a host relayout (compare's single-model pane
+    // switches from a narrow column to the full workbench).
+    refreshThreads: () => scheduleThreads(),
     destroy: () => {
       threadObs?.disconnect();
       threadTimers.forEach(clearTimeout);
