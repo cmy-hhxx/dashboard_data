@@ -149,8 +149,10 @@ def scheduler(delay):
 
 class Handler(SimpleHTTPRequestHandler):
     # HTTP/1.1 keeps the connection alive for the many sample-detail requests
-    # opened when a multi-trace session is selected.
+    # opened when a multi-trace session is selected.  Idle keep-alive sockets
+    # close after 30s so a stalled client cannot pin a request thread forever.
     protocol_version = "HTTP/1.1"
+    timeout = 30
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=STATIC, **kwargs)
@@ -291,6 +293,15 @@ class Handler(SimpleHTTPRequestHandler):
         with open(gz, "rb") as fh:
             shutil.copyfileobj(fh, self.wfile)
         return True
+
+    def handle_one_request(self):
+        started = time.time()
+        try:
+            super().handle_one_request()
+        finally:
+            elapsed = time.time() - started
+            if elapsed >= 2.0:
+                sys.stderr.write(f"[slow] {elapsed:.1f}s {getattr(self, 'command', '?')} {self.path}\n")
 
     def do_GET(self):
         self._cache_policy = None
