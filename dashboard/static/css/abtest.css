@@ -172,7 +172,7 @@ body.is-ab-full { overflow: hidden; }
 .ab-change-pills b { color: var(--ink-2); font-weight: var(--w-medium); }
 .ab-change-pills small { margin-left: 8px; color: var(--faint); }
 
-.ab-summary-grid { --rank-cols: minmax(0, 160px) minmax(120px, 1fr) 84px 60px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.ab-summary-grid { --rank-cols: minmax(0, 160px) minmax(120px, 1fr) 84px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .ab-rank { min-width: 0; background: var(--well); border-radius: var(--r-well); overflow: hidden; }
 .ab-rank > header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 12px 16px 4px; color: var(--muted); font-size: var(--fs-meta); }
 .ab-rank > header b { color: var(--ink-2); font-weight: var(--w-medium); }
@@ -202,11 +202,7 @@ body.is-ab-full { overflow: hidden; }
 .ab-db-dot.is-to { background: var(--accent); }
 .ab-rank.is-worse .ab-db-dot.is-to { background: var(--sev-1); }
 .ab-rankrow b { text-align: right; color: var(--ink-2); font-size: var(--fs-meta); font-weight: var(--w-medium); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.ab-rankrow small { overflow: hidden; color: var(--faint); font-size: 11px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .ab-rankempty { margin: 0; padding: 16px; color: var(--faint); font-size: var(--fs-meta); }
-
-.ab-summary-foot { display: flex; justify-content: flex-end; }
-.ab-next { font-size: var(--fs-small); }
 
 /* ---------------------------------------------------------------- 聚类矩阵 */
 .ab-matrixstep { display: grid; gap: 10px; min-width: 0; }
@@ -223,17 +219,14 @@ body.is-ab-full { overflow: hidden; }
 .ab-chip[aria-pressed="true"] { background: var(--active); color: var(--ink); }
 .ab-chip[disabled] { opacity: 0.35; cursor: default; }
 .ab-matrixmeta { margin-left: auto; color: var(--faint); font-size: var(--fs-meta); white-space: nowrap; }
-.ab-back { flex: none; }
-.ab-up { margin-left: auto; }
 .ab-mxshell { position: relative; min-width: 0; }
 
 .abmatrix .cell { cursor: pointer; }
 .abmatrix .cell.is-better { color: var(--accent); background: color-mix(in oklab, var(--accent) calc(var(--v) * 56%), transparent); }
 .abmatrix .cell.is-worse { color: var(--sev-1); background: color-mix(in oklab, var(--sev-1) calc(var(--v) * 50%), transparent); }
+.abmatrix .cell.coltot { background: color-mix(in oklab, var(--accent) 10%, transparent); }
 .abmatrix .cell.is-zero { background: var(--well); color: var(--faint); }
 .abmatrix .cell.is-sel { box-shadow: inset 0 0 0 1.5px color-mix(in oklab, currentColor 55%, transparent); }
-.abmatrix .rowtot i.is-better { background: var(--accent); }
-.abmatrix .rowtot i.is-worse { background: var(--sev-1); }
 
 /* ---------------------------------------------------------------- 选中格趋势 */
 .ab-trend { display: grid; gap: 8px; min-width: 0; margin-top: 1px; padding-top: 12px; border-top: 1px solid var(--well-2); }
@@ -281,6 +274,7 @@ body.is-ab-full { overflow: hidden; }
   .ab-summary-grid { --rank-cols: minmax(0, 1fr) minmax(60px, 1fr) auto; }
   .ab-rankrow { grid-template-columns: var(--rank-cols); }
   .ab-rank-axis { display: none; }
-  .ab-rankrow small { display: none; }
   .mx-card.is-full { padding: 12px 16px 32px; }
 }
+.abmatrix .coltot.is-better, .abmatrix .rowtot-foot.is-better { color: var(--accent); }
+.abmatrix .coltot.is-worse, .abmatrix .rowtot-foot.is-worse { color: var(--sev-1); }

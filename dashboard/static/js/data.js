@@ -23,7 +23,7 @@ const ui = (product) =>
   (UI[product] = UI[product] || {
     field: { w: null, pages: [] }, vol: {}, clu: {}, pred: "vol",
     mx: {
-      rows: [], cols: [], trail: [], expanded: false, issueOpen: false, issueRange: "30", issuePath: [], analysisLevels: ["P0", "P1"],
+      rows: [], cols: [], trail: [], expanded: true, issueOpen: true, issueRange: "30", issuePath: [], analysisLevels: ["P0", "P1"],
       // 聚类矩阵格子的就地趋势图：口径 / 时间 / 场景 + 来源·模型·等级的折线组 + 是否打开都活在这里，
       // 就地刷新或切换产品再回来仍是同一张图。rowKeys/colKeys 是行列路径，刷新后用来重新定位。
       trend: { open: false, measure: "count", range: "30", scope: "row", lines: [], active: 0, seeded: false, rowKeys: null, colKeys: null },
@@ -146,7 +146,7 @@ const FIELD_TILE = 13; // 11px tile + 2px gap
 
 function fieldCard(p, u) {
   const groups = p.field
-    .map((g, gi) => `<div class="fgroup" data-g="${gi}"><div class="fgroup-head"><b>${esc(groupName(p, g))}</b><span class="num">${fmt(g.cells.length)}</span>${
+    .map((g, gi) => `<div class="fgroup" data-g="${gi}"><div class="fgroup-head"><b>${esc(groupName(p, g))}</b><span class="num">${fmt(g.cells.length)} 条 · ${fmt(g.sessions ?? g.cells.length)} 场</span>${
       g.lost ? `<span class="fgroup-lost"><i></i>流失会话 ${fmt(g.lost)}</span>` : ""
     }</div><div class="tiles"></div><div class="pager field-pager" data-pager="${gi}" hidden></div></div>`)
     .join("");
@@ -251,7 +251,7 @@ function paintField(field, p, filter) {
     if (pages > 1) {
       const btn = (key, label, off) => `<button type="button" data-page="${key}"${off ? " disabled" : ""}>${label}</button>`;
       pager.innerHTML = `${btn("prev", "上一页", cur === 1)}
-        <span class="pager-info">第 <b class="num">${cur}</b> / ${pages} 页 · ${fmt(g.cells.length)} 条</span>
+        <span class="pager-info">第 <b class="num">${cur}</b> / ${pages} 页 · ${fmt(g.cells.length)} 条记录</span>
         ${btn("next", "下一页", cur === pages)}`;
     }
   });
@@ -346,7 +346,7 @@ const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
 const EV_PER_ROW = 15;
 const RANGE_LABEL = { 7: "近 7 天", 30: "近 30 天", all: "全部" };
 // year: 「全部」柱状图超过 12 个月时切到年份，点某一年再下钻成该年的月份。
-const EV = { range: "30", model: "all", year: null };
+const EV = { range: "all", model: "all", year: null };
 
 function evalRows(p) {
   if (Array.isArray(p.daily) && p.daily.length) return p.daily;
@@ -462,7 +462,7 @@ function evalChart(p) {
         const total = Math.max(x.inputs, x.evaluated, 1);
         const height = Math.max(3, (barH * total) / max);
         const done = x.evaluated ? Math.min(100, (100 * x.evaluated) / Math.max(x.inputs, x.evaluated)) : 0;
-        const tip = `${x.tip || x.d}|输入 ${fmt(x.inputs)} · 已完成 ${fmt(x.evaluated)} · ${pct(x.evaluated, x.inputs, 1)}`;
+        const tip = `${x.tip || x.d}|输入 ${fmt(x.inputs)} 条记录 · 已完成 ${fmt(x.evaluated)} 条记录 · ${pct(x.evaluated, x.inputs, 1)}`;
         return `<div class="evday${x.evaluated ? " is-live" : ""}${x.year ? " is-drill" : ""}"${x.year ? ` data-year="${esc(x.year)}"` : ""} data-d0="${x.d0 || x.d}" data-d1="${x.d1 || x.d}"><div class="evnums"><b class="num">${compact(x.evaluated)}</b><small class="num">${compact(x.inputs)}</small></div>
           <div class="evbar" style="height:${height}px" data-tip="${esc(tip)}"><i style="height:${done}%"></i></div>
           <small class="evdate num">${esc(x.label)}</small></div>`;
@@ -472,7 +472,9 @@ function evalChart(p) {
 }
 
 /* 评测量是「输出 / 输入」对账：口径跟 ev-range 走，近 7/30 天用窗口合计，
-   全部（以及年份下钻）用全量/该年合计。 */
+   全部（以及年份下钻）用全量/该年合计。默认全部，所以首次加载的
+   完成 Session / 输入 Session、完成 Trace / 输入 Trace 与数据量卡逐位相等；
+   切到近 7/30 天是本卡的缩放，不再声称与全量数据量卡对账。 */
 function evalTotals(p) {
   const w = evalWindow(p);
   const k = p.kpi;
@@ -510,7 +512,7 @@ function evalLegend() {
   const back = EV.range === "all" && EV.year
     ? `<button type="button" class="link ev-back" id="evYearBack" aria-label="返回全部年份">‹ ${esc(EV.year)} 年</button>`
     : "";
-  return `<div class="ev-legend"><span><i class="ev-done"></i>已完成</span><span><i class="ev-in"></i>评测输入</span>${back}</div>`;
+  return `<div class="ev-legend"><span><i class="ev-done"></i>已完成记录</span><span><i class="ev-in"></i>评测输入记录</span>${back}</div>`;
 }
 
 function evalCard(p) {
@@ -1486,9 +1488,11 @@ const clusterMatches = (node, pid) => !node.prefix || pid === node.prefix || pid
 
 function matrixView(p, rows, cols) {
   const cells = rows.map(() => cols.map(() => ({ n: 0, sessions: 0, pats: new Map() })));
-  (p.cross || []).forEach(([task, sub, pats]) => {
+  const traces = rows.map(() => 0);
+  (p.cross || []).forEach(([task, sub, pats, tr]) => {
     const ri = rows.findIndex((r) => sceneMatches(r, task, sub));
     if (ri < 0) return;
+    traces[ri] += Number(tr) || 0;
     const hit = new Set();
     pats.forEach(([pid, n]) => {
       const ci = cols.findIndex((c) => clusterMatches(c, pid));
@@ -1502,16 +1506,19 @@ function matrixView(p, rows, cols) {
       }
     });
   });
-  return { rows, cols, cells };
+  return { rows, cols, cells, traces };
 }
 
 function matrixTable(view) {
-  const { rows, cols, cells } = view;
+  const { rows, cols, cells, traces } = view;
   if (!rows.length || !cols.length) return `<div class="empty">暂无聚类数据</div>`;
-  let max = 1, maxTot = 1;
+  let max = 1;
   const totals = rows.map((_, ri) => sum(cells[ri].map((x) => x.n)));
+  const colTotals = cols.map((_, ci) => sum(rows.map((_, ri) => cells[ri][ci].n)));
+  const grand = sum(colTotals);
+  const grandTraces = sum(traces) || 0;
   cells.forEach((row) => row.forEach((x) => (max = Math.max(max, x.n))));
-  totals.forEach((n) => (maxTot = Math.max(maxTot, n)));
+  const cellData = (n, den) => `<span class="cell-data"><span class="cell-main"><b>${fmt(n)}</b><span class="cell-den">/ ${fmt(den)}</span></span><span class="cell-pct">${pct(n, den, 1)}</span></span>`;
   const heads = cols
     .map((c, ci) => {
       const title = `${c.id ? `${c.id} · ` : ""}${c.name}`;
@@ -1528,19 +1535,20 @@ function matrixTable(view) {
     rowLabels += drill
       ? `<button type="button" class="rh" data-row="${ri}" title="${esc(r.name)}" aria-label="下钻 ${esc(r.name)}">${label}</button>`
       : `<span class="rh" title="${esc(r.name)}">${label}</span>`;
-    cols.forEach((_, ci) => {
+    cols.forEach((c, ci) => {
       const cell = cells[ri][ci];
       const v = cell.n ? 0.08 + 0.72 * Math.sqrt(cell.n / max) : 0;
       gridCells += cell.n
-        ? `<span class="cell num${v > 0.5 ? " hot" : ""}" style="--v:${v.toFixed(3)}" data-mx="${ri}:${ci}">${fmt(cell.n)}</span>`
+        ? `<span class="cell num${v > 0.5 ? " hot" : ""}" style="--v:${v.toFixed(3)}" data-mx="${ri}:${ci}" title="${esc(r.name)} · ${esc(c.name)}：${fmt(cell.n)} 个问题 / ${fmt(traces[ri])} 条 Trace · ${pct(cell.n, traces[ri], 1)}">${cellData(cell.n, traces[ri])}</span>`
         : `<span class="cell is-empty" data-mx="${ri}:${ci}"></span>`;
     });
-    tots += `<span class="rowtot num"><i style="width:${(72 * totals[ri]) / maxTot}px"></i>${fmt(totals[ri])}</span>`;
+    tots += `<span class="rowtot num">${fmt(totals[ri])}</span>`;
   });
+  const foot = cols.map((c, ci) => `<button type="button" class="cell coltot" style="--v:0.08" data-mx="${rows.length}:${ci}" title="全部场景 · ${esc(c.name)}：${fmt(colTotals[ci])} 个问题 / ${fmt(grandTraces)} 条 Trace · ${pct(colTotals[ci], grandTraces, 1)}">${cellData(colTotals[ci], grandTraces)}</button>`).join("");
   return `<div class="matrix mx-swap-panel" style="--cols:${cols.length};--rows:${rows.length}">
-    <div class="mx-rows"><span class="mx-corner" aria-hidden="true"></span>${rowLabels}</div>
-    <div class="mx-scroll"><div class="mx-grid">${heads}${gridCells}</div></div>
-    <div class="mx-tots"><span class="rowtot-head" title="该场景在各问题聚类上的问题数合计">问题合计</span>${tots}</div>
+    <div class="mx-rows"><span class="mx-corner" aria-hidden="true"></span>${rowLabels}<span class="rh"><span class="mx-lab mx-total-lab">场景合计</span></span></div>
+    <div class="mx-scroll"><div class="mx-grid">${heads}${gridCells}${foot}</div></div>
+    <div class="mx-tots"><span class="rowtot-head" title="该场景在各问题聚类上的问题数合计"><span class="mx-lab mx-total-lab">问题合计</span></span>${tots}<span class="rowtot rowtot-foot">${fmt(grand)}</span></div>
   </div>`;
 }
 
@@ -1637,7 +1645,7 @@ function wireMatrixAnalysis(panel, model, state, trend) {
     if (!model?.total) return;
     chartHost._drawer?.destroy();
     const draw = () => {
-      const chart = mxRateTrendChart(model, chartHost.clientWidth, state.analysisLevels, 232);
+      const chart = mxRateTrendChart(model, chartHost.clientWidth, state.analysisLevels, 180);
       chartHost.innerHTML = state.analysisLevels.length ? chart.html : '<div class="empty">选择问题等级</div>';
       wireLineTrendChart(chartHost, chart, "", (pick) => drawer.open(pick));
     };
@@ -1669,7 +1677,7 @@ function matrixPerspectiveHTML(view, trend, loading = false, state = {}, cluster
   return `<div class="mxp">
     <div class="mxp-lenses">
       <section class="mxp-lens is-depth">
-        <header><b>问题等级</b><small class="mxp-rule">每条 Trace 仅计入最严重等级</small></header>
+        <header><b>问题等级</b></header>
         <div class="mxp-severity" role="table" aria-label="按最严重等级归类的 Trace 数量与占比">
           <div class="mxp-severity-row mxp-severity-head" role="row"><span role="columnheader">等级</span><span></span><span role="columnheader">Trace 数</span><span role="columnheader">占比</span></div>
           ${rows}
@@ -1679,7 +1687,7 @@ function matrixPerspectiveHTML(view, trend, loading = false, state = {}, cluster
       <section class="mxp-lens is-speed">
         <header><b>Trace 趋势</b></header>
         <div class="mxp-levels" role="group" aria-label="选择趋势图的问题等级">${levels.map((level) => trendChip("analysis-level", level, SEV_NAME[level], selected.includes(level), false)).join("")}</div>
-        ${trendSampleFrame(`<div class="mpt-chart mxp-rate-chart" data-own-tip>${model?.total ? mxRateTrendChart(model, 340, selected).html : `<div class="empty">${empty}</div>`}</div>`)}
+        ${trendSampleFrame(`<div class="mpt-chart mxp-rate-chart" data-own-tip>${model?.total ? mxRateTrendChart(model, 340, selected, 180).html : `<div class="empty">${empty}</div>`}</div>`)}
       </section>
     </div>
     <section class="mxp-chart-panel">${mxPerspectiveTimeline(summary, loading)}</section>
@@ -1692,7 +1700,8 @@ function fitMatrix(m) {
   if (!m) return;
   const labs = $$(".mh .mx-lab", m);
   if (!labs.length) return;
-  const need = Math.ceil(Math.max(...labs.map((l) => l.scrollWidth))) + 9; // 4px gap + 5px caret
+  const widths = [...labs, ...$$(".mx-grid .cell-main, .mx-grid .cell-pct", m)].map((el) => el.scrollWidth);
+  const need = Math.ceil(Math.max(...widths)) + 9; // 4px gap + 5px caret
   m.style.setProperty("--mx-colw", `${need}px`);
   const pane = m.querySelector(".mx-scroll");
   if (pane) {
@@ -1750,18 +1759,18 @@ function swapShell(shell, html, animate, source) {
   const out = prev.animate([
     { opacity: 1, transform: "scale(1)" },
     { opacity: 0, transform: "scale(0.992)" },
-  ], { duration: 180, easing: "cubic-bezier(0.4, 0, 1, 1)", fill: "forwards" });
+  ], { duration: 140, easing: "cubic-bezier(0.4, 0, 1, 1)", fill: "forwards" });
   const enter = next.animate([
     { opacity: 1, clipPath: `circle(0px at ${ox}px ${oy}px)`, transform: "scale(0.997)" },
     { opacity: 1, clipPath: `circle(${radius.toFixed(1)}px at ${ox}px ${oy}px)`, transform: "none" },
-  ], { duration: 500, delay: 20, easing: ease, fill: "forwards" });
+  ], { duration: 340, delay: 10, easing: ease, fill: "forwards" });
   const resize = from !== to
-    ? shell.animate([{ height: `${from}px` }, { height: `${to}px` }], { duration: 500, easing: ease, fill: "forwards" })
+    ? shell.animate([{ height: `${from}px` }, { height: `${to}px` }], { duration: 340, easing: ease, fill: "forwards" })
     : null;
   const ripple = probe.animate([
     { opacity: 0.6, transform: "translate(-50%, -50%) scale(0.25)" },
     { opacity: 0, transform: "translate(-50%, -50%) scale(9)" },
-  ], { duration: 560, easing: ease, fill: "forwards" });
+  ], { duration: 380, easing: ease, fill: "forwards" });
   const anims = [out, enter, resize, ripple].filter(Boolean);
   shell._swapCleanup = () => {
     anims.forEach((anim) => anim.cancel());
@@ -1800,12 +1809,18 @@ const TREND_TW = 1200;   // 宽屏的上限；实际 viewBox 宽度按容器量�
 const TREND_TH = 260;    // 最小绘图高度；线多时按条数长高，给右侧端点标签留位置
 const TREND_PAD = { l: 56, r: 170, t: 16, b: 28 };
 const TREND_CACHE = new Map();
+const TREND_READY = new Map();
 
 /* One payload per (product, build); a rebuild invalidates it through generated_at. */
+const trendKey = (c) => `${c.product}|${c.data.generated_at}`;
+const trendReady = (c) => TREND_READY.get(trendKey(c));
 function loadTrend(c) {
-  const key = `${c.product}|${c.data.generated_at}`;
+  const key = trendKey(c);
+  if (TREND_READY.has(key)) return Promise.resolve(TREND_READY.get(key));
   if (!TREND_CACHE.has(key)) {
-    TREND_CACHE.set(key, getJSON(`trends-${c.product}.json`).catch(() => null));
+    TREND_CACHE.set(key, getJSON(`trends-${c.product}.json`)
+      .then((data) => { TREND_READY.set(key, data); return data; })
+      .catch(() => null));
   }
   return TREND_CACHE.get(key);
 }
@@ -2334,7 +2349,7 @@ function trendBodyHTML(data, spec, title) {
     <div class="mxt-tools">
       ${trendSeg("mxtMeasure", "measure", [["count", TREND_MEASURE.count], ["ratio", TREND_MEASURE.ratio]], spec.measure)}
       ${trendSeg("mxtRange", "range", ["7", "30", "all"].map((v) => [v, RANGE_LABEL[v]]), spec.range)}
-      ${trendSeg("mxtScope", "scope", [["row", `本场景：${spec.rowName || "—"}`], ["all", "全部场景"]], spec.scope)}
+      ${spec.rowName === "全部场景" ? "" : trendSeg("mxtScope", "scope", [["row", `本场景：${spec.rowName || "—"}`], ["all", "全部场景"]], spec.scope)}
     </div>
     <div class="mxt-palette" id="mxtPalette">${active ? trendPalette(data, active) : ""}</div>
     <div class="mxt-lines" id="mxtLines">${trendLinesHTML(spec.lines, data, spec.active)}</div>
@@ -2411,8 +2426,10 @@ function matrixCard(p, tax) {
     <div class="mx-face mx-matrix-face" id="mxMatrixFace">
       <header class="card-head mx-card-head"><h2>聚类矩阵</h2>${chrome ? `<div class="mx-head-views">${issueBtn}${expandBtn}</div>` : ""}${actions ? `<div class="mx-head-actions">${actions}</div>` : ""}</header>
       ${body}
-      ${chrome && p.ab ? `<section class="mx-issue-trends-shell" id="mxIssueTrends" hidden aria-label="全部问题类型趋势"></section>` : ""}
-      ${chrome ? `<section class="mx-perspective" id="mxPerspective" hidden aria-label="聚类矩阵问题分析"></section>` : ""}
+      ${chrome ? `<div class="mx-panels" id="mxPanels" hidden>
+        ${p.ab ? `<section class="mx-issue-trends-shell" id="mxIssueTrends" hidden aria-label="全部问题类型趋势"></section>` : ""}
+        <section class="mx-perspective" id="mxPerspective" hidden aria-label="聚类矩阵问题分析"></section>
+      </div>` : ""}
     </div>
     <div class="mx-face mx-ab-face" id="mxABFace" hidden>
       <header class="card-head ab-card-head">
@@ -3275,7 +3292,7 @@ function wire(bento, p, tax, u) {
         back.textContent = "← 返回上一级";
         back.hidden = rowPath.length === 1 && colPath.length === 1;
       }
-      renderPerspective();
+      renderPerspective(undefined, false);
     };
     const activeMatrix = () => shell.querySelector(".matrix:last-of-type");
     const clearHover = () => {
@@ -3347,6 +3364,7 @@ function wire(bento, p, tax, u) {
     const expandBtn = $("#mxExpand", bento);
     const issueEl = $("#mxIssueTrends", bento);
     const issueBtn = $("#mxIssueTrendsBtn", bento);
+    const panelsEl = $("#mxPanels", bento);
     let perspectiveToken = 0;
     let perspectiveLoading = false;
     let issueData = null;
@@ -3354,19 +3372,18 @@ function wire(bento, p, tax, u) {
     let issueToken = 0;
     const panelCard = shell.closest(".mx-card");
     let cancelPanelMotion = () => {};
-    let paintedCardHeight = null;
 
-    // Commit layout once, then move the following cards with transforms. The card surface and
-    // incoming content reveal on the sunburst clock; no per-frame height/layout work is needed.
+    /* Both analysis panels can be open at once. Commit the new grid/card height, then move the
+       cards below with one short transform so the page does not jump. */
     function layoutPanels(update, animate = true) {
-      const followers = [...bento.children].slice([...bento.children].indexOf(panelCard) + 1);
+      if (!panelCard || !bento) { update(); return; }
+      const children = [...bento.children].filter((el) => el && el.nodeType === 1);
+      const at = children.indexOf(panelCard);
+      const followers = at >= 0 ? children.slice(at + 1) : [];
       const before = followers.map((el) => ({ el, top: el.getBoundingClientRect().top }));
-      const beforeBox = panelCard.getBoundingClientRect();
-      const beforeHeight = paintedCardHeight ?? beforeBox.height;
+      const beforeHeight = panelCard.getBoundingClientRect().height;
+      const prevOverflow = panelCard.style.overflow;
       cancelPanelMotion();
-      const previous = [issueEl, perspectiveEl].find((el) => el && !el.hidden);
-      const previousBox = previous?.getBoundingClientRect();
-      const faceBox = panelCard.querySelector(".mx-matrix-face").getBoundingClientRect();
       bento.style.overflowAnchor = "none";
       update();
       if (!animate || REDUCED) {
@@ -3374,55 +3391,26 @@ function wire(bento, p, tax, u) {
         return;
       }
       const afterHeight = panelCard.getBoundingClientRect().height;
-      const jobs = before.map(({ el, top }) => ({ el, dy: top - el.getBoundingClientRect().top }));
-      const incoming = [issueEl, perspectiveEl].find((el) => el && !el.hidden);
-      const outgoing = previous?.hidden ? previous : null;
-      if (outgoing) {
-        outgoing.hidden = false;
-        outgoing.inert = true;
-        outgoing.setAttribute("aria-hidden", "true");
-        Object.assign(outgoing.style, { position: "absolute", top: `${previousBox.top - faceBox.top}px`, left: `${previousBox.left - faceBox.left}px`, width: `${previousBox.width}px`, pointerEvents: "none" });
+      const ease = "cubic-bezier(0.2, 1, 0.3, 1)";
+      const anims = [];
+      if (Math.abs(afterHeight - beforeHeight) > 0.5) {
+        panelCard.style.overflow = "hidden";
+        anims.push(panelCard.animate([{ height: `${beforeHeight}px` }, { height: `${afterHeight}px` }], { duration: 320, easing: ease }));
       }
-      const surface = document.createElement("div");
-      surface.className = "mx-motion-surface";
-      surface.setAttribute("aria-hidden", "true");
-      const surfaceHeight = Math.max(beforeHeight, afterHeight);
-      surface.style.height = `${surfaceHeight}px`;
-      panelCard.prepend(surface);
-      panelCard.classList.add("is-panel-moving");
-      const clearPanel = (el) => {
-        if (!el) return;
-        ["position", "top", "left", "width", "pointerEvents", "opacity", "transform", "clipPath"].forEach((key) => { el.style[key] = ""; });
-      };
+      followers.forEach(({ el, top }) => {
+        if (!el || !el.isConnected) return;
+        const dy = top - el.getBoundingClientRect().top;
+        if (Math.abs(dy) > 0.5) anims.push(el.animate([{ transform: `translateY(${dy}px)` }, { transform: "none" }], { duration: 320, easing: ease }));
+      });
       const clean = () => {
-        jobs.forEach(({ el }) => { el.style.transform = ""; });
-        clearPanel(incoming);
-        clearPanel(outgoing);
-        if (outgoing) {
-          outgoing.hidden = true;
-          outgoing.inert = false;
-          outgoing.removeAttribute("aria-hidden");
-        }
-        surface.remove();
-        panelCard.classList.remove("is-panel-moving");
+        anims.forEach((a) => a.cancel());
+        panelCard.style.height = "";
+        panelCard.style.overflow = prevOverflow;
         bento.style.overflowAnchor = "";
-        paintedCardHeight = null;
       };
-      const cancel = sunburstTween((k) => {
-        paintedCardHeight = beforeHeight + (afterHeight - beforeHeight) * k;
-        surface.style.transform = `scaleY(${paintedCardHeight / surfaceHeight})`;
-        jobs.forEach(({ el, dy }) => { if (Math.abs(dy) > 0.5) el.style.transform = `translateY(${dy * (1 - k)}px)`; });
-        if (incoming && incoming !== previous) {
-          incoming.style.clipPath = `inset(0 0 ${(1 - k) * 100}% 0)`;
-          incoming.style.opacity = String(0.4 + 0.6 * k);
-          incoming.style.transform = `translateY(${-4 * (1 - k)}px)`;
-        }
-        if (outgoing) {
-          outgoing.style.clipPath = `inset(0 0 ${k * 100}% 0)`;
-          outgoing.style.opacity = String(1 - k);
-        }
-      }, { finish: clean });
-      cancelPanelMotion = () => { cancel(); clean(); };
+      if (anims.length) Promise.all(anims.map((a) => a.finished.catch(() => {}))).then(clean);
+      else clean();
+      cancelPanelMotion = () => { anims.forEach((a) => a.cancel()); clean(); };
     }
 
     function renderIssueTrends(reveal = true) {
@@ -3501,25 +3489,33 @@ function wire(bento, p, tax, u) {
 
     function setMatrixPanel(kind, open, animate) {
       layoutPanels(() => {
-        u.mx.issueOpen = kind === "issue" && open;
-        u.mx.expanded = kind === "perspective" && open;
+        if (kind === "issue") u.mx.issueOpen = open;
+        else u.mx.expanded = open;
+        const issueVisible = !!issueEl && u.mx.issueOpen;
+        const perspectiveVisible = !!perspectiveEl && u.mx.expanded;
+        if (panelsEl) {
+          panelsEl.hidden = !issueVisible && !perspectiveVisible;
+          panelsEl.classList.toggle("is-both", issueVisible && perspectiveVisible);
+          panelsEl.classList.toggle("is-issue", issueVisible && !perspectiveVisible);
+          panelsEl.classList.toggle("is-perspective", perspectiveVisible && !issueVisible);
+        }
         if (issueEl && issueBtn) {
-          issueEl.hidden = !u.mx.issueOpen;
-          issueBtn.setAttribute("aria-expanded", String(u.mx.issueOpen));
+          issueEl.hidden = !issueVisible;
+          issueBtn.setAttribute("aria-expanded", String(issueVisible));
         }
         if (perspectiveEl && expandBtn) {
-          perspectiveEl.hidden = !u.mx.expanded;
-          expandBtn.setAttribute("aria-expanded", String(u.mx.expanded));
-          expandBtn.querySelector("span").textContent = u.mx.expanded ? "收起分析" : "问题分析";
+          perspectiveEl.hidden = !perspectiveVisible;
+          expandBtn.setAttribute("aria-expanded", String(perspectiveVisible));
+          expandBtn.querySelector("span").textContent = perspectiveVisible ? "收起分析" : "问题分析";
         }
-        if (u.mx.issueOpen) {
+        if (issueVisible) {
           if (issueData) renderIssueTrends(false);
           else issueEl.innerHTML = `<div class="mx-issue-loading"><div class="empty">正在读取问题趋势…</div></div>`;
         }
-        if (u.mx.expanded) renderPerspective(!trendData, false);
+        if (perspectiveVisible) renderPerspective(!trendData, false);
       }, animate);
-      if (u.mx.issueOpen) hydrateIssueTrends();
-      if (u.mx.expanded) hydratePerspective();
+      if (u.mx.issueOpen && issueEl) hydrateIssueTrends();
+      if (u.mx.expanded && perspectiveEl) hydratePerspective();
     }
     const setIssueTrends = (open, animate = true) => setMatrixPanel("issue", open, animate);
     const setPerspective = (open, animate = true) => setMatrixPanel("perspective", open, animate);
@@ -3704,13 +3700,14 @@ function wire(bento, p, tax, u) {
       }
     }
 
-    async function openTrend(row, col, source = null) {
+    async function openTrend(row, col, source = null, allScenes = false) {
       const node = col.prefix || col.pat;
       if (!node) return;
       hideTip();
       trend.open = true;
       trend.node = node;
       trend.rowName = row.name;
+      if (allScenes) trend.scope = "all";
       trend.colPrefix = node;
       trend.rowKeys = rowPath.slice(1).map(rowKey);
       trend.colKeys = colPath.slice(1).map(colKey);
@@ -3719,49 +3716,41 @@ function wire(bento, p, tax, u) {
         backBtn.textContent = "← 返回矩阵";
         backBtn.hidden = false;
       }
-      shell.classList.add("is-probing");
+      const ready = trendReady(ctx);
       $$(".mx-trend-probe", shell).forEach((el) => el.remove());
-      const status = document.createElement("span");
-      status.className = "mx-trend-probe";
-      status.textContent = "正在读取趋势";
-      shell.appendChild(status);
-      if (source && source.getBoundingClientRect && !REDUCED) {
-        const box = shell.getBoundingClientRect();
-        const src = source.getBoundingClientRect();
-        const probe = document.createElement("i");
-        probe.className = "mx-swap-probe";
-        probe.style.left = `${Math.max(12, Math.min(box.width - 12, src.left + src.width / 2 - box.left))}px`;
-        probe.style.top = `${Math.max(12, Math.min(box.height - 4, src.top + src.height / 2 - box.top))}px`;
-        shell.appendChild(probe);
-        probe.animate([
-          { opacity: 0.7, transform: "translate(-50%, -50%) scale(0.3)" },
-          { opacity: 0, transform: "translate(-50%, -50%) scale(9)" },
-        ], { duration: 460, easing: "cubic-bezier(0.16, 1, 0.3, 1)", fill: "forwards" }).finished.catch(() => {}).then(() => probe.remove());
+      if (!ready) {
+        const status = document.createElement("span");
+        status.className = "mx-trend-probe";
+        status.textContent = "正在读取趋势";
+        shell.appendChild(status);
       }
       const token = ++trendToken;
-      const data = await loadTrend(ctx);
+      const data = ready || await loadTrend(ctx);
       if (token !== trendToken || !trend.open || !shell.isConnected) return;
-      shell.classList.remove("is-probing");
       $$(".mx-trend-probe, .mx-swap-probe", shell).forEach((el) => el.remove());
       if (!data || !data.dates || !data.dates.length) {
-        swapShell(shell, `<div class="mxt mx-swap-panel"><div class="empty">暂无趋势数据</div></div>`, true, source);
+        swapShell(shell, `<div class="mxt mx-swap-panel"><div class="empty">暂无趋势数据</div></div>`, !!ready, source);
         return;
       }
       trendData = data;
       trendData.modelLabels = data.modelLabels || (p.models || []).map((m) => ({ id: m.id, label: m.label }));
       normalizeTrend(trend, data);
-      trendFrame(row, true, source);
+      trendFrame(row, !!ready, source);
     }
 
     function closeTrend(source = null) {
       trend.open = false;
       trendToken += 1;
-      shell.classList.remove("is-probing");
       $$(".mx-trend-probe, .mx-swap-probe", shell).forEach((el) => el.remove());
       paint(true, source);
     }
 
     paint(false);
+    // The trend payload is 6-7 MB: fetch it while the matrix is idle so the first cell
+    // click swaps in an already-parsed chart instead of waiting on the network.
+    const preloadTrend = () => loadTrend(ctx);
+    if ("requestIdleCallback" in window) requestIdleCallback(preloadTrend, { timeout: 3000 });
+    else setTimeout(preloadTrend, 1200);
     if (perspectiveEl && expandBtn) {
       expandBtn.addEventListener("click", () => setPerspective(!u.mx.expanded, true));
       if (u.mx.expanded) setPerspective(true, false);
@@ -3775,7 +3764,8 @@ function wire(bento, p, tax, u) {
       const row = (mxView.rows || []).find((x) => x.name === trend.rowName);
       const col = (mxView.cols || []).find((x) => (x.prefix || x.pat) === trend.colPrefix)
         || { name: patName(tax, trend.node) || trend.node, prefix: trend.node };
-      if (row) openTrend(row, col);
+      if (trend.rowName === "全部场景") openTrend({ name: "全部场景", all: true }, col, null, true);
+      else if (row) openTrend(row, col);
       else trend.open = false;
     }
     bento.addEventListener("click", (e) => {
@@ -3794,6 +3784,12 @@ function wire(bento, p, tax, u) {
       if (cell) {
         // A cell is a ready-made 具体数据 filter: its scene row × its problem column.
         const [ri, ci] = cell.dataset.mx.split(":").map(Number);
+        if (ri === mxView.rows.length) {
+          const c = mxView.cols[ci];
+          if (!c) return;
+          openTrend({ name: "全部场景", all: true }, c, cell, true);
+          return;
+        }
         const r = mxView.rows[ri];
         const c = mxView.cols[ci];
         if (!r || !c) return;
@@ -3885,7 +3881,7 @@ function wire(bento, p, tax, u) {
   const abFace = $("#mxABFace", bento);
   const abBody = $("#abBody", bento);
   if (abBtn && mxCard && matrixFace && abFace && abBody && p.ab) {
-    u.ab = u.ab || { open: false, round: -1, step: "summary", metric: "", rows: [], cols: [], cell: null };
+    u.ab = u.ab || { open: false, round: -1, metric: "", cell: null };
     let targetBack = !abFace.hidden;
     let flipping = false;
     let loading = false;

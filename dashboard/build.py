@@ -460,6 +460,11 @@ def scan_inputs(datasets: Path, top: Path, product: str, store: bs.BuildStore, j
     if sidecar_files and not isinstance(sidecar_files, dict):
         sidecar_files = {item["path"]: item for item in sidecar_files}
     sidecar_files = sidecar_files or {}
+    # A sidecar entry only carries aggregates; join keys still come from the file index.
+    # A cache row written before keys existed (or by a different store) also lacks them.
+    # Both would make input_session_counts() return None and silently drop the session
+    # denominators, so treat "no keys for a non-empty file" as a cache miss.
+    indexed = store.file_keys([path.relative_to(datasets).as_posix() for path in files])
     metas, todo = [], []
     from_sidecar = 0
     for path in files:
@@ -468,16 +473,21 @@ def scan_inputs(datasets: Path, top: Path, product: str, store: bs.BuildStore, j
             stat = path.stat()
         except OSError:
             continue
+        indexed_keys = indexed.get(rel)
         side = sidecar_files.get(rel)
-        if side and side.get("size") == stat.st_size and side.get("mtime_ns") == stat.st_mtime_ns:
+        if (side and side.get("size") == stat.st_size and side.get("mtime_ns") == stat.st_mtime_ns
+                and (indexed_keys or not side.get("lines"))):
             metas.append(side)
             from_sidecar += 1
             continue
         cached = store.file_meta(rel)
-        if cached and cached["size"] == stat.st_size and cached["mtime_ns"] == stat.st_mtime_ns:
+        if (cached and cached["size"] == stat.st_size and cached["mtime_ns"] == stat.st_mtime_ns
+                and (indexed_keys or not cached.get("lines"))):
             metas.append(cached)
             continue
         prev = store.get_file(rel) if cached else None
+        if prev and prev.get("lines") and not prev.get("keys"):
+            prev = None  # full rescan backfills join keys instead of tailing only new lines
         todo.append((str(datasets), rel, "input", prev, True, product,
                      bs.split_from_rel(rel), bs.model_from_rel(rel)))
     if todo:
@@ -1694,7 +1704,7 @@ def aggregate(product, samples, taxonomy):
         if not pats:
             continue
         cross.append([scene_of(detail, scene), detail["meta"].get("subtask") or "",
-                      [[pid, n] for pid, n in pats.most_common()]])
+                      [[pid, n] for pid, n in pats.most_common()], row["tr"]])
 
     # Input profile.
     msgs = [s[3]["messages"] for s in samples]
@@ -1779,8 +1789,10 @@ def aggregate(product, samples, taxonomy):
             for t, c in sorted(tree.items(), key=lambda kv: -sum(kv[1].values()))
         ]
 
-    # The session field: one cell per session, grouped by model. AIME is read as one
-    # product (daily + lost together); its lost users are counted as a marker, not split out.
+    # The session field: one cell per evaluated record (session × request_time), grouped by
+    # model. AIME is read as one product (daily + lost together); its lost users are counted
+    # as a marker, not split out. `sessions` repeats the same (split, sid) key as
+    # `unique_sessions`, so group headers sum to the card summary and to 评测量's 完成 Session.
     field = []
     order = {k: i for i, k in enumerate(WORST_KEYS)}
     unified = product == "aime"
@@ -1792,6 +1804,7 @@ def aggregate(product, samples, taxonomy):
             field.append({
                 "split": sp or "", "model": m,
                 "lost": sum(1 for s in group if s[2]["sp"] == "lost"),
+                "sessions": len({(s[2]["sp"], s[2]["sid"] or s[0]) for s in group}),
                 "cells": [[s[0], order[s[2]["w"]], s[2]["n"], clip(s[2]["q"], 56), int(s[2]["sp"] == "lost")] for s in group],
                 "roles": dict(Counter(p["role"] or "other" for s in group for p in s[1]["attribution"]["problems"])),
                 "tree": task_tree(group),

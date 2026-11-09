@@ -59,8 +59,13 @@ class SidecarTests(unittest.TestCase):
             second = run_build(datasets, static)
             self.assertNotIn("reused", second, second)
             data = json.loads((static / "data-wencai.json").read_text())
-            self.assertEqual(data["products"]["wencai"]["input"]["records"], 2)
-            daily = {(r["d"], r["m"]): r for r in data["products"]["wencai"]["daily"]}
+            product = data["products"]["wencai"]
+            self.assertEqual(product["input"]["records"], 2)
+            # The worker's sidecar has aggregates but no join keys; the build must still
+            # index the files so the session denominator is not silently dropped.
+            self.assertEqual(product["input"]["sessions"], 2)
+            self.assertTrue(all("in_sids" in r for r in product["daily"]))
+            daily = {(r["d"], r["m"]): r for r in product["daily"]}
             self.assertEqual(daily[("2026-11-02", "a_fast")]["inputs"], 1)
 
     def test_build_uses_fresh_sidecar(self):
@@ -69,9 +74,11 @@ class SidecarTests(unittest.TestCase):
             datasets, static = root / "datasets", root / "static"
             seed(datasets)
             seed_lost(datasets)
+            # The worker shares the build's cache in production, so its scan also fills the
+            # join-key index the build needs for session denominators.
             subprocess.run(
                 [sys.executable, str(DASHBOARD / "stats_worker.py"), "--datasets", str(datasets),
-                 "--store", str(root / "stats-cache.sqlite3"), "--out", str(datasets / "stats.json"),
+                 "--store", str(static.parent / "cache" / "build.sqlite3"), "--out", str(datasets / "stats.json"),
                  "--once"],
                 check=True, capture_output=True, text=True,
             )

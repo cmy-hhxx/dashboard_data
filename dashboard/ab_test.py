@@ -44,7 +44,7 @@ from pathlib import Path
 AB_DIR = "ab_test"
 # Bump when the payload's meaning changes (model scoping, leaf/matrix assembly) so an unchanged
 # dataset still rebuilds its abtests-*.json instead of serving a stale payload.
-AB_PAYLOAD_VERSION = 3
+AB_PAYLOAD_VERSION = 4
 ROUND_RE = re.compile(r"^(\d+)_version(?P<version>[0-9A-Za-z.]+?)(?:_test)?$")
 # 重测归因的 session_meta.case_id 结尾是 ``_eq_00013``：只有它的 eq 能生成改版后详情。
 ATTRIBUTION_EQ_RE = re.compile(r"_eq_(\d+)$")
@@ -448,13 +448,19 @@ def coverage_scene(row, scenes):
     return task or NO_SCENE, sub
 
 
-def matrix_rows(counter):
-    """``[(task, sub)] → [[path, n], …]`` in the shape the browser matrix already consumes."""
+def matrix_rows(counter, scene_traces=None):
+    """``[(task, sub)] → [[path, n], …]`` plus that scene's trace total.
+
+    ``scene_traces`` is the count of traces with problems in the scene; the browser uses it as
+    the denominator under each cell (问题数 / 该场景 Trace 总数) and for the percentage.
+    """
+    scene_traces = scene_traces or {}
     grouped = defaultdict(Counter)
     for (task, sub, path), count in counter.items():
         grouped[(task, sub)][path] += count
     return [
-        [task, sub, [[path, n] for path, n in sorted(paths.items(), key=lambda item: node_order(item[0]))]]
+        [task, sub, [[path, n] for path, n in sorted(paths.items(), key=lambda item: node_order(item[0]))],
+         scene_traces.get((task, sub), 0)]
         for (task, sub), paths in sorted(grouped.items(), key=lambda item: (-sum(item[1].values()), item[0]))
     ]
 
@@ -684,6 +690,7 @@ def _collect_side(rows, index, trace_scenes, with_slug=True):
     by_model = defaultdict(Counter)
     by_source = defaultdict(Counter)
     matrix = Counter()
+    scene_traces = Counter()
     refs = []
     by_trace = {}
     for row in rows:
@@ -691,6 +698,7 @@ def _collect_side(rows, index, trace_scenes, with_slug=True):
         if not paths:
             continue
         task, sub = _scene_for(row, index, trace_scenes)
+        scene_traces[(task, sub)] += 1
         by_trace[row["trace"]] = paths
         ref = {"trace": row["trace"], "model": row["model"], "task": task, "sub": sub, "paths": paths}
         if row.get("question"):
@@ -707,7 +715,8 @@ def _collect_side(rows, index, trace_scenes, with_slug=True):
             if row["source"]:
                 by_source[path][row["source"]] += 1
     return {"counter": counter, "model": by_model, "source": by_source, "matrix": matrix,
-            "refs": refs, "by_trace": by_trace, "rows": len(rows), "available": bool(rows)}
+            "scene_traces": scene_traces, "refs": refs, "by_trace": by_trace,
+            "rows": len(rows), "available": bool(rows)}
 
 
 def _online_from_samples(round_dir, meta, samples, before_rows, next_release, models=()):
@@ -719,6 +728,7 @@ def _online_from_samples(round_dir, meta, samples, before_rows, next_release, mo
     by_model = defaultdict(Counter)
     by_source = defaultdict(Counter)
     matrix = Counter()
+    scene_traces = Counter()
     refs = []
     dates = set()
     traces = 0
@@ -741,6 +751,7 @@ def _online_from_samples(round_dir, meta, samples, before_rows, next_release, mo
         traces += 1
         dates.add(day)
         task, sub = scene_pair(detail, row)
+        scene_traces[(task, sub)] += 1
         if paths:
             ref = {"slug": slug, "trace": trace, "model": model, "task": task, "sub": sub,
                    "paths": paths}
@@ -754,7 +765,8 @@ def _online_from_samples(round_dir, meta, samples, before_rows, next_release, mo
                 by_model[path][model] += 1
             by_source[path]["online_real"] += 1
     return {"counter": counter, "model": by_model, "source": by_source, "matrix": matrix,
-            "refs": refs, "traces": traces, "dates": dates, "available": True}
+            "scene_traces": scene_traces, "refs": refs, "traces": traces, "dates": dates,
+            "available": True}
 
 
 def _before_in_scope(row, models):
@@ -970,9 +982,9 @@ def _build_round_scoped(round_dir: Path, order: int, version: str, samples=None,
     meta["sample_refs"] = {"before": before["refs"], "after": after["refs"], "online": online["refs"]}
     meta["pairs"] = pairs
     meta["matrix"] = {
-        "before": matrix_rows(before["matrix"]) if before["available"] else [],
-        "after": matrix_rows(after["matrix"]) if after_available else None,
-        "online": matrix_rows(online["matrix"]) if online_available else None,
+        "before": matrix_rows(before["matrix"], before["scene_traces"]) if before["available"] else [],
+        "after": matrix_rows(after["matrix"], after["scene_traces"]) if after_available else None,
+        "online": matrix_rows(online["matrix"], online.get("scene_traces")) if online_available else None,
     }
     meta["nodes"] = tree_nodes(before["counter"], after["counter"], online["counter"], names,
                                after_available, online_available)
@@ -994,6 +1006,7 @@ def _build_round_legacy(round_dir: Path, order: int, version: str, samples=None,
             sample_by_trace[(str(trace), model)].add(slug)
     before, before_model, before_source = Counter(), defaultdict(Counter), defaultdict(Counter)
     before_matrix = Counter()
+    before_scene_traces = Counter()
     sample_refs = {side: [] for side in ("before", "after", "online")}
     for row in rows:
         paths = [p for p in (row.get("cls_paths") or "").split(";") if p]
@@ -1002,6 +1015,7 @@ def _build_round_legacy(round_dir: Path, order: int, version: str, samples=None,
         model = eval_model(str(row.get("eval_store") or ""))
         source = row.get("eval_category") or ""
         scene = coverage_scene(row, scenes)
+        before_scene_traces[scene] += 1
         sample_refs["before"].append({"trace": str(row.get("trace_id") or ""), "model": model,
                                       "task": scene[0], "sub": scene[1], "paths": paths})
         slugs = sample_by_trace[(str(row.get("trace_id") or ""), model)]
@@ -1020,6 +1034,7 @@ def _build_round_legacy(round_dir: Path, order: int, version: str, samples=None,
     after_model = defaultdict(Counter)
     after_source = defaultdict(Counter)
     after_matrix = Counter()
+    after_scene_traces = Counter()
     by_trace = {}
     if after_paths:
         for row in rows:
@@ -1030,6 +1045,7 @@ def _build_round_legacy(round_dir: Path, order: int, version: str, samples=None,
             model = eval_model(str(row.get("eval_store") or ""))
             source = row.get("eval_category") or ""
             scene = coverage_scene(row, scenes)
+            after_scene_traces[scene] += 1
             by_trace[trace] = paths
             sample_refs["after"].append({"trace": trace, "model": model, "task": scene[0], "sub": scene[1], "paths": paths})
             for path in paths:
@@ -1047,6 +1063,7 @@ def _build_round_legacy(round_dir: Path, order: int, version: str, samples=None,
     online_model = defaultdict(Counter)
     online_source = defaultdict(Counter)
     online_matrix = Counter()
+    online_scene_traces = Counter()
     online_dates = set()
     online_traces = 0
     online_start = meta.get("released_at")
@@ -1067,6 +1084,7 @@ def _build_round_legacy(round_dir: Path, order: int, version: str, samples=None,
             online_traces += 1
             online_dates.add(day)
             scene = scene_pair(detail, row)
+            online_scene_traces[scene] += 1
             if paths:
                 sample_refs["online"].append({"slug": _slug, "trace": trace, "model": row.get("m") or "",
                                                "task": scene[0], "sub": scene[1], "paths": paths})
@@ -1109,9 +1127,9 @@ def _build_round_legacy(round_dir: Path, order: int, version: str, samples=None,
     meta["leaves"] = leaves
     meta["sample_refs"] = sample_refs
     meta["matrix"] = {
-        "before": matrix_rows(before_matrix),
-        "after": matrix_rows(after_matrix) if after_paths else None,
-        "online": matrix_rows(online_matrix) if online_available else None,
+        "before": matrix_rows(before_matrix, before_scene_traces),
+        "after": matrix_rows(after_matrix, after_scene_traces) if after_paths else None,
+        "online": matrix_rows(online_matrix, online_scene_traces) if online_available else None,
     }
     meta["nodes"] = tree_nodes(before, after, online, names, bool(after_paths), online_available)
     return meta

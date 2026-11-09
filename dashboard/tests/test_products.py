@@ -88,6 +88,32 @@ class ProductSplitTests(unittest.TestCase):
             self.assertEqual(product["input"]["models"]["a_fast"]["sessions"], 1)
             self.assertEqual(product["daily"][0]["in_sids"], product["daily"][1]["in_sids"])
 
+    def test_session_field_separates_records_from_sessions_and_problems(self):
+        """会话场一格一条评测记录；场数按 (split, sid) 去重，问题数按记录内条目累加。"""
+        with tempfile.TemporaryDirectory() as folder:
+            datasets, static = Path(folder) / "datasets", Path(folder) / "static"
+            seed(datasets)
+            inp = datasets / "0_wencai/eval_input/a_fast/2026-11-01.jsonl"
+            second = json.loads(inp.read_text())
+            second["request_time"] = "2026-11-01 11:00:00"
+            second["meta"]["request_time"] = second["request_time"]
+            second["trace_id"] = "t2"
+            with inp.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(second, ensure_ascii=False) + "\n")
+            out = datasets / "0_wencai/eval_output/0_daily_eval/a_fast/a_fast_attribution-2026-11-01.jsonl"
+            second_out = json.loads(out.read_text())
+            second_out["session_meta"]["request_time"] = "2026-11-01 11:00:00"
+            with out.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(second_out, ensure_ascii=False) + "\n")
+
+            build(datasets, static)
+            product = json.loads((static / "data-wencai.json").read_text())["products"]["wencai"]
+            field = product["field"]
+            self.assertEqual((product["kpi"]["sessions"], product["kpi"]["unique_sessions"]), (2, 1))
+            self.assertEqual(product["kpi"]["problems"], 2)
+            self.assertEqual(sum(len(g["cells"]) for g in field), 2)
+            self.assertEqual(sum(g["sessions"] for g in field), product["kpi"]["unique_sessions"])
+
     def test_daily_trace_volume_counts_traces_inside_each_record(self):
         with tempfile.TemporaryDirectory() as folder:
             datasets, static = Path(folder) / "datasets", Path(folder) / "static"

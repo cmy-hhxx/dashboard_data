@@ -110,7 +110,7 @@ class PayloadTests(unittest.TestCase):
             self.assertEqual(payload["models"], ["expert"])
             self.assertEqual(payload["labels"]["status"]["C"][0], "无评测记录")
             self.assertEqual(payload["labels"]["sides"]["online"], "改版后 · 线上真实用户")
-            self.assertEqual(rnd["matrix"]["before"], [["未接入分类体系", "", [["S1.M2.1", 1], ["S1.M2.1.3", 1], ["S2.M1.2", 1]]]])
+            self.assertEqual(rnd["matrix"]["before"], [["未接入分类体系", "", [["S1.M2.1", 1], ["S1.M2.1.3", 1], ["S2.M1.2", 1]], 2]])
 
     def test_after_side_unions_and_pairs(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -184,8 +184,8 @@ class PayloadTests(unittest.TestCase):
             nodes = {node["id"]: node for node in rnd["nodes"]}
             self.assertEqual((nodes["S1.M2.1"]["online"], nodes["S2"]["online"]), (1, 1))
             self.assertEqual(rnd["matrix"]["online"], [
-                ["取数规划", "目标错配", [["S1.M2.1", 1]]],
-                ["检索规划", "空转未执行", [["S2.M1.2", 1]]],
+                ["取数规划", "目标错配", [["S1.M2.1", 1]], 2],
+                ["检索规划", "空转未执行", [["S2.M1.2", 1]], 1],
             ])
 
     def test_online_window_stops_at_the_next_release(self):
@@ -383,9 +383,9 @@ class ScopeLayoutTests(unittest.TestCase):
             self.assertEqual(before_matrix[("检索规划", "空转未执行")], [["S2.M1.2", 1]])
             # 场景按 trace 归属，不随新落点变化：t1 仍是「取数规划 · 目标错配」。
             self.assertEqual(rnd["matrix"]["after"],
-                             [["取数规划", "目标错配", [["S2.M1.2", 1]]]])
+                             [["取数规划", "目标错配", [["S2.M1.2", 1]], 1]])
             self.assertEqual(rnd["matrix"]["online"],
-                             [["行情解读", "股价走势", [["S9.M1.1", 1]]]])
+                             [["行情解读", "股价走势", [["S9.M1.1", 1]], 1]])
 
             refs = {ref["trace"]: ref for ref in rnd["sample_refs"]["before"]}
             self.assertEqual((refs["t1"]["task"], refs["t1"]["sub"]), ("取数规划", "目标错配"))
