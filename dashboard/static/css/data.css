@@ -375,7 +375,7 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .mxp-chart-panel { min-width: 0; padding: 10px 12px; border: 1px solid var(--well-2); border-radius: 10px; overflow-x: auto; overflow-y: hidden; }
 /* 问题发生率：30 天 × 聚类。格子只靠颜色读数，所以行高固定、宽度吃满，不跟着卡片无限长高；
    有命中的格子是按钮，点开就是「当天 × 当前场景 × 该聚类」的具体数据查询。 */
-.mxp-heat { display: grid; gap: var(--tile-gap); min-width: 0; }
+.mxp-heat { display: grid; gap: 8px; min-width: 0; }
 .mxp-heat-head, .mxp-heat-row { display: grid; grid-template-columns: minmax(88px, 120px) minmax(0, 1fr) 60px 48px; gap: 12px; align-items: center; }
 .mxp-heat-head { min-height: 24px; color: var(--muted); font-size: 11px; }
 .mxp-heat-label { display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
