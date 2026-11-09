@@ -22,6 +22,8 @@
   height: calc(100vh - 88px); min-height: 640px;
 }
 .bench > .pane { height: 100%; }
+/* Reuse the compare list rail: folding leaves the 44px expand column, detail takes the rest. */
+.bench.is-list-off { grid-template-columns: 44px minmax(0, 1fr); }
 .pane { background: var(--card); border-radius: var(--r-card); box-shadow: var(--shadow); min-width: 0; }
 .pane-sticky { position: sticky; top: 72px; display: flex; flex-direction: column; overflow: hidden; }
 .bench .pane-sticky { height: 100%; }

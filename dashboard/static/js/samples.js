@@ -2,8 +2,11 @@
 import { $, $$, esc, fmt, SEV, WORST, SEV_NAME, sevColor, getJSON } from "./core.js";
 import { createSampleDetail, detailPaneHTML, flash, USER_TYPES, utOf, isLostRow } from "./sample_detail.js";
 
+const CHEV_LEFT = `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true"><path d="M10 3.5 5.5 8 10 12.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const CHEV_RIGHT = `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
 const PAGE = 50;
-const S = { product: null, all: [], rows: [], pageRows: [], page: 1, slug: null, refocusList: false };
+const S = { product: null, all: [], rows: [], pageRows: [], page: 1, slug: null, refocusList: false, listOff: false };
 let ctx;
 let root;
 let labelsP = null;
@@ -186,14 +189,16 @@ export async function render(r, c) {
 /* ---------------------------------------------------------------- skeleton & filters */
 function skeleton() {
   root.innerHTML = `<div class="bench">
-    <aside class="pane pane-sticky" aria-label="样本列表">
-      <div class="pane-head">
+    <aside class="pane pane-sticky compare-list" aria-label="样本列表">
+      <button type="button" class="compare-rail-btn" id="srail" title="展开样本列表" aria-label="展开样本列表">${CHEV_RIGHT}<span class="compare-rail-label">样本列表</span></button>
+      <div class="pane-head compare-list-head">
         <input class="search" id="sq" type="search" placeholder="搜索问题 · Session ID · Trace ID" autocomplete="off">
         <div class="filters" id="sf"></div>
         <div class="list-meta"><span id="scount" class="num"></span>
           <span class="meta-end">
             <button type="button" class="reset" id="sreset" hidden>重置</button>
             <select id="ssort" aria-label="排序"><option value="sev">严重度优先</option><option value="n">问题数</option><option value="date">日期新→旧</option></select>
+            <button type="button" class="compare-icon-btn" id="scollapse" aria-expanded="true" title="折叠样本列表" aria-label="折叠样本列表">${CHEV_LEFT}</button>
           </span></div>
       </div>
       <div class="pane-scroll" id="slist" tabindex="0" aria-label="样本"></div>
@@ -201,6 +206,18 @@ function skeleton() {
     </aside>
     <section class="pane pane-out pane-sticky" id="sdetail" aria-label="数据详情">${detailPaneHTML()}</section>
   </div>`;
+  const applyList = (off) => {
+    S.listOff = off;
+    $(".bench", root)?.classList.toggle("is-list-off", off);
+    $(".compare-list", root)?.classList.toggle("is-collapsed", off);
+    $("#scollapse", root)?.setAttribute("aria-expanded", String(!off));
+  };
+  applyList(S.listOff);
+  $("#scollapse", root).addEventListener("click", () => applyList(!S.listOff));
+  $("#srail", root).addEventListener("click", () => {
+    applyList(false);
+    $("#scollapse", root)?.focus({ preventScroll: true });
+  });
   detail?.destroy();
   detail = createSampleDetail($("#sdetail", root), ctx, {
     product: ctx.product,
