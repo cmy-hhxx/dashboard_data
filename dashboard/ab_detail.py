@@ -152,9 +152,23 @@ class ABDetailBuilder:
         self.sample_dir = Path(sample_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.sample_dir.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
+        # The index is read-only after it is loaded; only its first build/load must be
+        # serialised.  Distinct eq details can then be generated in parallel, which
+        # matters when several compare panes are opened around the same time.
+        self._index_lock = threading.RLock()
+        self._eq_guard = threading.Lock()
+        self._eq_locks = {}
         self._indexes = {}
         self._rounds = {}
+
+    def _eq_lock(self, round_id: str, eq: int):
+        key = (round_id, eq)
+        with self._eq_guard:
+            lock = self._eq_locks.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                self._eq_locks[key] = lock
+            return lock
 
     # ---- discovery -------------------------------------------------------------------------
 
@@ -173,7 +187,8 @@ class ABDetailBuilder:
             for _order, _version, round_dir in ab_test.ab_round_dirs(self.datasets, product):
                 if round_dir.name == round_id and ab_test.is_scope_layout(round_dir):
                     found = (product, round_dir)
-                    self._rounds[round_id] = found
+                    with self._index_lock:
+                        self._rounds[round_id] = found
                     return found
         return None
 
@@ -404,8 +419,9 @@ class ABDetailBuilder:
             return None
         product, round_dir = found
         path = self.sample_dir / round_id / f"{eq}.json"
-        with self._lock:
+        with self._index_lock:
             index = self._index(round_id, round_dir)
+        with self._eq_lock(round_id, eq):
             if self._fresh(path, index.get("built_at_ns") or 0):
                 return path
             detail = self._build_detail(product, round_dir, round_id, eq, index)

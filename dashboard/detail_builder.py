@@ -26,22 +26,41 @@ class DetailBuilder:
         self.sample_dir = Path(sample_dir)
         self.cache_dir = Path(cache_dir)
         self.sample_dir.mkdir(parents=True, exist_ok=True)
-        # One lock serialises every use of the shared read-only connection.
-        self._lock = threading.Lock()
-        self._store = None
+        # A multi-trace session opens one detail per trace at the same time.  A single
+        # shared SQLite connection + lock would serialise them all, so each request
+        # thread keeps its own read-only connection and only the cluster index is
+        # shared behind a lock.
+        self._local = threading.local()
+        self._cluster_lock = threading.Lock()
         self._cluster_index = None
         self._cluster_loaded = None
+        self._slug_guard = threading.Lock()
+        self._slug_locks = {}
 
     def _open(self):
-        if self._store is None:
-            self._store = bs.BuildStore(self.store_path, readonly=True)
-        return self._store
+        store = getattr(self._local, "store", None)
+        if store is None:
+            store = bs.BuildStore(self.store_path, readonly=True)
+            self._local.store = store
+        return store
 
     def _reopen(self):
-        if self._store:
-            self._store.close()
-        self._store = None
+        store = getattr(self._local, "store", None)
+        if store is not None:
+            try:
+                store.close()
+            except Exception:  # noqa: BLE001 - a dead read connection is replaced below
+                pass
+        self._local.store = None
         return self._open()
+
+    def _slug_lock(self, slug: str):
+        with self._slug_guard:
+            lock = self._slug_locks.get(slug)
+            if lock is None:
+                lock = threading.Lock()
+                self._slug_locks[slug] = lock
+            return lock
 
     @staticmethod
     def _read(reader, ref):
@@ -55,12 +74,15 @@ class DetailBuilder:
     def _clusters(self, stamp):
         # A rebuilt mapping (new pickle) must reach the details regenerated for it;
         # caching the first index forever would bake the old cluster paths back in.
-        if self._cluster_index is None or stamp != self._cluster_loaded:
-            sig = build.cluster_signature(self.datasets, self.cache_dir)
-            _, index = build.load_clusters_cached(self.datasets, sig, self.cache_dir)
-            self._cluster_index = index
-            self._cluster_loaded = stamp
-        return self._cluster_index
+        if self._cluster_index is not None and stamp == self._cluster_loaded:
+            return self._cluster_index
+        with self._cluster_lock:
+            if self._cluster_index is None or stamp != self._cluster_loaded:
+                sig = build.cluster_signature(self.datasets, self.cache_dir)
+                _, index = build.load_clusters_cached(self.datasets, sig, self.cache_dir)
+                self._cluster_index = index
+                self._cluster_loaded = stamp
+            return self._cluster_index
 
     @staticmethod
     def _fresh(path, stamp):
@@ -79,7 +101,7 @@ class DetailBuilder:
         stamp = self._cluster_stamp()
         if self._fresh(path, stamp):
             return path
-        with self._lock:
+        with self._slug_lock(slug):
             if self._fresh(path, stamp):
                 return path
             store = self._open()
@@ -142,5 +164,7 @@ class DetailBuilder:
         return made
 
     def close(self):
-        if self._store:
-            self._store.close()
+        store = getattr(self._local, "store", None)
+        if store is not None:
+            store.close()
+            self._local.store = None

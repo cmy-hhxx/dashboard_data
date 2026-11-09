@@ -921,6 +921,7 @@ def pairs_from_keys(root: Path, store: bs.BuildStore):
     """
     pairs = []
     info = Counter()
+    misses = {}
     for item in discover_outputs(root):
         # Detail building reads one output line by offset; make sure that index
         # exists even when the pairing itself is served from cache.
@@ -928,17 +929,25 @@ def pairs_from_keys(root: Path, store: bs.BuildStore):
         cached = store.get_pairs(item["rel"])
         if cached and cached[0] == item["sig"]:
             file_pairs = cached[1]
+            file_misses = cached[2] or {}
             info["pair_hits"] += 1
         else:
             file_pairs, unmatched = pair_output(root, item, store)
-            store.put_pairs(item["rel"], item["sig"], file_pairs)
+            file_misses = {key: value for key, value in unmatched.items() if value}
+            store.put_pairs(item["rel"], item["sig"], file_pairs, file_misses)
             info["pair_misses"] += 1
-            for key, value in unmatched.items():
-                info[f"unmatched_{key}"] += value
+        for key, value in file_misses.items():
+            info[f"unmatched_{key}"] += value
+        if file_misses:
+            misses[item["rel"]] = file_misses
         pairs.extend(file_pairs)
         store.commit()
     info["mode"] = "key"
     info["rows"] = len(pairs)
+    info["unmatched_files"] = len(misses)
+    info["unmatched_sig"] = hashlib.sha1(
+        json.dumps(sorted(misses.items()), ensure_ascii=False, separators=(",", ":")).encode()
+    ).hexdigest()
     return pairs, dict(info)
 
 
@@ -2846,11 +2855,20 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
         feed_sig = feed_signature(datasets)
         release_sig = release_signature(datasets)
         ab_sig = ab_test.rounds_signature(datasets)
-        ab_expected = {product for product in PRODUCTS if ab_test.ab_round_dirs(datasets, product)}
+        # Only this deployment's products have payloads written; a shared datasets root
+        # can contain another product's ab_test (e.g. 问财 reads a root that also has
+        # 1_aime/ab_test), and requiring that product's abtests-*.json here would
+        # silently disable payload reuse forever.
+        ab_expected = {product for product in ENABLED if ab_test.ab_round_dirs(datasets, product)}
         scanned = sum(v["scanned"] for v in scan_info.values())
         marker = store.get_meta("complete")
+        # A small, stable set of outputs may never pair (missing input / compact on
+        # the data side).  A permanently-rebuilding board costs a full scan and
+        # rewrites the 20 MB index every 10 minutes, so reuse is keyed on the
+        # unmatched set itself: any new or fixed output changes the signature.
+        unmatched_sig = pairing_info.get("unmatched_sig") or ""
         if (pairing_info.get("mode") == "key" and scanned == 0
-                and pairing_info.get("pair_misses", 0) == 0 and marker
+                and marker and marker.get("unmatched") == unmatched_sig
                 and marker.get("build") == bs.BUILD_VERSION
                 and marker.get("payload") == PAYLOAD_VERSION
                 and marker.get("rules") == rules_sig
@@ -2869,6 +2887,7 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
             timers["write"] = 0.0
             summary = Counter({
                 "pairs": len(pairs), "pairing": pairing_info.get("mode"), "reused": 1,
+                "unmatched": pairing_info.get("unmatched_files", 0),
                 "scan_files": sum(v["files"] for v in scan_info.values()),
                 "scan_scanned": 0, "scan_cached": sum(v["cached"] for v in scan_info.values()),
                 **{f"t_{k}": v for k, v in timers.items()},
@@ -3042,7 +3061,8 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
         store.set_meta("complete", {
             "build": bs.BUILD_VERSION, "payload": PAYLOAD_VERSION, "pairs": len(pairs),
             "rules": rules_sig, "datasets": str(datasets),
-            "pairs_sig": pairs_sig, "cluster": cluster_sig, "feed": feed_sig,
+            "pairs_sig": pairs_sig, "unmatched": pairing_info.get("unmatched_sig") or "",
+            "cluster": cluster_sig, "feed": feed_sig,
             "releases": release_sig, "ab": ab_sig, "input": input_sig,
             "at": generated,
         })
@@ -3050,7 +3070,8 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
 
         summary = Counter(stats)
         summary.update({
-            "pairs": len(pairs), "data_kb": round(data_bytes / 1024),
+            "pairs": len(pairs), "unmatched": pairing_info.get("unmatched_files", 0),
+            "data_kb": round(data_bytes / 1024),
             "trend_kb": round(trend_bytes / 1024),
             "ab_kb": round(ab_bytes / 1024),
             "index_kb": round(index_bytes / 1024),

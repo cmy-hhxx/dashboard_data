@@ -135,6 +135,28 @@ class IncrementalTests(unittest.TestCase):
             rebuilt = json.loads((static / "data-wencai.json").read_text())["products"]["wencai"]
             self.assertEqual(rebuilt["input"]["sessions"], 3)
 
+    def test_stable_unpaired_output_still_reuses_payloads(self):
+        """An output whose input never arrives must not force a full rebuild every cycle.
+
+        The reuse marker used to require zero pairing misses, so one permanently
+        missing input rewrote the whole 20 MB index every ten minutes.  The marker
+        now keys on the unmatched set itself: it may be non-empty, but must be stable.
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            datasets, static = root / "datasets", root / "static"
+            seed(datasets)
+            first = self.run_build(datasets, static)
+            self.assertNotIn("reused", first)
+            # The attribution output survives, its input snapshot never lands.
+            (datasets / "0_wencai/eval_input/a_fast/2026-11-01.jsonl").unlink()
+            second = self.run_build(datasets, static)
+            self.assertNotIn("reused", second)
+            self.assertGreaterEqual(second.get("unmatched", 0), 1, second)
+            third = self.run_build(datasets, static)
+            self.assertEqual(third.get("reused"), 1, third)
+            self.assertEqual(third.get("unmatched"), second.get("unmatched"), third)
+
     def test_changed_dataset_root_does_not_reuse_payloads(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

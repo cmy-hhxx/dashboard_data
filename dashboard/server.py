@@ -31,6 +31,10 @@ _lister = None
 _prewarm_lock = threading.Lock()
 _prewarm_running = False
 PREWARM = int(os.environ.get("DETAIL_PREWARM", "30"))
+# The gzip validation reads the ISIZE trailer of every .gz once per mtime; cache it
+# so a busy page (30+ detail requests) does not re-open the same file each time.
+_GZIP_ISIZE = {}
+_GZIP_ISIZE_LOCK = threading.Lock()
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 MODEL_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 # /ab_samples/<roundId>/<eq>.json: the round name is validated before it can reach the builder.
@@ -92,7 +96,10 @@ def refresh_once():
             except ValueError:
                 _state["build"] = line[-500:]
             print("[refresh]", line, flush=True)
-            threading.Thread(target=prewarm_details, daemon=True).start()
+            # A reused build did not rewrite the payloads, so the first-page details
+            # are still the ones warmed last time; skip loading the 28 MB index again.
+            if not isinstance(_state["build"], dict) or not _state["build"].get("reused"):
+                threading.Thread(target=prewarm_details, daemon=True).start()
         else:
             _state["error"] = (proc.stderr or line or "")[-500:]
             print("[refresh] failed:", _state["error"], flush=True)
@@ -186,14 +193,24 @@ class Handler(SimpleHTTPRequestHandler):
         mismatch catches the dangerous case before stale JSON reaches clients.
         """
         try:
+            gz_stat = os.stat(gz)
+            src_stat = os.stat(path)
             # gzip preserves the source timestamp, often with coarser precision;
             # allow a small skew but still require a matching payload size below.
-            if os.path.getmtime(gz) + 1 < os.path.getmtime(path):
+            if gz_stat.st_mtime + 1 < src_stat.st_mtime:
                 return False
-            with open(gz, "rb") as fh:
-                fh.seek(-4, os.SEEK_END)
-                size = int.from_bytes(fh.read(4), "little")
-            return size == os.path.getsize(path) % (1 << 32)
+            key = (gz, gz_stat.st_mtime_ns, gz_stat.st_size)
+            with _GZIP_ISIZE_LOCK:
+                size = _GZIP_ISIZE.get(key)
+            if size is None:
+                with open(gz, "rb") as fh:
+                    fh.seek(-4, os.SEEK_END)
+                    size = int.from_bytes(fh.read(4), "little")
+                with _GZIP_ISIZE_LOCK:
+                    if len(_GZIP_ISIZE) > 512:
+                        _GZIP_ISIZE.clear()
+                    _GZIP_ISIZE[key] = size
+            return size == src_stat.st_size % (1 << 32)
         except OSError:
             return False
 
@@ -317,6 +334,16 @@ def outputs_ready():
             and all(os.path.exists(os.path.join(STATIC, f"trends-{p}.json")) for p in (data.get("products") or {})))
 
 
+class DashboardServer(ThreadingHTTPServer):
+    """Long-lived HTTP/1.1 server sized for a burst of sample details."""
+
+    daemon_threads = True
+    allow_reuse_address = True
+    # One sample page opens every trace of a session at once (tens of requests).
+    # The stdlib default backlog of 5 can refuse the later connections.
+    request_queue_size = 128
+
+
 def main():
     global _builder, _lister, _ab_builder
     try:
@@ -357,7 +384,7 @@ def main():
     seed_state()
     threading.Thread(target=scheduler, args=(REFRESH if age < 120 else 0,), daemon=True).start()
     threading.Thread(target=prewarm_details, daemon=True).start()
-    server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    server = DashboardServer(("0.0.0.0", PORT), Handler)
     print(f"[serve] http://0.0.0.0:{PORT} static={STATIC} refresh={REFRESH}s", flush=True)
     server.serve_forever()
 

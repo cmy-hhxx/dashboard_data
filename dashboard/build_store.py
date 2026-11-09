@@ -323,7 +323,8 @@ class BuildStore:
             split TEXT NOT NULL DEFAULT '', scanned_at REAL NOT NULL
         );
         CREATE TABLE IF NOT EXISTS pairs (
-            output TEXT PRIMARY KEY, sig TEXT NOT NULL, payload TEXT NOT NULL, updated_at REAL NOT NULL
+            output TEXT PRIMARY KEY, sig TEXT NOT NULL, payload TEXT NOT NULL,
+            misses TEXT NOT NULL DEFAULT '{}', updated_at REAL NOT NULL
         );
         CREATE TABLE IF NOT EXISTS samples (
             slug TEXT PRIMARY KEY, fp TEXT NOT NULL, oh TEXT NOT NULL,
@@ -340,6 +341,13 @@ class BuildStore:
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(files)")}
         if "digests" not in columns:
             self.db.execute("ALTER TABLE files ADD COLUMN digests BLOB")
+        # Pairing misses became part of the reuse marker in 2026-11-10.  Older rows
+        # only cached the pairs, so drop them once to record which outputs stay
+        # unpaired; otherwise a permanently-missing input would rebuild forever.
+        columns = {row[1] for row in self.db.execute("PRAGMA table_info(pairs)")}
+        if "misses" not in columns:
+            self.db.execute("ALTER TABLE pairs ADD COLUMN misses TEXT NOT NULL DEFAULT '{}'")
+            self.db.execute("DELETE FROM pairs")
         row = self.db.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
         if row and int(row[0]) != SCHEMA_VERSION:
             # A format change invalidates byte offsets and cached payloads.
@@ -445,14 +453,21 @@ class BuildStore:
 
     # ---- pairs
 
-    def get_pairs(self, output: str) -> tuple[str, list] | None:
-        row = self.db.execute("SELECT sig,payload FROM pairs WHERE output=?", (output,)).fetchone()
-        return (row[0], json.loads(row[1])) if row else None
+    def get_pairs(self, output: str):
+        row = self.db.execute("SELECT sig,payload,misses FROM pairs WHERE output=?", (output,)).fetchone()
+        if not row:
+            return None
+        try:
+            misses = json.loads(row[2]) if row[2] else {}
+        except ValueError:
+            misses = {}
+        return (row[0], json.loads(row[1]), misses)
 
-    def put_pairs(self, output: str, sig: str, payload: list) -> None:
+    def put_pairs(self, output: str, sig: str, payload: list, misses=None) -> None:
         self.db.execute(
-            "INSERT OR REPLACE INTO pairs(output,sig,payload,updated_at) VALUES(?,?,?,?)",
-            (output, sig, json.dumps(payload, ensure_ascii=False), time.time()),
+            "INSERT OR REPLACE INTO pairs(output,sig,payload,misses,updated_at) VALUES(?,?,?,?,?)",
+            (output, sig, json.dumps(payload, ensure_ascii=False),
+             json.dumps(misses or {}, ensure_ascii=False), time.time()),
         )
 
     # ---- samples
