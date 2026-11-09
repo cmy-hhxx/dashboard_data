@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Eval dashboard server: static files + build.py payloads on :5001, rebuilt on a timer."""
 import gzip
+import hashlib
 import json
 import mimetypes
 import os
@@ -35,6 +36,10 @@ PREWARM = int(os.environ.get("DETAIL_PREWARM", "30"))
 # so a busy page (30+ detail requests) does not re-open the same file each time.
 _GZIP_ISIZE = {}
 _GZIP_ISIZE_LOCK = threading.Lock()
+# Generated JSON responses (input listings) are revalidated by ETag; keep the
+# last few gzipped bodies so repeated drills do not recompress 1.6 MB each time.
+_RESP_GZIP = {}
+_RESP_GZIP_LOCK = threading.Lock()
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 MODEL_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 # /ab_samples/<roundId>/<eq>.json: the round name is validated before it can reach the builder.
@@ -166,16 +171,37 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", policy)
         super().end_headers()
 
-    def _send_body(self, status, body, ctype):
+    def _send_body(self, status, body, ctype, etag=None):
         # HTTP/1.1 keep-alive: without Content-Length the client waits for a body
         # that never ends, which is how a failed detail used to hang the page.
         # Generated JSON has no precompressed twin, so compress it here; the
         # sample details are the largest payloads the page pulls.
         if status >= 400:
             self._cache_policy = "no-store"
+        if etag:
+            inm = self.headers.get("If-None-Match")
+            if inm and etag in {part.strip() for part in inm.split(",")}:
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                self.send_header("Vary", "Accept-Encoding")
+                self.end_headers()
+                return
         encoding = None
         if len(body) >= 1024 and "gzip" in self.headers.get("Accept-Encoding", ""):
-            body = gzip.compress(body, 6)
+            key = (etag, len(body)) if etag else None
+            cached = None
+            if key:
+                with _RESP_GZIP_LOCK:
+                    cached = _RESP_GZIP.get(key)
+            if cached is not None:
+                body = cached
+            else:
+                body = gzip.compress(body, 6)
+                if key:
+                    with _RESP_GZIP_LOCK:
+                        if len(_RESP_GZIP) > 48:
+                            _RESP_GZIP.clear()
+                        _RESP_GZIP[key] = body
             encoding = "gzip"
         self.send_response(status)
         self.send_header("Content-Type", ctype)
@@ -183,8 +209,16 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Vary", "Accept-Encoding")
         if encoding:
             self.send_header("Content-Encoding", encoding)
+        if etag:
+            self.send_header("ETag", etag)
         self.end_headers()
         self.wfile.write(body)
+
+    def list_directory(self, path):
+        # There is no user-facing directory index; a crawler or typo should not
+        # build a 10k-entry HTML listing of the sample-detail tree.
+        self.send_error(404, "File not found")
+        return None
 
     def _serve_inputs(self, path_only):
         """评测输入清单（按天/模型现读）与单条输入的详情。"""
@@ -204,7 +238,8 @@ class Handler(SimpleHTTPRequestHandler):
                 self._send_body(500, b'{"error":"input listing failed"}', "application/json")
                 return True
             body = json.dumps(payload, ensure_ascii=False).encode()
-            self._send_body(200, body, "application/json")
+            sig = hashlib.sha1(json.dumps(payload.get("sig"), separators=(",", ":")).encode()).hexdigest()[:20]
+            self._send_body(200, body, "application/json", etag=f'"inputs-{sig}"')
             return True
         ref = urllib.parse.unquote(path_only[len("/inputs/"):-len(".json")])
         try:
