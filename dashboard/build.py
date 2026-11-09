@@ -49,6 +49,12 @@ import build_store as bs
 import user_rules
 from filelist import TreeCache
 
+try:  # optional: ~25% smaller JSON payloads than gzip at low quality
+    import brotli as _brotli
+except ImportError:  # pragma: no cover - deployment image may not have it
+    _brotli = None
+BROTLI_QUALITY = int(os.environ.get("BROTLI_QUALITY", "6"))
+
 DASHBOARD = Path(__file__).resolve().parent
 REPO = DASHBOARD.parent
 STATIC = DASHBOARD / "static"
@@ -2207,6 +2213,11 @@ def write_json(path: Path, payload, gz=True):
         tmp = Path(str(gz_path) + ".tmp")
         tmp.write_bytes(gzip.compress(data, compresslevel=6, mtime=0))
         os.replace(tmp, gz_path)
+        if _brotli is not None:
+            br_path = Path(str(path) + ".br")
+            tmp = Path(str(br_path) + ".tmp")
+            tmp.write_bytes(_brotli.compress(data, quality=BROTLI_QUALITY))
+            os.replace(tmp, br_path)
     return len(data)
 
 

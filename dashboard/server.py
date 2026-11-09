@@ -218,25 +218,24 @@ class Handler(SimpleHTTPRequestHandler):
         self._send_body(200, json.dumps(detail, ensure_ascii=False).encode(), "application/json")
         return True
 
-    def _gzip_matches_source(self, path, gz):
-        """Reject a .gz that was not built from the current source file.
+    def _encoded_matches_source(self, path, encoded, encoding):
+        """Reject a compressed twin that was not built from the current source.
 
         mtime alone misses equal-timestamp copies (e.g. a copied static tree);
-        gzip's trailing ISIZE field records the uncompressed size, so a size
-        mismatch catches the dangerous case before stale JSON reaches clients.
+        for gzip the ISIZE trailer also pins the uncompressed size.
         """
         try:
-            gz_stat = os.stat(gz)
+            enc_stat = os.stat(encoded)
             src_stat = os.stat(path)
-            # gzip preserves the source timestamp, often with coarser precision;
-            # allow a small skew but still require a matching payload size below.
-            if gz_stat.st_mtime + 1 < src_stat.st_mtime:
+            if enc_stat.st_mtime + 1 < src_stat.st_mtime:
                 return False
-            key = (gz, gz_stat.st_mtime_ns, gz_stat.st_size)
+            if encoding != "gzip":
+                return True
+            key = (encoded, enc_stat.st_mtime_ns, enc_stat.st_size)
             with _GZIP_ISIZE_LOCK:
                 size = _GZIP_ISIZE.get(key)
             if size is None:
-                with open(gz, "rb") as fh:
+                with open(encoded, "rb") as fh:
                     fh.seek(-4, os.SEEK_END)
                     size = int.from_bytes(fh.read(4), "little")
                 with _GZIP_ISIZE_LOCK:
@@ -247,52 +246,54 @@ class Handler(SimpleHTTPRequestHandler):
         except OSError:
             return False
 
-    def _serve_gzip(self, path):
-        gz = path + ".gz"
+    def _serve_encoded(self, path, encoding):
+        """Serve ``path.br`` / ``path.gz`` with ETag/304; False when unavailable."""
+        suffix = ".br" if encoding == "br" else ".gz"
+        encoded = path + suffix
         try:
-            stat = os.stat(gz)
+            stat = os.stat(encoded)
             source = os.stat(path)
         except OSError:
             return False
-        # The compressed copy must not be older than its source, otherwise a
-        # regenerated data.json would be served from a stale .gz.
+        if not self._encoded_matches_source(path, encoded, encoding):
+            return False
         last_modified = max(stat.st_mtime, source.st_mtime)
+        etag = f'"{int(last_modified * 1000)}-{stat.st_size}-{encoding}"'
+        headers = [
+            ("Vary", "Accept-Encoding"),
+            ("ETag", etag),
+            ("Last-Modified", self.date_time_string(last_modified)),
+        ]
+        cache = "304" if self._not_modified(etag, last_modified) else "200"
+        self.send_response(304 if cache == "304" else 200)
+        for key, value in headers:
+            self.send_header(key, value)
+        if cache == "304":
+            self.end_headers()
+            return True
+        ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Encoding", encoding)
+        self.send_header("Content-Length", str(stat.st_size))
+        self.end_headers()
+        with open(encoded, "rb") as fh:
+            shutil.copyfileobj(fh, self.wfile)
+        return True
+
+    def _not_modified(self, etag, last_modified):
+        inm = self.headers.get("If-None-Match")
+        if inm and etag in {part.strip() for part in inm.split(",")}:
+            return True
         since = self.headers.get("If-Modified-Since")
         if since:
             try:
                 parsed = parsedate_to_datetime(since)
                 if parsed.tzinfo is None:
                     parsed = parsed.replace(tzinfo=timezone.utc)
-                if int(last_modified) <= int(parsed.timestamp()):
-                    self.send_response(304)
-                    self.send_header("Vary", "Accept-Encoding")
-                    self.send_header("ETag", f'"{int(last_modified * 1000)}-{stat.st_size}"')
-                    self.send_header("Last-Modified", self.date_time_string(last_modified))
-                    self.end_headers()
-                    return True
+                return int(last_modified) <= int(parsed.timestamp())
             except (TypeError, ValueError, OverflowError):
-                pass
-        ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"
-        etag = f'"{int(last_modified * 1000)}-{stat.st_size}"'
-        inm = self.headers.get("If-None-Match")
-        if inm and etag in {part.strip() for part in inm.split(",")}:
-            self.send_response(304)
-            self.send_header("Vary", "Accept-Encoding")
-            self.send_header("ETag", etag)
-            self.send_header("Last-Modified", self.date_time_string(last_modified))
-            self.end_headers()
-            return True
-        self.send_response(200)
-        self.send_header("Vary", "Accept-Encoding")
-        self.send_header("ETag", etag)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Encoding", "gzip")
-        self.send_header("Content-Length", str(stat.st_size))
-        self.send_header("Last-Modified", self.date_time_string(last_modified))
-        self.end_headers()
-        with open(gz, "rb") as fh:
-            shutil.copyfileobj(fh, self.wfile)
-        return True
+                return False
+        return False
 
     def handle_one_request(self):
         started = time.time()
@@ -354,14 +355,15 @@ class Handler(SimpleHTTPRequestHandler):
             if generated is None and (ref is None or not os.path.isfile(self.translate_path(path_only))):
                 self._send_body(404, b"ab sample detail unavailable", "text/plain; charset=utf-8")
                 return
-        if "gzip" in self.headers.get("Accept-Encoding", ""):
-            path = self.translate_path(self.path)
-            if os.path.isdir(path):
-                index = os.path.join(path, "index.html")
-                if os.path.isfile(index):
-                    path = index
-            if os.path.isfile(path) and os.path.isfile(path + ".gz"):
-                if self._gzip_matches_source(path, path + ".gz") and self._serve_gzip(path):
+        accept = {part.strip().split(";")[0] for part in self.headers.get("Accept-Encoding", "").split(",")}
+        path = self.translate_path(self.path)
+        if os.path.isdir(path):
+            index = os.path.join(path, "index.html")
+            if os.path.isfile(index):
+                path = index
+        if os.path.isfile(path):
+            for encoding in ("br", "gzip"):
+                if encoding in accept and self._serve_encoded(path, encoding):
                     return
         super().do_GET()
 
