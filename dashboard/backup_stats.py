@@ -329,6 +329,22 @@ def main(argv=None) -> int:
     )
     log.info("backup %s -> %s every %ss, keep %s",
              args.datasets, args.dest, args.interval, args.keep)
+    # A deploy restarts this worker.  Taking a 2.3 GiB snapshot on every restart
+    # produced a burst of ceph writes after each release; reuse the latest
+    # snapshot and wait out the remainder of the hour instead.
+    if not args.once:
+        dest = args.dest.expanduser()
+        latest = latest_snapshot(dest) if dest.is_dir() else None
+        if latest is not None:
+            try:
+                age = max(0.0, time.time() - latest.stat().st_mtime)
+            except OSError:
+                age = 0.0
+            wait = args.interval - age
+            if wait > 60:
+                log.info("latest snapshot %s is %.0fs old; waiting %.0fs",
+                         latest.name, age, wait)
+                time.sleep(wait)
     while True:
         started = time.time()
         ok = make_snapshot(args.datasets.expanduser(), args.dashboard, args.dest, args.keep)
