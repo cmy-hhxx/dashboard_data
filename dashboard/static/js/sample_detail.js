@@ -9,6 +9,7 @@ import { threadFlow } from "./particles.js";
 
 const params = () => new URLSearchParams(location.search);
 const FOLD_OPEN = new Set(["user", "answer"]);
+const TABS_PER_PAGE = 20;
 
 /* 用户类型：构建时按 dashboard/user_rules.py 的规则写进样本行的 ut（real / test / internal / unknown），
    流失是独立标记 ul（流失目录或流失 uid 名单）。 */
@@ -87,7 +88,7 @@ export function createSampleDetail(host, ctxArg, opts = {}) {
   const S = {
     product: opts.product, prod: opts.prod, all: opts.sessions || [],
     cache: new Map(), loadSeq: 0, D: null, sessionKey: null, session: null,
-    round: 0, trace: 0, turn: 0, cturn: 0, sessionView: false, open: new Set(),
+    round: 0, trace: 0, turn: 0, cturn: 0, sessionView: false, tabPage: 0, open: new Set(),
     active: null, bandOpen: false, traceMiss: null,
   };
   let threadsBound = false;
@@ -323,6 +324,7 @@ async function loadSession(session, focusSlug, focusTrace, sev) {
     if (at >= 0) S.round = at;
     else S.traceMiss = focusTrace;
   }
+  S.tabPage = Math.floor(S.round / TABS_PER_PAGE);
   const init = D.rounds[S.round];
   S.trace = init?.trace ?? 0;
   S.turn = init?.turn ?? S.round;
@@ -373,6 +375,7 @@ function selectRound(i, { scroll = true } = {}) {
   const round = Math.max(0, Math.min(n - 1, Number(i) || 0));
   const r = D.rounds?.[round];
   S.round = round;
+  S.tabPage = Math.floor(round / TABS_PER_PAGE);
   S.trace = r?.trace ?? round;
   S.turn = r?.turn ?? round;
   S.cturn = r?.compact ?? round;
@@ -488,10 +491,7 @@ function renderIn() {
         ${group("场景", "is-scene", scene)}
         ${group("规模", "is-scale", scale)}
       </div>
-      ${hasChat(D) || rounds.length > 1 ? `<div class="trace-tabs" id="${prefix}ttabs">${rounds.map((r, i) => {
-        const t = D.input.traces?.[r.trace];
-        return `<button type="button" class="pill" data-t="${i}" aria-pressed="${!S.sessionView && i === S.round}"${t?.agent ? ` title="${esc(t.agent)}"` : ""}>第 ${i + 1} 轮</button>`;
-      }).join("")}${hasChat(D) ? `<button type="button" class="pill" data-t="session" aria-pressed="${S.sessionView}">session 总评</button>` : ""}</div>` : ""}
+      ${hasChat(D) || rounds.length > 1 ? `<div class="trace-tabs" id="${prefix}ttabs">${traceTabsInner(rounds, D)}</div>` : ""}
       <div id="${prefix}ovBox" class="ov-box"></div>
       <div id="${prefix}sumBox">${summaryInner(D)}</div>
       <div id="${prefix}ov" class="ov-grid"></div>
@@ -522,6 +522,42 @@ function hasChat(D) {
   return (D.input?.traces || []).some((tr) => (tr.messages || []).some((m) => m.k === "user" || m.k === "answer"));
 }
 
+function roundTabHTML(D, i) {
+  const r = D.rounds[i];
+  const t = D.input.traces?.[r.trace];
+  return `<button type="button" class="pill" data-t="${i}" aria-pressed="${!S.sessionView && i === S.round}"${t?.agent ? ` title="${esc(t.agent)}"` : ""}>第 ${i + 1} 轮</button>`;
+}
+
+function traceTabsInner(rounds, D) {
+  const total = rounds.length;
+  const paged = total > TABS_PER_PAGE;
+  const pages = Math.max(1, Math.ceil(total / TABS_PER_PAGE));
+  const page = Math.max(0, Math.min(pages - 1, S.tabPage || 0));
+  const start = paged ? page * TABS_PER_PAGE : 0;
+  const end = Math.min(total, start + TABS_PER_PAGE);
+  const tabs = rounds.slice(start, end).map((_, j) => roundTabHTML(D, start + j)).join("");
+  const pager = paged
+    ? `<span class="trace-tabs-pager"><button type="button" data-tpage="-1" aria-label="上一页轮次"${page === 0 ? " disabled" : ""}>‹</button><span class="num">${page + 1}/${pages}</span><button type="button" data-tpage="1" aria-label="下一页轮次"${page === pages - 1 ? " disabled" : ""}>›</button></span>`
+    : "";
+  const session = hasChat(D) ? `<button type="button" class="pill" data-t="session" aria-pressed="${S.sessionView}">session 总评</button>` : "";
+  return `${tabs}${pager}${session}`;
+}
+
+function syncTraceTabs() {
+  const session = S.sessionView;
+  $$(`#${prefix}ttabs [data-t]`, root).forEach((b) => {
+    const tab = b.dataset.t === "session";
+    b.setAttribute("aria-pressed", String(tab ? session : (!session && Number(b.dataset.t) === S.round)));
+  });
+}
+
+function renderTraceTabs() {
+  const el = $(`#${prefix}ttabs`, root);
+  if (!el || !S.D) return;
+  el.innerHTML = traceTabsInner(S.D.rounds || [], S.D);
+  syncTraceTabs();
+}
+
 function renderTrace() {
   renderSummary();
   const D = S.D;
@@ -534,10 +570,13 @@ function renderTrace() {
   $(`#${prefix}sanatomy`, root)?.classList.remove("is-focus");
   $(`#${prefix}sanatomy`, root)?.classList.toggle("is-session", session);
   $(`#${prefix}shead`, root)?.classList.toggle("is-session", session);
-  $$(`#${prefix}ttabs .pill`, root).forEach((b) => {
-    const tab = b.dataset.t === "session";
-    b.setAttribute("aria-pressed", String(tab ? session : (!session && Number(b.dataset.t) === S.round)));
-  });
+  const tabPage = Math.floor(S.round / TABS_PER_PAGE);
+  if (S.tabPage !== tabPage) {
+    S.tabPage = tabPage;
+    renderTraceTabs();
+  } else {
+    syncTraceTabs();
+  }
   if (session) {
     $(`#${prefix}sout`, root).innerHTML = "";
     $(`#${prefix}stl`, root).innerHTML = qaHTML(D);
@@ -873,6 +912,13 @@ function onInputClick(e) {
     const [t, i] = fold.dataset.fold.split(":").map(Number);
     S.open.has(fold.dataset.fold) ? S.open.delete(fold.dataset.fold) : S.open.add(fold.dataset.fold);
     rerenderMsg(t, i);
+    return;
+  }
+  const tabStep = e.target.closest(`#${prefix}ttabs [data-tpage]`);
+  if (tabStep) {
+    const pages = Math.max(1, Math.ceil((S.D?.rounds?.length || 0) / TABS_PER_PAGE));
+    S.tabPage = Math.max(0, Math.min(pages - 1, (S.tabPage || 0) + Number(tabStep.dataset.tpage)));
+    renderTraceTabs();
     return;
   }
   const tab = e.target.closest(`#${prefix}ttabs [data-t]`);

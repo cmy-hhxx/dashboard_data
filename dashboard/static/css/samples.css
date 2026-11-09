@@ -174,6 +174,11 @@
 .trace-tabs .pill:hover { background: var(--well-2); transform: translateY(-1px); }
 .trace-tabs .pill:active { transform: translateY(0); }
 .trace-tabs .pill[aria-pressed="true"] { background: var(--ink); color: var(--card); font-weight: var(--w-medium); }
+.trace-tabs-pager { display: inline-flex; align-items: center; gap: 2px; height: 28px; color: var(--muted); font-size: var(--fs-meta); }
+.trace-tabs-pager button { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; color: var(--muted); }
+.trace-tabs-pager button:hover:not([disabled]) { background: var(--well-2); color: var(--ink); }
+.trace-tabs-pager button[disabled] { opacity: 0.3; }
+.trace-tabs-pager .num { min-width: 30px; text-align: center; }
 
 /* Overview (compact map + skill points) and the trace summary */
 .ov-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; align-items: start; min-width: 0; }
