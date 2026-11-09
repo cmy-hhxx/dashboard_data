@@ -2478,6 +2478,12 @@ def _sample_batch(task):
 
 
 SAMPLE_CACHE_VERSION = 1
+# The per-sample cache is ~800 MB on AIME.  Rewriting it every ten minutes is
+# 10 s of CPU and a large write even when only a handful of samples arrived.
+# Keep a stable baseline plus a small delta of entries changed since it; compact
+# only when the delta grows large or the baseline is missing/stale.
+SAMPLE_DELTA = "samples-delta.pkl"
+SAMPLE_COMPACT_ROWS = 8000
 
 
 def load_sample_pickle(path: Path):
@@ -2489,6 +2495,15 @@ def load_sample_pickle(path: Path):
     if data.get("version") != SAMPLE_CACHE_VERSION or data.get("build") != bs.BUILD_VERSION:
         return {}
     return data.get("rows") or {}
+
+
+def load_sample_cache(cache_dir: Path):
+    """Merge the stable baseline with the delta written by recent builds."""
+    base = load_sample_pickle(cache_dir / "samples.pkl")
+    delta = load_sample_pickle(cache_dir / SAMPLE_DELTA)
+    rows = dict(base)
+    rows.update(delta)
+    return rows, delta
 
 
 def write_sample_pickle(path: Path, rows):
@@ -2519,8 +2534,8 @@ def build_samples(pairs, root, out_dir, store, reader, cluster_index, cluster_si
     # A 16k-brief JSON decode costs 15–35 s.  The pickle is validated against
     # the light SQLite columns (fp/oh/ih/ch), so a stale file can only cost a
     # fallback load, never a wrong hit.
-    cache_path = out_dir.parent / "cache" / "samples.pkl"
-    pickled = load_sample_pickle(cache_path)
+    cache_dir = out_dir.parent / "cache"
+    pickled, sample_delta = load_sample_cache(cache_dir)
     meta = store.sample_meta(slugs)
     cached, need = {}, []
     for slug, info in meta.items():
@@ -2545,6 +2560,7 @@ def build_samples(pairs, root, out_dir, store, reader, cluster_index, cluster_si
             misses.append(pair)
 
     detail_bytes = 0
+    changed_samples = {}
 
     def add_sample(pair, brief, row, facts, golden):
         nonlocal detail_bytes
@@ -2558,6 +2574,7 @@ def build_samples(pairs, root, out_dir, store, reader, cluster_index, cluster_si
         if not hit.get("refs"):
             # Older cache rows predate on-demand details; backfill the refs once.
             hit["refs"] = {"input": pair.get("input"), "compact": pair.get("compact")}
+            changed_samples[pair["_slug"]] = hit
             store.put_sample({
                 "slug": pair["_slug"], "fp": hit["fp"], "oh": hit["oh"],
                 "ih": hit["ih"], "ch": hit["ch"], "product": pair["product"],
@@ -2631,6 +2648,7 @@ def build_samples(pairs, root, out_dir, store, reader, cluster_index, cluster_si
                 }
                 store.put_sample(entry)
                 cached[item["slug"]] = entry
+                changed_samples[item["slug"]] = entry
                 add_sample(item, item["brief"], item["row"], item["facts"], item["golden"])
                 stats["sample_built"] += 1
                 stats["missing_input"] += item["missing_input"]
@@ -2643,7 +2661,19 @@ def build_samples(pairs, root, out_dir, store, reader, cluster_index, cluster_si
                     debug(f"merged {merged} samples")
 
     try:
-        write_sample_pickle(cache_path, cached)
+        baseline_path = cache_dir / "samples.pkl"
+        merged_delta = dict(sample_delta)
+        merged_delta.update(changed_samples)
+        if not baseline_path.exists() or len(merged_delta) > SAMPLE_COMPACT_ROWS:
+            compacted = {slug: cached[slug] for slug in slugs if slug in cached}
+            write_sample_pickle(baseline_path, compacted)
+            (cache_dir / SAMPLE_DELTA).unlink(missing_ok=True)
+            stats["sample_cache"] = "compact"
+        elif changed_samples:
+            write_sample_pickle(cache_dir / SAMPLE_DELTA, merged_delta)
+            stats["sample_cache"] = "delta"
+        else:
+            stats["sample_cache"] = "reuse"
     except OSError as exc:
         debug(f"sample cache write failed: {exc}")
 

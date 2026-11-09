@@ -16,6 +16,7 @@ Snapshot layout (one directory per UTC hour)::
         dataset/<product>/eval_output/cluster/...   # cluster_tree/item_index
         dashboard/cache/build.sqlite3              # sqlite backup, WAL safe
         dashboard/cache/samples.pkl
+        dashboard/cache/samples-delta.pkl
         dashboard/cache/clusters-*.pkl
         dashboard/cache/tree-*.json
         dashboard/cache/inputs/
@@ -64,6 +65,7 @@ DATASET_FILES = ("stats.json", "user_rules.json", "releases.json")
 CACHE_FILES = (
     "build.sqlite3",
     "samples.pkl",
+    "samples-delta.pkl",
     "clusters-*.pkl",
     "tree-*.json",
     "cluster-signature.json",

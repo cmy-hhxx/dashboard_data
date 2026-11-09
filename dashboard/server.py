@@ -133,8 +133,11 @@ class Handler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=STATIC, **kwargs)
 
     def end_headers(self):
-        # Everything revalidates (a 304 still saves the body); healthz is never cached.
-        policy = "no-store" if self.path.startswith("/healthz") else "no-cache"
+        # Data payloads revalidate (a 304 still saves the body); generated details and
+        # versioned browser assets may be reused briefly.  healthz is never cached.
+        policy = getattr(self, "_cache_policy", None)
+        if not policy:
+            policy = "no-store" if self.path.startswith("/healthz") else "no-cache"
         self.send_header("Cache-Control", policy)
         super().end_headers()
 
@@ -143,6 +146,8 @@ class Handler(SimpleHTTPRequestHandler):
         # that never ends, which is how a failed detail used to hang the page.
         # Generated JSON has no precompressed twin, so compress it here; the
         # sample details are the largest payloads the page pulls.
+        if status >= 400:
+            self._cache_policy = "no-store"
         encoding = None
         if len(body) >= 1024 and "gzip" in self.headers.get("Accept-Encoding", ""):
             body = gzip.compress(body, 6)
@@ -265,6 +270,16 @@ class Handler(SimpleHTTPRequestHandler):
         return True
 
     def do_GET(self):
+        self._cache_policy = None
+        path_only = self.path.split("?", 1)[0]
+        if path_only.startswith("/samples/") or path_only.startswith("/ab_samples/"):
+            # Content comes from a generated file whose mtime changes when it is
+            # rebuilt; a short reuse window avoids one RTT per trace.
+            self._cache_policy = "public, max-age=120"
+        elif path_only.startswith("/js/") or path_only.startswith("/css/") or path_only in ("/", "/index.html"):
+            # Deploys replace these files under the same name; a minute of reuse
+            # keeps ordinary reloads from revalidating every module.
+            self._cache_policy = "public, max-age=60"
         if self.path.startswith("/healthz"):
             body = json.dumps({
                 "ok": _state["error"] == "",
