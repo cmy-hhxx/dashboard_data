@@ -413,7 +413,7 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .mx-panels.is-both .mxp-heat-head, .mx-panels.is-both .mxp-heat-row { grid-template-columns: minmax(72px, 96px) minmax(0, 1fr) 52px 48px; gap: 8px; }
 .mx-panels.is-both .mxp-heat-head { min-height: 20px; }
 .mxp-heat-days.tiles > span, .mxp-heat-days.tiles > button {
-  width: min(100%, 24px); height: auto; aspect-ratio: 1; min-width: 0; justify-self: center; padding: 0; border-radius: 2px; background: var(--c);
+  width: min(100%, 20px); height: auto; aspect-ratio: 1; min-width: 0; justify-self: center; padding: 0; border-radius: 3px; background: var(--c);
 }
 .mxp-heat-days.tiles > span { cursor: default; }
 .mxp-heat-days.tiles > span:hover, .mxp-heat-days.tiles > span:active { transform: none; box-shadow: none; }
