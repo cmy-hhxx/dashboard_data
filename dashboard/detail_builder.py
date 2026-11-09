@@ -153,14 +153,25 @@ class DetailBuilder:
             return path
 
     def prewarm(self, slugs):
-        """Generate a small first-page set in the background; never fatal."""
+        """Generate a small first-page set in the background; never fatal.
+
+        Each slug owns a per-slug lock and the builder is thread-safe now, so a
+        small pool turns the first-page warm from ~40 sequential builds into one
+        short burst (and stops it competing with user requests for as long).
+        """
+        from concurrent.futures import ThreadPoolExecutor
+        workers = min(8, max(1, len(slugs)))
         made = 0
-        for slug in slugs:
+
+        def one(slug):
             try:
-                if self.ensure(slug):
-                    made += 1
+                return bool(self.ensure(slug))
             except Exception as exc:  # noqa: BLE001 - prewarm is best effort
                 build.debug(f"prewarm {slug}: {exc}")
+                return False
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            made = sum(1 for ok in pool.map(one, slugs) if ok)
         return made
 
     def close(self):
