@@ -1636,8 +1636,12 @@ def aggregate(product, samples, taxonomy):
     roles = {}
     for slug, row, p in problems_all:
         r = p["role"] or "other"
-        e = roles.setdefault(r, {"id": r, "label": ROLE_LABEL.get(r, r), "problems": 0, "sev": sev_counter(),
-                                 "sessions": set(), "families": Counter(), "components": Counter()})
+        # setdefault would build its two Counters on every problem, even when the
+        # role already exists (hundreds of thousands of throwaway objects).
+        e = roles.get(r)
+        if e is None:
+            e = roles[r] = {"id": r, "label": ROLE_LABEL.get(r, r), "problems": 0, "sev": sev_counter(),
+                            "sessions": set(), "families": Counter(), "components": Counter()}
         e["problems"] += 1
         if p["sev"]:
             e["sev"][p["sev"]] += 1
@@ -1672,8 +1676,10 @@ def aggregate(product, samples, taxonomy):
         cell["sessions"].add(slug)
         if p["sev"]:
             cell["sev"][p["sev"]] += 1
-        pat = patterns.setdefault(cl["path"], {"id": cl["path"], "n": 0, "sessions": set(), "sev": sev_counter(),
-                                               "models": Counter(), "examples": []})
+        pat = patterns.get(cl["path"])
+        if pat is None:
+            pat = patterns[cl["path"]] = {"id": cl["path"], "n": 0, "sessions": set(), "sev": sev_counter(),
+                                          "models": Counter(), "examples": []}
         pat["n"] += 1
         pat["sessions"].add(slug)
         pat["models"][row["m"]] += 1
@@ -1682,7 +1688,9 @@ def aggregate(product, samples, taxonomy):
         pat["examples"].append((SEVERITIES.index(p["sev"]) if p["sev"] else 9, slug, p["id"], p["label"],
                                 row["m"], row["w"], clip(row["q"], 64)))
         for tag in cl["tags"]:
-            t = tags.setdefault(tag, {"id": tag, "n": 0, "sessions": set(), "stages": Counter()})
+            t = tags.get(tag)
+            if t is None:
+                t = tags[tag] = {"id": tag, "n": 0, "sessions": set(), "stages": Counter()}
             t["n"] += 1
             t["sessions"].add(slug)
             t["stages"][stage] += 1
@@ -2011,7 +2019,9 @@ def trend_payload(product, samples, releases=(), generated=None):
             parts = p["cl"]["path"].split(".")
             for n in range(1, len(parts) + 1):
                 key = (day, scene_i, node_idx[".".join(parts[:n])], model, ut)
-                cell = cells.setdefault(key, [[0, 0, 0, 0, 0], {}])
+                cell = cells.get(key)
+                if cell is None:
+                    cell = cells[key] = [[0, 0, 0, 0, 0], {}]
                 cell[0][sev] += 1
                 cell[1][slug] = cell[1].get(slug, 0) | (1 << sev)
 
@@ -2023,7 +2033,10 @@ def trend_payload(product, samples, releases=(), generated=None):
         if not any(counts):
             continue
         hit_counts = [sum(1 for mask in mask_of.values() if mask & (1 << k)) for k in range(len(TREND_SEVERITIES))]
-        hist = sorted(Counter(mask_of.values()).items())
+        hist_by_mask = {}
+        for mask in mask_of.values():
+            hist_by_mask[mask] = hist_by_mask.get(mask, 0) + 1
+        hist = sorted(hist_by_mask.items())
         cells_out.append([*key, *counts, *hit_counts, len(mask_of),
                           *(v for pair in hist for v in pair)])
 
