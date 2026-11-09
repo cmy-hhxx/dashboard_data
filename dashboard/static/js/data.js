@@ -2181,6 +2181,8 @@ function trendSVG(view, title, releases, width, endLabels = true) {
   // 平滑曲线 + 极淡的面积，让升降方向比一串折点更快被读出来；标签则沿右侧独立排布。
   const baseY = PAD.t + innerH;
   const valueMax = Math.max(1, ...series.flatMap((s) => s.vals.filter((v) => v != null)));
+  const clusterBounds = { l: PAD.l, r: PAD.l + innerW, t: PAD.t, b: PAD.t + innerH };
+  const clusterSpread = Math.min(8, Math.max(2.2, (innerW / Math.max(1, n - 1)) * 0.36));
   let defs = "", areas = "", nebulas = "", lines = "", dots = "";
   series.forEach((s, gi) => {
     const points = [];
@@ -2194,7 +2196,7 @@ function trendSVG(view, title, releases, width, endLabels = true) {
     }
     points.forEach(([x, y, value, i]) => {
       const ratio = s.sessions[i] > 0 ? s.hits[i] / s.sessions[i] : value / valueMax;
-      nebulas += nebulaCluster({ x, y, value, max: valueMax, ratio, color: s.color, maxDots: 14, spread: 8 });
+      nebulas += nebulaCluster({ x, y, value, max: valueMax, ratio, color: s.color, maxDots: 14, spread: clusterSpread, bounds: clusterBounds });
       dots += `<circle class="mxt-dot" data-trend-point="${gi}:${i}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.8" style="fill:${s.color}"/>`;
     });
   });

@@ -34,7 +34,7 @@ export function monotonePath(points) {
    (no jitter), so a row of points reads as one rhythm, and the mark stays inside the plot padding so
    the first and last dates are never clipped by the chart edge. 1,000 observations never become
    1,000 circles. */
-export function nebulaCluster({ x, y, value, max, ratio = 0, color, maxDots = 16, spread = 9 }) {
+export function nebulaCluster({ x, y, value, max, ratio = 0, color, maxDots = 16, spread = 9, bounds = null }) {
   if (!(value > 0)) return "";
   const share = max > 0 ? clamp(value / max, 0, 1) : 0;
   const hitShare = clamp(ratio || share, 0, 1);
@@ -51,7 +51,13 @@ export function nebulaCluster({ x, y, value, max, ratio = 0, color, maxDots = 16
     const start = -Math.PI / 2 + (ring ? step / 2 : 0);
     for (let i = 0; i < count; i += 1) {
       const angle = start + i * step;
-      out += `<circle class="mxt-nebula-dot" cx="${(x + Math.cos(angle) * radius).toFixed(1)}" cy="${(y + Math.sin(angle) * radius).toFixed(1)}" r="${dotR}" fill="${color}" opacity="${opacity}"/>`;
+      const px = x + Math.cos(angle) * radius;
+      const py = y + Math.sin(angle) * radius;
+      // Keep every dot inside the plot's boundary instead of letting edge rosettes spill into
+      // the axis padding or run into the neighbouring point.
+      const cx = bounds ? clamp(px, bounds.l + dotR, bounds.r - dotR) : px;
+      const cy = bounds ? clamp(py, bounds.t + dotR, bounds.b - dotR) : py;
+      out += `<circle class="mxt-nebula-dot" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${dotR}" fill="${color}" opacity="${opacity}"/>`;
     }
   });
   return `${out}</g>`;
@@ -80,6 +86,8 @@ export function lineTrendSVG({ width = 720, height = 170, xLabels = [], xDates =
   const top = Math.max(minTop, topFor(all));
   const innerW = W - PAD.l - PAD.r;
   const innerH = H - PAD.t - PAD.b;
+  const clusterBounds = { l: PAD.l, r: PAD.l + innerW, t: PAD.t, b: PAD.t + innerH };
+  const clusterSpread = Math.min(compact ? 3.4 : 9, Math.max(2.2, (innerW / Math.max(1, n - 1)) * 0.36));
   const times = xDates.map((d) => Date.parse(`${d}T00:00:00Z`));
   const timeAxis = times.length === n && times.every(Number.isFinite) && times[n - 1] > times[0];
   const xOf = (i) => PAD.l + (n <= 1 ? innerW / 2 : innerW * (timeAxis ? (times[i] - times[0]) / (times[n - 1] - times[0]) : i / (n - 1)));
@@ -147,7 +155,7 @@ export function lineTrendSVG({ width = 720, height = 170, xLabels = [], xDates =
       run.push(point);
       if (!s.ghost) {
         const ratio = s.ratios && s.ratios[i] != null ? s.ratios[i] : v / top;
-        nebula += nebulaCluster({ x: point[0], y: point[1], value: s.volumes ? s.volumes[i] : v, max: volumeMax, ratio, color: s.color, maxDots: nebulaDots || (compact ? 10 : 16), spread: compact ? 3.4 : 9 });
+        nebula += nebulaCluster({ x: point[0], y: point[1], value: s.volumes ? s.volumes[i] : v, max: volumeMax, ratio, color: s.color, maxDots: nebulaDots || (compact ? 10 : 16), spread: clusterSpread, bounds: clusterBounds });
         dots += `<circle class="mxt-dot" data-trend-point="${si}:${i}" cx="${point[0].toFixed(1)}" cy="${point[1].toFixed(1)}" r="${compact ? 2 : 2.8}" style="fill:${s.color}" aria-label="${esc(`${s.label || ""} ${xLabels[i] || ""} · ${formatValue(v)}`)}"/>`;
       }
     });
