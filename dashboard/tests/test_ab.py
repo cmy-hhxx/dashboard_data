@@ -155,6 +155,21 @@ class PayloadTests(unittest.TestCase):
             round_dir(root, name="1_version1201_test", after=[("t1", "S2.M1.2")])
             self.assertNotEqual(ab_test.rounds_signature(root), signature)
 
+    def test_sample_recall_keeps_only_questions_with_both_details(self):
+        pairs = [
+            {"id": "both", "before": {"detail": "slug"}, "after": {"detail": 1}},
+            {"id": "before-only", "before": {"detail": "slug"}, "after": {"detail": None}},
+            {"id": "after-only", "before": {"detail": None}, "after": {"detail": 2}},
+        ]
+        refs = {"before": [{"pair": "both"}, {"pair": "before-only"}, {"pair": "after-only"}],
+                "after": [{"pair": "both"}, {"pair": "before-only"}, {"pair": "after-only"}],
+                "online": [{"slug": "online"}]}
+        ab_test._paired_only(pairs, refs)
+        self.assertEqual([pair["id"] for pair in pairs], ["both"])
+        self.assertEqual([ref["pair"] for ref in refs["before"]], ["both"])
+        self.assertEqual([ref["pair"] for ref in refs["after"]], ["both"])
+        self.assertEqual(refs["online"], [{"slug": "online"}])
+
     def test_online_real_users_after_release_are_a_third_side(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -398,10 +413,10 @@ class ScopeLayoutTests(unittest.TestCase):
             self.assertEqual(refs["t2"]["slug"], "sess-t2")
             self.assertEqual(rnd["sample_refs"]["online"][0]["slug"], "online-1")
 
-            # 同题 pairs：全部 eq 行，before/after 各自带详情入口。
+            # 同题 pairs：只保留两侧详情都存在的题；eq3 缺详情不进入召回列表。
             pairs = rnd["pairs"]
-            self.assertEqual([pair["eq"] for pair in pairs], [1, 2, 3])
-            self.assertEqual([pair["q"] for pair in pairs], ["q1", "q2", "q3"])
+            self.assertEqual([pair["eq"] for pair in pairs], [1, 2])
+            self.assertEqual([pair["q"] for pair in pairs], ["q1", "q2"])
             first = pairs[0]
             self.assertEqual((first["id"], first["scene"], first["sub"]),
                              ("t1", "取数规划", "目标错配"))
@@ -413,10 +428,7 @@ class ScopeLayoutTests(unittest.TestCase):
                 "trace": "t1", "model": "expert", "detail": 1, "n": 1,
                 "paths": ["S2.M1.2"], "status": "已重测_有归因",
             })
-            third = pairs[2]
-            self.assertEqual((third["before"]["n"], third["before"]["paths"],
-                              third["before"]["detail"]), (0, [], None))
-            self.assertIsNone(third["after"]["detail"])   # 没有 attribution → 不能开详情
+            self.assertNotIn(3, {pair["eq"] for pair in pairs})
 
             # sample_refs 的对比字段：before 用 slug，after detail 是能开详情的 eq。
             refs = {ref["trace"]: ref for ref in rnd["sample_refs"]["before"]}
@@ -458,16 +470,10 @@ class ScopeLayoutTests(unittest.TestCase):
             self.assertEqual(rnd["sides"]["before"], {"traces": 2, "hits": 3})
             self.assertEqual(rnd["sides"]["online"]["traces"], 1)
             self.assertEqual([ref["slug"] for ref in rnd["sample_refs"]["online"]], ["online-1"])
-            # pairs 仍保留全部题（AB 面板任意 ref 都能解析），但跨模型口径的 before 置 null；
-            # q 仍在，after 正常。专家口径的 before 不受影响。
+            # 只保留两侧都有详情的专家题；跨模型 before 为 null 的 t4 不再进入召回列表。
             pairs = {pair["eq"]: pair for pair in rnd["pairs"]}
-            self.assertEqual(sorted(pairs), [1, 2, 3, 4])
+            self.assertEqual(sorted(pairs), [1, 2])
             self.assertIsNotNone(pairs[1]["before"])
-            fast_pair = pairs[4]
-            self.assertIsNone(fast_pair["before"])
-            self.assertEqual((fast_pair["id"], fast_pair["q"], fast_pair["after"]["trace"]),
-                             ("t4", "q4", "t4"))
-            self.assertIsNone(fast_pair["after"]["detail"])
 
     def test_missing_after_scope_is_null_everywhere(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -479,12 +485,10 @@ class ScopeLayoutTests(unittest.TestCase):
             self.assertTrue(all(leaf["after"] is None for leaf in rnd["leaves"]))
             self.assertTrue(all(node["after"] is None for node in rnd["nodes"]))
             self.assertIsNotNone(rnd["matrix"]["before"])
-            # 重测未落盘时 pairs 退化为按 targets 顺序的 before-only 列表，而不是空列表。
-            pairs = rnd["pairs"]
-            self.assertEqual([pair["eq"] for pair in pairs], [1, 2, 3])
-            self.assertTrue(all(pair["after"] is None for pair in pairs))
-            self.assertEqual((pairs[0]["id"], pairs[0]["q"], pairs[0]["before"]["detail"]),
-                             ("t1", "q1", "sess-t1"))
+            # 重测未落盘时没有可配对的两侧详情，列表为空而不是给出单向样本。
+            self.assertEqual(rnd["pairs"], [])
+            self.assertEqual(rnd["sample_refs"]["before"], [])
+            self.assertEqual(rnd["sample_refs"]["after"], [])
 
     def test_trace_scenes_csv_wins_over_samples(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -515,7 +519,7 @@ class ScopeLayoutTests(unittest.TestCase):
             payload = json.loads((static / "abtests-aime.json").read_text(encoding="utf-8"))
             rnd = payload["rounds"][0]
             self.assertEqual((rnd["sides"]["before"]["traces"], rnd["sides"]["after"]["traces"]), (2, 1))
-            self.assertEqual(len(rnd["pairs"]), 3)
+            self.assertEqual(len(rnd["pairs"]), 1)
             self.assertIsInstance(rnd["matrix"]["after"], list)
             self.assertIsInstance(rnd["matrix"]["online"], list)
             entry = json.loads((static / "data-aime.json").read_text())["products"]["aime"]["ab"]

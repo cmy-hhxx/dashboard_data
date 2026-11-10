@@ -900,6 +900,26 @@ def _add_pair_refs(refs, before_by_trace, eq_by_trace, detail_by_trace, attr_eqs
             ref["detail"] = eq if eq is not None and eq in attr_eqs else None
 
 
+def _paired_only(pairs, sample_refs):
+    """Keep only questions with both before and after details.
+
+    The trend sample list may only recall samples that can actually open on both sides.
+    A question whose baseline has no evaluation (or whose retest has no attribution) stays
+    in the matrix counts but is not offered as a comparable sample.
+    """
+    ready = {
+        str(pair.get("id")) for pair in pairs
+        if pair.get("before") and pair["before"].get("detail") is not None
+        and pair.get("after") and pair["after"].get("detail") is not None
+    }
+    pairs[:] = [pair for pair in pairs if str(pair.get("id")) in ready]
+    for side in ("before", "after"):
+        refs = sample_refs.get(side)
+        if refs is not None:
+            refs[:] = [ref for ref in refs
+                       if str(ref.get("pair") or ref.get("trace")) in ready]
+
+
 def _build_round_scoped(round_dir: Path, order: int, version: str, samples=None,
                         next_release: str | None = None, meta=None):
     meta = meta or round_meta(round_dir, order, version)
@@ -940,6 +960,8 @@ def _build_round_scoped(round_dir: Path, order: int, version: str, samples=None,
                                 detail_by_trace, models)
     _add_pair_refs(before["refs"], before_by_trace, eq_by_trace, detail_by_trace, attr_eqs, "before")
     _add_pair_refs(after["refs"], before_by_trace, eq_by_trace, detail_by_trace, attr_eqs, "after")
+    side_traces = {"before": len(before["refs"]), "after": len(after["refs"])}
+    _paired_only(pairs, {"before": before["refs"], "after": after["refs"]})
 
     names = read_leaf_names(round_dir)
     leaves = []
@@ -966,8 +988,8 @@ def _build_round_scoped(round_dir: Path, order: int, version: str, samples=None,
         online_from = meta.get("released_at")
         online_traces = online.get("traces", 0)
     meta["sides"] = {
-        "before": {"traces": len(before["refs"]), "hits": sum(before["counter"].values())},
-        "after": ({"traces": len(after["refs"]), "hits": sum(after["counter"].values())}
+        "before": {"traces": side_traces["before"], "hits": sum(before["counter"].values())},
+        "after": ({"traces": side_traces["after"], "hits": sum(after["counter"].values())}
                   if after_available else None),
         "online": ({
             "traces": online_traces,
