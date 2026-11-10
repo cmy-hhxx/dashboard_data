@@ -249,6 +249,12 @@ export function pairGaps(pair) {
   return { before: !(before && before.detail), after: !(after && after.detail != null) };
 }
 
+/* 一侧有详情、另一侧没有时按单列展示；两侧都缺或两侧都全时维持用户选择。 */
+export function sideLayout(gaps, sides = { b: true, a: true }) {
+  const autoSingle = !!(sides.b && sides.a && gaps.before !== gaps.after);
+  return { autoSingle, sides: autoSingle ? { b: !gaps.before, a: !gaps.after } : { ...sides } };
+}
+
 /* ---------------------------------------------------------------- data */
 function loadAB(ctx) {
   const key = `${ctx.product}|${ctx.data?.generated_at || ""}`;
@@ -537,6 +543,11 @@ async function paintSides(round, pair, online) {
   const before = online ? null : (pair.before || {});
   const after = online ? null : (pair.after || null);
   const gaps = online ? { before: true, after: true } : pairGaps(pair);
+  // 只有一侧有详情时，不要给另一侧留一块空白错误态：单侧就按单列渲染。
+  // 用户手动隐藏过某一侧时尊重手动选择，不自动切换。
+  const { autoSingle, sides: activeSides } = online
+    ? { autoSingle: false, sides: C.sides }
+    : sideLayout(gaps, C.sides);
   const onlineSource = online ? onlineRef(round, online) : null;
   const allColumns = online
     ? [{ prefix: "o", label: "线上真实", ref: onlineSource, gap: false, model: onlineSource?.model || fallbackModel, online: true }]
@@ -544,14 +555,14 @@ async function paintSides(round, pair, online) {
         { prefix: "b", label: "改版前", ref: before, gap: gaps.before, model: before?.model || fallbackModel },
         { prefix: "a", label: "改版后", ref: after, gap: gaps.after, model: after?.model || fallbackModel },
       ];
-  const columns = online ? allColumns : allColumns.filter((column) => C.sides[column.prefix] !== false);
+  const columns = online ? allColumns : allColumns.filter((column) => activeSides[column.prefix] !== false);
   panes.classList.toggle("is-single", columns.length === 1);
   // 两列及以上才需要折叠；单列就是具体数据页的完整工作台（含 threads）。
   const folds = columns.length > 1;
   const modelHost = $(".compare-models", C.root);
   if (modelHost) {
-    modelHost.hidden = !!online;
-    if (!online) {
+    modelHost.hidden = !!online || autoSingle;
+    if (!online && !autoSingle) {
       const distinct = new Set(allColumns.map((column) => column.model).filter(Boolean)).size > 1;
       modelHost.innerHTML = allColumns.map((column) => {
         const on = C.sides[column.prefix] !== false;

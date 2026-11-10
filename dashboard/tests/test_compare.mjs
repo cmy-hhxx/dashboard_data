@@ -5,7 +5,7 @@ import test from "node:test";
 // the other front-end tests (core.js reads location.search at import time).
 globalThis.location = { search: "" };
 globalThis.window = {};
-const { parseCompareURL, pickRound, sortPairs, filterPairs, pagePairs, pairGaps, readyOf, detailReady, timelineModel } =
+const { parseCompareURL, pickRound, sortPairs, filterPairs, pagePairs, pairGaps, sideLayout, readyOf, detailReady, timelineModel } =
   await import("../static/js/compare.js");
 
 const pair = (eq, before, after, q = `题目 ${eq}`) => ({ id: `t${eq}`, eq, q, before: { n: before, detail: "s1" }, after: after == null ? null : { n: after, detail: eq } });
@@ -64,6 +64,17 @@ test("a side without its own detail is a gap, not a copy of the other side", () 
   assert.deepEqual(pairGaps({ before: { detail: null }, after: null }), { before: true, after: true });
   assert.deepEqual(pairGaps({ before: null, after: { detail: 3 } }), { before: true, after: false });
   assert.deepEqual(pairGaps({}), { before: true, after: true });
+});
+
+test("a one-sided pair renders the available side alone instead of an empty gap", () => {
+  // 线上召回样本：改版前「无评测记录」，改版后有重测归因。
+  assert.deepEqual(sideLayout({ before: true, after: false }), { autoSingle: true, sides: { b: false, a: true } });
+  assert.deepEqual(sideLayout({ before: false, after: true }), { autoSingle: true, sides: { b: true, a: false } });
+  // 两侧都缺 / 两侧都全：保留原选择；用户手动隐藏过某一侧也不自动切。
+  assert.deepEqual(sideLayout({ before: true, after: true }), { autoSingle: false, sides: { b: true, a: true } });
+  assert.deepEqual(sideLayout({ before: false, after: false }), { autoSingle: false, sides: { b: true, a: true } });
+  assert.deepEqual(sideLayout({ before: true, after: false }, { b: true, a: false }),
+    { autoSingle: false, sides: { b: true, a: false } });
 });
 
 test("a lone round sits in the middle of a padded time window, never in a corner", () => {
