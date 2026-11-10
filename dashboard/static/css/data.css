@@ -199,21 +199,15 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 }
 
 .mx-card-head { align-items: center; margin-bottom: 6px; }
-.mx-head-views { display: flex; align-items: center; gap: 8px; }
 .mx-head-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-left: auto; flex-wrap: wrap; }
-.mx-back,
-.mx-expand {
+.mx-back {
   display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 9px;
   border-radius: var(--r-chip); color: var(--muted); font-size: var(--fs-meta); white-space: nowrap;
   transition: background var(--snap), color var(--snap), transform var(--spring);
 }
-.mx-back:hover, .mx-expand:hover { background: var(--hover); color: var(--ink); }
-.mx-back:active, .mx-expand:active { transform: scale(0.985); transition-duration: 120ms; }
+.mx-back:hover { background: var(--hover); color: var(--ink); }
+.mx-back:active { transform: scale(0.985); transition-duration: 120ms; }
 .mx-back[hidden] { display: none; }
-.mx-expand { background: var(--well); color: var(--ink-2); }
-.mx-expand svg { width: 14px; height: 14px; transition: transform 260ms cubic-bezier(0.16, 1, 0.3, 1); }
-.mx-expand[aria-expanded="true"] { background: var(--active); color: var(--ink); }
-.mx-expand[aria-expanded="true"] svg { transform: rotate(180deg); }
 
 /* ------------------------------------------------------------------ 聚类矩阵 (neutral heat)
    Three panes share one row grid: the scene labels, a horizontally scrollable pane of columns,

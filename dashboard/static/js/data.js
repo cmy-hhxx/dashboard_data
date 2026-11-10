@@ -23,7 +23,7 @@ const ui = (product) =>
   (UI[product] = UI[product] || {
     field: { w: null, pages: [] }, vol: {}, clu: {}, pred: "vol",
     mx: {
-      rows: [], cols: [], trail: [], expanded: true, issueOpen: true, issueRange: "30", issuePath: [], analysisLevels: ["P0", "P1"],
+      rows: [], cols: [], trail: [], issueRange: "30", issuePath: [], analysisLevels: ["P0", "P1"],
       // 聚类矩阵格子的就地趋势图：口径 / 时间 / 场景 + 来源·模型·等级的折线组 + 是否打开都活在这里，
       // 就地刷新或切换产品再回来仍是同一张图。rowKeys/colKeys 是行列路径，刷新后用来重新定位。
       trend: { open: false, measure: "count", range: "30", scope: "row", lines: [], active: 0, seeded: false, rowKeys: null, colKeys: null },
@@ -1791,13 +1791,14 @@ function fitMatrix(m) {
    few pixels while the incoming panel is revealed by an opaque radial clip, then the shell settles
    to its new height. It reads as a ring opening from the pointer, like the sunburst, instead of a
    hard old-page/new-page cut. */
-function swapShell(shell, html, animate, source) {
+function swapShell(shell, html, animate, source, done = null) {
   if (shell._swapCleanup) shell._swapCleanup();
   const panels = $$(".mx-swap-panel", shell);
   const prev = panels[panels.length - 1];
   if (!animate || REDUCED || !prev) {
     shell.innerHTML = html;
     fitMatrix(shell.querySelector(".matrix"));
+    done?.();
     return;
   }
   const token = (shell._swapToken || 0) + 1;
@@ -1868,7 +1869,9 @@ function swapShell(shell, html, animate, source) {
     fitMatrix(keep && keep.classList.contains("matrix") ? keep : null);
   };
   Promise.all([out.finished.catch(() => {}), enter.finished.catch(() => {}), resize ? resize.finished.catch(() => {}) : Promise.resolve()]).then(() => {
-    if (token === shell._swapToken && shell._swapCleanup) shell._swapCleanup();
+    if (token !== shell._swapToken || !shell._swapCleanup) return;
+    shell._swapCleanup();
+    done?.();
   });
 }
 
@@ -2495,15 +2498,9 @@ function matrixCard(p, tax) {
   const abBtn = p.ab && tax
     ? `<button type="button" class="link mx-ab" id="mxAB" aria-expanded="false" aria-controls="mxABFace" title="固定题集改版前后对比 + 线上真实用户验证">A/B Test<small>${esc(p.ab.label || "")}</small></button>`
     : "";
-  const expandBtn = `<button type="button" class="mx-expand" id="mxExpand" aria-expanded="false" aria-controls="mxPerspective" title="查看问题等级与速率趋势">
-    <span>问题分析</span><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 6l4.5 4 4.5-4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-  </button>`;
-  const issueBtn = p.ab && tax ? `<button type="button" class="mx-expand mx-issue-toggle" id="mxIssueTrendsBtn" aria-expanded="false" aria-controls="mxIssueTrends" title="向下展开全部类型、全部场景的问题趋势">
-    <span>总体趋势</span><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 6l4.5 4 4.5-4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-  </button>` : "";
   const matrix = (body, actions = "", chrome = false) => `<article class="card mx-card" id="mxCard" style="--span:12">
     <div class="mx-face mx-matrix-face" id="mxMatrixFace">
-      <header class="card-head mx-card-head"><h2>聚类矩阵</h2>${chrome ? `<div class="mx-head-views">${issueBtn}${expandBtn}</div>` : ""}${actions ? `<div class="mx-head-actions">${actions}</div>` : ""}</header>
+      <header class="card-head mx-card-head"><h2>聚类矩阵</h2>${actions ? `<div class="mx-head-actions">${actions}</div>` : ""}</header>
       ${body}
       ${chrome ? `<div class="mx-panels" id="mxPanels" hidden>
         ${p.ab ? `<section class="mx-issue-trends-shell" id="mxIssueTrends" hidden aria-label="全部问题类型趋势"></section>` : ""}
@@ -3394,7 +3391,7 @@ function wire(bento, p, tax, u) {
       mxView = view;
       mxKey = "";
       remember();
-      swapShell(shell, matrixTable(mxView), animate, source);
+      swapShell(shell, matrixTable(mxView), animate, source, () => { if (!trend.open) setPanelsOpen(true); });
       const back = $("#mxBack", bento);
       if (back) {
         back.textContent = "← 返回上一级";
@@ -3470,10 +3467,10 @@ function wire(bento, p, tax, u) {
     });
     let trendData = null;
     const perspectiveEl = $("#mxPerspective", bento);
-    const expandBtn = $("#mxExpand", bento);
     const issueEl = $("#mxIssueTrends", bento);
-    const issueBtn = $("#mxIssueTrendsBtn", bento);
     const panelsEl = $("#mxPanels", bento);
+    /* 两张分析面板没有开关，默认就在矩阵下面；只有进入某个格子的就地趋势时才让位。 */
+    let panelsOpen = false;
     let perspectiveToken = 0;
     let perspectiveLoading = false;
     let issueData = null;
@@ -3523,7 +3520,7 @@ function wire(bento, p, tax, u) {
     }
 
     function renderIssueTrends(reveal = true) {
-      if (!issueEl || !u.mx.issueOpen || !issueData) return;
+      if (!issueEl || !panelsOpen || !issueData) return;
       u.mx.issuePath = Array.isArray(u.mx.heatPath) ? u.mx.heatPath.slice() : [];
       u.mx.issueZoom = null;
       const names = new Map();
@@ -3541,14 +3538,14 @@ function wire(bento, p, tax, u) {
     }
 
     async function hydrateIssueTrends() {
-      if (!issueEl || !u.mx.issueOpen || issueLoading || issueData) return;
+      if (!issueEl || !panelsOpen || issueLoading || issueData) return;
       issueLoading = true;
       const token = ++issueToken;
       const data = await loadTrend(ctx);
       if (token !== issueToken) return;
       issueLoading = false;
       issueData = data?.dates?.length ? data : null;
-      if (u.mx.issueOpen && issueEl.isConnected) {
+      if (panelsOpen && issueEl.isConnected) {
         if (issueData) renderIssueTrends();
         else layoutPanels(() => { issueEl.innerHTML = `<div class="mx-issue-loading"><div class="empty">暂无问题趋势数据</div></div>`; });
       }
@@ -3571,7 +3568,7 @@ function wire(bento, p, tax, u) {
     }
 
     function renderPerspective(loading = perspectiveLoading, reveal = true) {
-      if (!perspectiveEl || !u.mx.expanded || !mxView) return;
+      if (!perspectiveEl || !panelsOpen || !mxView) return;
       const update = () => { perspectiveEl.innerHTML = `<div class="mx-perspective-inner">${matrixPerspectiveHTML(mxView, trendData, loading, u.mx, clusterRoot)}</div>`; };
       if (reveal) layoutPanels(update);
       else update();
@@ -3593,7 +3590,7 @@ function wire(bento, p, tax, u) {
         u.mx.heatPath = down ? [...keys, down.dataset.heatNode] : keys.slice(0, -1);
         heatPanel._cancelHeat?.();
         layoutPanels(() => {
-          if (u.mx.issueOpen && issueData) renderIssueTrends(false);
+          if (panelsOpen && issueData) renderIssueTrends(false);
           heatPanel.innerHTML = mxPerspectiveTimeline(mxTrendSummary(trendData, mxView, clusterRoot, u.mx), false);
         });
         const clear = () => { heatPanel.style.opacity = ""; heatPanel.style.transform = ""; };
@@ -3605,7 +3602,7 @@ function wire(bento, p, tax, u) {
     }
 
     async function hydratePerspective() {
-      if (!perspectiveEl || !u.mx.expanded || trendData || perspectiveLoading) return;
+      if (!perspectiveEl || !panelsOpen || trendData || perspectiveLoading) return;
       perspectiveLoading = true;
       const token = ++perspectiveToken;
       const data = await loadTrend(ctx);
@@ -3615,46 +3612,42 @@ function wire(bento, p, tax, u) {
         trendData = data;
         trendData.modelLabels = data.modelLabels || (p.models || []).map((m) => ({ id: m.id, label: m.label }));
       }
-      if (u.mx.expanded && perspectiveEl.isConnected) renderPerspective(false);
+      if (panelsOpen && perspectiveEl.isConnected) renderPerspective(false);
     }
 
-    function setMatrixPanel(kind, open, animate) {
+    function setPanelsOpen(open, animate = true) {
+      if (panelsOpen === open) return;
+      panelsOpen = open;
       layoutPanels(() => {
-        if (kind === "issue") u.mx.issueOpen = open;
-        else u.mx.expanded = open;
-        const issueVisible = !!issueEl && u.mx.issueOpen;
-        const perspectiveVisible = !!perspectiveEl && u.mx.expanded;
+        const issueVisible = !!issueEl && open;
+        const perspectiveVisible = !!perspectiveEl && open;
         if (panelsEl) {
           panelsEl.hidden = !issueVisible && !perspectiveVisible;
           panelsEl.classList.toggle("is-both", issueVisible && perspectiveVisible);
           panelsEl.classList.toggle("is-issue", issueVisible && !perspectiveVisible);
           panelsEl.classList.toggle("is-perspective", perspectiveVisible && !issueVisible);
         }
-        if (issueEl && issueBtn) {
+        if (issueEl) {
           issueEl.hidden = !issueVisible;
-          issueBtn.setAttribute("aria-expanded", String(issueVisible));
+          if (issueVisible) {
+            if (issueData) renderIssueTrends(false);
+            else issueEl.innerHTML = `<div class="mx-issue-loading"><div class="empty">正在读取问题趋势…</div></div>`;
+          }
         }
-        if (perspectiveEl && expandBtn) {
+        if (perspectiveEl) {
           perspectiveEl.hidden = !perspectiveVisible;
-          expandBtn.setAttribute("aria-expanded", String(perspectiveVisible));
-          expandBtn.querySelector("span").textContent = perspectiveVisible ? "收起分析" : "问题分析";
+          if (perspectiveVisible) renderPerspective(!trendData, false);
         }
-        if (issueVisible) {
-          if (issueData) renderIssueTrends(false);
-          else issueEl.innerHTML = `<div class="mx-issue-loading"><div class="empty">正在读取问题趋势…</div></div>`;
-        }
-        if (perspectiveVisible) renderPerspective(!trendData, false);
       }, animate);
-      if (u.mx.issueOpen && issueEl) hydrateIssueTrends();
-      if (u.mx.expanded && perspectiveEl) hydratePerspective();
+      if (!open) return;
+      if (issueEl) hydrateIssueTrends();
+      if (perspectiveEl) hydratePerspective();
     }
-    const setIssueTrends = (open, animate = true) => setMatrixPanel("issue", open, animate);
-    const setPerspective = (open, animate = true) => setMatrixPanel("perspective", open, animate);
 
     function trendFrame(row, animate = true, source = null) {
       const spec = trendSpec(row);
       const title = trendTitle(row, spec.node);
-      swapShell(shell, trendBodyHTML(trendData, spec, title), animate, source);
+      swapShell(shell, trendBodyHTML(trendData, spec, title), animate, source, () => setPanelsOpen(false));
       const box = $(".mxt", shell);
       /* Opening the sample drawer splits the frame and narrows the map: that resize is expected
          and must not rebuild (and thereby close) the drawer. Defer the repaint instead and play
@@ -3860,7 +3853,7 @@ function wire(bento, p, tax, u) {
       if (token !== trendToken || !trend.open || !shell.isConnected) return;
       $$(".mx-trend-probe, .mx-swap-probe", shell).forEach((el) => el.remove());
       if (!data || !data.dates || !data.dates.length) {
-        swapShell(shell, `<div class="mxt mx-swap-panel"><div class="empty">暂无趋势数据</div></div>`, !!ready, source);
+        swapShell(shell, `<div class="mxt mx-swap-panel"><div class="empty">暂无趋势数据</div></div>`, !!ready, source, () => setPanelsOpen(false));
         return;
       }
       trendData = data;
@@ -3882,14 +3875,8 @@ function wire(bento, p, tax, u) {
     const preloadTrend = () => loadTrend(ctx);
     if ("requestIdleCallback" in window) requestIdleCallback(preloadTrend, { timeout: 3000 });
     else setTimeout(preloadTrend, 1200);
-    if (perspectiveEl && expandBtn) {
-      expandBtn.addEventListener("click", () => setPerspective(!u.mx.expanded, true));
-      if (u.mx.expanded) setPerspective(true, false);
-    }
-    if (issueEl && issueBtn) {
-      issueBtn.addEventListener("click", () => setIssueTrends(!u.mx.issueOpen, true));
-      if (u.mx.issueOpen) setIssueTrends(true, false);
-    }
+    // 默认展开两张分析面板；回到某个格子的趋势时它们保持收着。
+    setPanelsOpen(!trend.open, false);
     // 就地刷新或切产品回来：路径还在，趋势也重新打开在同一格上。
     if (trend.open && trend.node) {
       const row = (mxView.rows || []).find((x) => x.name === trend.rowName);
