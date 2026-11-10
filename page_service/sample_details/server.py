@@ -81,34 +81,60 @@ class DocCache:
 
 
 DOCS = DocCache()
-RAW_INDEX = {}
-RAW_LABELS = {}
-RAW_LOCK = threading.Lock()
+FILTERED = {}
+FILTER_LOCK = threading.Lock()
+TEST_USER = "test"
 
 
-def _raw_bytes(cache, path):
-    """Raw payload body (and its gzip) cached briefly; these files are several MB."""
-    item = cache.get(path)
-    if item and time.time() - item[0] < DOC_TTL:
+def filtered_docs(product):
+    """Index + labels with test-user rows removed (same mask keeps labels aligned)."""
+    now = time.time()
+    item = FILTERED.get(product)
+    if item and now - item[0] < DOC_TTL:
         return item[1], item[2]
-    with RAW_LOCK:
-        item = cache.get(path)
+    with FILTER_LOCK:
+        item = FILTERED.get(product)
         if item and time.time() - item[0] < DOC_TTL:
             return item[1], item[2]
-        _, _, body = _upstream(path)
-        packed = (time.time(), body, gzip.compress(body, 5))
-        cache[path] = packed
-        return packed[1], packed[2]
+        doc = DOCS.get("index:" + product, "/samples-%s.json" % product)
+        labels = DOCS.get("labels:" + product, "/labels-%s.json" % product)
+        payload = (doc.get("products") or {}).get(product) or {}
+        rows = payload.get("rows") or []
+        keep = [i for i, row in enumerate(rows) if row.get("ut") != TEST_USER]
+        if len(keep) == len(rows):
+            filtered, filtered_labels = doc, labels
+        else:
+            filtered = {
+                **doc,
+                "products": {**(doc.get("products") or {}),
+                             product: {**payload, "rows": [rows[i] for i in keep]}},
+            }
+            raw_labels = labels.get("labels") if isinstance(labels, dict) else None
+            if isinstance(raw_labels, list) and len(raw_labels) == len(rows):
+                filtered_labels = {**labels, "labels": [raw_labels[i] for i in keep]}
+            else:
+                filtered_labels = labels
+        FILTERED[product] = (time.time(), filtered, filtered_labels)
+        return filtered, filtered_labels
 
 
-def _index_bytes(product):
-    """Recall index body; it is several MB."""
-    return _raw_bytes(RAW_INDEX, "/samples-%s.json" % product)
-
-
-def _labels_bytes(product):
-    """Problem labels, index-aligned with the recall index rows; AIME is ~5 MB."""
-    return _raw_bytes(RAW_LABELS, "/labels-%s.json" % product)
+def allowed_slugs():
+    """Slugs visible through the page interface: test-user samples are not served."""
+    now = time.time()
+    item = FILTERED.get("__slugs")
+    if item and now - item[0] < DOC_TTL:
+        return item[1]
+    slugs = set()
+    for product in PRODUCTS:
+        try:
+            doc, _ = filtered_docs(product)
+        except Exception as exc:  # noqa: BLE001 - one product must not block the other
+            sys.stderr.write("[filter] index %s: %s\n" % (product, exc))
+            continue
+        rows = (((doc.get("products") or {}).get(product) or {}).get("rows") or [])
+        slugs.update(row.get("s") for row in rows if row.get("s"))
+    FILTERED["__slugs"] = (time.time(), slugs)
+    return slugs
 
 
 def session_key(row):
@@ -126,7 +152,7 @@ def resolve(product, case, slug):
     loaded = failed = 0
     for prod in candidates:
         try:
-            doc = DOCS.get("index:" + prod, "/samples-%s.json" % prod)
+            doc, _labels = filtered_docs(prod)
         except Exception as exc:  # noqa: BLE001 - a missing product must not stop the other
             failed += 1
             sys.stderr.write("[context] index %s: %s\n" % (prod, exc))
@@ -274,6 +300,8 @@ class Handler(SimpleHTTPRequestHandler):
         return self._json(200, context)
 
     def _detail(self, slug):
+        if slug not in allowed_slugs():
+            return self._error(404, "detail unavailable", slug=slug)
         try:
             _, headers, body = _upstream("/samples/%s.json" % slug)
         except urllib.error.HTTPError as exc:
@@ -283,22 +311,23 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _index(self, product):
         try:
-            body, packed = _index_bytes(product)
+            doc, _labels = filtered_docs(product)
         except urllib.error.HTTPError as exc:
             return self._error(exc.code, "index unavailable", product=product)
+        body = json.dumps(doc, ensure_ascii=False).encode("utf-8")
         if self._accepts_gzip():
-            return self._write(200, packed, "application/json; charset=utf-8", encoding="gzip")
+            return self._write(200, gzip.compress(body, 5), "application/json; charset=utf-8", encoding="gzip")
         return self._write(200, body, "application/json; charset=utf-8")
 
     def _labels(self, product):
-        # Forwarded verbatim: callers pair labels[i] with the same row of
-        # /samples-<product>.json, so both must stay index-aligned.
+        # Same mask as /samples-<product>.json: callers pair labels[i] with rows[i].
         try:
-            body, packed = _labels_bytes(product)
+            _doc, labels = filtered_docs(product)
         except urllib.error.HTTPError as exc:
             return self._error(exc.code, "labels unavailable", product=product)
+        body = json.dumps(labels, ensure_ascii=False).encode("utf-8")
         if self._accepts_gzip():
-            return self._write(200, packed, "application/json; charset=utf-8", encoding="gzip")
+            return self._write(200, gzip.compress(body, 5), "application/json; charset=utf-8", encoding="gzip")
         return self._write(200, body, "application/json; charset=utf-8")
 
     def log_message(self, fmt, *args):

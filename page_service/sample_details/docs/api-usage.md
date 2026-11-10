@@ -124,6 +124,7 @@ curl -s --compressed "$BASE/samples-wencai.json" -o index.json
 - 首次打开慢：详情按需生成，未访问过的样本约 0.5–4 秒，之后走磁盘缓存；AIME 多轮会话首次更久
 - `/api/context` 索引有 120 秒进程内缓存，看板刚重建完最多约 2 分钟后才跟上
 - 无鉴权，仅内部使用；只读，避免高频批量拉取；建议先 `/api/context` 定位会话，再取详情
+- **测试用户不供数**：索引 / context / 详情均剔除看板样本行 `ut=test` 的记录；看板本身仍展示全部用户
 - 想看某一轮：`?case=…&trace=<trace_id>`；轮次位置在详情 `attribution.turns[].trace_id` 里自行匹配
 - 不支持列表搜索、批量导出
 

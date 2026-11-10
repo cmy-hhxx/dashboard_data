@@ -1502,6 +1502,8 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
             "mode": tmeta.get("mode") or tmeta.get("runtime_mode"),
             "question_zh": tmeta.get("question_zh"), "task": tmeta.get("task"),
             "subtask": tmeta.get("subtask"), "difficulty": tmeta.get("difficulty"),
+            # 原始 trace_meta 全量保留：页面可以不展示，但不能在后端丢掉。
+            "meta": tmeta,
             "messages": msgs,
         })
 
@@ -1530,10 +1532,13 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
         "question": question, "question_zh": first_meta.get("question_zh"),
         "lang": lang_of(question),
         "ids": {"session": sid, "trace": tid, "case": case},
+        # 外层 meta 是 session 级埋点；全量保留，页面按需展示。
+        "session_meta": imeta,
         "meta": {
             "version": (inp or {}).get("version"), "mode": smeta.get("agent_mode") or imeta.get("agent_mode"),
             "source": smeta.get("source") or imeta.get("source"), "skill": imeta.get("skill_name") or None,
-            "comefrom": first_meta.get("comefrom") or imeta.get("comefrom"),
+            "app": imeta.get("app") or first_meta.get("app") or smeta.get("app"),
+            "comefrom": imeta.get("comefrom") or first_meta.get("comefrom") or smeta.get("comefrom"),
             "device": first_meta.get("device_type") or imeta.get("device_type"),
             "task": first_meta.get("task"), "subtask": first_meta.get("subtask"),
             "difficulty": first_meta.get("difficulty"),

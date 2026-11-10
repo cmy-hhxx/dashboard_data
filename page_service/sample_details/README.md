@@ -22,9 +22,9 @@ http://<看板主机>:2833/?product=&case=  ──> /api/context（迷你索引�
 |---|---|
 | `/`、`/detail` | 页面。带 `?product=wencai&case=daily%7Cb_fast%7Cthread_…`（一个会话，多轮自动合并）或 `?product=wencai&slug=<10位hex>`（一条评测输出）；再加 `&trace=<trace_id>` 可直接定位到会话里的某一轮；不带参数时是使用说明页 |
 | `/api/context?…` | 页面用：只返回这个会话的那几行召回索引 + taxonomy（AIME 全量索引 8.1 MB，不下发浏览器）；带 `trace` 时原样回显（定位在前端做，详情里才有每轮 trace_id） |
-| `/samples/<slug>.json` | 原样透传单条详情（与看板同路径，首次请求会触发看板懒生成，0.5–4 s） |
-| `/samples-<product>.json` | 原样透传召回索引（给同事的系统对接用）。**2026-11-07 起行内不再含 `lb`**，标签改由 `/labels-<product>.json` 按行号提供 |
-| `/labels-<product>.json` | 原样透传问题标签（`{schema, product, labels:[…]}`），与 `/samples-<product>.json` 的 `rows[]` 同序同长度，按行号配对 |
+| `/samples/<slug>.json` | 单条详情（与看板同路径，首次请求会触发看板懒生成，0.5–4 s）；测试用户样本返回 404 |
+| `/samples-<product>.json` | 召回索引（给同事的系统对接用），已剔除测试用户行。**2026-11-07 起行内不再含 `lb`**，标签改由 `/labels-<product>.json` 按行号提供 |
+| `/labels-<product>.json` | 问题标签（`{schema, product, labels:[…]}`），按同一测试用户掩码过滤，与 `/samples-<product>.json` 的 `rows[]` 同序同长度 |
 | `/healthz` | 存活 + 上游探活 |
 
 页面链接的用法：在看板里选中一个样本，复制地址栏的
@@ -100,9 +100,10 @@ curl -sI "http://<看板主机>:2833/samples/<slug>.json"
 
 ## 已知边界
 
-- **无鉴权**：按约定部署在内部网络，和看板口径一致；不要把这个端口暴露到公网。
+- **无鉴权**：按约定部署在内部网络，不要把这个端口暴露到公网。
+- **测试用户不供数**：索引 / context / 详情都按看板样本行的 `ut=test` 排除；看板自己仍展示全部用户。
 - **labels 与索引必须按行号配对**：2026-11-07 起召回索引行里的 `lb`（问题标签）拆成了
-  `labels-<product>.json`，本服务原样透传；两者的行号一一对应，**只对 `/samples-<product>.json`
+  `labels-<product>.json`，本服务按同一测试用户掩码过滤后下发；两者的行号一一对应，**只对 `/samples-<product>.json`
   的全量 `rows[]` 成立**。`/api/context` 返回的是子集（只该会话那几行），不要拿 labels 按位置贴它。
 - **页面本身不拉 labels**：单样本页只需要一个会话，前端用 `oneSession` 跳过这次请求，所以不会白拉几 MB。
 - **首次打开慢**：详情是看板按需生成的。没被访问过的样本首次 0.5–4 s，之后走磁盘缓存；

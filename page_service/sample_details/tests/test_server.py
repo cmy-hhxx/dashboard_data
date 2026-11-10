@@ -29,11 +29,11 @@ def free_port():
         return sock.getsockname()[1]
 
 
-def row(slug, sid, model="b_fast", split="daily", question="问题"):
+def row(slug, sid, model="b_fast", split="daily", question="问题", ut="real"):
     return {
         "s": slug, "sid": sid, "m": model, "sp": split, "q": question, "d": "2026-10-01",
         "n": 1, "w": "P1", "tr": 1, "pt": [], "st": [], "tg": [], "lang": "zh",
-        "tid": "", "case": "", "task": "", "sub": "", "skill": "", "sc": "",
+        "tid": "", "case": "", "task": "", "sub": "", "skill": "", "sc": "", "ut": ut,
     }
 
 
@@ -44,7 +44,8 @@ INDEX = {
         "products": {"wencai": {"label": "问财", "models": [{"id": "b_fast", "label": "B Fast"}],
                                 "splits": ["daily"],
                                 "rows": [row("aaaaaaaaaa", "thread_1"), row("bbbbbbbbbb", "thread_1"),
-                                         row("cccccccccc", "thread_2")], "pad": "x" * 4096}},
+                                         row("cccccccccc", "thread_2"),
+                                         row("dddddddddd", "thread_3", ut="test")], "pad": "x" * 4096}},
     },
     "/samples-aime.json": {
         "schema": 1, "generated_at": "2026-11-03T00:00:00", "product": "aime",
@@ -52,7 +53,7 @@ INDEX = {
         "products": {"aime": {"label": "AIME", "models": [], "splits": ["lost"], "rows": []}},
     },
     "/data.json": {"schema": 1, "taxonomy": {"patterns": {"S1.M1": {"name": "模式"}}, "stages": []}},
-    "/labels-wencai.json": {"schema": 2, "product": "wencai", "labels": ["标签一", "标签二", ""]},
+    "/labels-wencai.json": {"schema": 2, "product": "wencai", "labels": ["标签一", "标签二", "", "测试"]},
     "/labels-aime.json": {"schema": 2, "product": "aime", "labels": ["标签一", "标签二", ""]},
     "/samples/aaaaaaaaaa.json": {"slug": "aaaaaaaaaa", "product": "wencai", "model": "b_fast",
                                  "input": {"traces": [], "missing": True},
@@ -188,6 +189,17 @@ class SampleDetailsTest(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as caught:
             fetch(self.base + "/samples/9999999999.json")
         self.assertEqual(caught.exception.code, 404)
+
+    def test_test_users_are_not_served(self):
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            fetch(self.base + "/samples/dddddddddd.json")
+        self.assertEqual(caught.exception.code, 404)
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            fetch(self.base + "/api/context?product=wencai&case=daily%7Cb_fast%7Cthread_3")
+        self.assertEqual(caught.exception.code, 404)
+        _, _, body = fetch(self.base + "/samples-wencai.json")
+        rows = json.loads(body)["products"]["wencai"]["rows"]
+        self.assertNotIn("dddddddddd", {r["s"] for r in rows})
 
     def test_index_proxy(self):
         status, _, body = fetch(self.base + "/samples-wencai.json")

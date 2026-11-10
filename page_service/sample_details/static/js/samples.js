@@ -539,6 +539,7 @@ function mergeSessionDetails(parts, session) {
     question_zh: parts[0].detail.question_zh,
     lang: parts[0].detail.lang,
     ids: { session: session.sid, trace: "" },
+    session_meta: { ...(parts[parts.length - 1].detail.session_meta || {}) },
     meta: { ...(parts[parts.length - 1].detail.meta || {}) },
     input: { traces: [], missing: false },
     attribution: { summary: "", turns: [], problems: [], session_problems: [] },
@@ -822,10 +823,12 @@ function renderIn() {
     m.finish_ms ? `${fmt(m.finish_ms / 1000, 1)} s` : null].filter(Boolean);
   const session = S.all.find((x) => x.key === S.sessionKey) || S.session || {};
   const rounds = D.rounds || [];
-  const group = (k, cls, vals) =>
-    vals.length
-      ? `<span class="cg${cls ? ` ${cls}` : ""}"><span class="cg-k">${k}</span>${vals.map((v) => `<span class="pill">${esc(v)}</span>`).join("")}</span>`
+  const group = (k, cls, vals) => {
+    const shown = vals.filter((v) => v != null && v !== "");
+    return shown.length
+      ? `<span class="cg${cls ? ` ${cls}` : ""}"><span class="cg-k">${k}</span>${shown.map((v) => `<span class="pill">${esc(v)}</span>`).join("")}</span>`
       : "";
+  };
   const fullQ = D.question || "（无提问）";
   const shortQ = fullQ.length > 80 ? `${fullQ.slice(0, 80)}…` : fullQ;
   $("#shead", root).innerHTML = `<div class="sample-head">
@@ -837,6 +840,8 @@ function renderIn() {
         ${isLostRow(session) ? `<span class="cg"><span class="pill lost">流失用户</span></span>` : ""}
         ${group("模型", "is-model", [label])}
         ${group("日期", "is-plain", [D.date])}
+        ${group("App", "is-plain", [m.app])}
+        ${group("来源", "is-plain", [m.comefrom])}
         ${group("场景", "is-scene", scene)}
         ${group("规模", "is-scale", scale)}
       </div>

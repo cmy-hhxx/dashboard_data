@@ -138,6 +138,7 @@ tokens / task-subtask / lost 统计写到 `<datasets>/stats.json`；`build.py` �
 - 用户 ID 在 idline 展示并标注用户类型（真实 / 测试 / 内部 / 未知），类型规则见 `<datasets>/user_rules.json`；
   idline 只展示 Session ID 和当前轮的 Trace ID（两者相同时不重复显示），均提供复制按钮；
   Case ID 不再展示；样本 URL 使用短 slug。
+- 详情保留完整 `session_meta` 和每条 trace 的 `meta`（埋点信息），头部展示 `app` 与 `comefrom`。
 - 归因/体系页通过 `?view=samples&product=…&case=…` 深链进入，加 `&trace=<trace_id>`
   可定位到会话里的某一轮（`trace` = 5003 `/traces` 的 trace_id）；
   搜索、严重度、模型、阶段 / 机制 / 模式与头部轮次同步到 URL。问财暂无样本时保持问财选中并给出 AIME 入口，

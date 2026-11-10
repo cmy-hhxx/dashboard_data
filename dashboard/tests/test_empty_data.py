@@ -161,7 +161,9 @@ class BuildTests(unittest.TestCase):
             datasets, static = root / "datasets", root / "static"
             seed(datasets)
             inp = datasets / "0_wencai/eval_input/a_fast/2026-11-01.jsonl"
-            meta = {"session_id": "s1", "request_time": REQ, "question": "茅台今天收盘价", "user_id": "598960105"}
+            meta = {"session_id": "s1", "request_time": REQ, "question": "茅台今天收盘价", "user_id": "598960105",
+                    "app": "harness-app", "comefrom": "WebTest"}
+
             write_jsonl(inp, {
                 "trace_id": "outer-wrong", "meta": meta,
                 "traces": [
@@ -185,6 +187,12 @@ class BuildTests(unittest.TestCase):
             builder.close()
             self.assertEqual(detail["ids"], {"session": "s1", "trace": "trace-1", "case": ""})
             self.assertEqual([t["trace_id"] for t in detail["input"]["traces"]], ["trace-1", "trace-2"])
+            # 埋点信息不能丢：外层 session meta + 每条 trace 的 trace_meta 全量保留。
+            self.assertEqual(detail["session_meta"]["app"], "harness-app")
+            self.assertEqual(detail["session_meta"]["comefrom"], "WebTest")
+            self.assertEqual((detail["meta"]["app"], detail["meta"]["comefrom"]), ("harness-app", "WebTest"))
+            self.assertEqual(detail["input"]["traces"][0]["meta"]["trace_id"], "trace-1")
+            self.assertEqual(detail["input"]["traces"][1]["meta"]["trace_id"], "trace-2")
 
     def test_user_rules_reach_index_and_trigger_rebuild(self):
         with tempfile.TemporaryDirectory() as folder:

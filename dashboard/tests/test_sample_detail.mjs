@@ -60,8 +60,9 @@ function traceDetail(trace, summary = "", problems = 1) {
     detail: {
       product: "aime", split: "daily", model: "aime_fast", date: "2026-10-01",
       question: "Q", question_zh: null, lang: "en",
-      ids: { session: "thread_s1", trace }, meta: { request_time: "2026-10-01 10:00:00" },
-      input: { traces: [{ messages: [{ k: "user", blocks: [] }] }], missing: false },
+      ids: { session: "thread_s1", trace }, meta: { request_time: "2026-10-01 10:00:00", app: "app", comefrom: "web" },
+      session_meta: { app: "app", comefrom: "web" },
+      input: { traces: [{ trace_id: trace, meta: { trace_id: trace }, messages: [{ k: "user", blocks: [] }] }], missing: false },
       attribution: {
         summary,
         turns: [{ trace_id: trace, summary: summary || "trace summary", problems: Array.from({ length: problems }, (_, i) => i) }],
@@ -86,6 +87,8 @@ test("per-trace parts merge into one session with re-indexed problems and eviden
   assert.deepEqual(D.attribution.problems[1].ev, [1], "second part's evidence ids are offset into the merged list");
   assert.deepEqual(D.rounds.map((r) => r.trace), [0, 1]);
   assert.deepEqual(D.rounds.map((r) => r.tid), ["t1", "t2"]);
+  assert.deepEqual(D.session_meta, { app: "app", comefrom: "web" });
+  assert.deepEqual(D.input.traces.map((t) => t.meta.trace_id), ["t1", "t2"]);
 });
 
 test("session comment only exists when a part carries a session_summary field", () => {
