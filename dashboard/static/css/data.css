@@ -200,6 +200,22 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 
 .mx-card-head { align-items: center; margin-bottom: 6px; }
 .mx-head-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+.mx-full { width: 28px; height: 28px; border-radius: var(--r-ctl); color: var(--muted); }
+.mx-full:hover, .mx-full:focus-visible { background: var(--hover); color: var(--ink); }
+.mx-full svg { width: 16px; height: 16px; }
+.mx-full .i-mxfull-close { display: none; }
+.mx-full[aria-pressed="true"] { background: var(--active); color: var(--ink); }
+.mx-full[aria-pressed="true"] .i-mxfull-open { display: none; }
+.mx-full[aria-pressed="true"] .i-mxfull-close { display: block; }
+/* 全屏矩阵：卡片离开 bento 铺满视口，Esc 或同一枚键回到原位。 */
+.mx-card.is-mx-full {
+  position: fixed; inset: 0; z-index: 80; width: auto; height: auto; overflow: auto;
+  border-radius: 0; padding: 20px var(--gutter) 40px; background: var(--card);
+}
+.mx-card.is-mx-full > .mx-face { max-width: none; margin-inline: 0; }
+.mx-card.is-mx-full .mx-panels.is-both { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.mx-card.is-mx-full .mx-card-head { position: sticky; top: 0; z-index: 3; padding: 4px 0 10px; background: var(--card); }
+body.is-mx-full { overflow: hidden; }
 .mx-back {
   display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 9px;
   border-radius: var(--r-chip); color: var(--muted); font-size: var(--fs-meta); white-space: nowrap;
@@ -329,18 +345,24 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 /* Matrix disclosures share the sunburst motion. Only surfaces and transforms move. */
 .mx-perspective[hidden], .mx-issue-trends-shell[hidden] { display: none; }
 .mx-perspective, .mx-issue-trends-shell { overflow-anchor: none; min-width: 0; }
+.mx-issue-trends-shell { scroll-margin-top: 116px; }
 .mx-panels {
   display: grid; gap: 16px; align-items: start;
   margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--well-2);
 }
 .mx-panels[hidden] { display: none; }
-.mx-panels.is-both { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); }
+.mx-panels.is-both { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); align-items: stretch; }
+/* 右侧热力图铺到左栏 mpt 的底边，全屏内外都对齐。 */
+.mx-panels.is-both .mx-perspective:not([hidden]) { display: flex; flex-direction: column; }
+.mx-panels.is-both .mx-perspective-inner { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.mx-panels.is-both .mxp { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.mx-panels.is-both .mxp-heat-wrap { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.mx-panels.is-both .mxp-chart-panel { flex: 1 1 auto; }
 .mx-panels.is-issue, .mx-panels.is-perspective { grid-template-columns: minmax(0, 1fr); }
 .mx-panels .mx-perspective-inner, .mx-panels .mx-issue-trends-shell > .mpt { margin-top: 0; padding-top: 0; border-top: 0; }
 .mx-issue-loading .empty { min-height: 180px; display: grid; place-items: center; padding: 0; }
 .mxp { display: grid; gap: 12px; min-width: 0; }
 /* The left issue grid starts under its range bar; the lens top must meet that same line. */
-.mx-panels.is-both .mxp { margin-top: 42px; }
 .mxp-lens { position: relative; min-width: 0; padding: 16px; border-radius: 12px; background: var(--well); }
 /* 小小的全屏键：常驻左上卡片的右上角，进入后铺满视口，Esc 或同一枚键退出。 */
 .mxp-full { position: absolute; top: 8px; right: 8px; z-index: 2; width: 24px; height: 24px; border-radius: 7px; color: var(--muted); opacity: 0.6; }
@@ -408,6 +430,7 @@ body.is-mxp-full { overflow: hidden; }
 .mxp-legend-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
 .mxp-trend { display: grid; gap: 8px; min-width: 0; padding: 12px 0 0; border-top: 1px solid var(--well-2); }
 .mxp-trend-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: var(--fs-meta); }
+.mxp-trend-tools { display: flex; align-items: center; gap: 6px; }
 .mxp-trend-head b { color: var(--ink-2); font-weight: var(--w-medium); }
 /* 周期切换贴着标题右侧，尺寸压到 24px，和下方的量能图一起把左栏高度吃满。 */
 .mxp-kseg { height: 24px; padding: 1px; }
@@ -504,15 +527,11 @@ body.is-mxp-full { overflow: hidden; }
 .mxp-chart-empty { display: grid; place-items: center; min-height: 200px; color: var(--faint); font-size: var(--fs-meta); }
 .mx-trend-loading .empty { min-height: 220px; display: grid; place-items: center; padding: 0; }
 @media (max-width: 1160px) {
-  .mx-panels.is-both { grid-template-columns: minmax(0, 1fr); }
+  .mx-panels.is-both, .mx-card.is-mx-full .mx-panels.is-both { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* Global problem-type trends: one time curve per type, all scenes aggregated. */
-.mpt { display: grid; gap: 12px; min-width: 0; }
-.mpt-toolbar { scroll-margin-top: 76px; display: flex; align-items: center; gap: 10px 12px; min-width: 0; flex-wrap: wrap; }
-.mpt-range { height: 30px; padding: 2px; }
-.mpt-range button { padding: 0 10px; font-size: var(--fs-meta); }
-.mpt-range .seg-knob { top: 2px; bottom: 2px; }
+.mpt { display: grid; gap: 12px; min-width: 0; scroll-margin-top: 116px; }
 .mpt-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(205px, 1fr)); gap: 8px;
   align-items: start; align-content: start; padding: 0; overflow: visible; scroll-margin-top: 116px;
@@ -523,6 +542,7 @@ body.is-mxp-full { overflow: hidden; }
   color: inherit; text-align: left;
   transition: background var(--snap), box-shadow var(--snap);
 }
+.mpt-card.is-branch { cursor: pointer; }
 .mpt-card:hover { box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ink) 8%, transparent); }
 .mpt-card:hover h4 { color: var(--ink); }
 .mpt-card:hover .mpt-action { opacity: 1; }
@@ -548,7 +568,6 @@ body.is-mxp-full { overflow: hidden; }
 @media (max-width: 700px) {
   .mx-card-head { align-items: center; }
   .mx-head-actions { width: 100%; justify-content: flex-start; margin-left: 0; }
-  .mpt-toolbar { align-items: flex-start; }
   .mxp-overview { grid-template-columns: minmax(0, 1fr); }
   .mxp-trend { border-top: 1px solid var(--well-2); border-left: 0; padding: 12px 0 0; }
 }
@@ -570,9 +589,27 @@ body.is-mxp-full { overflow: hidden; }
   .mxp-heat-dates > span:nth-child(2n) { visibility: hidden; }
 }
 
-/* 格子 → 就地趋势：一张按时间轴的多折线图。口径 / 时间 / 场景是单选，来源 / 模型 / 等级是多选；
-   每条线的身份直接标在右端（不再用 legend）。 */
+/* 格子 → 就地趋势：一张按时间轴的多折线图。口径 / 场景是单选，来源 / 模型 / 等级是多选；
+   折线身份由上方折线卡承担，图内不重复 legend。 */
 .mxt { display: grid; gap: 12px; min-width: 0; }
+/* 口径 / 折线 / 条件池只占两行：第一行口径与条件池，第二行折线与量能图例；不再铺浅灰底。 */
+.mxt-bar { display: grid; gap: 10px; min-width: 0; }
+.mxt-bar-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; min-width: 0; }
+.mxt-bar-top .mxt-tools { flex: none; }
+.mxt-bar-top .mxt-palette { flex: 1 1 auto; min-width: 0; }
+.mxt-bar .mxt-palette:empty { display: none; }
+.mxt-bar-lines { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; min-width: 0; }
+.mxt-bar-lines .mxt-lines { flex: 1 1 auto; }
+.mxt-vol-key { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; color: var(--faint); font-size: var(--fs-meta); white-space: nowrap; }
+.mxt-vol-key i { width: 5px; height: 8px; border-radius: 1px; background: var(--t3); }
+/* 滚轮缩放锁：解锁时滚轮归图表，锁定后滚轮正常滚动页面。 */
+.mxt-zoom { flex: none; width: 24px; height: 24px; display: grid; place-items: center; border-radius: 6px; color: var(--faint); transition: background var(--snap), color var(--snap); }
+.mxt-zoom:hover { background: var(--hover); color: var(--ink); }
+.mxt-zoom svg { width: 14px; height: 14px; }
+.mxt-zoom .i-zoom-unlock { display: none; }
+.mxt-zoom[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+.mxt-zoom[aria-pressed="true"] .i-zoom-lock { display: none; }
+.mxt-zoom[aria-pressed="true"] .i-zoom-unlock { display: block; }
 /* 折线组颜色：蓝 / 青 / 紫 / 琥珀，亮暗各一套，最多 4 条。放在 :root 上，tooltip 也能取到。 */
 :root { --mx-c1: var(--accent); --mx-c2: var(--loc-ulq); --mx-c3: var(--loc-vir); --mx-c4: #b3651f; }
 :root[data-mode="dark"] { --mx-c4: #e0a05a; }
@@ -625,7 +662,10 @@ body.is-mxp-full { overflow: hidden; }
 .mxt-line-add:hover:not([disabled]) { background: var(--hover); color: var(--ink); }
 .mxt-line-add[disabled] { opacity: 0.3; cursor: default; }
 .mxt-plot { min-width: 0; }
-.mxt-plot svg { display: block; width: 100%; height: auto; overflow: visible; }
+.mxt-plot.kl-host { min-height: 260px; }
+.mxt-plot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
+.kl-tip-name { display: inline-flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 190px; }
+.kl-tip-name i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--c, var(--muted)); }
 .mxt-grid line { stroke: var(--well-2); stroke-width: 1; }
 .mxt-grid line.is-base { stroke: var(--well); }
 .mxt-ylab, .mxt-xlab { fill: var(--faint); font-size: 11px; }
@@ -672,8 +712,10 @@ body.is-mxp-full { overflow: hidden; }
   .duo .list { width: 100%; }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .stats.stats-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  /* Phones: the totals column keeps only the number, so the scroll pane still has room. */
-  .mx-tots { width: 64px; }
+  /* Phones: the totals column keeps only the number, and long scene names ellipsize instead of
+     squeezing the scrollable problem columns down to a sliver. */
+  .mx-tots { width: 64px; min-width: 0; }
+  .mx-rows { max-width: 48%; }
   .matrix .rowtot { gap: 0; }
 }
 
@@ -914,18 +956,15 @@ body.is-modal { overflow: hidden; }
 .mxt-sample-side .gl-r, .mxt-sample-side .gl-strip i { animation: none; }
 .mxt-sample-side.gx-side .empty { position: static; min-height: 80px; flex: 1; }
 .mxt-sample-side .gx-list { overscroll-behavior: contain; mask-image: none; margin-right: 0; }
-.mxt-sample-side .gl-sum b { font-size: 18px; }
-/* 抬头一行：日期 / 条件 / 数据量 / 返回；条件过长时省略，不换行占高度。 */
+/* 抬头一行：日期 / 样本量 / 返回；条件说明和底部注释已去掉，列表拿到全部高度。 */
 .mxt-sample-head { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 2px 8px; min-width: 0; font-size: var(--fs-meta); }
 .mxt-sample-head > span { min-width: 0; color: var(--ink-2); }
 .mxt-sample-head .mxt-sample-when { flex: none; font-weight: var(--w-medium); white-space: nowrap; }
-.mxt-sample-head .mx-back { flex: none; margin-left: auto; white-space: nowrap; }
-.mxt-sample-head .mxt-sample-what { flex: 1 1 auto; overflow: hidden; color: var(--muted); line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
-.mxt-sample-head .mxt-sample-vol { flex: none; color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.mxt-sample-head .mxt-sample-vol { flex: none; margin-left: auto; color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.mxt-sample-head .mx-back { flex: none; margin-left: 0; white-space: nowrap; }
 .mxp-kseg[hidden] { display: none; }
 .mxt-sample-loading { display: grid; align-content: start; gap: 6px; }
 .mxt-sample-loading .empty { position: static; min-height: 72px; padding: 0; display: grid; place-items: center; }
-.mxt-sample-note { color: var(--muted); font-size: 11px; line-height: 1.4; margin: 0; }
 .mxt-sample-pager { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--fs-meta); }
 .mxt-sample-pager button { flex: none; width: 24px; height: 24px; border-radius: 6px; display: grid; place-items: center; color: var(--muted); font-size: 14px; line-height: 1; }
 .mxt-sample-pager button:hover:not([disabled]) { background: var(--hover); color: var(--ink); }

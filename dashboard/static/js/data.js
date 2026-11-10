@@ -6,16 +6,17 @@ import { sunburst } from "./sunburst.js";
 import { sunburstTween } from "./motion.js";
 import { galaxy } from "./galaxy.js";
 import { mountAB } from "./abtest.js";
-import { monotonePath, nebulaCluster, lineTrendSVG, wireLineTrendChart, wireTrendPointPick } from "./trend_chart.js";
+import { lineTrendSVG, wireLineTrendChart } from "./trend_chart.js";
 import { mountProblemTrends } from "./problem_trends.js";
 import { traceSeverityModel, traceShares } from "./trace_analysis.js";
-import { createKlineChart, KLINE_PERIODS } from "./kline_chart.js";
+import { createKlineChart, createTrendChart, KLINE_PERIODS } from "./kline_chart.js";
 import { buildIntradayCandles } from "./kline_data.js";
 import { matrixHeatSummary } from "./matrix_heat.js";
 import { trendSampleFrame, abTrendSampleRefs, resolveABSamples, trendSampleCandidates, trendSampleProblems, traceSampleRefs } from "./trend_samples.js";
 
 let ctx;
 let abDocKey = null;
+let mxDocKey = null;
 let shown = null;
 let lastDetail = null;
 /* View state per product that outlives a redraw: an in-place data refresh (or switching product
@@ -25,10 +26,10 @@ const ui = (product) =>
   (UI[product] = UI[product] || {
     field: { w: null, pages: [] }, vol: {}, clu: {}, pred: "vol",
     mx: {
-      rows: [], cols: [], trail: [], issueRange: "30", issuePath: [], analysisLevels: ["P0", "P1"], analysisPeriod: "day",
-      // 聚类矩阵格子的就地趋势图：口径 / 时间 / 场景 + 来源·模型·等级的折线组 + 是否打开都活在这里，
+      rows: [], cols: [], trail: [], issuePath: [], analysisLevels: ["P0", "P1"], analysisPeriod: "day", analysisZoom: false,
+      // 聚类矩阵格子的就地趋势图：口径 / 场景 + 来源·模型·等级的折线组 + 是否打开都活在这里，
       // 就地刷新或切换产品再回来仍是同一张图。rowKeys/colKeys 是行列路径，刷新后用来重新定位。
-      trend: { open: false, measure: "count", range: "30", scope: "row", lines: [], active: 0, seeded: false, rowKeys: null, colKeys: null },
+      trend: { open: false, measure: "count", scope: "row", lines: [], active: 0, seeded: false, rowKeys: null, colKeys: null, zoom: false },
     },
   });
 const SPLIT_SHORT = { daily: "日常", lost: "流失" };
@@ -49,7 +50,7 @@ export async function render(root, c) {
   if (shown === key && root.firstChild) return;
   shown = key;
   // A redraw replaces the whole board: drop the fullscreen lock first, the AB block re-applies it.
-  document.body.classList.remove("is-ab-full", "is-mxp-full");
+  document.body.classList.remove("is-ab-full", "is-mxp-full", "is-mx-full");
   if (!p) {
     root.innerHTML = `<div class="bento"><article class="card" style="--span:12"><div class="empty">${
       c.product === "wencai" ? "问财" : "AIME"
@@ -1704,7 +1705,7 @@ function mxRatePick(model, candle, selected, period) {
    the heat and the lens chrome, and give the trend exactly the remaining height. */
 function analysisChartHeight(panel, chartHost) {
   const lens = panel.querySelector(".mxp-lens");
-  if (lens?.classList.contains("is-full")) return Math.max(420, Math.round(window.innerHeight - 300));
+  if (lens?.classList.contains("is-full")) return Math.max(480, Math.round(window.innerHeight - 260));
   const panels = panel.closest(".mx-panels");
   const issueShell = document.getElementById("mxIssueTrends");
   if (!panels?.classList.contains("is-both") || !issueShell || issueShell.hidden) return 260;
@@ -1738,13 +1739,22 @@ function wireMatrixAnalysis(panel, model, state, trend) {
   };
   // 抽屉是 K 线地图的侧栏：开合只改宽度，图表用 autoSize 跟着走，不需要重画。
   const drawer = trendSampleDrawer(chartHost, (pick) => loadTraceSamplePage(trend, pick), () => {}, {
-    hideSum: true, hideNote: true,
     onOpenChange: (open) => {
       const seg = panel.querySelector(".mxp-kseg");
       if (seg) seg.hidden = open;
     },
   });
   chartHost._drawer = drawer;
+  const zoomBtn = panel.querySelector("[data-mxp-zoom]");
+  const setZoom = (on) => {
+    state.analysisZoom = on;
+    if (!zoomBtn) return;
+    zoomBtn.setAttribute("aria-pressed", String(on));
+    zoomBtn.setAttribute("aria-label", on ? "滚轮缩放已解锁" : "滚轮缩放已锁定");
+    zoomBtn.title = on ? "点击锁定滚轮缩放" : "点击解锁滚轮缩放";
+  };
+  zoomBtn?.addEventListener("click", () => setZoom(!state.analysisZoom));
+  setZoom(!!state.analysisZoom);
   const paint = () => {
     if (!model?.total) return;
     const token = ++paintToken;
@@ -1773,6 +1783,7 @@ function wireMatrixAnalysis(panel, model, state, trend) {
         period,
         height: analysisChartHeight(panel, chartHost),
         volumeName: "Trace",
+        wheelZoom: () => !!state.analysisZoom,
         emptyText: "暂无已评测 Trace",
         openLabel: labels.open,
         closeLabel: labels.close,
@@ -1892,9 +1903,15 @@ function matrixPerspectiveHTML(view, trend, loading = false, state = {}, cluster
         <div class="mxp-legend">${legend}</div>
       </div>
       <div class="mxp-trend">
-        <div class="mxp-trend-head"><b>Trace 趋势</b>${model?.total ? `<div class="seg mxp-kseg" id="mxpKPeriod" role="group" aria-label="K 线周期">
-          <span class="seg-knob" aria-hidden="true"></span>
-          ${KLINE_PERIODS.map(([value, label]) => `<button type="button" data-value="${value}" aria-pressed="${(state.analysisPeriod || "day") === value}">${label}</button>`).join("")}
+        <div class="mxp-trend-head"><b>Trace 趋势</b>${model?.total ? `<div class="mxp-trend-tools">
+          <button type="button" class="mxt-zoom" data-mxp-zoom aria-pressed="${!!state.analysisZoom}" aria-label="${state.analysisZoom ? "滚轮缩放已解锁" : "滚轮缩放已锁定"}" title="${state.analysisZoom ? "点击锁定滚轮缩放" : "点击解锁滚轮缩放"}">
+            <svg class="i-zoom-lock" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="4" y="7" width="8" height="6" rx="1.2" stroke="currentColor" stroke-width="1.3"/><path d="M6 7V5.3a2 2 0 0 1 4 0V7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+            <svg class="i-zoom-unlock" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="4" y="7" width="8" height="6" rx="1.2" stroke="currentColor" stroke-width="1.3"/><path d="M6 7V5.3a2 2 0 0 1 3.8-.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+          </button>
+          <div class="seg mxp-kseg" id="mxpKPeriod" role="group" aria-label="K 线周期">
+            <span class="seg-knob" aria-hidden="true"></span>
+            ${KLINE_PERIODS.map(([value, label]) => `<button type="button" data-value="${value}" aria-pressed="${(state.analysisPeriod || "day") === value}">${label}</button>`).join("")}
+          </div>
         </div>` : ""}</div>
         ${trendSampleFrame(`<div class="mpt-chart mxp-rate-chart" data-own-tip>${model?.total ? "" : `<div class="empty">${empty}</div>`}</div>`)}
       </div>
@@ -1932,6 +1949,7 @@ function swapShell(shell, html, animate, source, done = null) {
   if (!animate || REDUCED || !prev) {
     shell.innerHTML = html;
     fitMatrix(shell.querySelector(".matrix"));
+    hideTip();
     done?.();
     return;
   }
@@ -2001,6 +2019,7 @@ function swapShell(shell, html, animate, source, done = null) {
     shell.classList.remove("is-swapping");
     shell._swapCleanup = null;
     fitMatrix(keep && keep.classList.contains("matrix") ? keep : null);
+    hideTip();
   };
   Promise.all([out.finished.catch(() => {}), enter.finished.catch(() => {}), resize ? resize.finished.catch(() => {}) : Promise.resolve()]).then(() => {
     if (token !== shell._swapToken || !shell._swapCleanup) return;
@@ -2131,11 +2150,6 @@ function trendTop(v, ratio) {
 }
 const trendCeil = (v) => trendTop(v, false);
 const trendRatioCeil = (v) => trendTop(v, true);
-const trendSigned = (v, measure) => {
-  const a = Math.abs(v);
-  const text = measure === "ratio" ? `${fmt(a, a >= 10 ? 1 : 2)}pp` : fmt(Math.round(a));
-  return `${v > 0 ? "+" : v < 0 ? "−" : ""}${text}`;
-};
 
 function trendSeries(trend, spec) {
   const node = trend.nodes.indexOf(spec.node);
@@ -2177,6 +2191,13 @@ function trendSeries(trend, spec) {
     };
   });
   if (node >= 0 && spec.scenes.size && series.length) {
+    const volume = new Array(n).fill(0);
+    const volUts = new Set();
+    const volModels = new Set();
+    series.forEach((s) => {
+      s.utSet.forEach((i) => volUts.add(i));
+      s.modelSet.forEach((i) => volModels.add(i));
+    });
     const winAt = new Map();
     win.forEach((w, i) => { if (w.idx >= 0) winAt.set(w.idx, i); });
     for (const [d, sc, nd, m, u, ...rest] of trend.cells) {
@@ -2211,6 +2232,7 @@ function trendSeries(trend, spec) {
       if (!spec.scenes.has(sc)) continue;
       const wi = winAt.get(d);
       if (wi == null) continue;
+      if (volModels.has(m) && volUts.has(u)) volume[wi] += nx;
       for (const s of series) if (s.utSet.has(u) && s.modelSet.has(m)) s.sessions[wi] += nx;
     }
     series.forEach((s) => {
@@ -2222,293 +2244,15 @@ function trendSeries(trend, spec) {
         if (s.vals[i] != null) s.last = i;
       }
     });
+    const peak = series.reduce((mx, s) => s.vals.reduce((m, v) => (v != null && v > m ? v : m), mx), 0);
+    const top = spec.measure === "ratio" ? trendRatioCeil(peak) : trendCeil(peak);
+    const empty = !series.length || !series.some((s) => s.vals.some((v) => v != null));
+    return { win, series, top, measure: spec.measure, empty, volume };
   }
   const peak = series.reduce((mx, s) => s.vals.reduce((m, v) => (v != null && v > m ? v : m), mx), 0);
   const top = spec.measure === "ratio" ? trendRatioCeil(peak) : trendCeil(peak);
   const empty = !series.length || !series.some((s) => s.vals.some((v) => v != null));
-  return { win, series, top, measure: spec.measure, empty };
-}
-
-/* 两条折线只差模型、其他条件一致时，画差距带并在右端标最新差值。 */
-function trendPairs(view) {
-  const pairs = [];
-  for (let i = 0; i < view.series.length; i++) {
-    for (let j = i + 1; j < view.series.length; j++) {
-      const a = view.series[i];
-      const b = view.series[j];
-      if (trendLevelKey(a.levels) !== trendLevelKey(b.levels)) continue;
-      if (trendSourceKey(a) !== trendSourceKey(b)) continue;
-      if (a.models.length !== 1 || b.models.length !== 1 || a.models[0] === b.models[0]) continue;
-      let last = -1;
-      for (let k = view.win.length - 1; k >= 0; k--) {
-        if (a.vals[k] != null && b.vals[k] != null) { last = k; break; }
-      }
-      if (last < 0) continue;
-      const gap = a.vals[last] - b.vals[last];
-      pairs.push({
-        a, b, i: last, gap,
-        hi: gap >= 0 ? a : b,
-        color: `color-mix(in oklab, ${a.color} 50%, ${b.color})`,
-      });
-    }
-  }
-  return pairs;
-}
-
-const trendTextWidth = (text, size = 10.5) => [...String(text)].reduce((w, ch) => {
-  const cp = ch.codePointAt(0);
-  return w + (cp >= 0x2e80 || "·—".includes(ch) ? size : size * 0.58);
-}, 0);
-
-/* A monotone cubic keeps the line soft without inventing overshoot outside neighbouring values. */
-function trendCurvePath(points) {
-  return monotonePath(points);
-}
-
-function trendSVG(view, title, releases, width, endLabels = true) {
-  const n = view.win.length;
-  const series = view.series;
-  const pairs = trendPairs(view);
-  const TW = Math.max(320, Math.min(TREND_TW, Math.round(width || TREND_TW)));
-  const narrow = TW < 640;
-  const labelSize = 10.5;
-  const fullLabelW = endLabels ? series.reduce((m, s) => s.last < 0 ? m : Math.max(
-    m,
-    trendTextWidth(s.name, labelSize) + trendTextWidth(trendValue(s.vals[s.last], view.measure), labelSize) + 16,
-  ), 0) : 0;
-  const baseRight = narrow ? 140 : Math.round(Math.max(160, Math.min(220, TW * 0.18)));
-  const PAD = {
-    l: narrow ? 40 : TREND_PAD.l,
-    // 抽屉打开时右端只剩一小段留白：折线本身先拿到空间，样本列表才是主角。
-    r: endLabels ? Math.round(Math.min(TW * 0.42, Math.max(baseRight, fullLabelW + 38))) : (narrow ? 20 : 28),
-    // 发版标签要落在绘图区上方，给顶端留一行。
-    t: (releases || []).length ? TREND_PAD.t + 14 : TREND_PAD.t,
-    b: TREND_PAD.b,
-  };
-  const compactEnds = !endLabels || narrow || fullLabelW + 38 > PAD.r;
-  const TH = Math.max(TREND_TH, Math.min(900, PAD.t + PAD.b + 70 + series.length * 17));
-  const innerW = TW - PAD.l - PAD.r;
-  const innerH = TH - PAD.t - PAD.b;
-  const xOf = (i) => PAD.l + (n > 1 ? (i * innerW) / (n - 1) : innerW / 2);
-  const yOf = (v) => PAD.t + innerH - (Math.max(0, Math.min(view.top, v)) / view.top) * innerH;
-  const fmtAxis = (v) => (view.measure === "ratio"
-    ? `${fmt(v, view.top < 1 ? 2 : view.top < 10 && v % 1 ? 1 : 0)}%`
-    : fmt(Math.round(v)));
-
-  let grid = "";
-  for (let g = 0; g <= 4; g++) {
-    const v = (view.top * g) / 4;
-    const y = yOf(v).toFixed(1);
-    grid += `<line x1="${PAD.l}" x2="${TW - PAD.r}" y1="${y}" y2="${y}"${g ? "" : ' class="is-base"'} />`;
-    grid += `<text class="mxt-ylab" x="${PAD.l - 8}" y="${y}">${fmtAxis(v)}</text>`;
-  }
-  const tickMax = Math.max(2, Math.min(narrow ? 4 : 7, Math.floor(innerW / 72) + 1));
-  const tickCount = Math.min(n, tickMax);
-  const ticks = [...new Set(tickCount <= 1 ? [0] : Array.from({ length: tickCount }, (_, k) => Math.round((k * (n - 1)) / (tickCount - 1))))];
-  const xlab = ticks.map((i) => `<text class="mxt-xlab" x="${xOf(i).toFixed(1)}" y="${TH - 8}">${esc(view.win[i].d.slice(5))}</text>`).join("");
-
-  // 差距带：只连接两边都有值的日期；没有评测的日期直接跨过去，不把带子切碎。
-  let bands = "";
-  pairs.forEach((p) => {
-    const both = [];
-    for (let i = 0; i < n; i++) if (p.a.vals[i] != null && p.b.vals[i] != null) both.push(i);
-    if (both.length < 2) return;
-    const hi = both.map((k) => `${xOf(k).toFixed(1)},${yOf(Math.max(p.a.vals[k], p.b.vals[k])).toFixed(1)}`);
-    const lo = both.slice().reverse().map((k) => `${xOf(k).toFixed(1)},${yOf(Math.min(p.a.vals[k], p.b.vals[k])).toFixed(1)}`);
-    bands += `<path class="mxt-band" d="M${hi.join("L")}L${lo.join("L")}Z" style="fill:${p.color};fill-opacity:.075"/>`;
-  });
-
-  // 平滑曲线 + 极淡的面积，让升降方向比一串折点更快被读出来；标签则沿右侧独立排布。
-  const baseY = PAD.t + innerH;
-  const valueMax = Math.max(1, ...series.flatMap((s) => s.vals.filter((v) => v != null)));
-  const clusterBounds = { l: PAD.l, r: PAD.l + innerW, t: PAD.t, b: PAD.t + innerH };
-  const clusterSpread = Math.min(8, Math.max(2.2, (innerW / Math.max(1, n - 1)) * 0.36));
-  let defs = "", areas = "", nebulas = "", lines = "", dots = "";
-  series.forEach((s, gi) => {
-    const points = [];
-    s.vals.forEach((v, i) => { if (v != null) points.push([xOf(i), yOf(v), v, i]); });
-    if (points.length > 1) {
-      const curve = trendCurvePath(points);
-      const area = `${curve}L${points[points.length - 1][0].toFixed(1)},${baseY.toFixed(1)}L${points[0][0].toFixed(1)},${baseY.toFixed(1)}Z`;
-      defs += `<linearGradient id="mxt-area-${gi}" gradientUnits="userSpaceOnUse" x1="0" x2="0" y1="${PAD.t}" y2="${baseY.toFixed(1)}"><stop offset="0" stop-color="${s.color}" stop-opacity=".12"/><stop offset="1" stop-color="${s.color}" stop-opacity="0"/></linearGradient>`;
-      areas += `<path class="mxt-area" d="${area}" fill="url(#mxt-area-${gi})"/>`;
-      lines += `<path class="mxt-line" d="${curve}" style="stroke:${s.color}"/>`;
-    }
-    points.forEach(([x, y, value, i]) => {
-      const ratio = s.sessions[i] > 0 ? s.hits[i] / s.sessions[i] : value / valueMax;
-      nebulas += nebulaCluster({ x, y, value, max: valueMax, ratio, color: s.color, maxDots: 14, spread: clusterSpread, bounds: clusterBounds });
-      dots += `<circle class="mxt-dot" data-trend-point="${gi}:${i}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.8" style="fill:${s.color}"/>`;
-    });
-  });
-
-  // 发版日参照线：按真实日期在相邻窗口之间插值（不是就近吸附），线从顶轴贯到底轴，
-  // 与下方总体趋势用同一套标记与配色。
-  const winTimes = view.win.map((w) => Date.parse(`${w.d}T00:00:00Z`));
-  const clampX = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-  const relMarks = [];
-  (releases || []).forEach((r) => {
-    const t = Date.parse(`${r && r.date}T00:00:00Z`);
-    if (!Number.isFinite(t) || !winTimes.length || t < winTimes[0] || t > winTimes[winTimes.length - 1]) return;
-    let k = winTimes.findIndex((time, i) => i === winTimes.length - 1 || winTimes[i + 1] > t);
-    if (k < 0) k = winTimes.length - 1;
-    const span = winTimes[k + 1] != null ? winTimes[k + 1] - winTimes[k] : 0;
-    relMarks.push({ x: xOf(k + (span > 0 ? (t - winTimes[k]) / span : 0)), label: r.label || "发版" });
-  });
-  relMarks.sort((a, b) => a.x - b.x);
-  const relBands = relMarks.map((m) => `<rect class="mxt-release-band" x="${(m.x - 3).toFixed(1)}" y="${PAD.t}" width="6" height="${innerH.toFixed(1)}" rx="3"/>`).join("");
-  const relBars = relMarks.map((m) => `<line class="mxt-release-line" x1="${m.x.toFixed(1)}" x2="${m.x.toFixed(1)}" y1="${PAD.t}" y2="${(PAD.t + innerH).toFixed(1)}"/><circle class="mxt-release-dot" cx="${m.x.toFixed(1)}" cy="${PAD.t}" r="2.4"/><circle class="mxt-release-dot" cx="${m.x.toFixed(1)}" cy="${(PAD.t + innerH).toFixed(1)}" r="2.4"/>`).join("");
-  const relLabels = relMarks.map((m) => `<text class="mxt-release-label" x="${clampX(m.x, PAD.l + 14, TW - PAD.r - 14).toFixed(1)}" y="${(PAD.t - 9).toFixed(1)}" text-anchor="middle">${esc(m.label)}</text>`).join("");
-
-  // 端点标签：每条线的最新值直接标在右侧，按行距错开，线上不再用 legend。
-  const endName = (s) => (compactEnds ? s.shortName : s.name);
-  const ends = endLabels ? series.filter((s) => s.last >= 0).map((s) => ({
-    s, value: s.vals[s.last], x: xOf(s.last), y: yOf(s.vals[s.last]), ly: yOf(s.vals[s.last]),
-    name: endName(s),
-  })) : [];
-  ends.sort((a, b) => a.ly - b.ly);
-  const GAP = 18;
-  ends.forEach((e) => { e.ly = Math.max(e.ly, PAD.t); });
-  for (let i = 1; i < ends.length; i++) ends[i].ly = Math.max(ends[i].ly, ends[i - 1].ly + GAP);
-  const maxY = PAD.t + innerH;
-  if (ends.length && ends[ends.length - 1].ly > maxY) {
-    ends[ends.length - 1].ly = maxY;
-    for (let i = ends.length - 2; i >= 0; i--) ends[i].ly = Math.min(ends[i].ly, ends[i + 1].ly - GAP);
-    if (ends[0].ly < PAD.t) {
-      const shift = PAD.t - ends[0].ly;
-      ends.forEach((e) => { e.ly += shift; });
-    }
-  }
-  const labelX = TW - PAD.r + 10;
-  const endsSvg = ends.map((e) => `<g class="mxt-end">
-      <line class="mxt-end-line" x1="${e.x.toFixed(1)}" y1="${e.y.toFixed(1)}" x2="${(labelX - 7).toFixed(1)}" y2="${e.ly.toFixed(1)}" style="stroke:${e.s.color}"/>
-      <line x1="${(labelX - 1).toFixed(1)}" x2="${(labelX + 8).toFixed(1)}" y1="${e.ly.toFixed(1)}" y2="${e.ly.toFixed(1)}" style="stroke:${e.s.color};stroke-width:2"/>
-      <text x="${(labelX + 13).toFixed(1)}" y="${(e.ly + 3.4).toFixed(1)}"><tspan>${esc(e.name)}</tspan><tspan class="mxt-end-val" dx="6">${esc(trendValue(e.value, view.measure))}</tspan></text>
-    </g>`).join("");
-
-  // 差距标注：同一等级下两个模型的最新差值，标在差距带右端。
-  const gaps = [];
-  pairs.forEach((p) => {
-    const y1 = yOf(p.a.vals[p.i]);
-    const y2 = yOf(p.b.vals[p.i]);
-    gaps.push({ p, y: (y1 + y2) / 2, x: xOf(p.i), y1, y2, gap: p.gap });
-  });
-  gaps.sort((a, b) => a.y - b.y);
-  let prevY = -Infinity;
-  const gapSvg = gaps.filter((g) => {
-    if (g.y - prevY < 16) return false;
-    prevY = g.y;
-    return true;
-  }).map((g) => {
-    const delta = view.measure === "ratio" ? `${fmt(Math.abs(g.gap), Math.abs(g.gap) >= 10 ? 1 : 2)}pp` : fmt(Math.round(Math.abs(g.gap)));
-    const label = g.gap === 0 ? "持平" : `${g.p.hi.modelName} 高 ${delta}`;
-    const labelX = Math.max(PAD.l + trendTextWidth(label, 10) + 4, g.x - 6);
-    return `<g class="mxt-gap-g">
-      <line class="mxt-gap-line" x1="${g.x.toFixed(1)}" x2="${g.x.toFixed(1)}" y1="${g.y1.toFixed(1)}" y2="${g.y2.toFixed(1)}" style="stroke:${g.p.color}"/>
-      <text class="mxt-gap" x="${labelX.toFixed(1)}" y="${(g.y + 3.2).toFixed(1)}" text-anchor="end" style="fill:var(--ink-2)">${esc(label)}</text>
-    </g>`;
-  }).join("");
-
-  return {
-    html: `<svg viewBox="0 0 ${TW} ${TH}" role="img" aria-label="${esc(title)}" data-n="${n}" data-l="${PAD.l}" data-r="${PAD.r}" data-t="${PAD.t}" data-b="${PAD.b}" data-top="${view.top}">
-      <defs>${defs}</defs><g class="mxt-grid">${grid}${xlab}</g>${relBands}${areas}${nebulas}${bands}${lines}${dots}${relBars}${relLabels}${endsSvg}${gapSvg}
-      <g class="mxt-cursor"><line y1="${PAD.t}" y2="${PAD.t + innerH}"/><g class="mxt-cursor-dots"></g><circle class="mxt-pick" r="6"/></g></svg>`,
-    geo: { W: TW, H: TH, TW, TH, PAD, innerW, innerH, xOf, yOf, xDates: view.win.map((day) => day.d), series: series.map((s) => ({ ...s, label: s.name, values: s.vals })) },
-  };
-}
-
-/* 悬停：一根竖向游标 + 每条线的点 + 一张把当前日期所有线（以及模型差）列清楚的卡片。 */
-function wireTrendHover(plot, view) {
-  const svg = $("svg", plot);
-  const cursor = svg && $(".mxt-cursor", svg);
-  const dots = cursor && $(".mxt-cursor-dots", cursor);
-  if (!svg || !cursor || !dots) return;
-  const n = Number(svg.dataset.n) || view.win.length;
-  const left = Number(svg.dataset.l);
-  const right = Number(svg.dataset.r);
-  const topPad = Number(svg.dataset.t);
-  const botPad = Number(svg.dataset.b);
-  const top = Number(svg.dataset.top) || 1;
-  const vbw = svg.viewBox.baseVal.width || TREND_TW;
-  const vbh = svg.viewBox.baseVal.height || TREND_TH;
-  const innerW = vbw - left - right;
-  const innerH = vbh - topPad - botPad;
-  const xOf = (i) => left + (n > 1 ? (i * innerW) / (n - 1) : innerW / 2);
-  const yOf = (v) => topPad + innerH - (Math.max(0, Math.min(top, v)) / top) * innerH;
-  const [line] = $$("line", cursor);
-  const ring = $(".mxt-pick", cursor);
-  const pairs = trendPairs(view);
-  const points = [];
-  view.series.forEach((s, si) => s.vals.forEach((v, i) => {
-    if (v != null) points.push({ si, i, x: xOf(i), y: yOf(v) });
-  }));
-  let hovered = -1, nearest = null;
-
-  const tipHTML = (i, pick) => {
-    const rows = view.series.filter((s) => s.vals[i] != null);
-    const shown = rows.slice(0, 10);
-    const label = (s) => s.name;
-    const body = shown.map((s) => {
-      const extra = view.measure === "ratio"
-        ? `<span class="dim">${fmt(s.hits[i])}/${fmt(s.sessions[i])}</span>`
-        : `<span class="dim">命中 ${pct(s.hits[i], s.sessions[i], 1)}</span>`;
-      return `<div class="t-row"><span class="sev" style="--c:${s.color}"><i></i>${esc(label(s))}</span>
-        <b class="num" style="margin-left:auto">${trendValue(s.vals[i], view.measure)}</b>${extra}</div>`;
-    }).join("");
-    const more = rows.length > shown.length ? `<div class="t-note">还有 ${rows.length - shown.length} 条线</div>` : "";
-    const gaps = pairs.filter((p) => p.a.vals[i] != null && p.b.vals[i] != null).slice(0, 6).map((p) => {
-      const d = p.a.vals[i] - p.b.vals[i];
-      return `<div class="t-row"><span>${esc(`${p.a.levelName} 差`)}</span>
-        <b class="num" style="margin-left:auto">${trendSigned(d, view.measure)}</b></div>`;
-    }).join("");
-    const pickNote = pick
-      ? `<div class="t-note t-pick-note">点击圆点查看 ${esc(view.win[pick.i].d)} · ${esc(view.series[pick.si].name)} 的样本</div>`
-      : "";
-    return `<div style="font-weight:var(--w-medium);margin-bottom:6px">${esc(view.win[i].d)}</div>${body}${more}
-      ${rows.length ? "" : `<div class="t-note">当日无评测数据</div>`}
-      ${gaps ? `<div class="t-note" style="margin:6px 0 2px">模型差（同来源同等级）</div>${gaps}` : ""}${pickNote}`;
-  };
-
-  svg.addEventListener("pointermove", (e) => {
-    const box = svg.getBoundingClientRect();
-    const vx = ((e.clientX - box.left) / box.width) * vbw;
-    const vy = ((e.clientY - box.top) / box.height) * vbh;
-    const i = n <= 1 ? 0 : Math.max(0, Math.min(n - 1, Math.round(((vx - left) / innerW) * (n - 1))));
-    const x = xOf(i);
-    if (i !== hovered) {
-      hovered = i;
-      line.setAttribute("x1", x.toFixed(1));
-      line.setAttribute("x2", x.toFixed(1));
-      dots.innerHTML = view.series
-        .filter((s) => s.vals[i] != null)
-        .map((s) => `<circle cx="${x.toFixed(1)}" cy="${yOf(s.vals[i]).toFixed(1)}" r="3" style="fill:${s.color}"/>`)
-        .join("");
-    }
-    // 两条线贴得近时，点哪个圆点才是要看的样本：环出离指针最近的那个点，并在提示里点名。
-    const radius = 26;
-    let best = radius * radius;
-    nearest = null;
-    points.forEach((p) => {
-      const d = (p.x - vx) ** 2 + (p.y - vy) ** 2;
-      if (d < best) { best = d; nearest = p; }
-    });
-    if (ring) {
-      if (nearest) {
-        ring.setAttribute("cx", nearest.x.toFixed(1));
-        ring.setAttribute("cy", nearest.y.toFixed(1));
-        ring.style.stroke = view.series[nearest.si].color;
-      }
-      ring.classList.toggle("is-on", !!nearest);
-    }
-    cursor.classList.add("is-on");
-    showTip(tipHTML(i, nearest), e.clientX, e.clientY);
-  });
-  svg.addEventListener("pointerleave", () => {
-    cursor.classList.remove("is-on");
-    ring?.classList.remove("is-on");
-    hovered = -1;
-    nearest = null;
-    hideTip();
-  });
+  return { win, series, top, measure: spec.measure, empty, volume: [] };
 }
 
 /* 条件池：来源、模型可多选合并，等级单选；这些条件共同组成当前选中的那一条折线。
@@ -2520,17 +2264,15 @@ function trendChip(kind, value, label, on, draggable = true) {
 function trendPalette(data, line) {
   const uts = data.uts || [];
   const models = data.models || [];
-  return `<div class="mxt-palette">
-    <span class="mxt-pickgroup" role="group" aria-label="来源">
-      <span class="mxt-pick-label">来源</span>${trendChip("uts", "all", "全部来源", !line.uts.length)}${uts.map((u) => trendChip("uts", u, trendUtName(u), line.uts.includes(u))).join("")}
-    </span>
-    <span class="mxt-pickgroup" role="group" aria-label="模型">
-      <span class="mxt-pick-label">模型</span>${trendChip("models", "all", "全部模型", !line.models.length)}${models.map((m) => trendChip("models", m, trendModelName(data, m) || m, line.models.includes(m))).join("")}
-    </span>
-    <span class="mxt-pickgroup" role="group" aria-label="等级">
-      <span class="mxt-pick-label">等级</span>${[["all", "全部问题"], ...TREND_SEV.map((s) => [s, s])].map(([v]) => trendChip("level", v, v === "all" ? "全部问题" : v, v === "all" ? !line.levels.length : line.levels.includes(v))).join("")}
-    </span>
-  </div>`;
+  return `<span class="mxt-pickgroup" role="group" aria-label="来源">
+    <span class="mxt-pick-label">来源</span>${trendChip("uts", "all", "全部来源", !line.uts.length)}${uts.map((u) => trendChip("uts", u, trendUtName(u), line.uts.includes(u))).join("")}
+  </span>
+  <span class="mxt-pickgroup" role="group" aria-label="模型">
+    <span class="mxt-pick-label">模型</span>${trendChip("models", "all", "全部模型", !line.models.length)}${models.map((m) => trendChip("models", m, trendModelName(data, m) || m, line.models.includes(m))).join("")}
+  </span>
+  <span class="mxt-pickgroup" role="group" aria-label="等级">
+    <span class="mxt-pick-label">等级</span>${[["all", "全部问题"], ...TREND_SEV.map((s) => [s, s])].map(([v]) => trendChip("level", v, v === "all" ? "全部问题" : v, v === "all" ? !line.levels.length : line.levels.includes(v))).join("")}
+  </span>`;
 }
 
 function trendLinesHTML(lines, data, active) {
@@ -2545,10 +2287,9 @@ function trendLinesHTML(lines, data, active) {
   return `<span class="mxt-lines-label">折线</span>${cards}<button type="button" class="mxt-line-add" data-add="1" aria-label="添加一条折线"${lines.length >= TREND_MAX_GROUPS ? " disabled" : ""}>+</button>`;
 }
 
-const TREND_SEG_LABEL = { measure: "口径", range: "时间范围", scope: "场景范围" };
+const TREND_SEG_LABEL = { measure: "口径", scope: "场景范围" };
 const TREND_SEG_TITLE = {
   measure: "出现数 = 该聚类 P0/P1/P2 问题条数；出现比例 = 命中会话占比：当日同场景会话中，出现该聚类该等级问题的会话占比",
-  range: "以最近一天为锚点回看；没有评测的日期不补 0，折线按有数据的日期直接相连，避免断裂",
   scope: "本场景 = 点进来的这一行；全部场景 = 整个产品，不按场景拆分",
 };
 
@@ -2562,23 +2303,35 @@ function trendSeg(id, key, items, value) {
 function trendBodyHTML(data, spec, title) {
   const active = spec.lines[spec.active];
   return `<div class="mxt mx-swap-panel" data-own-tip>
-    <div class="mxt-tools">
-      ${trendSeg("mxtMeasure", "measure", [["count", TREND_MEASURE.count], ["ratio", TREND_MEASURE.ratio]], spec.measure)}
-      ${trendSeg("mxtRange", "range", ["7", "30", "all"].map((v) => [v, RANGE_LABEL[v]]), spec.range)}
-      ${spec.rowName === "全部场景" ? "" : trendSeg("mxtScope", "scope", [["row", `本场景：${spec.rowName || "—"}`], ["all", "全部场景"]], spec.scope)}
+    <div class="mxt-bar">
+      <div class="mxt-bar-top">
+        <div class="mxt-tools">
+          ${trendSeg("mxtMeasure", "measure", [["count", TREND_MEASURE.count], ["ratio", TREND_MEASURE.ratio]], spec.measure)}
+          ${spec.rowName === "全部场景" ? "" : trendSeg("mxtScope", "scope", [["row", `本场景：${spec.rowName || "—"}`], ["all", "全部场景"]], spec.scope)}
+        </div>
+        <div class="mxt-palette" id="mxtPalette">${active ? trendPalette(data, active) : ""}</div>
+      </div>
+      <div class="mxt-bar-lines">
+        <div class="mxt-lines" id="mxtLines">${trendLinesHTML(spec.lines, data, spec.active)}</div>
+        <button type="button" class="mxt-zoom" id="mxtZoom" aria-pressed="${!!spec.zoom}" aria-label="${spec.zoom ? "滚轮缩放已解锁" : "滚轮缩放已锁定"}" title="${spec.zoom ? "点击锁定滚轮缩放" : "点击解锁滚轮缩放"}">
+          <svg class="i-zoom-lock" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="4" y="7" width="8" height="6" rx="1.2" stroke="currentColor" stroke-width="1.3"/><path d="M6 7V5.3a2 2 0 0 1 4 0V7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+          <svg class="i-zoom-unlock" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="4" y="7" width="8" height="6" rx="1.2" stroke="currentColor" stroke-width="1.3"/><path d="M6 7V5.3a2 2 0 0 1 3.8-.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+        </button>
+        <span class="mxt-vol-key"><i aria-hidden="true"></i>量能 · Trace</span>
+      </div>
     </div>
-    <div class="mxt-palette" id="mxtPalette">${active ? trendPalette(data, active) : ""}</div>
-    <div class="mxt-lines" id="mxtLines">${trendLinesHTML(spec.lines, data, spec.active)}</div>
     ${trendSampleFrame(`<div class="mxt-plot" id="mxtPlot" data-own-tip aria-label="${esc(title)}"></div>`)}
   </div>`;
 }
 
 const plotWidth = (box) => ($("#mxtPlot", box) || box).clientWidth;
 
-function paintTrendPlot(box, spec, trend, title, onOpenChange = null) {
+function paintTrendPlot(box, spec, trend, onOpenChange = null, wheelZoom = null) {
   const plot = $("#mxtPlot", box);
   if (!plot) return;
   plot._drawer?.destroy();
+  plot._trend?.destroy();
+  plot._trend = null;
   if (!spec.lines.length) {
     plot.innerHTML = `<div class="empty">暂无折线，添加一条折线后显示趋势</div>`;
     return;
@@ -2589,13 +2342,31 @@ function paintTrendPlot(box, spec, trend, title, onOpenChange = null) {
     return;
   }
   const draw = () => {
-    // 样本抽屉打开时右侧的端点图注让位给折线本身（可用宽度全给样本列表）。
-    const chart = trendSVG(view, title, trend.releases, plot.clientWidth, !drawer.isOpen());
-    plot.innerHTML = chart.html;
-    wireTrendHover(plot, view);
-    wireTrendPointPick(plot, chart.geo, (pick) => drawer.open(pick));
+    // 折线图统一走 K 线的 lightweight-charts 外壳：滚轮缩放、拖拽平移、十字线读数都在里面。
+    plot.tabIndex = -1;
+    plot._trend?.destroy();
+    plot._trend = createTrendChart(plot, {
+      series: view.series.map((s) => ({
+        name: s.name,
+        color: s.color,
+        data: view.win.map((w, i) => ({ time: w.d, value: s.vals[i] })).filter((d) => d.value != null),
+      })),
+      measure: view.measure,
+      releases: trend.releases,
+      volume: view.win.map((w, i) => ({ time: w.d, value: view.volume?.[i] ?? 0 })),
+      wheelZoom: typeof wheelZoom === "function" ? wheelZoom : () => false,
+      height: box.closest(".mx-card.is-mx-full")
+        ? Math.max(420, Math.min(760, Math.round(window.innerHeight - 220)))
+        : Math.max(260, Math.min(460, Math.round(plotWidth(box) * 0.32))),
+      onPick: ({ time, seriesIndex }) => {
+        const i = view.win.findIndex((w) => w.d === time);
+        const series = view.series[seriesIndex];
+        if (i < 0 || !series) return;
+        drawer.open({ date: time, series, seriesIndex, index: i });
+      },
+    });
   };
-  const drawer = trendSampleDrawer(plot, (pick) => loadTrendSamplePage(trend, spec, pick), draw,
+  const drawer = trendSampleDrawer(plot, (pick) => loadTrendSamplePage(trend, spec, pick), () => {},
     onOpenChange ? { onOpenChange } : {});
   plot._drawer = drawer;
   draw();
@@ -2664,7 +2435,10 @@ function matrixCard(p, tax) {
   }
   return matrix(
     `<div id="mxShell">${matrixTable(matrixView(p, sceneRoot.children, clusterRoot.children))}</div>`,
-    `${abBtn}<button type="button" class="mx-back" id="mxBack" hidden aria-label="返回上一级">← 返回</button>`,
+    `${abBtn}<button type="button" class="icon-btn mx-full" id="mxFull" aria-pressed="false" aria-label="全屏查看聚类矩阵" title="全屏">
+      <svg class="i-mxfull-open" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 2.5H2.5V6M10 2.5h3.5V6M6 13.5H2.5V10M10 13.5h3.5V10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <svg class="i-mxfull-close" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 6H6V2.5M13.5 6H10V2.5M2.5 10H6v3.5M13.5 10H10v3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button><button type="button" class="mx-back" id="mxBack" hidden aria-label="返回上一级">← 返回</button>`,
     true,
   );
 }
@@ -2726,7 +2500,6 @@ function trendSampleDrawer(plot, load, repaint, interaction = {}) {
   const map = $(".gx-map", layout);
   const side = $(".mxt-sample-side", layout);
   let opened = false, token = 0, cancel = () => {};
-  let trigger = null;
   const clear = () => {
     [map, side].forEach((el) => { el.style.transform = ""; el.style.transformOrigin = ""; el.style.opacity = ""; });
   };
@@ -2768,13 +2541,11 @@ function trendSampleDrawer(plot, load, repaint, interaction = {}) {
     pickNow = null;
     current = null;
     scanNext = null;
-    (plot.querySelector(`[data-trend-point="${trigger}"]`) || plot.querySelector("[data-trend-point]"))?.focus({ preventScroll: true });
+    plot.focus({ preventScroll: true });
   };
-  /* 抽屉：抬头只写日期（副标题是这条折线的条件），列表按 20 条一页；扫描在后台补页，
-     翻页不再让用户反复点「加载更多」。 */
+  /* 抽屉：抬头只写日期和样本量；列表按 20 条一页，扫描在后台补页。 */
   const head = (pick, count = null) => `<header class="mxt-sample-head">
     <span class="mxt-sample-when num">${esc(pick.when || pick.date)}</span>
-    <span class="mxt-sample-what" title="${esc(pick.series.label || "")}">${esc(pick.series.label || "")}</span>
     ${count == null ? "" : `<span class="mxt-sample-vol num">量 ${fmt(count)}</span>`}
     <button type="button" class="mx-back" data-samples-close aria-label="返回趋势图">← 返回</button>
   </header>`;
@@ -2796,31 +2567,29 @@ function trendSampleDrawer(plot, load, repaint, interaction = {}) {
     el?.focus({ preventScroll: true });
   };
   const pagesOf = () => Math.max(1, Math.ceil((current?.items.length || 0) / PAGE));
-  const showNote = !interaction.hideNote;
-  const loading = () => `<div class="mxt-sample-loading"><div class="empty">正在读取样本…</div>${showNote && current?.note ? `<p class="mxt-sample-note">${esc(current.note)}</p>` : ""}${!busy && current?.canScan ? '<button type="button" class="mx-back" data-sample-scan>继续读取</button>' : ""}</div>`;
+  const loading = () => `<div class="mxt-sample-loading"><div class="empty">正在读取样本…</div>${!busy && current?.canScan ? '<button type="button" class="mx-back" data-sample-scan>继续读取</button>' : ""}</div>`;
   const render = () => {
     if (!current || !pickNow) return;
     const key = focusKey();
     if (!current.items.length) {
       side.innerHTML = `${head(pickNow, current.items.length)}${current.done
-        ? `<div class="empty">${esc(current.emptyText || "当前索引中没有匹配样本")}</div>${showNote && current.note ? `<p class="mxt-sample-note">${esc(current.note)}</p>` : ""}`
+        ? `<div class="empty">${esc(current.emptyText || "当前索引中没有匹配样本")}</div>`
         : loading()}`;
       restoreFocus(key);
       return;
     }
     const pages = pagesOf();
     page = Math.max(0, Math.min(pages - 1, page));
-    const led = ledger([{ items: current.items }], false, current.unit, current.items.slice(page * PAGE, (page + 1) * PAGE), { count: false, strip: false, sum: !interaction.hideSum });
+    const led = ledger([{ items: current.items }], false, current.unit, current.items.slice(page * PAGE, (page + 1) * PAGE), { count: false, strip: false, sum: false });
     pageItems = led.items;
     const scanning = busy;
     const canNext = page + 1 < pages || (current.canScan && !busy);
-    const note = showNote ? [current.note, current.done && current.items.length >= LEDGER_MAX ? `展示前 ${LEDGER_MAX} 条` : ""].filter(Boolean).join(" · ") : "";
     const pager = pages > 1 ? `<div class="mxt-sample-pager">
       <button type="button" data-sample-page="prev" aria-label="上一页"${page === 0 ? " disabled" : ""}>‹</button>
       <span class="mxt-sample-page num">第 <b>${page + 1}</b> / ${pages} 页${scanning ? '<span class="mxt-sample-reading">读取中…</span>' : ""}</span>
       <button type="button" data-sample-page="next" aria-label="下一页"${canNext ? "" : " disabled"}>›</button>
     </div>` : current.canScan && !busy ? '<button type="button" class="mx-back mxt-sample-scan" data-sample-scan>继续读取更多</button>' : "";
-    side.innerHTML = `${head(pickNow, current.items.length)}${led.body}${note ? `<p class="mxt-sample-note">${esc(note)}</p>` : ""}${pager}`;
+    side.innerHTML = `${head(pickNow, current.items.length)}${led.body}${pager}`;
     restoreFocus(key);
   };
   const scan = async () => {
@@ -2871,7 +2640,6 @@ function trendSampleDrawer(plot, load, repaint, interaction = {}) {
   const open = async (pick) => {
     const stamp = ++token;
     pickNow = pick;
-    trigger = `${pick.seriesIndex}:${pick.index}`;
     current = null;
     page = 0;
     pageItems = [];
@@ -2928,7 +2696,7 @@ async function loadTrendSamplePage(trend, spec, pick) {
     const worst = WORST.indexOf(row.w);
     return worst < 0 || worst <= mildest;
   });
-  const state = { items: [], scanned: 0, failures: 0, done: false };
+  const state = { items: [], scanned: 0, done: false };
   const total = pool.length;
   const CHUNK = 12;
   const CONCURRENCY = 8;
@@ -2937,7 +2705,6 @@ async function loadTrendSamplePage(trend, spec, pick) {
     // No candidate at all is not the same as candidates that miss the cluster/levels: say which
     // one happened instead of blaming the index for every empty drawer.
     emptyText: candidates.length ? "候选样本没有命中该簇的问题" : "",
-    note: [state.scanned ? `已检查 ${fmt(state.scanned)} / ${fmt(total)} 个候选样本` : "", state.failures ? `${fmt(state.failures)} 条读取失败` : ""].filter(Boolean).join(" · "),
     done: state.done, canScan: !state.done && state.scanned < total && state.items.length < LEDGER_MAX,
   });
   const scanMore = async () => {
@@ -2954,7 +2721,7 @@ async function loadTrendSamplePage(trend, spec, pick) {
         if (!problems.length) return null;
         return { ...caseItem(row), n: problems.length, w: Math.min(...problems.map((problem) => sevIdx(problem.sev))) };
       }));
-      results.forEach((result) => { if (result.status === "rejected") state.failures++; else if (result.value) state.items.push(result.value); });
+      results.forEach((result) => { if (result.status === "fulfilled" && result.value) state.items.push(result.value); });
       if (state.items.length >= LEDGER_MAX) break;
     }
     if (state.scanned >= total || state.items.length >= LEDGER_MAX) state.done = true;
@@ -2973,22 +2740,21 @@ async function loadTraceSamplePage(trend, pick) {
     const row = bySlug.get(slug);
     return row ? { ...caseItem(row), w: level, trace, turn, n: 0, q: `${row.q || "（无提问）"} · 第 ${turn + 1} 轮` } : null;
   }).filter(Boolean);
-  return { items, unit: "条 Trace", note: items.length < refs.length ? `当前索引可查看 ${fmt(items.length)} / ${fmt(refs.length)} 条 Trace` : "", done: true, canScan: false, scanMore: null };
+  return { items, unit: "条 Trace", done: true, canScan: false, scanMore: null };
 }
 
 async function loadABTrendSamplePage(spec, pick) {
   const { round, sides } = pick.series.samples[pick.index];
-  if (!round.sample_refs) return { items: [], note: "当前快照缺少 A/B 样本关联", emptyText: "当前快照缺少 A/B 样本关联" };
+  if (!round.sample_refs) return { items: [], emptyText: "当前快照缺少 A/B 样本关联" };
   const refs = abTrendSampleRefs(round, sides, spec.row, spec.node);
   const index = await ctx.loadIndex(ctx.product);
   const rows = index.products?.[ctx.product]?.rows || [];
-  const { items, unavailable } = resolveABSamples(refs, rows, spec.node);
+  const { items } = resolveABSamples(refs, rows, spec.node);
   return {
     items: items.map(({ row, trace, n, ref }) => ({ ...caseItem(row), trace, n, ref, pair: ref.pair || ref.trace, round: spec.round?.id })), unit: "个样本",
     // An empty drawer must name the real reason: this side of the batch has no hit here, or the
     // hits exist but have no detail to open — never "no samples in the index" for AB data.
     emptyText: refs.length ? "这些样本暂无可打开的评测详情" : "该批次这一格没有命中样本",
-    note: unavailable ? `${fmt(unavailable)} 个样本缺少对应评测详情` : "",
     done: true, canScan: false, scanMore: null,
   };
 }
@@ -3485,6 +3251,56 @@ function wire(bento, p, tax, u) {
   const shell = $("#mxShell", bento);
   let mxView = null;
   if (shell && tax) {
+    /* 聚类矩阵全屏：卡片离开 bento 铺满视口，Esc 或同一枚键回到原位。 */
+    const mxCardEl = shell.closest(".mx-card");
+    const mxFullBtn = $("#mxFull", bento);
+    const setMxFull = (on, animate = true) => {
+      u.mx.full = on;
+      if (!mxCardEl || mxCardEl.classList.contains("is-mx-full") === on) return;
+      const first = animate && !REDUCED ? mxCardEl.getBoundingClientRect() : null;
+      mxCardEl.classList.toggle("is-mx-full", on);
+      document.body.classList.toggle("is-mx-full", on);
+      if (mxFullBtn) {
+        const label = on ? "退出全屏" : "全屏查看聚类矩阵";
+        mxFullBtn.setAttribute("aria-pressed", String(on));
+        mxFullBtn.setAttribute("aria-label", label);
+        mxFullBtn.title = on ? "退出全屏" : "全屏";
+      }
+      if (!first) return;
+      const last = mxCardEl.getBoundingClientRect();
+      mxCardEl.animate([
+        { transform: `translate(${first.left - last.left}px, ${first.top - last.top}px) scale(${first.width / Math.max(1, last.width)}, ${first.height / Math.max(1, last.height)})`, transformOrigin: "0 0" },
+        { transform: "none" },
+      ], { duration: 360, easing: "cubic-bezier(0.16, 1, 0.3, 1)" });
+    };
+    const onMxFullKey = (event) => {
+      if (event.key !== "Escape" || !u.mx.full || !mxCardEl?.isConnected) return;
+      if (mxCardEl.querySelector(".mxt-sample-layout.is-open")) return;
+      setMxFull(false);
+    };
+    if (mxDocKey) document.removeEventListener("keydown", mxDocKey);
+    mxDocKey = onMxFullKey;
+    document.addEventListener("keydown", mxDocKey);
+    mxFullBtn?.addEventListener("click", () => setMxFull(!u.mx.full));
+    if (u.mx.full) setMxFull(true, false);
+    /* 全屏卡自己就是滚动容器；指针停在矩阵上时，部分浏览器不会把竖向滚轮链到它。
+       这里显式滚动卡片，同时让样本列表这类真正可竖向滚动的子元素优先。 */
+    const onMxWheel = (event) => {
+      if (event.defaultPrevented || !u.mx.full || event.ctrlKey || event.metaKey || event.shiftKey || event.deltaX) return;
+      if (!event.deltaY) return;
+      let node = event.target;
+      while (node && node !== mxCardEl) {
+        const style = getComputedStyle(node);
+        if ((style.overflowY === "auto" || style.overflowY === "scroll") && node.scrollHeight > node.clientHeight + 1) return;
+        node = node.parentElement;
+      }
+      const max = mxCardEl.scrollHeight - mxCardEl.clientHeight;
+      if (max <= 0) return;
+      const delta = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY;
+      event.preventDefault();
+      mxCardEl.scrollTop = Math.max(0, Math.min(max, mxCardEl.scrollTop + delta));
+    };
+    mxCardEl?.addEventListener("wheel", onMxWheel, { passive: false });
     const sceneRoot = { name: "全部", children: capScenes(sceneTree(p)) };
     const clusterRoot = clusterTree(p, tax);
     // Paths are kept as names / prefixes so they can be walked again on a fresh tree.
@@ -3588,7 +3404,7 @@ function wire(bento, p, tax, u) {
     }
 
     /* ---- 格子的就地趋势：同一个 shell 里把表换成图，返回时按原来的行列路径重画矩阵 ---- */
-    u.mx.trend = u.mx.trend || { open: false, measure: "count", range: "30", scope: "row", lines: [], active: 0, seeded: false };
+    u.mx.trend = u.mx.trend || { open: false, measure: "count", scope: "row", lines: [], active: 0, seeded: false, zoom: false };
     const trend = u.mx.trend;
     let trendToken = 0;
     const trendTitle = (row, node) => `${row.name} · ${patName(tax, node) || node} 的时间趋势`;
@@ -3598,7 +3414,7 @@ function wire(bento, p, tax, u) {
       // 「全部场景」看整个产品在这个聚类上的问题率，不按点进来的那一行过滤。
       scope: trend.scope === "all" ? "all" : "row",
       scenes: trendScenes(trendData, row, trend.scope === "all" ? "all" : "row"),
-      measure: trend.measure, range: trend.range,
+      measure: trend.measure, range: "all", zoom: !!trend.zoom,
       lines: trend.lines, active: trend.active,
     });
     let trendData = null;
@@ -3668,6 +3484,14 @@ function wire(bento, p, tax, u) {
       const update = () => mountProblemTrends(issueEl, issueData, u.mx, names, layoutPanels, {
         mountDetailChart: (plot, node, renderChart, interaction) => mountSampleTrend(plot, renderChart,
           (pick) => loadTrendSamplePage(issueData, { node, scenes: null }, pick), interaction),
+        // 左侧趋势下钻后，右侧热力矩阵跟着同一个路径重画；热力矩阵自己的下钻仍会反向刷新左侧。
+        onPath: () => {
+          const heatPanel = $(".mxp-chart-panel", perspectiveEl);
+          if (!heatPanel || !mxView) return;
+          heatPanel._cancelHeat?.();
+          heatPanel.innerHTML = mxPerspectiveTimeline(mxTrendSummary(trendData, mxView, clusterRoot, u.mx), false);
+          animateHeat();
+        },
       });
       if (reveal) layoutPanels(update);
       else update();
@@ -3795,6 +3619,16 @@ function wire(bento, p, tax, u) {
       const title = trendTitle(row, spec.node);
       swapShell(shell, trendBodyHTML(trendData, spec, title), animate, source, () => setPanelsOpen(false));
       const box = $(".mxt", shell);
+      const zoomBtn = $("#mxtZoom", box);
+      const setZoom = (on) => {
+        trend.zoom = on;
+        if (!zoomBtn) return;
+        zoomBtn.setAttribute("aria-pressed", String(on));
+        zoomBtn.setAttribute("aria-label", on ? "滚轮缩放已解锁" : "滚轮缩放已锁定");
+        zoomBtn.title = on ? "点击锁定滚轮缩放" : "点击解锁滚轮缩放";
+      };
+      zoomBtn?.addEventListener("click", () => setZoom(!trend.zoom));
+      setZoom(!!trend.zoom);
       /* Opening the sample drawer splits the frame and narrows the map: that resize is expected
          and must not rebuild (and thereby close) the drawer. Defer the repaint instead and play
          it once the drawer is back, so condition changes made meanwhile still land. */
@@ -3803,10 +3637,10 @@ function wire(bento, p, tax, u) {
         const plot = $("#mxtPlot", box);
         if (!force && plot?._drawer?.isOpen?.()) { deferred = true; return; }
         deferred = false;
-        paintTrendPlot(box, trendSpec(row), trendData, title, (open) => {
+        paintTrendPlot(box, trendSpec(row), trendData, (open) => {
           if (open) return;
           setTimeout(() => { if (deferred && box.isConnected) paintPlot(true); }, 280);
-        });
+        }, () => !!trend.zoom);
       };
       const bind = (id, key) => {
         const el = $(`#${id}`, box);
@@ -3818,7 +3652,6 @@ function wire(bento, p, tax, u) {
         seg.set(String(trend[key]), { silent: true });
       };
       bind("mxtMeasure", "measure");
-      bind("mxtRange", "range");
       bind("mxtScope", "scope");
       // 条件池编辑当前选中的折线；点卡片切换，拖条件到卡片也能改；最多 4 条，可删到 0 条。
       const paletteEl = $("#mxtPalette", box);

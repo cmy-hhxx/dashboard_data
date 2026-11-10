@@ -1,14 +1,12 @@
 /* Hierarchical problem-type trends. The first view is the stage level; each branch opens only its
    children. Curves contain only dates where that branch actually has a problem hit, never filled
    zeroes. Every scene is aggregated into the same series. */
-import { esc, fmt, segmented, hideTip } from "./core.js";
+import { esc, fmt, hideTip } from "./core.js";
 import { lineTrendSVG, wireLineTrendChart } from "./trend_chart.js";
 import { sunburstTween } from "./motion.js";
 import { trendSampleFrame } from "./trend_samples.js";
 
 const sum = (list) => list.reduce((a, b) => a + b, 0);
-const RANGE_LABEL = { "7": "近 7 天", "30": "近 30 天", all: "全部" };
-
 export function buildProblemTrendModel(trend, names = new Map()) {
   const dates = Array.isArray(trend.dates) ? trend.dates : [];
   const ids = Array.isArray(trend.nodes) ? trend.nodes : [];
@@ -54,14 +52,8 @@ export function buildProblemTrendModel(trend, names = new Map()) {
   return { dates, base, byId, root, releases: Array.isArray(trend.releases) ? trend.releases : [] };
 }
 
-function rangeIndexes(model, range) {
-  const idx = model.dates.map((_, i) => i).filter((i) => Number.isFinite(Date.parse(`${model.dates[i]}T00:00:00Z`)));
-  if (!idx.length || range === "all") return idx;
-  const end = new Date(`${model.dates[idx[idx.length - 1]]}T00:00:00Z`);
-  const start = new Date(end);
-  start.setUTCDate(start.getUTCDate() - (Number(range) - 1));
-  const from = start.toISOString().slice(0, 10);
-  return idx.filter((i) => model.dates[i] >= from);
+function allIndexes(model) {
+  return model.dates.map((_, i) => i).filter((i) => Number.isFinite(Date.parse(`${model.dates[i]}T00:00:00Z`)));
 }
 
 export function problemRateValues(node, base, idx) {
@@ -112,26 +104,16 @@ export function mountProblemTrends(host, trend, state = {}, names = new Map(), l
     host.innerHTML = `<div class="empty">暂无问题趋势数据</div>`;
     return;
   }
-  state.range = RANGE_LABEL[state.range] ? String(state.range) : "30";
   state.issuePath = Array.isArray(state.issuePath) ? state.issuePath : [];
   const resolved = resolvePath(model, state.issuePath);
   state.issuePath = resolved.nodes.map((node) => node.id);
-  host.innerHTML = `<div class="mpt">
-    <div class="mpt-toolbar">
-      <div class="seg mpt-range" id="mptRange" role="group" aria-label="问题趋势时间范围">
-        <span class="seg-knob" aria-hidden="true"></span>
-        ${["7", "30", "all"].map((v) => `<button type="button" data-value="${v}" aria-pressed="${state.range === v}">${RANGE_LABEL[v]}</button>`).join("")}
-      </div>
-    </div>
-    <div class="mpt-grid" id="mptGrid"></div>
-  </div>`;
+  host.innerHTML = `<div class="mpt"><div class="mpt-grid" id="mptGrid"></div></div>`;
 
   const grid = host.querySelector("#mptGrid");
-  const range = host.querySelector("#mptRange");
   const paint = (animate = false, source = null) => {
     hideTip();
     const path = resolvePath(model, state.issuePath);
-    const idx = rangeIndexes(model, state.range);
+    const idx = allIndexes(model);
     const hasObservations = (node) => observationIndexes(model, node, idx).length > 0;
     const children = path.node.children
       .filter(hasObservations)
@@ -150,7 +132,7 @@ export function mountProblemTrends(host, trend, state = {}, names = new Map(), l
       const chart = problemTrendChart(model, node, idx, expanded ? host.clientWidth - 32 : chartWidth, expanded);
       charts.push({ node, chart });
       const tag = `${node.children.filter(hasObservations).length} 个子类`;
-      // The heatmap owns the drill; the cards only show the current level.
+      // 分支卡片本身也是下钻入口；放大镜只负责把单条曲线展开看细节。
       const plot = `<div class="mpt-chart${expanded ? " mpt-chart-detail" : ""}" data-own-tip>${chart.html}</div>`;
       return `<article class="mpt-card${branch ? " is-branch" : ""}${expanded ? " is-expanded" : ""}" data-trend-card="${esc(node.id)}">
         <header><h4 title="${esc(node.name)}">${esc(node.name)}</h4><button type="button" class="icon-btn mpt-action" data-trend-zoom="${esc(node.id)}" aria-expanded="${expanded}" aria-label="${expanded ? "还原" : "放大"} ${esc(node.name)}" title="${expanded ? "还原" : "放大"}"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="${expanded ? "M6 3v3H3m7-3v3h3m0 4h-3v3m-4 0v-3H3" : "M3 6V3h3M10 3h3v3M13 10v3h-3M6 13H3v-3"}" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button></header>
@@ -165,7 +147,7 @@ export function mountProblemTrends(host, trend, state = {}, names = new Map(), l
     // Keep navigation in view when a lower card splits into a shorter set of children.
     // The page owns vertical scrolling; the grid never traps a wheel or touch gesture.
     if (animate && grid.getBoundingClientRect().top < 116) {
-      range.closest(".mpt-toolbar").scrollIntoView({ block: "start", behavior: "instant" });
+      host.scrollIntoView({ block: "start", behavior: "instant" });
     }
     const swap = () => {
       grid.innerHTML = cards || `<div class="mpt-empty">当前分类暂无时间趋势</div>`;
@@ -199,11 +181,6 @@ export function mountProblemTrends(host, trend, state = {}, names = new Map(), l
     host._mptCancel = () => { cancel(); clear(); disposeCharts.splice(0).forEach((dispose) => dispose()); };
   };
 
-  const control = segmented(range, (value) => {
-    state.range = value;
-    paint(true, range);
-  });
-  control.set(state.range, { silent: true });
   paint(false);
 
   const onClick = (e) => {
@@ -216,6 +193,20 @@ export function mountProblemTrends(host, trend, state = {}, names = new Map(), l
       [...grid.querySelectorAll("[data-trend-zoom]")].find((el) => el.dataset.trendZoom === id)?.focus({ preventScroll: true });
       return;
     }
+    if (state.issueZoom) return;
+    const card = e.target.closest("[data-trend-card]");
+    if (!card) return;
+    const node = model.byId.get(card.dataset.trendCard);
+    if (!node) return;
+    // 只有还有可观测子类的卡片才下钻；叶子卡片保持只读。
+    const idx = allIndexes(model);
+    if (!node.children.some((child) => observationIndexes(model, child, idx).length > 0)) return;
+    const path = resolvePath(model, state.issuePath).nodes.map((item) => item.id);
+    state.issuePath = [...path, node.id];
+    state.heatPath = state.issuePath.slice();
+    state.issueZoom = null;
+    paint(true, card);
+    actions.onPath?.(state.issuePath.slice());
   };
   host._mptClick = onClick;
   host.addEventListener("click", onClick);
