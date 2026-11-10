@@ -9,6 +9,8 @@ import { mountAB } from "./abtest.js";
 import { monotonePath, nebulaCluster, lineTrendSVG, wireLineTrendChart, wireTrendPointPick } from "./trend_chart.js";
 import { mountProblemTrends } from "./problem_trends.js";
 import { traceSeverityModel, traceShares } from "./trace_analysis.js";
+import { createKlineChart, KLINE_PERIODS } from "./kline_chart.js";
+import { buildIntradayCandles } from "./kline_data.js";
 import { matrixHeatSummary } from "./matrix_heat.js";
 import { trendSampleFrame, abTrendSampleRefs, resolveABSamples, trendSampleCandidates, trendSampleProblems, traceSampleRefs } from "./trend_samples.js";
 
@@ -23,7 +25,7 @@ const ui = (product) =>
   (UI[product] = UI[product] || {
     field: { w: null, pages: [] }, vol: {}, clu: {}, pred: "vol",
     mx: {
-      rows: [], cols: [], trail: [], issueRange: "30", issuePath: [], analysisLevels: ["P0", "P1"],
+      rows: [], cols: [], trail: [], issueRange: "30", issuePath: [], analysisLevels: ["P0", "P1"], analysisPeriod: "day",
       // 聚类矩阵格子的就地趋势图：口径 / 时间 / 场景 + 来源·模型·等级的折线组 + 是否打开都活在这里，
       // 就地刷新或切换产品再回来仍是同一张图。rowKeys/colKeys 是行列路径，刷新后用来重新定位。
       trend: { open: false, measure: "count", range: "30", scope: "row", lines: [], active: 0, seeded: false, rowKeys: null, colKeys: null },
@@ -1632,19 +1634,70 @@ function mxPerspectiveTimeline(summary, loading) {
   </div>`;
 }
 
-function mxRateTrendChart(model, width, selected, height = 232) {
-  const last = model.rows[model.rows.length - 1]?.date;
-  const from = dayMs(last) - 29 * DAY_MS;
-  const days = model.rows.filter((day) => dayMs(day.date) >= from && sum(day.counts) > 0);
-  return lineTrendSVG({
-    width, height, compact: true, yAxis: true, minTop: 4,
-    xLabels: days.map((day) => day.date.slice(5)), xDates: days.map((day) => day.date),
-    series: model.levels.filter((level) => selected.includes(level)).map((level) => {
-      const i = model.levels.indexOf(level);
-      return { level, label: SEV_NAME[level], color: level === "none" ? "var(--muted)" : sevColor(level), values: days.map((day) => day.counts[i]) };
-    }),
-    aria: "近 30 天各问题等级的 Trace 数量趋势", formatValue: fmt, nebulaDots: 6,
+const KLINE_NAME = Object.fromEntries(KLINE_PERIODS);
+const CLOCK = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit", hour12: false });
+const clockOf = (time) => (typeof time === "number" ? CLOCK.format(new Date(time * 1000)) : String(time));
+
+function rateLabels(period) {
+  if (period === "intraday") return { open: "开盘（5分钟前）", close: "收盘（5分钟后）" };
+  if (period === "week") return { open: "开盘（前一周）", close: "收盘（本周）" };
+  if (period === "month") return { open: "开盘（前一月）", close: "收盘（本月）" };
+  if (period === "year") return { open: "开盘（前一年）", close: "收盘（本年）" };
+  return { open: "开盘（前一日）", close: "收盘（当日）" };
+}
+
+/* 行情蜡烛按 5 分钟槽累计今天的问题数；点开时把该槽命中最多的一级交给样本抽屉。 */
+function mxIntradayPick(intraday, model, candle, selected) {
+  const counts = intraday.buckets?.find(([minute]) => minute === candle.from)?.slice(1) || [];
+  let level = selected[0];
+  let best = -1;
+  selected.forEach((name) => {
+    const n = Number(counts[model.levels.indexOf(name)] || 0);
+    if (n > best) { best = n; level = name; }
   });
+  return {
+    date: intraday.date, index: 0, seriesIndex: 0,
+    series: {
+      label: `${selected.map((name) => SEV_NAME[name] || name).join("+")} · 日内行情 ${candle.label}`,
+      level,
+      levelIdxs: selected.map((name) => model.levels.indexOf(name)).filter((i) => i >= 0),
+      levelAll: false, models: [], uts: [],
+    },
+  };
+}
+
+/* 矩阵研究面板的 K 线口径：全量日期，蜡烛是该周期内「所选等级 Trace 数」的开高低收，
+   量能是同一周期内所有等级的总 Trace 数（评测体量）。 */
+function mxRateKlineRows(model, selected) {
+  const idx = selected.map((level) => model.levels.indexOf(level)).filter((i) => i >= 0);
+  if (!idx.length) return [];
+  return model.rows.map(({ date, counts }) => ({
+    date,
+    value: idx.reduce((n, i) => n + (counts[i] || 0), 0),
+    volume: counts.reduce((n, value) => n + (value || 0), 0),
+  })).filter((row) => row.volume > 0);
+}
+
+/* 点一根蜡烛时打开它收盘日的样本；多等级同时选中时取当天命中最多的那一级。 */
+function mxRatePick(model, candle, selected, period) {
+  const row = model.rows.find((day) => day.date === candle.to);
+  let level = selected[0];
+  let best = -1;
+  if (row) {
+    selected.forEach((name) => {
+      const n = row.counts[model.levels.indexOf(name)] || 0;
+      if (n > best) { best = n; level = name; }
+    });
+  }
+  return {
+    date: candle.to, index: 0, seriesIndex: 0,
+    series: {
+      label: `${selected.map((name) => SEV_NAME[name] || name).join("+")} · ${KLINE_NAME[period] || ""}`,
+      level,
+      levelIdxs: selected.map((name) => model.levels.indexOf(name)).filter((i) => i >= 0),
+      levelAll: false, models: [], uts: [],
+    },
+  };
 }
 
 /* The right lens and heat share the left card grid's baseline. Measure the left grid, subtract
@@ -1652,16 +1705,16 @@ function mxRateTrendChart(model, width, selected, height = 232) {
 function analysisChartHeight(panel, chartHost) {
   const panels = panel.closest(".mx-panels");
   const issueShell = document.getElementById("mxIssueTrends");
-  if (!panels?.classList.contains("is-both") || !issueShell || issueShell.hidden) return 240;
+  if (!panels?.classList.contains("is-both") || !issueShell || issueShell.hidden) return 260;
   const lens = panel.querySelector(".mxp-lens");
   const heat = panel.querySelector(".mxp-chart-panel");
-  if (!lens || !heat) return 240;
+  if (!lens || !heat) return 260;
   const lr = issueShell.getBoundingClientRect();
   const pr = lens.getBoundingClientRect();
   const hr = heat.getBoundingClientRect();
-  if (!lr.height || !pr.height) return 240;
+  if (!lr.height || !pr.height) return 260;
   const chrome = pr.height - chartHost.getBoundingClientRect().height;
-  return Math.max(160, Math.round(lr.bottom - pr.top - 12 - hr.height - chrome));
+  return Math.max(200, Math.round(lr.bottom - pr.top - 12 - hr.height - chrome));
 }
 
 function wireMatrixAnalysis(panel, model, state, trend) {
@@ -1670,6 +1723,7 @@ function wireMatrixAnalysis(panel, model, state, trend) {
   const rows = $$(".mxp-overview .mxp-legend-row[data-level]", panel);
   const levels = model?.levels || WORST;
   state.analysisLevels ||= ["P0", "P1"];
+  state.analysisPeriod ||= "day";
   let paintToken = 0;
   let firstPaint = true;
   // The severity rows are the only filter; the ring is the same set drawn as shares.
@@ -1679,19 +1733,49 @@ function wireMatrixAnalysis(panel, model, state, trend) {
     const focus = on.size ? on : new Set(levels);
     $$(".mxp-ring-arc", panel).forEach((arc) => arc.classList.toggle("is-off", !focus.has(arc.dataset.level)));
   };
+  // 抽屉是 K 线地图的侧栏：开合只改宽度，图表用 autoSize 跟着走，不需要重画。
+  const drawer = trendSampleDrawer(chartHost, (pick) => loadTraceSamplePage(trend, pick), () => {}, { hideSum: true, hideNote: true });
+  chartHost._drawer = drawer;
   const paint = () => {
     if (!model?.total) return;
-    chartHost._drawer?.destroy();
     const token = ++paintToken;
     const draw = () => {
       if (token !== paintToken) return;
-      const chart = mxRateTrendChart(model, chartHost.clientWidth, state.analysisLevels, analysisChartHeight(panel, chartHost));
-      chartHost.innerHTML = state.analysisLevels.length ? chart.html : '<div class="empty">选择问题等级</div>';
-      wireLineTrendChart(chartHost, chart, "", (pick) => drawer.open(pick));
+      chartHost._kline?.destroy();
+      chartHost._kline = null;
+      if (!state.analysisLevels.length) {
+        chartHost.innerHTML = '<div class="empty">选择问题等级</div>';
+        chartHost.style.opacity = "";
+        return;
+      }
+      const period = state.analysisPeriod;
+      const intraday = trend?.trace_severity?.intraday;
+      const isIntraday = period === "intraday";
+      const candles = isIntraday ? buildIntradayCandles(intraday, state.analysisLevels, model.levels) : null;
+      if (isIntraday && !candles.length) {
+        chartHost.innerHTML = '<div class="empty">暂无日内行情数据</div>';
+        chartHost.style.opacity = "";
+        return;
+      }
+      const labels = rateLabels(period);
+      chartHost._kline = createKlineChart(chartHost, {
+        rows: isIntraday ? [] : mxRateKlineRows(model, state.analysisLevels),
+        candles: isIntraday ? candles : undefined,
+        period,
+        height: analysisChartHeight(panel, chartHost),
+        volumeName: "Trace",
+        emptyText: "暂无已评测 Trace",
+        openLabel: labels.open,
+        closeLabel: labels.close,
+        tickText: isIntraday ? (time) => clockOf(time) : undefined,
+        tipTime: isIntraday ? (candle) => `${intraday.date} ${candle.label}` : undefined,
+        tipPeriod: isIntraday ? () => "日内行情" : undefined,
+        onPick: (candle) => drawer.open(isIntraday
+          ? mxIntradayPick(intraday, model, candle, state.analysisLevels)
+          : mxRatePick(model, candle, state.analysisLevels, period)),
+      });
       chartHost.style.opacity = "";
     };
-    const drawer = trendSampleDrawer(chartHost, (pick) => loadTraceSamplePage(trend, pick), draw);
-    chartHost._drawer = drawer;
     if (REDUCED || firstPaint) { firstPaint = false; draw(); return; }
     // 只在重画时淡一下：高度不变，所以不会带出任何布局跳动。
     chartHost.style.opacity = "0.35";
@@ -1706,6 +1790,12 @@ function wireMatrixAnalysis(panel, model, state, trend) {
     sync();
     paint();
   };
+  const periodEl = $(".mxp-kseg", panel);
+  const periodControl = periodEl ? segmented(periodEl, (value) => {
+    state.analysisPeriod = value;
+    paint();
+  }) : null;
+  requestAnimationFrame(() => periodControl?.set(state.analysisPeriod, { silent: true }));
   sync();
   paint();
   rows.forEach((row) => row.addEventListener("click", () => toggle(row.dataset.level)));
@@ -1761,8 +1851,11 @@ function matrixPerspectiveHTML(view, trend, loading = false, state = {}, cluster
         <div class="mxp-legend">${legend}</div>
       </div>
       <div class="mxp-trend">
-        <div class="mxp-trend-head"><b>Trace 趋势</b><span class="num">近 30 天</span></div>
-        ${trendSampleFrame(`<div class="mpt-chart mxp-rate-chart" data-own-tip>${model?.total ? mxRateTrendChart(model, 340, selected, 240).html : `<div class="empty">${empty}</div>`}</div>`)}
+        <div class="mxp-trend-head"><b>Trace 趋势</b>${model?.total ? `<div class="seg mxp-kseg" id="mxpKPeriod" role="group" aria-label="K 线周期">
+          <span class="seg-knob" aria-hidden="true"></span>
+          ${KLINE_PERIODS.map(([value, label]) => `<button type="button" data-value="${value}" aria-pressed="${(state.analysisPeriod || "day") === value}">${label}</button>`).join("")}
+        </div>` : ""}</div>
+        ${trendSampleFrame(`<div class="mpt-chart mxp-rate-chart" data-own-tip>${model?.total ? "" : `<div class="empty">${empty}</div>`}</div>`)}
       </div>
     </section>
     <section class="mxp-heat-wrap">
@@ -2554,7 +2647,7 @@ const sevIdx = (w) => {
    question and its problem count (or verdict). The head is the slice's size and its severity split. */
 const LEDGER_MAX = 120;
 const predDot = (it) => (it.r === "correct" ? "var(--accent)" : it.r === "wrong" ? "var(--sev-1)" : it.r === "pending" ? "var(--muted)" : "var(--faint)");
-function ledger(groups, pred, unit = null, rows = null, { count = true, strip = true, size = LEDGER_MAX, page = 0 } = {}) {
+function ledger(groups, pred, unit = null, rows = null, { count = true, strip = true, size = LEDGER_MAX, page = 0, sum = true } = {}) {
   const all = groups.flatMap((g) => g.items);
   const ordered = pred ? all : [...all].sort((a, b) => a.w - b.w || b.n - a.n || (b.d || "").localeCompare(a.d || ""));
   const pages = Math.max(1, Math.ceil(ordered.length / size));
@@ -2571,7 +2664,7 @@ function ledger(groups, pred, unit = null, rows = null, { count = true, strip = 
     .filter((x) => x.n)
     .map((x) => `<i style="flex:${x.n} 1 0;background:${x.c}"></i>`)
     .join("")}</span>` : ""}</div>`;
-  const body = `${sumHtml}<div class="gx-list">${rowsHtml.join("")}</div>`;
+  const body = `${sum ? sumHtml : ""}<div class="gx-list">${rowsHtml.join("")}</div>`;
   return { items, all, ordered, parts, pages, page: at, size, rowHTML, sumHtml, body, html: `<div class="gx-side">${body}</div>` };
 }
 const caseItem = (r) => ({ s: r.s, w: sevIdx(r.w), n: r.n || 0, q: r.q || "", m: r.m, sp: r.sp, d: r.d || "" });
@@ -2661,24 +2754,25 @@ function trendSampleDrawer(plot, load, repaint, interaction = {}) {
     el?.focus({ preventScroll: true });
   };
   const pagesOf = () => Math.max(1, Math.ceil((current?.items.length || 0) / PAGE));
-  const loading = () => `<div class="mxt-sample-loading"><div class="empty">正在读取样本…</div>${current?.note ? `<p class="mxt-sample-note">${esc(current.note)}</p>` : ""}${!busy && current?.canScan ? '<button type="button" class="mx-back" data-sample-scan>继续读取</button>' : ""}</div>`;
+  const showNote = !interaction.hideNote;
+  const loading = () => `<div class="mxt-sample-loading"><div class="empty">正在读取样本…</div>${showNote && current?.note ? `<p class="mxt-sample-note">${esc(current.note)}</p>` : ""}${!busy && current?.canScan ? '<button type="button" class="mx-back" data-sample-scan>继续读取</button>' : ""}</div>`;
   const render = () => {
     if (!current || !pickNow) return;
     const key = focusKey();
     if (!current.items.length) {
       side.innerHTML = `${head(pickNow)}${current.done
-        ? `<div class="empty">${esc(current.emptyText || "当前索引中没有匹配样本")}</div>${current.note ? `<p class="mxt-sample-note">${esc(current.note)}</p>` : ""}`
+        ? `<div class="empty">${esc(current.emptyText || "当前索引中没有匹配样本")}</div>${showNote && current.note ? `<p class="mxt-sample-note">${esc(current.note)}</p>` : ""}`
         : loading()}`;
       restoreFocus(key);
       return;
     }
     const pages = pagesOf();
     page = Math.max(0, Math.min(pages - 1, page));
-    const led = ledger([{ items: current.items }], false, current.unit, current.items.slice(page * PAGE, (page + 1) * PAGE), { count: false, strip: false });
+    const led = ledger([{ items: current.items }], false, current.unit, current.items.slice(page * PAGE, (page + 1) * PAGE), { count: false, strip: false, sum: !interaction.hideSum });
     pageItems = led.items;
     const scanning = busy;
     const canNext = page + 1 < pages || (current.canScan && !busy);
-    const note = [current.note, current.done && current.items.length >= LEDGER_MAX ? `展示前 ${LEDGER_MAX} 条` : ""].filter(Boolean).join(" · ");
+    const note = showNote ? [current.note, current.done && current.items.length >= LEDGER_MAX ? `展示前 ${LEDGER_MAX} 条` : ""].filter(Boolean).join(" · ") : "";
     const pager = pages > 1 ? `<div class="mxt-sample-pager">
       <button type="button" data-sample-page="prev" aria-label="上一页"${page === 0 ? " disabled" : ""}>‹</button>
       <span class="mxt-sample-page num">第 <b>${page + 1}</b> / ${pages} 页${scanning ? '<span class="mxt-sample-reading">读取中…</span>' : ""}</span>
@@ -3569,7 +3663,12 @@ function wire(bento, p, tax, u) {
 
     function renderPerspective(loading = perspectiveLoading, reveal = true) {
       if (!perspectiveEl || !panelsOpen || !mxView) return;
-      const update = () => { perspectiveEl.innerHTML = `<div class="mx-perspective-inner">${matrixPerspectiveHTML(mxView, trendData, loading, u.mx, clusterRoot)}</div>`; };
+      const update = () => {
+        const old = perspectiveEl.querySelector(".mxp-rate-chart");
+        old?._drawer?.destroy();
+        old?._kline?.destroy();
+        perspectiveEl.innerHTML = `<div class="mx-perspective-inner">${matrixPerspectiveHTML(mxView, trendData, loading, u.mx, clusterRoot)}</div>`;
+      };
       if (reveal) layoutPanels(update);
       else update();
       wireMatrixAnalysis(perspectiveEl, traceSeverityModel(trendData), u.mx, trendData);

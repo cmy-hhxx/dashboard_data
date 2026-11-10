@@ -60,5 +60,19 @@ class TraceSeverityTests(unittest.TestCase):
         self.assertEqual(trace["refs"], [[0, "s1", 0, 0, "a"], [0, "s1", 1, 5, "b"], [1, "s2", 0, 4, "c"]])
 
 
+    def test_payload_reports_latest_day_five_minute_market(self):
+        first = self.detail(["a"], [(0, "P0", [])])
+        first["meta"]["request_time"] = "2026-11-01T01:05:00Z"   # 09:05 北京时间
+        second = self.detail(["b"], [(0, "P1", [])])
+        second["meta"]["request_time"] = "2026-11-02T01:12:00Z"  # 09:12 → 09:10 槽
+        samples = [("s1", build.slim_detail(first), {"d": "2026-11-01", "m": "a_fast"}, {}),
+                   ("s2", build.slim_detail(second), {"d": "2026-11-02", "m": "a_fast"}, {})]
+        intraday = build.trend_payload("wencai", samples)["trace_severity"]["intraday"]
+        self.assertEqual(intraday["date"], "2026-11-02")
+        self.assertEqual(intraday["prev"], [1, 0, 0, 0, 0, 0])
+        self.assertEqual(intraday["bucket_minutes"], 5)
+        self.assertEqual(intraday["buckets"], [[550, 0, 1, 0, 0, 0, 0]])
+
+
 if __name__ == "__main__":
     unittest.main()
