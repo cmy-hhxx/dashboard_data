@@ -2637,7 +2637,7 @@ function matrixCard(p, tax) {
       <header class="card-head mx-card-head"><h2>聚类矩阵</h2>${actions ? `<div class="mx-head-actions">${actions}</div>` : ""}</header>
       ${body}
       ${chrome ? `<div class="mx-panels" id="mxPanels" hidden>
-        ${p.ab ? `<section class="mx-issue-trends-shell" id="mxIssueTrends" hidden aria-label="全部问题类型趋势"></section>` : ""}
+        <section class="mx-issue-trends-shell" id="mxIssueTrends" hidden aria-label="全部问题类型趋势"></section>
         <section class="mx-perspective" id="mxPerspective" hidden aria-label="聚类矩阵问题分析"></section>
       </div>` : ""}
     </div>

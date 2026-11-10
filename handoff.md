@@ -300,6 +300,11 @@ labels:["…",…]}`，与 `rows[]` 同长度、同顺序；前端首屏后再�
 预测卡读 `datasets/4_forecast/<product>/prediction.json`（旧位置 `datasets/<n>_<product>/prediction.json` 兜底），
 缺失时显示「暂无预测数据」；接口格式见 `docs/prediction-data.md`。
 
+`<datasets>/<n>_<product>/dashboard_data_absence/` 是数据缺口落地目录：只要该目录存在，`build.py`
+每次构建（含复用构建）都会写 `<product>-data-absence.json` / `.md`，逐模型列出「有输入、没有
+attribution / compact」的日期，并给出聚类落点缺口与 A/B 轮次、发版配置、预测 feed、聚类映射的可用性。
+没有这个目录的产品（AIME）不会被写；`EVAL_ABSENCE_DIR` 可改目标位置。
+
 ## 6. 常见改动怎么下手
 
 1. **改数据口径 / 加指标**：改 `build.py` 的 `build_sample`、`aggregate`、

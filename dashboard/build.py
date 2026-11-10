@@ -3232,6 +3232,255 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
         store.close()
 
 
+# ----------------------------------------------------------------- data absence
+
+ABSENCE_DIR = "dashboard_data_absence"
+ABSENCE_SKIP = {"compact", "cluster", "comparison", ".runs", ".delivery"}
+
+
+def product_top(datasets: Path, product: str):
+    """``<datasets>/<n>_<product>`` for one product, else None."""
+    for top in sorted(datasets.glob("*")):
+        if top.is_dir() and product_of(top.name) == product:
+            return top
+    return None
+
+
+def _days_named(folder: Path, pattern: str):
+    days = set()
+    for path in folder.glob(pattern):
+        match = DATE_RE.search(path.name)
+        if match and path.is_file():
+            days.add(match.group(1))
+    return sorted(days)
+
+
+def _day_spans(days):
+    """Compress consecutive dates to ``a～b`` so 26 missing days read as one range."""
+    spans, start, prev = [], None, None
+    for day in days:
+        if start is None:
+            start = prev = day
+            continue
+        if (datetime.strptime(day, "%Y-%m-%d") - datetime.strptime(prev, "%Y-%m-%d")).days == 1:
+            prev = day
+            continue
+        spans.append(start if start == prev else f"{start}～{prev}")
+        start = prev = day
+    if start is not None:
+        spans.append(start if start == prev else f"{start}～{prev}")
+    return spans
+
+
+def _rel(path: Path, root: Path):
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def absence_markdown(report):
+    payload = report.get("payload") or {}
+    eval_out = report.get("eval_output") or {}
+    modules = report.get("modules") or {}
+    days = eval_out.get("evaluated_days") or []
+    input_days = eval_out.get("input_days") or []
+    lines = [
+        f"# {report['label']} · 看板数据缺口",
+        "",
+        f"- 生成时间：{report['generated_at']}",
+        f"- 数据根：{report['datasets']}",
+        f"- 评测输入：{len(input_days)} 天（{', '.join(_day_spans(input_days)) or '—'}）",
+        f"- 评测输出：{len(days)} 天（{', '.join(days) or '—'}）",
+        f"- 评测 Trace：输入 {payload.get('input_traces', '—')} · 已评测 {payload.get('evaluated_traces', '—')}",
+    ]
+    if payload.get("problems") is not None:
+        lines.append(f"- 问题：{payload.get('problems')}（已聚类 {payload.get('clustered', '—')} / 未聚类 {payload.get('unclustered', '—')}）")
+    lines += ["", "## 评测输出覆盖", "", "| 模型 | 输入天数 | attribution | compact | 缺失日期 |", "|---|---|---|---|---|"]
+    for model in eval_out.get("models") or []:
+        lines.append(
+            f"| {model['id']} | {len(model['input_days'])} | {len(model['attribution_days'])} | "
+            f"{len(model['compact_days'])} | {'、'.join(_day_spans(model['missing_days'])) or '—'} |"
+        )
+    cluster = report.get("cluster") or {}
+    lines += ["", "## 聚类落点", "", "| 日期 | 已评测 | 有问题 | 已聚类 |", "|---|---|---|---|"]
+    for day in cluster.get("days") or []:
+        lines.append(f"| {day['date']} | {day['evaluated']} | {day['problem_rows']} | {day['clustered']} |")
+    if not (cluster.get("days") or []):
+        lines.append("| — | — | — | — |")
+    lines += ["", "## 模块", "", "| 模块 | 状态 | 位置 / 说明 |", "|---|---|---|"]
+    for key, label in (("ab_test", "A/B Test"), ("releases", "发版配置"), ("prediction", "预测 feed"), ("cluster", "聚类映射")):
+        item = modules.get(key) or {}
+        state = "可用" if item.get("available") else "**缺失**"
+        lines.append(f"| {label} | {state} | {item.get('note') or item.get('path') or '—'} |")
+    if report.get("missing"):
+        lines += ["", "## 缺失明细"]
+        for item in report["missing"]:
+            if item["kind"] == "eval_output":
+                lines.append(
+                    f"- `{item['model']}`：缺 attribution {len(item['missing_attribution'])} 天、"
+                    f"compact {len(item['missing_compact'])} 天；{', '.join(_day_spans(item['dates'])) or '—'}"
+                )
+            elif item["kind"] == "cluster_day":
+                lines.append(f"- {item['date']}：{item['problem_rows']} 条有问题样本没有聚类落点（{item['note']}）")
+            else:
+                lines.append(f"- {item.get('note') or item['kind']}（{item.get('path') or '—'}）")
+    return "\n".join(lines) + "\n"
+
+
+def write_data_absence(datasets: Path, product: str, out_dir: Path):
+    """Write the board's data gaps for one product next to its datasets.
+
+    The destination is ``<datasets>/<n>_<product>/dashboard_data_absence/`` (``EVAL_ABSENCE_DIR``
+    overrides it).  A product without that directory is left alone: a shared datasets root can
+    hold several products, and the report must never create data under another product.
+    """
+    top = product_top(datasets, product)
+    if top is None:
+        return None
+    override = os.environ.get("EVAL_ABSENCE_DIR")
+    target = Path(override) if override else top / ABSENCE_DIR
+    if override:
+        target.mkdir(parents=True, exist_ok=True)
+    if not target.is_dir():
+        return None
+
+    inputs, outputs = {}, {}
+    input_root = top / "eval_input" / "0_daily_eval_input"
+    for model_dir in sorted(p for p in input_root.glob("*") if p.is_dir() and not p.name.startswith(".")):
+        model_days = _days_named(model_dir, "*.jsonl")
+        if model_days:
+            inputs[model_dir.name] = model_days
+    for split_dir in sorted(p for p in (top / "eval_output").glob("*") if p.is_dir() and not p.name.startswith(".")):
+        for model_dir in sorted(p for p in split_dir.glob("*") if p.is_dir() and not p.name.startswith(".")):
+            if model_dir.name in ABSENCE_SKIP:
+                continue
+            attribution = _days_named(model_dir, f"{model_dir.name}_attribution-*.jsonl")
+            compact = _days_named(model_dir / "compact", f"{model_dir.name}_compact-*.jsonl")
+            if not attribution and not compact:
+                continue
+            bucket = outputs.setdefault(model_dir.name, {"attribution": set(), "compact": set()})
+            bucket["attribution"].update(attribution)
+            bucket["compact"].update(compact)
+
+    known = PRODUCTS[product]["models"]
+    models = [m for m in known if m in inputs or m in outputs]
+    models += sorted((set(inputs) | set(outputs)) - set(known))
+    eval_models, missing = [], []
+    for model in models:
+        in_days = inputs.get(model, [])
+        attribution_days = sorted(outputs.get(model, {}).get("attribution") or [])
+        compact_days = sorted(outputs.get(model, {}).get("compact") or [])
+        missing_attribution = [day for day in in_days if day not in set(attribution_days)]
+        missing_compact = [day for day in in_days if day not in set(compact_days)]
+        missing_days = sorted(set(missing_attribution) | set(missing_compact))
+        eval_models.append({
+            "id": model, "input_days": in_days,
+            "attribution_days": attribution_days, "compact_days": compact_days,
+            "missing_days": missing_days,
+            "missing_attribution": missing_attribution, "missing_compact": missing_compact,
+        })
+        if missing_days:
+            missing.append({"kind": "eval_output", "model": model, "dates": missing_days,
+                            "missing_attribution": missing_attribution,
+                            "missing_compact": missing_compact})
+
+    frames = defaultdict(lambda: [0, 0, 0])
+    index_path = out_dir / f"samples-{product}.json"
+    try:
+        rows = json.loads(index_path.read_text(encoding="utf-8"))["products"][product]["rows"]
+    except (OSError, ValueError, KeyError):
+        rows = []
+    for row in rows:
+        day = row.get("d")
+        if not day:
+            continue
+        frames[day][2] += 1
+        if row.get("n"):
+            frames[day][0] += 1
+            if row.get("pt") or row.get("st"):
+                frames[day][1] += 1
+    cluster_days = [{"date": day, "evaluated": counts[2], "problem_rows": counts[0], "clustered": counts[1]}
+                    for day, counts in sorted(frames.items())]
+    for day in cluster_days:
+        if day["problem_rows"] and not day["clustered"]:
+            missing.append({"kind": "cluster_day", "date": day["date"], "problem_rows": day["problem_rows"],
+                            "note": "已评测出问题但没有聚类落点：矩阵趋势与问题趋势缺这一天"})
+
+    cluster_models = set()
+    for split_dir in (top / "eval_output").glob("*"):
+        for model_dir in (split_dir / "cluster").glob("*"):
+            if (model_dir / "item_index.jsonl").is_file():
+                cluster_models.add(model_dir.name)
+
+    rounds = ab_test.ab_round_dirs(datasets, product)
+    releases = release_entries(datasets, product)
+    feed = prediction_feed_path(datasets, product)
+    modules = {
+        "ab_test": {
+            "available": bool(rounds), "path": _rel(top / ab_test.AB_DIR, datasets),
+            "rounds": len(rounds),
+            "note": "" if rounds else "没有 ab_test 轮次：版本对比为空、聚类矩阵无 A/B Test 入口",
+        },
+        "releases": {
+            "available": bool(releases), "path": _rel(release_source(datasets), datasets),
+            "entries": releases,
+            "note": "" if releases else "没有发版日期：趋势图不画发版红线",
+        },
+        "prediction": {
+            "available": bool(feed), "path": _rel(feed, datasets) if feed else _rel(datasets / FORECAST_DIR / product, datasets),
+            "note": "" if feed else "没有预测 feed：预测体系只显示暂无预测数据",
+        },
+        "cluster": {
+            "available": bool(cluster_models), "path": _rel(top / "eval_output", datasets),
+            "models": sorted(cluster_models),
+            "note": "" if cluster_models else "没有聚类映射：矩阵与聚类体系无落点",
+        },
+    }
+    for kind in ("ab_test", "releases", "prediction", "cluster"):
+        if not modules[kind]["available"]:
+            missing.append({"kind": kind, "path": modules[kind]["path"], "note": modules[kind]["note"]})
+
+    payload = {}
+    try:
+        payload = json.loads((out_dir / f"data-{product}.json").read_text(encoding="utf-8"))["products"][product]
+    except (OSError, ValueError, KeyError):
+        payload = {}
+    kpi = payload.get("kpi") or {}
+    report = {
+        "schema": 1,
+        "generated_at": iso_now(),
+        "product": product,
+        "label": PRODUCTS[product]["label"],
+        "datasets": str(datasets),
+        "product_dir": top.name,
+        "payload": {
+            "input_traces": (payload.get("input") or {}).get("traces"),
+            "evaluated_traces": kpi.get("traces"),
+            "sessions": kpi.get("sessions"),
+            "problems": kpi.get("problems"),
+            "clustered": kpi.get("clustered"),
+            "unclustered": kpi.get("unclustered"),
+            "dates": [day.get("d") for day in payload.get("dates") or []],
+            "range": payload.get("range"),
+        },
+        "eval_output": {
+            "input_root": _rel(input_root, datasets),
+            "output_root": _rel(top / "eval_output", datasets),
+            "input_days": sorted({day for days in inputs.values() for day in days}),
+            "evaluated_days": sorted({day for bucket in outputs.values()
+                                      for day in bucket["attribution"] | bucket["compact"]}),
+            "models": eval_models,
+        },
+        "cluster": {"models": sorted(cluster_models), "days": cluster_days},
+        "modules": modules,
+        "missing": missing,
+    }
+    write_json(target / f"{product}-data-absence.json", report, gz=False)
+    (target / f"{product}-data-absence.md").write_text(absence_markdown(report), encoding="utf-8")
+    return target
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--datasets", type=Path,
@@ -3247,6 +3496,11 @@ def main(argv=None):
     args.datasets = args.datasets or default_datasets()
 
     (data, index), stats = build(args.datasets.resolve(), args.out, args.pairing, jobs=args.jobs)
+    try:
+        for product in sorted(ENABLED):
+            write_data_absence(args.datasets.resolve(), product, args.out)
+    except Exception as exc:  # noqa: BLE001 - the report must never fail the build
+        print(f"[absence] {exc}", file=sys.stderr)
     out = args.out
     if data is None and index is None:
         print(json.dumps(stats, ensure_ascii=False))
