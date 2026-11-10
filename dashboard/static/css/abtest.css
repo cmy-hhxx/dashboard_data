@@ -211,7 +211,7 @@ body.is-ab-full { overflow: hidden; }
 .abmatrix.is-change {
   --mx-rowh: 46px;
   /* 变化矩阵固定列宽：四数提前排好版，不再按当前内容测量撑宽；横向滚动由 mx-scroll 负责。 */
-  --mx-colw: 96px;
+  --mx-colw: 104px;
 }
 .abmatrix.is-change .mx-grid { grid-template-columns: repeat(var(--cols), var(--mx-colw)); }
 .abmatrix.is-change .cell.is-better { color: var(--accent); background: color-mix(in oklab, var(--accent) calc(var(--v) * 56%), transparent); }

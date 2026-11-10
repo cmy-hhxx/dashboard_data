@@ -314,22 +314,22 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .matrix .cell-data.is-change { width: 100%; gap: 3px; }
 .matrix .cell-pair,
 .matrix .cell-delta {
-  display: grid; grid-template-columns: minmax(0, 1fr) 14px minmax(0, 1fr);
-  align-items: baseline; column-gap: 4px; width: 100%; padding-inline: 5px;
+  display: grid; grid-template-columns: minmax(0, 1fr) 8px minmax(0, 1fr);
+  align-items: baseline; column-gap: 1px; width: 100%; padding-inline: 1px;
   white-space: nowrap; font-variant-numeric: tabular-nums;
 }
-.matrix .cell-pair { font-size: var(--fs-small); }
+.matrix .cell-pair { font-size: 11px; }
 .matrix .cell-pair b { font-weight: var(--w-medium); }
 .matrix .cell-pair b.is-from { justify-self: center; color: var(--ink-2); }
 .matrix .cell-pair b.is-to { justify-self: center; color: var(--ink); }
 .matrix .cell-arrow,
 .matrix .cell-dot { justify-self: center; color: var(--faint); font-style: normal; font-size: 9px; line-height: 1; }
-.matrix .cell-delta { font-size: var(--fs-small); line-height: 1.15; }
+.matrix .cell-delta { font-size: 11px; line-height: 1.15; }
 .matrix .cell-delta > b { position: relative; justify-self: center; font-weight: var(--w-medium); }
 /* 正负号与百分号绝对定位在数字外侧：不改变数字盒宽度，数字中心才对得上。 */
 .matrix .cell-sign { position: absolute; right: 100%; }
-.matrix .cell-delta .cell-ratio { position: relative; justify-self: center; color: var(--muted); font-size: inherit; }
-.matrix .cell-ratio-suffix { position: absolute; left: 100%; }
+.matrix .cell-delta .cell-ratio { position: relative; justify-self: center; color: var(--muted); font-size: 11px; }
+.matrix .cell-ratio-suffix { position: absolute; left: 100%; font-size: 9px; }
 .matrix .rowtot .cell-data, .matrix .rowtot-foot .cell-data { place-items: center; }
 .matrix .rowtot-foot { display: flex; align-items: center; justify-content: flex-end; padding: 0 8px; color: var(--ink); font-size: var(--fs-small); font-weight: var(--w-medium); background: color-mix(in oklab, var(--accent) 12%, transparent); }
 

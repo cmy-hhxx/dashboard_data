@@ -231,8 +231,11 @@ function changeCellData(before, after) {
   // 数字本身居中，正负号和百分号挂在数字外侧，不参与列宽/中心计算。
   const sign = d > 0 ? "+" : d < 0 ? "−" : "";
   const rate = ratioText(d, b);
-  const pct = rate.endsWith("%") ? rate.slice(0, -1) : rate;
-  const pctTail = rate.endsWith("%") ? '<span class="cell-ratio-suffix">%</span>' : "";
+  const pctNum = b ? Math.abs((100 * d) / b) : null;
+  // 比例也遵守 K/M/B 缩写，避免 1,000.0% 把 104px 的格子撑出边界。
+  const rateText = pctNum != null && pctNum >= 1000 ? `${compact(pctNum)}%` : rate;
+  const pct = rateText.endsWith("%") ? rateText.slice(0, -1) : rateText;
+  const pctTail = rateText.endsWith("%") ? '<span class="cell-ratio-suffix">%</span>' : "";
   return `<span class="cell-data is-change"><span class="cell-pair"><b class="is-from">${compact(b)}</b><i class="cell-arrow" aria-hidden="true">→</i><b class="is-to">${compact(a)}</b></span><span class="cell-delta"><b class="cell-delta-num"><span class="cell-sign">${sign}</span>${compact(Math.abs(d))}</b><i class="cell-dot" aria-hidden="true">·</i><span class="cell-ratio">${pct}${pctTail}</span></span></span>`;
 }
 function countCellData(v, den) {
