@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 
@@ -193,6 +194,23 @@ class BuildTests(unittest.TestCase):
             self.assertEqual((detail["meta"]["app"], detail["meta"]["comefrom"]), ("harness-app", "WebTest"))
             self.assertEqual(detail["input"]["traces"][0]["meta"]["trace_id"], "trace-1")
             self.assertEqual(detail["input"]["traces"][1]["meta"]["trace_id"], "trace-2")
+
+    def test_detail_cache_is_invalidated_by_build_version(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            datasets, static = root / "datasets", root / "static"
+            seed(datasets)
+            _, _, index = self.build(datasets, static)
+            sample = index["products"]["wencai"]["rows"][0]
+            from detail_builder import DetailBuilder
+            builder = DetailBuilder(datasets, static.parent / "cache" / "build.sqlite3",
+                                    static / "samples", static.parent / "cache")
+            path = builder.ensure(sample["s"])
+            before = Path(path).stat().st_mtime
+            builder.version_stamp = time.time() + 5
+            path = builder.ensure(sample["s"])
+            builder.close()
+            self.assertGreater(Path(path).stat().st_mtime, before)
 
     def test_user_rules_reach_index_and_trigger_rebuild(self):
         with tempfile.TemporaryDirectory() as folder:

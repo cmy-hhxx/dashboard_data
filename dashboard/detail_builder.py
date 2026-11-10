@@ -10,6 +10,7 @@ from __future__ import annotations
 import json_compat as json
 import re
 import threading
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -26,6 +27,9 @@ class DetailBuilder:
         self.sample_dir = Path(sample_dir)
         self.cache_dir = Path(cache_dir)
         self.sample_dir.mkdir(parents=True, exist_ok=True)
+        # 详情文件也按构建版本失效：BUILD_VERSION 变了就懒重建，不依赖聚类戳。
+        self.version_file = self.sample_dir / ".build-version"
+        self.version_stamp = self._sync_version()
         # A multi-trace session opens one detail per trace at the same time.  A single
         # shared SQLite connection + lock would serialise them all, so each request
         # thread keeps its own read-only connection and only the cluster index is
@@ -36,6 +40,22 @@ class DetailBuilder:
         self._cluster_loaded = None
         self._slug_guard = threading.Lock()
         self._slug_locks = {}
+
+    def _sync_version(self):
+        try:
+            current = self.version_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            current = ""
+        if current != bs.BUILD_VERSION:
+            try:
+                self.version_file.write_text(bs.BUILD_VERSION, encoding="utf-8")
+            except OSError:
+                pass
+            return time.time()
+        try:
+            return self.version_file.stat().st_mtime
+        except OSError:
+            return 0.0
 
     def _open(self):
         store = getattr(self._local, "store", None)
@@ -84,10 +104,9 @@ class DetailBuilder:
                 self._cluster_loaded = stamp
             return self._cluster_index
 
-    @staticmethod
-    def _fresh(path, stamp):
+    def _fresh(self, path, stamp):
         try:
-            if path.stat().st_mtime >= stamp:
+            if path.stat().st_mtime >= max(stamp, self.version_stamp):
                 build.ensure_detail_gz(path)
                 return True
         except OSError:
