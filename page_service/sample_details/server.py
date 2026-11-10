@@ -118,6 +118,22 @@ def filtered_docs(product):
         return filtered, filtered_labels
 
 
+def filtered_bytes(product):
+    """Serialized + gzipped filtered index/labels; recompressing 20 MB per request is wasteful."""
+    key = "bytes:" + product
+    now = time.time()
+    item = FILTERED.get(key)
+    if item and now - item[0] < DOC_TTL:
+        return item[1:]
+    doc, labels = filtered_docs(product)
+    body = json.dumps(doc, ensure_ascii=False).encode("utf-8")
+    lbody = json.dumps(labels, ensure_ascii=False).encode("utf-8")
+    packed = gzip.compress(body, 5)
+    lpacked = gzip.compress(lbody, 5)
+    FILTERED[key] = (time.time(), body, packed, lbody, lpacked)
+    return body, packed, lbody, lpacked
+
+
 def allowed_slugs():
     """Slugs visible through the page interface: test-user samples are not served."""
     now = time.time()
@@ -311,24 +327,22 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _index(self, product):
         try:
-            doc, _labels = filtered_docs(product)
+            body, packed, _lbody, _lpacked = filtered_bytes(product)
         except urllib.error.HTTPError as exc:
             return self._error(exc.code, "index unavailable", product=product)
-        body = json.dumps(doc, ensure_ascii=False).encode("utf-8")
         if self._accepts_gzip():
-            return self._write(200, gzip.compress(body, 5), "application/json; charset=utf-8", encoding="gzip")
+            return self._write(200, packed, "application/json; charset=utf-8", encoding="gzip")
         return self._write(200, body, "application/json; charset=utf-8")
 
     def _labels(self, product):
         # Same mask as /samples-<product>.json: callers pair labels[i] with rows[i].
         try:
-            _doc, labels = filtered_docs(product)
+            _body, _packed, lbody, lpacked = filtered_bytes(product)
         except urllib.error.HTTPError as exc:
             return self._error(exc.code, "labels unavailable", product=product)
-        body = json.dumps(labels, ensure_ascii=False).encode("utf-8")
         if self._accepts_gzip():
-            return self._write(200, gzip.compress(body, 5), "application/json; charset=utf-8", encoding="gzip")
-        return self._write(200, body, "application/json; charset=utf-8")
+            return self._write(200, lpacked, "application/json; charset=utf-8", encoding="gzip")
+        return self._write(200, lbody, "application/json; charset=utf-8")
 
     def log_message(self, fmt, *args):
         sys.stderr.write("%s %s\n" % (time.strftime("%H:%M:%S"), fmt % args))
