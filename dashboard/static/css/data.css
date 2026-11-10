@@ -309,8 +309,8 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .matrix .cell.hot .cell-main b { color: var(--card); }
 .matrix .cell.hot .cell-pct { color: color-mix(in oklab, var(--card) 76%, transparent); }
 /* 变化矩阵: 每个格子两行四数。上一行「前 → 后」，下一行「增减 · 比例」。
-   两行共用同一套三列网格（1fr / 14px / 1fr）：前值和增减都右对齐到同一列，
-   后值和比例都左对齐到同一列，箭头与中间点落在同一条格子中线上。 */
+   两行共用同一套三列网格（1fr / 14px / 1fr）：四个数字各自居于自己的半列中心，
+   箭头与中间点共用中间列，因此上下两行的数字中心、箭头、中点全部对齐。 */
 .matrix .cell-data.is-change { width: 100%; gap: 3px; }
 .matrix .cell-pair,
 .matrix .cell-delta {
@@ -320,13 +320,13 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 }
 .matrix .cell-pair { font-size: var(--fs-small); }
 .matrix .cell-pair b { font-weight: var(--w-medium); }
-.matrix .cell-pair b.is-from { justify-self: end; color: var(--ink-2); }
-.matrix .cell-pair b.is-to { justify-self: start; color: var(--ink); }
+.matrix .cell-pair b.is-from { justify-self: center; color: var(--ink-2); }
+.matrix .cell-pair b.is-to { justify-self: center; color: var(--ink); }
 .matrix .cell-arrow,
 .matrix .cell-dot { justify-self: center; color: var(--faint); font-style: normal; font-size: 9px; line-height: 1; }
 .matrix .cell-delta { font-size: 11px; line-height: 1.15; }
-.matrix .cell-delta > b { justify-self: end; font-weight: var(--w-medium); }
-.matrix .cell-delta .cell-ratio { justify-self: start; color: var(--muted); font-size: 10px; }
+.matrix .cell-delta > b { justify-self: center; font-weight: var(--w-medium); }
+.matrix .cell-delta .cell-ratio { justify-self: center; color: var(--muted); font-size: 10px; }
 .matrix .rowtot .cell-data, .matrix .rowtot-foot .cell-data { place-items: center; }
 .matrix .rowtot-foot { display: flex; align-items: center; justify-content: flex-end; padding: 0 8px; color: var(--ink); font-size: var(--fs-small); font-weight: var(--w-medium); background: color-mix(in oklab, var(--accent) 12%, transparent); }
 
