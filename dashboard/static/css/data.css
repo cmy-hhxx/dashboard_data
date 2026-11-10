@@ -341,7 +341,28 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .mxp { display: grid; gap: 12px; min-width: 0; }
 /* The left issue grid starts under its range bar; the lens top must meet that same line. */
 .mx-panels.is-both .mxp { margin-top: 42px; }
-.mxp-lens { min-width: 0; padding: 16px; border-radius: 12px; background: var(--well); }
+.mxp-lens { position: relative; min-width: 0; padding: 16px; border-radius: 12px; background: var(--well); }
+/* 小小的全屏键：常驻左上卡片的右上角，进入后铺满视口，Esc 或同一枚键退出。 */
+.mxp-full { position: absolute; top: 8px; right: 8px; z-index: 2; width: 24px; height: 24px; border-radius: 7px; color: var(--muted); opacity: 0.6; }
+.mxp-full:hover, .mxp-full:focus-visible { opacity: 1; background: var(--hover); color: var(--ink); }
+.mxp-full svg { width: 14px; height: 14px; }
+.mxp-full .i-mxpfull-close { display: none; }
+.mxp-full[aria-pressed="true"] { opacity: 1; background: var(--active); color: var(--ink); }
+.mxp-full[aria-pressed="true"] .i-mxpfull-open { display: none; }
+.mxp-full[aria-pressed="true"] .i-mxpfull-close { display: block; }
+.mxp-lens .mxp-dist { padding-right: 28px; }
+.mxp-lens.is-full {
+  position: fixed; inset: 0; z-index: 80; width: auto; height: auto; overflow: auto;
+  border-radius: 0; padding: 20px var(--gutter) 32px; background: var(--card);
+  grid-template-columns: minmax(300px, 0.8fr) minmax(0, 1.6fr); gap: 20px; align-items: start;
+}
+.mxp-lens.is-full .mxp-dist { padding-right: 0; align-self: start; }
+.mxp-lens.is-full .mxp-trend { padding-top: 0; border-top: 0; }
+.mxp-lens.is-full .mxp-full { position: fixed; top: 16px; right: 16px; }
+body.is-mxp-full { overflow: hidden; }
+@media (max-width: 900px) {
+  .mxp-lens.is-full { grid-template-columns: minmax(0, 1fr); }
+}
 /* 等级分布（环形，合计 100%）+ Trace 趋势：左右并排，给下面的热力图让出高度。 */
 .mxp-overview { display: grid; grid-template-columns: minmax(0, 1fr); align-items: stretch; gap: 12px; }
 .mxp-dist { display: flex; align-items: center; gap: 16px; min-width: 0; }
@@ -888,12 +909,14 @@ body.is-modal { overflow: hidden; }
 .mxt-sample-side.gx-side .empty { position: static; min-height: 80px; flex: 1; }
 .mxt-sample-side .gx-list { overscroll-behavior: contain; mask-image: none; margin-right: 0; }
 .mxt-sample-side .gl-sum b { font-size: 18px; }
-/* 抬头不再用省略号：日期一行、条件一行（可换行），返回按钮跟日期同一行。 */
-.mxt-sample-head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; min-width: 0; font-size: var(--fs-meta); }
+/* 抬头一行：日期 / 条件 / 数据量 / 返回；条件过长时省略，不换行占高度。 */
+.mxt-sample-head { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 2px 8px; min-width: 0; font-size: var(--fs-meta); }
 .mxt-sample-head > span { min-width: 0; color: var(--ink-2); }
-.mxt-sample-head .mxt-sample-when { flex: none; font-weight: var(--w-medium); }
-.mxt-sample-head .mx-back { flex: none; margin-left: auto; }
-.mxt-sample-head .mxt-sample-what { flex-basis: 100%; color: var(--muted); line-height: 1.35; white-space: normal; overflow-wrap: anywhere; }
+.mxt-sample-head .mxt-sample-when { flex: none; font-weight: var(--w-medium); white-space: nowrap; }
+.mxt-sample-head .mx-back { flex: none; margin-left: auto; white-space: nowrap; }
+.mxt-sample-head .mxt-sample-what { flex: 1 1 auto; overflow: hidden; color: var(--muted); line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.mxt-sample-head .mxt-sample-vol { flex: none; color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.mxp-kseg[hidden] { display: none; }
 .mxt-sample-loading { display: grid; align-content: start; gap: 6px; }
 .mxt-sample-loading .empty { position: static; min-height: 72px; padding: 0; display: grid; place-items: center; }
 .mxt-sample-note { color: var(--muted); font-size: 11px; line-height: 1.4; margin: 0; }

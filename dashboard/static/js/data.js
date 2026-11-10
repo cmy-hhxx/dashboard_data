@@ -49,7 +49,7 @@ export async function render(root, c) {
   if (shown === key && root.firstChild) return;
   shown = key;
   // A redraw replaces the whole board: drop the fullscreen lock first, the AB block re-applies it.
-  document.body.classList.remove("is-ab-full");
+  document.body.classList.remove("is-ab-full", "is-mxp-full");
   if (!p) {
     root.innerHTML = `<div class="bento"><article class="card" style="--span:12"><div class="empty">${
       c.product === "wencai" ? "问财" : "AIME"
@@ -1656,9 +1656,9 @@ function mxIntradayPick(intraday, model, candle, selected) {
     if (n > best) { best = n; level = name; }
   });
   return {
-    date: intraday.date, index: 0, seriesIndex: 0,
+    date: intraday.date, when: `${intraday.date} ${candle.label}`, index: 0, seriesIndex: 0,
     series: {
-      label: `${selected.map((name) => SEV_NAME[name] || name).join("+")} · 日内行情 ${candle.label}`,
+      label: `${selected.map((name) => SEV_NAME[name] || name).join("+")} · 日内行情`,
       level,
       levelIdxs: selected.map((name) => model.levels.indexOf(name)).filter((i) => i >= 0),
       levelAll: false, models: [], uts: [],
@@ -1690,7 +1690,7 @@ function mxRatePick(model, candle, selected, period) {
     });
   }
   return {
-    date: candle.to, index: 0, seriesIndex: 0,
+    date: candle.to, when: candle.to, index: 0, seriesIndex: 0,
     series: {
       label: `${selected.map((name) => SEV_NAME[name] || name).join("+")} · ${KLINE_NAME[period] || ""}`,
       level,
@@ -1703,10 +1703,11 @@ function mxRatePick(model, candle, selected, period) {
 /* The right lens and heat share the left card grid's baseline. Measure the left grid, subtract
    the heat and the lens chrome, and give the trend exactly the remaining height. */
 function analysisChartHeight(panel, chartHost) {
+  const lens = panel.querySelector(".mxp-lens");
+  if (lens?.classList.contains("is-full")) return Math.max(420, Math.round(window.innerHeight - 220));
   const panels = panel.closest(".mx-panels");
   const issueShell = document.getElementById("mxIssueTrends");
   if (!panels?.classList.contains("is-both") || !issueShell || issueShell.hidden) return 260;
-  const lens = panel.querySelector(".mxp-lens");
   const heat = panel.querySelector(".mxp-chart-panel");
   if (!lens || !heat) return 260;
   const lr = issueShell.getBoundingClientRect();
@@ -1720,6 +1721,8 @@ function analysisChartHeight(panel, chartHost) {
 function wireMatrixAnalysis(panel, model, state, trend) {
   const chartHost = $(".mxp-rate-chart", panel);
   if (!chartHost) return;
+  panel._mxFullCleanup?.();
+  document.body.classList.remove("is-mxp-full");
   const rows = $$(".mxp-overview .mxp-legend-row[data-level]", panel);
   const levels = model?.levels || WORST;
   state.analysisLevels ||= ["P0", "P1"];
@@ -1734,7 +1737,13 @@ function wireMatrixAnalysis(panel, model, state, trend) {
     $$(".mxp-ring-arc", panel).forEach((arc) => arc.classList.toggle("is-off", !focus.has(arc.dataset.level)));
   };
   // 抽屉是 K 线地图的侧栏：开合只改宽度，图表用 autoSize 跟着走，不需要重画。
-  const drawer = trendSampleDrawer(chartHost, (pick) => loadTraceSamplePage(trend, pick), () => {}, { hideSum: true, hideNote: true });
+  const drawer = trendSampleDrawer(chartHost, (pick) => loadTraceSamplePage(trend, pick), () => {}, {
+    hideSum: true, hideNote: true,
+    onOpenChange: (open) => {
+      const seg = panel.querySelector(".mxp-kseg");
+      if (seg) seg.hidden = open;
+    },
+  });
   chartHost._drawer = drawer;
   const paint = () => {
     if (!model?.total) return;
@@ -1781,6 +1790,34 @@ function wireMatrixAnalysis(panel, model, state, trend) {
     chartHost.style.opacity = "0.35";
     requestAnimationFrame(draw);
   };
+  const lens = panel.querySelector(".mxp-lens");
+  const fullBtn = panel.querySelector("[data-mxp-full]");
+  const setFull = (on) => {
+    if (!lens) return;
+    if (lens.classList.contains("is-full") === on) return;
+    lens.classList.toggle("is-full", on);
+    document.body.classList.toggle("is-mxp-full", on);
+    if (fullBtn) {
+      const label = on ? "退出全屏" : "全屏查看问题分析";
+      fullBtn.setAttribute("aria-pressed", String(on));
+      fullBtn.setAttribute("aria-label", label);
+      fullBtn.title = on ? "退出全屏" : "全屏";
+    }
+    paint();
+  };
+  const onFullKey = (event) => {
+    if (event.key !== "Escape" || !lens?.isConnected || !lens.classList.contains("is-full")) return;
+    if (panel.querySelector(".mxt-sample-layout.is-open")) return;
+    event.preventDefault();
+    setFull(false);
+  };
+  document.addEventListener("keydown", onFullKey);
+  panel._mxFullCleanup = () => {
+    document.removeEventListener("keydown", onFullKey);
+    document.body.classList.remove("is-mxp-full");
+  };
+  fullBtn?.addEventListener("click", () => setFull(!lens.classList.contains("is-full")));
+
   const toggle = (level) => {
     if (!level) return;
     const on = new Set(state.analysisLevels);
@@ -1840,6 +1877,10 @@ function matrixPerspectiveHTML(view, trend, loading = false, state = {}, cluster
   }).join("");
   return `<div class="mxp">
     <section class="mxp-lens mxp-overview" aria-label="问题等级与 Trace 趋势">
+      <button type="button" class="icon-btn mxp-full" data-mxp-full aria-pressed="false" aria-label="全屏查看问题分析" title="全屏">
+        <svg class="i-mxpfull-open" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 2.5H2.5V6M10 2.5h3.5V6M6 13.5H2.5V10M10 13.5h3.5V10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <svg class="i-mxpfull-close" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 6H6V2.5M13.5 6H10V2.5M2.5 10H6v3.5M13.5 10H10v3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
       <div class="mxp-dist" role="group" aria-label="按最严重等级归类的 Trace 数量与占比；点一行可在 Trace 趋势中显示或隐藏">
         <div class="mxp-ring-wrap">
           <svg class="mxp-ring" viewBox="0 0 96 96" role="img" aria-label="按最严重等级归类的 Trace 占比，合计 100%">
@@ -2731,10 +2772,11 @@ function trendSampleDrawer(plot, load, repaint, interaction = {}) {
   };
   /* 抽屉：抬头只写日期（副标题是这条折线的条件），列表按 20 条一页；扫描在后台补页，
      翻页不再让用户反复点「加载更多」。 */
-  const head = (pick) => `<header class="mxt-sample-head">
-    <span class="mxt-sample-when num">${esc(pick.date)}</span>
+  const head = (pick, count = null) => `<header class="mxt-sample-head">
+    <span class="mxt-sample-when num">${esc(pick.when || pick.date)}</span>
+    <span class="mxt-sample-what" title="${esc(pick.series.label || "")}">${esc(pick.series.label || "")}</span>
+    ${count == null ? "" : `<span class="mxt-sample-vol num">量 ${fmt(count)}</span>`}
     <button type="button" class="mx-back" data-samples-close aria-label="返回趋势图">← 返回</button>
-    <span class="mxt-sample-what">${esc(pick.series.label || "")}</span>
   </header>`;
   const PAGE = 20;
   let current = null, page = 0, pageItems = [], scanNext = null, pumping = false, busy = false, pickNow = null;
@@ -2760,7 +2802,7 @@ function trendSampleDrawer(plot, load, repaint, interaction = {}) {
     if (!current || !pickNow) return;
     const key = focusKey();
     if (!current.items.length) {
-      side.innerHTML = `${head(pickNow)}${current.done
+      side.innerHTML = `${head(pickNow, current.items.length)}${current.done
         ? `<div class="empty">${esc(current.emptyText || "当前索引中没有匹配样本")}</div>${showNote && current.note ? `<p class="mxt-sample-note">${esc(current.note)}</p>` : ""}`
         : loading()}`;
       restoreFocus(key);
@@ -2778,7 +2820,7 @@ function trendSampleDrawer(plot, load, repaint, interaction = {}) {
       <span class="mxt-sample-page num">第 <b>${page + 1}</b> / ${pages} 页${scanning ? '<span class="mxt-sample-reading">读取中…</span>' : ""}</span>
       <button type="button" data-sample-page="next" aria-label="下一页"${canNext ? "" : " disabled"}>›</button>
     </div>` : current.canScan && !busy ? '<button type="button" class="mx-back mxt-sample-scan" data-sample-scan>继续读取更多</button>' : "";
-    side.innerHTML = `${head(pickNow)}${led.body}${note ? `<p class="mxt-sample-note">${esc(note)}</p>` : ""}${pager}`;
+    side.innerHTML = `${head(pickNow, current.items.length)}${led.body}${note ? `<p class="mxt-sample-note">${esc(note)}</p>` : ""}${pager}`;
     restoreFocus(key);
   };
   const scan = async () => {
@@ -3664,6 +3706,7 @@ function wire(bento, p, tax, u) {
     function renderPerspective(loading = perspectiveLoading, reveal = true) {
       if (!perspectiveEl || !panelsOpen || !mxView) return;
       const update = () => {
+        perspectiveEl._mxFullCleanup?.();
         const old = perspectiveEl.querySelector(".mxp-rate-chart");
         old?._drawer?.destroy();
         old?._kline?.destroy();
@@ -3734,6 +3777,10 @@ function wire(bento, p, tax, u) {
           }
         }
         if (perspectiveEl) {
+          if (!perspectiveVisible) {
+            perspectiveEl.querySelector(".mxp-lens.is-full")?.classList.remove("is-full");
+            document.body.classList.remove("is-mxp-full");
+          }
           perspectiveEl.hidden = !perspectiveVisible;
           if (perspectiveVisible) renderPerspective(!trendData, false);
         }
