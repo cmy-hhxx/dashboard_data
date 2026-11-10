@@ -1356,6 +1356,7 @@ function renderOut() {
       </div>`
     : `<div class="out">${flow}</div>`;
   $(`#${prefix}sattr`, root).innerHTML = `<div class="out">${attrHTML(D)}</div>`;
+  $(`#${prefix}sanatomy`, root)?.classList.toggle("is-traj-collapsed", compareFolds && !S.folds.traj);
   requestAnimationFrame(markCmapScroll);
   scheduleThreadsCompensate();
 }
@@ -1542,6 +1543,7 @@ function onOutClick(e) {
     S.folds.traj = !S.folds.traj;
     trajFold.closest(".traj-fold")?.classList.toggle("is-collapsed", !S.folds.traj);
     trajFold.setAttribute("aria-expanded", String(S.folds.traj));
+    $(`#${prefix}sanatomy`, root)?.classList.toggle("is-traj-collapsed", !S.folds.traj);
     scheduleThreadsCompensate();
     return;
   }
