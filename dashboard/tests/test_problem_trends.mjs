@@ -440,7 +440,7 @@ test("AB matrix offers the four readings and paints four numbers in every change
     assert.match(host.innerHTML, /未接入分类体系<em class="mx-vol">（120条）<\/em>/);
     assert.doesNotMatch(host.innerHTML, /（95→60条）|（95→199条）/);
     // Each change cell carries 发版前 → 发版后, the net move and that move's rate.
-    assert.match(host.innerHTML, /<span class="cell-pair"><b class="is-from">95<\/b><i class="cell-arrow"[^>]*>→<\/i><b class="is-to">60<\/b><\/span><span class="cell-delta"><b>−35<\/b><span class="cell-ratio">36.8%<\/span><\/span>/);
+    assert.match(host.innerHTML, /<span class="cell-pair"><b class="is-from">95<\/b><i class="cell-arrow"[^>]*>→<\/i><b class="is-to">60<\/b><\/span><span class="cell-delta"><b>−35<\/b><i class="cell-dot"[^>]*>·<\/i><span class="cell-ratio">36.8%<\/span><\/span>/);
     assert.match(host.innerHTML, /变化合计/);
     // The shared session-matrix tooltip resolver owns [data-mx]; AB cells opt out for their own tip.
     assert.doesNotMatch(host.innerHTML, /data-mx="/);
