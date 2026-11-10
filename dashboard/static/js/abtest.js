@@ -8,7 +8,7 @@
    The matrix reads 同题变化 (fixed set alone), 发版前, 发版后同题 or 发版后线上, matching the
    orbit tree's release side.  State lives in data.js's u.ab so an in-place dashboard refresh
    returns to the same round, summary / matrix step, metric and selected cell. */
-import { esc, fmt, pct, REDUCED, segmented } from "./core.js";
+import { compact, esc, fmt, pct, REDUCED, segmented } from "./core.js";
 import { sunburst } from "./sunburst.js";
 import { lineTrendSVG, wireLineTrendChart } from "./trend_chart.js";
 import { trendSampleFrame, abTrendSampleRefs, abLeafRefs } from "./trend_samples.js";
@@ -233,7 +233,7 @@ function changeCellData(before, after) {
   const rate = ratioText(d, b);
   const pct = rate.endsWith("%") ? rate.slice(0, -1) : rate;
   const pctTail = rate.endsWith("%") ? '<span class="cell-ratio-suffix">%</span>' : "";
-  return `<span class="cell-data is-change"><span class="cell-pair"><b class="is-from">${fmt(b)}</b><i class="cell-arrow" aria-hidden="true">→</i><b class="is-to">${fmt(a)}</b></span><span class="cell-delta"><b class="cell-delta-num"><span class="cell-sign">${sign}</span>${fmt(Math.abs(d))}</b><i class="cell-dot" aria-hidden="true">·</i><span class="cell-ratio">${pct}${pctTail}</span></span></span>`;
+  return `<span class="cell-data is-change"><span class="cell-pair"><b class="is-from">${compact(b)}</b><i class="cell-arrow" aria-hidden="true">→</i><b class="is-to">${compact(a)}</b></span><span class="cell-delta"><b class="cell-delta-num"><span class="cell-sign">${sign}</span>${compact(Math.abs(d))}</b><i class="cell-dot" aria-hidden="true">·</i><span class="cell-ratio">${pct}${pctTail}</span></span></span>`;
 }
 function countCellData(v, den) {
   return `<span class="cell-data"><span class="cell-main"><b>${fmt(v)}</b></span><span class="cell-pct">${pct(v, den, 1)}</span></span>`;
@@ -326,12 +326,20 @@ function matrixTableAb(view, rnd, metric, selected) {
 
 function fitMatrix(m) {
   if (!m) return;
+  const pane = m.querySelector(".mx-scroll");
+  // 变化矩阵四数排版是固定的（等宽列 + 数字单位提前格式化），不按当前内容反复撑列宽。
+  if (m.classList.contains("is-change")) {
+    if (pane) {
+      pane.classList.toggle("is-overflow", pane.scrollWidth > pane.clientWidth + 1);
+      pane.classList.toggle("is-at-end", pane.scrollLeft + pane.clientWidth >= pane.scrollWidth - 2);
+    }
+    return;
+  }
   const labs = [...m.querySelectorAll(".mh .mx-lab")];
   if (!labs.length) return;
-  const widths = [...labs, ...m.querySelectorAll(".mx-grid .cell-main, .mx-grid .cell-pair, .mx-grid .cell-delta")].map((el) => el.scrollWidth);
+  const widths = [...labs, ...m.querySelectorAll(".mx-grid .cell-main")].map((el) => el.scrollWidth);
   const need = Math.ceil(Math.max(...widths)) + 9;
   m.style.setProperty("--mx-colw", `${need}px`);
-  const pane = m.querySelector(".mx-scroll");
   if (pane) {
     pane.classList.toggle("is-overflow", pane.scrollWidth > pane.clientWidth + 1);
     pane.classList.toggle("is-at-end", pane.scrollLeft + pane.clientWidth >= pane.scrollWidth - 2);

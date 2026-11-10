@@ -208,7 +208,12 @@ body.is-ab-full { overflow: hidden; }
 
 /* AB 的普通矩阵和外部矩阵共用 data.css 的格子 / 热力 / 合计样式，只有同题变化矩阵
    读的是差值，才在这里补方向色。变化矩阵两行四数，行高单独放宽一档。 */
-.abmatrix.is-change { --mx-rowh: 46px; }
+.abmatrix.is-change {
+  --mx-rowh: 46px;
+  /* 变化矩阵固定列宽：四数提前排好版，不再按当前内容测量撑宽；横向滚动由 mx-scroll 负责。 */
+  --mx-colw: 96px;
+}
+.abmatrix.is-change .mx-grid { grid-template-columns: repeat(var(--cols), var(--mx-colw)); }
 .abmatrix.is-change .cell.is-better { color: var(--accent); background: color-mix(in oklab, var(--accent) calc(var(--v) * 56%), transparent); }
 .abmatrix.is-change .cell.is-worse { color: var(--sev-1); background: color-mix(in oklab, var(--sev-1) calc(var(--v) * 50%), transparent); }
 /* The scene/column totals are the same readout as the cells: semantic tone, same heat ramp,
