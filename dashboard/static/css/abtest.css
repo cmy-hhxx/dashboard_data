@@ -71,6 +71,7 @@ body.is-ab-full { overflow: hidden; }
 .ab-card-btn[aria-pressed="true"] { opacity: 1; background: var(--active); color: var(--accent); }
 .ab-card-btn svg { width: 15px; height: 15px; }
 .ab-card-top { display: flex; align-items: center; gap: 8px; min-height: 24px; padding-right: 26px; }
+.ab-change-card .ab-card-top, .ab-rank-card .ab-card-top { padding-right: 0; }
 .ab-card-title { flex: none; color: var(--ink-2); font-size: var(--fs-meta); font-weight: var(--w-medium); white-space: nowrap; }
 
 /* 聚类树 */
@@ -211,7 +212,7 @@ body.is-ab-full { overflow: hidden; }
 .abmatrix.is-change {
   --mx-rowh: 46px;
   /* 变化矩阵固定列宽：四数提前排好版，不再按当前内容测量撑宽；横向滚动由 mx-scroll 负责。 */
-  --mx-colw: 104px;
+  --mx-colw: 82px;
 }
 .abmatrix.is-change .mx-grid { grid-template-columns: repeat(var(--cols), var(--mx-colw)); }
 .abmatrix.is-change .cell.is-better { color: var(--accent); background: color-mix(in oklab, var(--accent) calc(var(--v) * 56%), transparent); }

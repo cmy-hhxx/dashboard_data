@@ -233,10 +233,11 @@ function changeCellData(before, after) {
   const rate = ratioText(d, b);
   const pctNum = b ? Math.abs((100 * d) / b) : null;
   // 比例也遵守 K/M/B 缩写，避免 1,000.0% 把 104px 的格子撑出边界。
-  const rateText = pctNum != null && pctNum >= 1000 ? `${compact(pctNum)}%` : rate;
-  const pct = rateText.endsWith("%") ? rateText.slice(0, -1) : rateText;
-  const pctTail = rateText.endsWith("%") ? '<span class="cell-ratio-suffix">%</span>' : "";
-  return `<span class="cell-data is-change"><span class="cell-pair"><b class="is-from">${compact(b)}</b><i class="cell-arrow" aria-hidden="true">→</i><b class="is-to">${compact(a)}</b></span><span class="cell-delta"><b class="cell-delta-num"><span class="cell-sign">${sign}</span>${compact(Math.abs(d))}</b><i class="cell-dot" aria-hidden="true">·</i><span class="cell-ratio">${pct}${pctTail}</span></span></span>`;
+  const rateText = pctNum == null ? rate
+    : pctNum >= 1000 ? `${compact(pctNum)}%`
+      : pctNum >= 10 ? `${fmt(pctNum, 0)}%`
+        : `${fmt(pctNum, 1)}%`;
+  return `<span class="cell-data is-change"><span class="cell-pair"><b class="is-from">${compact(b)}</b><i class="cell-arrow" aria-hidden="true">→</i><b class="is-to">${compact(a)}</b></span><span class="cell-delta"><b class="cell-delta-num"><span class="cell-sign">${sign}</span>${compact(Math.abs(d))}</b><i class="cell-dot" aria-hidden="true">·</i><span class="cell-ratio">${rateText}</span></span></span>`;
 }
 function countCellData(v, den) {
   return `<span class="cell-data"><span class="cell-main"><b>${fmt(v)}</b></span><span class="cell-pct">${pct(v, den, 1)}</span></span>`;
@@ -532,7 +533,6 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
         </div>` : ""}
       </div>
       <div class="ab-side-pane" data-pane="samples"></div>
-      ${pushButton("change", "变化构成")}
     </section>`;
   }
 
@@ -544,7 +544,6 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
       <div class="ab-card-top">
         <span class="ab-card-title" title="同题变化 = 同题复测 − 同题基线；线上真实只单独计入">问题变化</span>
         <span class="ab-rank-legend" aria-hidden="true"><i class="is-from"></i>改版前<i class="is-to"></i>改版后</span>
-        ${pushButton("ranks", "问题变化")}
       </div>
       <div class="ab-rank-axis" aria-hidden="true"><div class="ab-rank-axis-track"><span>0</span><span>${fmt(max)}</span></div></div>
       ${rankPanel("变好", improved.slice(0, 5), "is-better", max, improved.length, rnd)}

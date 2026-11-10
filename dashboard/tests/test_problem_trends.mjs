@@ -240,7 +240,7 @@ test("AB overview is three cards whose four flows add up to the net paired chang
     mountAB(host, { rounds: [rnd] }, { round: 0, step: "summary" }, {}, null, {});
     assert.match(host.innerHTML, /class="ab-overview" id="abOverview" data-open="" data-cards="3"/);
     assert.equal((host.innerHTML.match(/data-abcard="/g) || []).length, 3, "three cards share the row");
-    assert.equal((host.innerHTML.match(/data-act="abcard"/g) || []).length, 3, "each card can take the row");
+    assert.equal((host.innerHTML.match(/data-act="abcard"/g) || []).length, 1, "only the orbit card keeps its expand control");
     assert.match(host.innerHTML, /class="ab-bridge-main"><b class="num is-better">−60<\/b><small>个问题<\/small>/);
     assert.match(host.innerHTML, /<span>改版后同题<\/span>\s*<b class="num">65<\/b>/);
     assert.match(host.innerHTML, /<span>改版前<\/span>\s*<b class="num">125<\/b>/);
@@ -440,7 +440,7 @@ test("AB matrix offers the four readings and paints four numbers in every change
     assert.match(host.innerHTML, /未接入分类体系<em class="mx-vol">（120条）<\/em>/);
     assert.doesNotMatch(host.innerHTML, /（95→60条）|（95→199条）/);
     // Each change cell carries 发版前 → 发版后, the net move and that move's rate.
-    assert.match(host.innerHTML, /<span class="cell-pair"><b class="is-from">95<\/b><i class="cell-arrow"[^>]*>→<\/i><b class="is-to">60<\/b><\/span><span class="cell-delta"><b class="cell-delta-num"><span class="cell-sign">−<\/span>35<\/b><i class="cell-dot"[^>]*>·<\/i><span class="cell-ratio">36.8<span class="cell-ratio-suffix">%<\/span><\/span><\/span>/);
+    assert.match(host.innerHTML, /<span class="cell-pair"><b class="is-from">95<\/b><i class="cell-arrow"[^>]*>→<\/i><b class="is-to">60<\/b><\/span><span class="cell-delta"><b class="cell-delta-num"><span class="cell-sign">−<\/span>35<\/b><i class="cell-dot"[^>]*>·<\/i><span class="cell-ratio">37%<\/span><\/span>/);
     assert.match(host.innerHTML, /变化合计/);
     // The shared session-matrix tooltip resolver owns [data-mx]; AB cells opt out for their own tip.
     assert.doesNotMatch(host.innerHTML, /data-mx="/);
