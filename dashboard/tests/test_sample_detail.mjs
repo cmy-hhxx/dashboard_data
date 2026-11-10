@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 globalThis.location = { search: "" };
 globalThis.window = {};
 const dir = path.dirname(fileURLToPath(import.meta.url));
-const { detailPaneHTML, utOf, isLostRow, USER_TYPE_SHORT, mergeSessionDetails, dropSubsetParts, hasSessionComment } = await import("../static/js/sample_detail.js");
+const { detailPaneHTML, detailIds, utOf, isLostRow, USER_TYPE_SHORT, mergeSessionDetails, dropSubsetParts, hasSessionComment } = await import("../static/js/sample_detail.js");
 const { sessionRows } = await import("../static/js/compare.js");
 
 test("detail pane ids carry the prefix so two panes can coexist", () => {
@@ -21,6 +21,17 @@ test("detail pane ids carry the prefix so two panes can coexist", () => {
     assert.ok(!second.includes(`id="${name}"`), `${name} must not stay unprefixed`);
   }
   assert.ok(second.includes('class="pane-scroll"'));
+});
+
+test("id line shows the current trace once and never a case id", () => {
+  const D = {
+    ids: { session: "thread_s1", trace: "thread_s1", case: "case_1" },
+    input: { traces: [{ trace_id: "t1" }, { trace_id: "t2" }] },
+  };
+  assert.deepEqual(detailIds(D, 1), [["会话 ID", "thread_s1"], ["Trace ID", "t2"]]);
+  const same = { ids: { session: "thread_s1", trace: "thread_s1" }, input: { traces: [{ trace_id: "thread_s1" }] } };
+  assert.deepEqual(detailIds(same, 0), [["会话 ID", "thread_s1"]],
+    "a trace id equal to the session id is redundant");
 });
 
 test("user type helpers match the dashboard vocabulary", () => {

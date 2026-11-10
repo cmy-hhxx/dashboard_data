@@ -33,6 +33,7 @@ trace 的 `problems` 问题数组与 P0–P4 严重度，并新增 `GET /severit
 | 问题聚类树 | `eval_output/cluster/{aime_expert,aime_fast}/cluster_tree.json` |
 | 问题条目 → 聚类编码 | `eval_output/cluster/{aime_expert,aime_fast}/item_index.jsonl` |
 | 对话原始结构体 | `eval_input/0_daily_eval_input/{model}/<date>.jsonl`、`.archive/1_lost_user_input/{model}/*_input.jsonl` |
+| 测试用户规则（可选） | `<EVAL_DATASETS>/user_rules.json`（`EVAL_USER_RULES` 可覆盖） |
 
 本服务只服务 AIME 一份数据（`dataset=aime_eval`）。
 
@@ -77,6 +78,11 @@ trace 的 `problems` 问题数组与 P0–P4 严重度，并新增 `GET /severit
    同一范围的 trace 数。
 7. **`intent` 编码不在数据里**：`task`/`subtask` 是中文自由文本，编码由本仓库的
    `taxonomy/intent_2026-10.json` 固定；出现表外的新 label 时该 trace 的 `intent_code` 为 `null`。
+8. **trace 与 session**：trace 是统计单位，`trace_id` 取每个 `traces[].meta.trace_id`；外层
+   `meta.session_id` 只作 `session_id`。同一 session 的多轮各算一条 trace。
+9. **测试用户不供数**：按 `<datasets>/user_rules.json`（`EVAL_USER_RULES` 可覆盖）识别测试账号，
+   其 trace 整条不进入 5003 快照，因此问句、详情正文与证据都不会返回；`/healthz` 的
+   `build.test_excluded` 给出被排除条数。
 
 ## 接口
 
@@ -142,8 +148,8 @@ python3 tests/test_acceptance.py --real --base-url http://127.0.0.1:5003   # 真
 - v1 → v2 首次迁移：清归因派生行后全量重扫 44 个 attribution 文件，151 秒；之后重启/增量重建 3–4 秒。
 - 索引快照（部署后 14:48，数据仍在增长）：18,574 条 trace / 724 条历史版本 / 51,190 个问题条目；
   严重度 P0 225、P1 3,154、P2 12,235、P3 6,901、P4 28,675（各等级 `traces` 见 `/severity`）。
-- `tests/test_acceptance.py`：fixture 18 条全过；真实数据 17 条全过（含问题数组一致性、P0–P4 总量与
-  分组、`/summary` 与 `/traces` 一致、分母规则、多问题计数、大类展开、导出、5000 个 user_ids、详情）。
+- `tests/test_acceptance.py`：fixture 20 条全过；真实数据 17 条全过（含问题数组一致性、P0–P4 总量与
+  分组、`/summary` 与 `/traces` 一致、分母规则、多问题计数、大类展开、导出、5000 个 user_ids、详情、测试用户不供数）。
 - 容器内实测：`/summary` 0.05s、`/severity` 0.06s（`group_by=problem&level=leaf` 0.15s）、
   `/traces` 0.004s（`severity=P0` 0.02s）、`/traces/{id}` 约 0.6s。
 
@@ -154,6 +160,7 @@ analysis_api/
   config.py     环境变量、路径、常量、严重度等级
   taxonomy.py   分类树（意图 JSON / 聚类树 / P0–P4 定义）
   store.py      SQLite 增量索引（attribution、问题条目与严重度、input 偏移、历史版本）
+  users.py      测试用户判定（与看板 user_rules.json 同口径）
   snapshot.py   内存快照、筛选、/summary、/severity 与 /traces 语义、详情拼装
   cursors.py    无状态签名 cursor
   server.py     HTTP 路由与后台重建

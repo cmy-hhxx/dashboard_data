@@ -127,6 +127,65 @@ class BuildTests(unittest.TestCase):
             self.assertEqual(list((static / "samples").iterdir()), [])
             self.assertEqual([p.name for p in static.iterdir() if p.name.startswith(".samples")], [])
 
+    def test_trace_id_comes_from_the_turn_not_the_session(self):
+        """session_meta.trace_id 常是 thread/session id；真正的 trace id 在归因轮次里。"""
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            datasets, static = root / "datasets", root / "static"
+            seed(datasets)
+            inp = datasets / "0_wencai/eval_input/a_fast/2026-11-01.jsonl"
+            source = json.loads(inp.read_text(encoding="utf-8"))
+            source.pop("trace_id", None)
+            source["meta"].pop("trace_id", None)
+            write_jsonl(inp, source)
+            attr = datasets / "0_wencai/eval_output/0_daily_eval/a_fast/a_fast_attribution-2026-11-01.jsonl"
+            row = json.loads(attr.read_text(encoding="utf-8"))
+            row["session_meta"]["trace_id"] = "s1"
+            row["turns"][0]["meta"] = {"trace_id": "turn-1"}
+            write_jsonl(attr, row)
+
+            _, _, index = self.build(datasets, static)
+            sample = index["products"]["wencai"]["rows"][0]
+            self.assertEqual(sample["tid"], "turn-1")
+            from detail_builder import DetailBuilder
+            builder = DetailBuilder(datasets, static.parent / "cache" / "build.sqlite3",
+                                    static / "samples", static.parent / "cache")
+            detail = json.loads(Path(builder.ensure(sample["s"])).read_text(encoding="utf-8"))
+            builder.close()
+            self.assertEqual(detail["ids"]["trace"], "turn-1")
+
+    def test_trace_ids_come_from_each_traces_meta(self):
+        """一条 session 多 trace：外层的 meta.session_id 是会话，轮次 id 在各 trace 的 meta 里。"""
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            datasets, static = root / "datasets", root / "static"
+            seed(datasets)
+            inp = datasets / "0_wencai/eval_input/a_fast/2026-11-01.jsonl"
+            meta = {"session_id": "s1", "request_time": REQ, "question": "茅台今天收盘价", "user_id": "598960105"}
+            write_jsonl(inp, {
+                "trace_id": "outer-wrong", "meta": meta,
+                "traces": [
+                    {"meta": {"trace_id": "trace-1", "session_id": "s1"}, "messages": []},
+                    {"meta": {"trace_id": "trace-2", "session_id": "s1"}, "messages": []},
+                ],
+            })
+            attr = datasets / "0_wencai/eval_output/0_daily_eval/a_fast/a_fast_attribution-2026-11-01.jsonl"
+            row = json.loads(attr.read_text(encoding="utf-8"))
+            row["session_meta"]["trace_id"] = "s1"
+            row["turns"][0]["meta"] = {"trace_id": "trace-1"}
+            write_jsonl(attr, row)
+
+            _, _, index = self.build(datasets, static)
+            sample = index["products"]["wencai"]["rows"][0]
+            self.assertEqual((sample["sid"], sample["tid"]), ("s1", "trace-1"))
+            from detail_builder import DetailBuilder
+            builder = DetailBuilder(datasets, static.parent / "cache" / "build.sqlite3",
+                                    static / "samples", static.parent / "cache")
+            detail = json.loads(Path(builder.ensure(sample["s"])).read_text(encoding="utf-8"))
+            builder.close()
+            self.assertEqual(detail["ids"], {"session": "s1", "trace": "trace-1", "case": ""})
+            self.assertEqual([t["trace_id"] for t in detail["input"]["traces"]], ["trace-1", "trace-2"])
+
     def test_user_rules_reach_index_and_trigger_rebuild(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

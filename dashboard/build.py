@@ -1289,17 +1289,38 @@ def session_question(inp, attr):
 def build_sample(pair, inp, attr, comp, clusters, stats):
     product, model = pair["product"], pair["model"]
     smeta = attr.get("session_meta") or {}
-    sid = smeta.get("session_id") or smeta.get("thread_id") or ""
-    tid = smeta.get("trace_id") or ""
+    imeta = (inp or {}).get("meta") or {}
     case = (inp or {}).get("case_id") or smeta.get("case_id") or ""
 
     # ---- input traces → messages with blocks
     if inp and inp.get("traces"):
         raw_traces = [(t.get("meta") or {}, t.get("messages") or []) for t in inp["traces"]]
     elif inp:
-        raw_traces = [(inp.get("meta") or {}, inp.get("messages") or [])]
+        meta = dict(inp.get("meta") or {})
+        # 老布局没有 traces[]：顶层 trace_id 才是这条 trace 的 id，别用外层 meta 里的会话 id。
+        if inp.get("trace_id"):
+            meta["trace_id"] = inp["trace_id"]
+        raw_traces = [(meta, inp.get("messages") or [])]
     else:
         raw_traces = []
+
+    # 最外层 meta 是 session 级；每条 trace 的 trace_id 在自己的 trace_meta（meta）里。
+    # attribution 的 session_meta.trace_id 常被写成 thread/session id，不能当 trace id。
+    sid = imeta.get("session_id") or imeta.get("thread_id") or smeta.get("session_id") or smeta.get("thread_id") or ""
+    if not sid:
+        for tmeta, _ in raw_traces:
+            sid = tmeta.get("session_id") or tmeta.get("thread_id") or ""
+            if sid:
+                break
+    input_tids = [tmeta.get("trace_id") for tmeta, _ in raw_traces
+                  if isinstance(tmeta, dict) and tmeta.get("trace_id")]
+    turn_tids = []
+    for turn in attr.get("turns") or []:
+        meta = turn.get("meta") if isinstance(turn, dict) else None
+        if isinstance(meta, dict) and meta.get("trace_id"):
+            turn_tids.append(meta["trace_id"])
+    tid = (input_tids[0] if input_tids else "") or (turn_tids[0] if turn_tids else "") \
+        or (inp or {}).get("trace_id") or smeta.get("trace_id") or ""
     traces = []
     for tmeta, msgs in raw_traces:
         call_names = {}
@@ -1494,7 +1515,6 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
             for o in (row["raw"].get("output") or []) if isinstance(o, dict)
         )
     first_meta = raw_traces[0][0] if raw_traces else {}
-    imeta = (inp or {}).get("meta") or {}
     # 样本页的「用户 ID / 用户类型」：输入顶层 meta 优先，其次各轮 trace meta，最后归因 session_meta。
     uid = imeta.get("user_id")
     if uid in (None, ""):

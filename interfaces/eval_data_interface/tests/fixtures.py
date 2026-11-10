@@ -274,6 +274,12 @@ def build(root: Path) -> Path:
             question="多轮会话问句",
             session_problems=[_problem("跨轮遗漏标的", "P1")],
         ),
+        # 测试账号：供数接口不能返回它的问句 / trace。
+        _session(
+            "thread_test", "trace_test", "2026-10-20T07:00:00.000Z", "投教问答", "金融术语与指标释义", "test_user", "AIME-Atlas",
+            [],
+            question="内部测试问句",
+        ),
     ]
     attr_path = out / "0_daily_eval" / "aime_expert" / f"aime_expert_attribution-{DAY}.jsonl"
     _write_jsonl(attr_path, daily)
@@ -317,10 +323,12 @@ def build(root: Path) -> Path:
         _input_record("thread_d", "trace_delta", "2026-10-20T05:00:00.000Z", "u3", "AIME-Atlas", "什么是市盈率"),
         _input_record("thread_multi", "trace_multi_1", "2026-10-20T06:00:00.000Z", "u6", "AIME-Atlas",
                       "多轮会话问句", extra_traces=("trace_multi_2",)),
+        _input_record("thread_test", "trace_test", "2026-10-20T07:00:00.000Z", "test_user", "AIME-Atlas", "内部测试问句"),
     ]
     _write_jsonl(aime / "eval_input" / "0_daily_eval_input" / "aime_expert" / f"{DAY}.jsonl", inputs)
     _write_jsonl(
         aime / ".archive" / "1_lost_user_input" / "aime_fast" / f"aime_fast-{LOST_DAY}_input.jsonl",
         [_input_record("thread_lost", "trace_lost", "2026-09-18T02:00:00.000Z", "u9", "aime-fast-new", "lost user question")],
     )
+    _write_json(root / "user_rules.json", {"test": {"ids": ["test_user"]}})
     return aime

@@ -341,6 +341,19 @@ def check_user_ids(client, dataset, limit=5000):
         raise AssertionError(f"超过上限应返回 413：{status}")
 
 
+def check_test_user_hidden(client, dataset, day):
+    """测试账号的 trace 整条不能出现在供数接口里（包括问句和详情）。"""
+    status, payload = client.get(f"{API}/traces", dataset=dataset, q="内部测试问句")
+    if status != 200 or payload["data"]["total"] != 0:
+        raise AssertionError(f"测试用户问句仍可搜到：{status} {payload['data']['total']}")
+    status, payload = client.get(f"{API}/traces", dataset=dataset, user_ids="test_user")
+    if status != 200 or payload["data"]["total"] != 0:
+        raise AssertionError(f"测试用户 trace 仍出现在 /traces：{status} {payload['data']['total']}")
+    status, payload = client.get(f"{API}/traces/trace_test", dataset=dataset, day=day)
+    if status != 404:
+        raise AssertionError(f"测试用户详情应返回 404：{status} {payload}")
+
+
 def check_detail(client, dataset, trace_id, day):
     status, payload = client.get(f"{API}/traces/{trace_id}", dataset=dataset, day=day)
     if status != 200:
@@ -564,6 +577,7 @@ def run_fixture_cases(workdir: Path):
         ),
         ("14 导出", lambda: check_ids_only(client, dataset)),
         ("15 用户筛选", lambda: check_user_ids(client, dataset)),
+        ("15b 测试用户不供数", lambda: check_test_user_hidden(client, dataset, fixtures.DAY)),
         ("16 详情", lambda: check_detail(client, dataset, "trace_alpha", fixtures.DAY)),
         ("17 cursor 过期", lambda: check_cursor_expired(client, dataset)),
     ]

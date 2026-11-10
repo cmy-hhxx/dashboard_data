@@ -9,10 +9,10 @@ import tempfile
 import unittest
 
 try:
-    from dashboard.tests.test_empty_data import DASHBOARD, seed
+    from dashboard.tests.test_empty_data import DASHBOARD, seed, write_jsonl
     from dashboard.tests.test_trends import add_aime
 except ImportError:  # `cd dashboard && python3 -m unittest discover -s tests`
-    from test_empty_data import DASHBOARD, seed
+    from test_empty_data import DASHBOARD, seed, write_jsonl
     from test_trends import add_aime
 
 sys.path.insert(0, str(DASHBOARD))
@@ -233,6 +233,11 @@ class BuildIntegrationTests(unittest.TestCase):
             datasets, static = root / "datasets", root / "static"
             seed(datasets)
             add_aime(datasets)
+            # 线上样本换一条 trace，避免和固定题集里的 t1 撞车后被排除。
+            online_inp = datasets / "1_aime/eval_input/0_daily_eval_input/aime_fast/2026-11-01.jsonl"
+            online = json.loads(online_inp.read_text(encoding="utf-8"))
+            online["trace_id"] = "online-t1"
+            write_jsonl(online_inp, online)
             base = round_dir(datasets)
             (base / "round.json").write_text(json.dumps({"released_at": "2026-10-31"}), encoding="utf-8")
 

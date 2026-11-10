@@ -7,7 +7,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from . import config, cursors, errors, timeutil
+from . import config, cursors, errors, timeutil, users
 from .taxonomy import Tree
 
 GROUP_DIMS = ("intent", "problem", "day", "user", "app_version", "source")
@@ -116,6 +116,21 @@ def load(conn, intent_tree, problem_trees, build_summary=None) -> Snapshot:
                 offset=row[20] or 0,
             )
         )
+    # 供数接口不提供测试用户的问句：测试账号的 trace 整条不进入快照，
+    # 否则详情里的 session / trace / evidence 仍会把问句带出去。
+    rules = users.load(config.datasets_root())
+    stats = rules.question_stats((trace.user_id, trace.question) for trace in traces)
+    kept = []
+    excluded = 0
+    for trace in traces:
+        if rules.is_test(trace.user_id, stats):
+            excluded += 1
+        else:
+            kept.append(trace)
+    if excluded:
+        traces = kept
+    if build_summary is not None:
+        build_summary["test_excluded"] = excluded
     newest = max((t.analyzed_at for t in traces if t.analyzed_at), default=None)
     return Snapshot(traces, intent_tree, problem_trees, newest, build_summary)
 

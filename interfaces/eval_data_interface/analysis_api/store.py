@@ -410,6 +410,8 @@ def ingest_attribution(conn, aime: Path, item_codes_by_model, intent_tree, log):
                 trace_id = _text(meta.get("trace_id"))
                 if not trace_id:
                     continue
+                # session 是外层 meta；session_meta 缺失时用每轮 trace meta 的 session_id 兜底。
+                turn_session_id = session_id or _text(meta.get("session_id"))
                 stamp = timeutil.parse_iso(meta.get("timestamp")) or timeutil.parse_iso(smeta.get("request_time"))
                 day = timeutil.cn_day(stamp) or default_day
                 task = _clean(meta.get("task"))
@@ -468,7 +470,7 @@ def ingest_attribution(conn, aime: Path, item_codes_by_model, intent_tree, log):
                     "source": source,
                     "user_id": _text(meta.get("user_id")),
                     "question": question,
-                    "session_id": session_id,
+                    "session_id": turn_session_id,
                     "intent_code": intent_code,
                     "task": task,
                     "subtask": subtask,

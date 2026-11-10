@@ -449,6 +449,11 @@ class InputLister:
         match = NTR_RE.search(raw)
         ntr = int(match.group(1)) if match else 0
         match = TID_RE.search(raw)
+        # 新版输入外层 meta 也可能带 trace_id（实际是 session/thread id）；
+        # 真正的轮次 id 在 traces[].meta 里，跳过 traces 之前的那个。
+        traces_at = raw.find(b'"traces"')
+        if match and 0 <= traces_at <= match.start():
+            match = TID_RE.search(raw, traces_at)
         tid = match.group(1).decode("utf-8", "replace") if match else ""
         match = SKILL_RE.search(raw) or TASK_RE.search(raw)
         cat = _json_str(match.group(1)) if match else ""
@@ -561,9 +566,9 @@ class InputLister:
         meta = inp.get("meta") or {}
         detail["slug"] = key
         detail["inputs_only"] = True
+        # build_sample 已从 traces[].meta（每个 trace 的 trace_meta）解析好 ids；
+        # 外层 meta.trace_id 可能是 session/thread id，不能覆盖。
         detail.setdefault("ids", {})
-        detail["ids"]["session"] = meta.get("session_id") or meta.get("thread_id") or detail["ids"].get("session", "")
-        detail["ids"]["trace"] = meta.get("trace_id") or ""
         detail.setdefault("meta", {})
         detail["meta"]["request_time"] = detail["meta"].get("request_time") or inp.get("request_time") or meta.get("request_time")
         detail["_stamp"] = stamp

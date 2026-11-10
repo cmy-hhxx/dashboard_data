@@ -78,6 +78,16 @@ function wireCmapPan(host) {
 }
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
+/* 头部只放能唯一标识这条记录的 ID：case 含义不清已移除；一轮会话只有一个
+   trace id，取当前轮；它和 session id 相同时（问财 b_* 等源数据如此）不再重复显示。 */
+export function detailIds(D, traceIndex = 0) {
+  const session = String(D?.ids?.session || "");
+  const round = (D?.rounds || []).find((r) => r.trace === traceIndex);
+  const trace = String(D?.input?.traces?.[traceIndex]?.trace_id || round?.tid || D?.ids?.trace || "");
+  return [["会话 ID", session], ["Trace ID", trace]]
+    .filter(([k, v]) => v && !(k === "Trace ID" && v === session));
+}
+
 const traceSet = (d) => new Set((d.attribution?.turns || []).map((t) => t.trace_id).filter(Boolean));
 const roundCount = (d) => Math.max(d.input?.traces?.length || 0, d.attribution?.turns?.length || 0, d.compact?.turns?.length || 0, 1);
 
@@ -125,7 +135,7 @@ export function mergeSessionDetails(parts, session, product) {
     question: session.q,
     question_zh: parts[0].detail.question_zh,
     lang: parts[0].detail.lang,
-    ids: { session: session.sid, trace: "", case: session.case },
+    ids: { session: session.sid, trace: "" },
     meta: { ...(parts[parts.length - 1].detail.meta || {}) },
     input: { traces: [], missing: false },
     attribution: { summary: "", turns: [], problems: [], session_problems: [] },
@@ -260,6 +270,30 @@ export function createSampleDetail(host, ctxArg, opts = {}) {
     h.title = fullQ;
   }
 
+  /* 选中的是哪一轮，URL 的 trace 就是那一轮的 trace id；刷新 / 分享仍落回同一轮。 */
+  function syncTraceParam() {
+    const trace = S.sessionView ? "" : (S.D?.input?.traces?.[S.trace]?.trace_id || "");
+    if ((params().get("trace") || "") !== trace) ctx.navigate({ trace: trace || null }, { replace: true });
+  }
+
+  function idlineHTML() {
+    const D = S.D;
+    if (!D) return "";
+    const session = S.all.find((x) => x.key === S.sessionKey) || S.session || {};
+    const uid = String(session.uid || "");
+    const ut = utOf(session);
+    const userItem = uid
+      ? `<button type="button" class="copy" data-copy="${esc(uid)}" title="用户类型：${esc(USER_TYPE_NAME[ut] || "未知")}">用户 ID <span class="num">${esc(uid.length > 18 ? `${uid.slice(0, 8)}…${uid.slice(-6)}` : uid)}</span><span class="utag is-${ut}">${USER_TYPE_SHORT[ut] || "未知"}</span></button>`
+      : `<span class="id-miss" title="评测输入 meta 里没有 user_id">用户 ID <span class="num">—</span><span class="utag is-unknown">未知</span></span>`;
+    return `<div class="idline">${userItem}${detailIds(D, S.trace).map(([k, v]) => `<button type="button" class="copy" data-copy="${esc(v)}">${k} <span class="num">${esc(v.length > 18 ? `${v.slice(0, 8)}…${v.slice(-6)}` : v)}</span></button>`).join("")}</div>`;
+  }
+
+  /* 当前轮的 trace id 会随标签切换，头部那枚按钮要跟着换。 */
+  function renderIdline() {
+    const el = $(`#${prefix}shead .idline`, root);
+    if (el) el.outerHTML = idlineHTML();
+  }
+
   function markCmapScroll() {
     $$(".cmap", root).forEach((c) => {
       const overflow = c.scrollWidth > c.clientWidth + 1;
@@ -380,6 +414,7 @@ function selectRound(i, { scroll = true } = {}) {
     if (!hasSessionComment(D)) return;
     S.sessionView = true;
     setHeadQuestion();
+    syncTraceParam();
     renderTrace();
     renderOut();
     return;
@@ -394,6 +429,7 @@ function selectRound(i, { scroll = true } = {}) {
   S.turn = r?.turn ?? round;
   S.cturn = r?.compact ?? round;
   setHeadQuestion();
+  syncTraceParam();
   renderTrace();
   renderOut();
   if (scroll) revealRound();
@@ -473,18 +509,12 @@ function renderIn() {
   const scene = [m.task, m.subtask, m.difficulty, m.skill, m.mode].filter(Boolean);
   const scale = [m.tokens_in ? `${compact((m.tokens_in || 0) + (m.tokens_out || 0))} tokens` : null,
     m.finish_ms ? `${fmt(m.finish_ms / 1000, 1)} s` : null].filter(Boolean);
-  const ids = [["会话 ID", D.ids.session], ["Trace ID", D.ids.trace], ["Case ID", D.ids.case]].filter((x) => x[1]);
   const session = S.all.find((x) => x.key === S.sessionKey) || S.session || {};
   // One session can mix models across its traces; the list keeps one row per model, so read
   // the sibling groups sharing this session id, not only the current group's rows.
   const sessionPeers = S.all.filter((x) => x.sid && session.sid && String(x.sid) === String(session.sid));
   const sessionModels = [...new Set((sessionPeers.length ? sessionPeers : [session]).map((x) => x.m).filter(Boolean))];
   const sessionLabel = sessionModels.length > 1 ? "混合" : modelLabel(sessionModels[0] || D.model);
-  const uid = String(session.uid || "");
-  const ut = utOf(session);
-  const userItem = uid
-    ? `<button type="button" class="copy" data-copy="${esc(uid)}" title="用户类型：${esc(USER_TYPE_NAME[ut] || "未知")}">用户 ID <span class="num">${esc(uid.length > 18 ? `${uid.slice(0, 8)}…${uid.slice(-6)}` : uid)}</span><span class="utag is-${ut}">${USER_TYPE_SHORT[ut] || "未知"}</span></button>`
-    : `<span class="id-miss" title="评测输入 meta 里没有 user_id">用户 ID <span class="num">—</span><span class="utag is-unknown">未知</span></span>`;
   const rounds = D.rounds || [];
   const group = (k, cls, vals) =>
     vals.length
@@ -492,11 +522,10 @@ function renderIn() {
       : "";
   const fullQ = questionOf(D) || "（无提问）";
   const shortQ = fullQ.length > 80 ? `${fullQ.slice(0, 80)}…` : fullQ;
-  const idline = `<div class="idline">${userItem}${ids.map(([k, v]) => `<button type="button" class="copy" data-copy="${esc(v)}">${k} <span class="num">${esc(v.length > 18 ? `${v.slice(0, 8)}…${v.slice(-6)}` : v)}</span></button>`).join("")}</div>`;
   $(`#${prefix}shead`, root).innerHTML = `<div class="sample-head">
       <div class="headline">
         <h2 title="${esc(fullQ)}">${esc(shortQ)}</h2>
-        ${idline}
+        ${idlineHTML()}
       </div>
       <div class="chip-groups">
         ${isLostRow(session) ? `<span class="cg"><span class="pill lost">流失用户</span></span>` : ""}
@@ -585,6 +614,7 @@ function renderTrace() {
   $(`#${prefix}sanatomy`, root)?.classList.remove("is-focus");
   $(`#${prefix}sanatomy`, root)?.classList.toggle("is-session", session);
   $(`#${prefix}shead`, root)?.classList.toggle("is-session", session);
+  renderIdline();
   const tabPage = Math.floor(S.round / TABS_PER_PAGE);
   if (S.tabPage !== tabPage) {
     S.tabPage = tabPage;
@@ -963,7 +993,6 @@ function onInputClick(e) {
   const tab = e.target.closest(`#${prefix}ttabs [data-t]`);
   if (tab) {
     selectRound(tab.dataset.t === "session" ? "session" : Number(tab.dataset.t));
-    if (params().get("trace")) ctx.navigate({ trace: null }, { replace: true });
     return;
   }
   const copy = e.target.closest("[data-copy]");
@@ -1001,6 +1030,7 @@ function jump(eid) {
       S.turn = rr.turn;
       S.cturn = rr.compact;
     }
+    syncTraceParam();
     renderTrace();
     renderOut();
   }
