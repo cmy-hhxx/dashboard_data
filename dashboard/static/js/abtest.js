@@ -74,11 +74,15 @@ export function abComparisonHTML(rnd) {
     const result = rnd.sides?.[side];
     const n = result ? num(result.hits) : null;
     const traces = result?.traces == null ? DASH : fmt(result.traces);
-    const volumeLabel = side === "online" ? "评测样本" : "有问题 Trace";
-    return `<div class="ab-batch is-${side}${result ? "" : " is-missing"}">
+    const problemTraces = result?.problem_traces;
+    const title = result
+      ? side === "online"
+        ? `线上真实：${fmt(n)} 个问题，${traces} 条评测样本`
+        : `同题交集：${traces} 条 Trace，其中 ${problemTraces == null ? DASH : fmt(problemTraces)} 条有问题；共 ${fmt(n)} 个问题`
+      : `${labels[side]}暂无数据`;
+    return `<div class="ab-batch is-${side}${result ? "" : " is-missing"}" title="${esc(title)}">
       <span>${labels[side]}</span>
       <b class="num">${n == null ? DASH : fmt(n)}</b>
-      <small class="num">${result ? `${traces} ${volumeLabel}` : "暂无结果"}</small>
     </div>`;
   }).join("")}</div>`;
 }
@@ -201,22 +205,58 @@ function clusterTree(cross, tax, names) {
 function matrixViewAb(rnd, rows, cols, metric) {
   const cells = rows.map(() => cols.map(() => ({ before: 0, after: 0, online: 0, pats: new Map() })));
   const traces = { before: rows.map(() => 0), after: rows.map(() => 0), online: rows.map(() => 0) };
-  SIDES.forEach((side) => {
-    const cross = crossFor(rnd, side);
-    if (!cross) return;
-    cross.forEach(([task, sub, pats, sceneTraces]) => {
+  const addPaths = (ri, side, paths) => {
+    (paths || []).forEach((pid) => {
+      const ci = cols.findIndex((c) => pid === c.prefix || String(pid).startsWith(`${c.prefix}.`));
+      if (ci < 0) return;
+      const cell = cells[ri][ci];
+      cell[side] += 1;
+      cell.pats.set(pid, (cell.pats.get(pid) || 0) + 1);
+    });
+  };
+  const common = Array.isArray(rnd.common?.rows) ? rnd.common.rows : null;
+  if (common && metric !== "online") {
+    // 发版前矩阵 / 发版后矩阵 / 同题变化矩阵共用同一个交集：
+    // 发版前已评测 ∩ 发版后已重测。无问题 Trace 也计入场景 volume。
+    common.forEach(([task, sub, beforePaths, afterPaths]) => {
       const ri = rows.findIndex((r) => sceneMatches(r, task || NO_SCENE, sub || ""));
       if (ri < 0) return;
-      traces[side][ri] += num(sceneTraces);
-      pats.forEach(([pid, n]) => {
-        const ci = cols.findIndex((c) => pid === c.prefix || String(pid).startsWith(`${c.prefix}.`));
-        if (ci < 0) return;
-        const cell = cells[ri][ci];
-        cell[side] += num(n);
-        cell.pats.set(pid, (cell.pats.get(pid) || 0) + num(n));
+      traces.before[ri] += 1;
+      traces.after[ri] += 1;
+      if (metric === "paired" || metric === "before") addPaths(ri, "before", beforePaths);
+      if (metric === "paired" || metric === "after") addPaths(ri, "after", afterPaths);
+    });
+  } else if (metric === "paired") {
+    // Old payloads without `common`: recall list is the only paired source available.
+    const pairs = Array.isArray(rnd.pairs) ? rnd.pairs : [];
+    pairs.forEach((pair) => {
+      const ri = rows.findIndex((r) => sceneMatches(r, pair.scene || NO_SCENE, pair.sub || ""));
+      if (ri < 0) return;
+      ["before", "after"].forEach((side) => {
+        const ref = pair[side];
+        if (!ref) return;
+        traces[side][ri] += 1;
+        addPaths(ri, side, ref.paths);
       });
     });
-  });
+  } else {
+    SIDES.forEach((side) => {
+      const cross = crossFor(rnd, side);
+      if (!cross) return;
+      cross.forEach(([task, sub, pats, sceneTraces]) => {
+        const ri = rows.findIndex((r) => sceneMatches(r, task || NO_SCENE, sub || ""));
+        if (ri < 0) return;
+        traces[side][ri] += num(sceneTraces);
+        pats.forEach(([pid, n]) => {
+          const ci = cols.findIndex((c) => pid === c.prefix || String(pid).startsWith(`${c.prefix}.`));
+          if (ci < 0) return;
+          const cell = cells[ri][ci];
+          cell[side] += num(n);
+          cell.pats.set(pid, (cell.pats.get(pid) || 0) + num(n));
+        });
+      });
+    });
+  }
   cells.forEach((row) => row.forEach((cell) => { cell.n = metricValue(cell, metric, rnd); }));
   return { rows, cols, cells, traces };
 }
@@ -267,11 +307,14 @@ function matrixTableAb(view, rnd, metric, selected) {
       ? `<button type="button" class="mh" data-act="abcol" data-ci="${ci}" title="${esc(title)}" aria-label="下钻 ${esc(c.name)}">${label}<i class="mx-caret" aria-hidden="true"></i></button>`
       : `<span class="mh" title="${esc(title)}">${label}</span>`;
   }).join("");
-  // 同题变化比的是同一批固定题，场景在固定题集里的 trace 数前后不变；只有各侧的
-  // 问题 trace 才会增减，所以这里不再写 前→后，固定题集不可得时退回发版前。
-  const fixedCount = (row) => (Array.isArray(rnd.pairs)
-    ? rnd.pairs.reduce((n, pair) => n + (sceneMatches(row, pair.scene || NO_SCENE, pair.sub || "") ? 1 : 0), 0)
-    : null);
+  // 发版前矩阵 / 发版后矩阵 / 同题变化矩阵共用「发版前已评测 ∩ 发版后已重测」这一个交集；
+  // 场景 volume 是这个交集里的 Trace 数（含无问题 Trace），问题数只影响格子。
+  const sharedRows = Array.isArray(rnd.common?.scenes) ? rnd.common.scenes : null;
+  const fixedCount = (row) => sharedRows
+    ? sharedRows.reduce((n, [task, sub, count]) => n + (sceneMatches(row, task || NO_SCENE, sub || "") ? num(count) : 0), 0)
+    : (Array.isArray(rnd.pairs)
+      ? rnd.pairs.reduce((n, pair) => n + (sceneMatches(row, pair.scene || NO_SCENE, pair.sub || "") ? 1 : 0), 0)
+      : null);
   let rowLabels = "", gridCells = "", tots = "";
   rows.forEach((r, ri) => {
     const fixed = change ? fixedCount(r) : null;
@@ -304,11 +347,22 @@ function matrixTableAb(view, rnd, metric, selected) {
       tots += `<span class="rowtot num">${fmt(rowCount[ri])}</span>`;
     }
   });
-  const totalFixed = Array.isArray(rnd.pairs) ? sumOf(rows.map((r) => fixedCount(r))) : null;
+  const totalFixed = (sharedRows || Array.isArray(rnd.pairs)) ? sumOf(rows.map((r) => fixedCount(r))) : null;
   // 场景合计后的（N条）与各行口径一致：变化矩阵是固定题集条数，其余是当前侧 Trace 数。
   const totalVolume = change
     ? (totalFixed == null ? sumOf(traces?.before || []) : totalFixed)
     : grandDen;
+  const fixedInfo = rnd.fixed;
+  const commonInfo = rnd.common;
+  const totalTitle = change
+    ? [
+      `矩阵口径：发版前已评测 ∩ 发版后已重测 ${fmt(commonInfo?.total ?? totalVolume)} 条 Trace（含无问题）`,
+      fixedInfo?.total != null ? `固定题集 ${fmt(fixedInfo.total)} 条` : "",
+      fixedInfo?.before != null ? `发版前已评测 ${fmt(fixedInfo.before)} 条` : "",
+      fixedInfo?.after != null ? `发版后已重测 ${fmt(fixedInfo.after)} 条` : "",
+      Array.isArray(rnd.pairs) ? `两侧都有详情 ${fmt(rnd.pairs.length)} 条` : "",
+    ].filter(Boolean).join("；")
+    : "当前口径下全部场景的 Trace 数";
   const foot = cols.map((c, ci) => {
     if (change) {
       const before = sumOf(rows.map((_, ri) => num(cells[ri][ci].before)));
@@ -327,7 +381,7 @@ function matrixTableAb(view, rnd, metric, selected) {
     footTotal = `<span class="rowtot rowtot-foot num" style="--v:0.08">${fmt(sumOf(rowCount))}</span>`;
   }
   return `<div class="matrix abmatrix${change ? " is-change" : ""}" style="--cols:${cols.length};--rows:${rows.length}">
-    <div class="mx-rows"><span class="mx-corner" aria-hidden="true"></span>${rowLabels}<span class="rh"><span class="mx-lab mx-total-lab">场景合计<em class="mx-vol">（${fmt(totalVolume)}条）</em></span></span></div>
+    <div class="mx-rows"><span class="mx-corner" aria-hidden="true"></span>${rowLabels}<span class="rh"><span class="mx-lab mx-total-lab" title="${esc(totalTitle)}">场景合计<em class="mx-vol">（${fmt(totalVolume)}条）</em></span></span></div>
     <div class="mx-scroll"><div class="mx-grid">${heads}${gridCells}${foot}</div></div>
     <div class="mx-tots"><span class="rowtot-head" title="该场景在当前口径下的问题数合计"><span class="mx-lab mx-total-lab">${change ? "变化合计" : "问题合计"}</span></span>${tots}${footTotal}</div>
   </div>`;

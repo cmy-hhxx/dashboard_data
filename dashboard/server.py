@@ -358,9 +358,10 @@ class Handler(SimpleHTTPRequestHandler):
             # rebuilt; a short reuse window avoids one RTT per trace.
             self._cache_policy = "public, max-age=120"
         elif path_only.startswith("/js/") or path_only.startswith("/css/") or path_only in ("/", "/index.html"):
-            # Deploys replace these files under the same name; a minute of reuse
-            # keeps ordinary reloads from revalidating every module.
-            self._cache_policy = "public, max-age=60"
+            # Deploys replace these files under the same name.  A max-age reuse window is how an
+            # old abtest.js survived a deploy while its JSON was already fresh; revalidate every
+            # load instead (ETag/Last-Modified still make the hit a cheap 304).
+            self._cache_policy = "no-cache"
         if self.path.startswith("/healthz"):
             body = json.dumps({
                 "ok": _state["error"] == "",

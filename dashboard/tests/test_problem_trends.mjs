@@ -191,27 +191,27 @@ test("rounded Trace shares sum to exactly 100.0% without inventing a denominator
 });
 
 test("AB batches keep both released populations but keep their volumes separate", () => {
-  const html = abComparisonHTML({ sides: { before: { hits: 200, traces: 80 }, after: { hits: 60, traces: 30 }, online: { hits: 40, traces: 400 } } });
+  const html = abComparisonHTML({ sides: { before: { hits: 200, traces: 80, problem_traces: 70 }, after: { hits: 60, traces: 30, problem_traces: 25 }, online: { hits: 40, traces: 400 } } });
   assert.equal((html.match(/class="ab-batch is-/g) || []).length, 3);
   assert.match(html, /改版前/);
   assert.match(html, /改版后同题/);
   assert.match(html, /线上真实/);
-  assert.match(html, />80 有问题 Trace</);
-  assert.match(html, />30 有问题 Trace</);
-  assert.match(html, />400 评测样本</);
-  assert.doesNotMatch(html, /暂无结果/);
+  assert.doesNotMatch(html, /<small/);
+  assert.match(html, /80 条 Trace，其中 70 条有问题/);
+  assert.match(html, /30 条 Trace，其中 25 条有问题/);
+  assert.match(html, /400 条评测样本/);
 });
 
 test("AB comparison distinguishes missing results from measured zero problems", () => {
   const missing = abComparisonHTML({ sides: { before: { hits: 200 }, after: null } });
-  assert.equal((missing.match(/暂无结果/g) || []).length, 2); // The retest and the online batch are both missing.
+  assert.equal((missing.match(/is-missing/g) || []).length, 2); // The retest and the online batch are both missing.
   assert.doesNotMatch(missing, /减少/);
   const zero = abComparisonHTML({ sides: { before: { hits: 200 }, after: { hits: 0 } } });
-  assert.equal((zero.match(/暂无结果/g) || []).length, 1); // Online remains independently missing.
+  assert.equal((zero.match(/is-missing/g) || []).length, 1); // Online remains independently missing.
   assert.match(zero, /<b class="num">0<\/b>/);
   const onlineOnly = abComparisonHTML({ sides: { before: { hits: 200 }, online: { hits: 40 } } });
   assert.doesNotMatch(onlineOnly, /同题减少|同题增加/);
-  assert.equal((onlineOnly.match(/暂无结果/g) || []).length, 1);
+  assert.equal((onlineOnly.match(/is-missing/g) || []).length, 1);
 });
 
 test("AB overview is three cards whose four flows add up to the net paired change", () => {
@@ -409,12 +409,22 @@ test("AB matrix offers the four readings and paints four numbers in every change
   const rowBefore = [row.task, "", [["S4.M1.1", 95]], 95];
   const rowAfter = [row.task, "", [["S4.M1.1", 60]], 60];
   const rowOnline = [row.task, "", [["S4.M1.1", 40]], 40];
-  const pairs = Array.from({ length: 120 }, () => ({ scene: row.task, sub: "" }));
+  const pairs = Array.from({ length: 120 }, (_, i) => ({
+    scene: row.task, sub: "",
+    before: { paths: i < 95 ? ["S4.M1.1"] : [], n: i < 95 ? 1 : 0 },
+    after: { paths: i < 60 ? ["S4.M1.1"] : [], n: i < 60 ? 1 : 0 },
+  }));
   const post = {
     label: "v1106",
     sides: { before: { hits: 95, traces: 95 }, after: { hits: 60, traces: 60 }, online: { hits: 40, traces: 40 } },
     matrix: { before: [rowBefore], after: [rowAfter], online: [rowOnline] },
     pairs,
+    common: {
+      total: 120,
+      scenes: [[row.task, "", 120]],
+      rows: pairs.map((pair) => [row.task, "", pair.before.paths, pair.after.paths]),
+    },
+    fixed: { total: 120, before: 120, after: 120 },
     nodes: [],
   };
   const host = { innerHTML: "", getBoundingClientRect: () => ({ width: 720 }),

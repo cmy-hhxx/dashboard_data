@@ -44,7 +44,7 @@ from pathlib import Path
 AB_DIR = "ab_test"
 # Bump when the payload's meaning changes (model scoping, leaf/matrix assembly) so an unchanged
 # dataset still rebuilds its abtests-*.json instead of serving a stale payload.
-AB_PAYLOAD_VERSION = 4
+AB_PAYLOAD_VERSION = 6
 ROUND_RE = re.compile(r"^(\d+)_version(?P<version>[0-9A-Za-z.]+?)(?:_test)?$")
 # 重测归因的 session_meta.case_id 结尾是 ``_eq_00013``：只有它的 eq 能生成改版后详情。
 ATTRIBUTION_EQ_RE = re.compile(r"_eq_(\d+)$")
@@ -993,24 +993,63 @@ def _build_round_scoped(round_dir: Path, order: int, version: str, samples=None,
                                 detail_by_trace, models)
     _add_pair_refs(before["refs"], before_by_trace, eq_by_trace, detail_by_trace, attr_eqs, "before")
     _add_pair_refs(after["refs"], before_by_trace, eq_by_trace, detail_by_trace, attr_eqs, "after")
-    side_traces = {"before": len(before["refs"]), "after": len(after["refs"])}
+    # The fixed set itself, before the recall list drops questions missing a side: the matrix
+    # scene volume is all fixed traces (clean ones included), not only traces with problems.
+    all_pairs = list(pairs)
+    fixed_scenes = Counter((pair.get("scene") or NO_SCENE, pair.get("sub") or "") for pair in all_pairs)
+    # 三张矩阵的共同口径：发版前已评测 ∩ 发版后已重测。无问题的 Trace 也在里面，
+    # 问题数只影响格子，不影响场景的 Trace 数量。
+    common_rows = []
+    for pair in all_pairs:
+        before_side = pair.get("before")
+        after_side = pair.get("after")
+        if not before_side or not after_side:
+            continue
+        if not (before_side.get("status") or "").startswith("已评测"):
+            continue
+        if not (after_side.get("status") or "").startswith("已重测"):
+            continue
+        common_rows.append([
+            pair.get("scene") or NO_SCENE,
+            pair.get("sub") or "",
+            list(before_side.get("paths") or []),
+            list(after_side.get("paths") or []),
+        ])
+    common_scenes = Counter((task, sub) for task, sub, _before, _after in common_rows)
+    common_before, common_after = Counter(), Counter()
+    common_before_matrix, common_after_matrix = Counter(), Counter()
+    common_before_scene, common_after_scene = Counter(), Counter()
+    common_before_problem = common_after_problem = 0
+    for task, sub, before_paths, after_paths in common_rows:
+        common_before_scene[(task, sub)] += 1
+        common_after_scene[(task, sub)] += 1
+        if before_paths:
+            common_before_problem += 1
+        if after_paths:
+            common_after_problem += 1
+        for path in before_paths:
+            common_before[path] += 1
+            common_before_matrix[(task, sub, path)] += 1
+        for path in after_paths:
+            common_after[path] += 1
+            common_after_matrix[(task, sub, path)] += 1
     _paired_only(pairs, {"before": before["refs"], "after": after["refs"]})
 
     names = read_leaf_names(round_dir)
     leaves = []
-    for path in sorted(set(before["counter"]) | set(after["counter"]) | set(online["counter"]),
+    for path in sorted(set(common_before) | set(common_after) | set(online["counter"]),
                        key=node_order):
         leaves.append({
             "id": path,
             "name": names.get(path) or path,
-            "before": before["counter"].get(path, 0),
-            "after": after["counter"].get(path, 0) if after_available else None,
+            "before": common_before.get(path, 0),
+            "after": common_after.get(path, 0) if after_available else None,
             "online": online["counter"].get(path, 0) if online_available else None,
-            "model_before": dict(before["model"].get(path) or {}),
-            "model_after": dict(after["model"].get(path) or {}) if after_available else None,
+            "model_before": {},
+            "model_after": {},
             "model_online": dict(online["model"].get(path) or {}) if online_available else None,
-            "source_before": dict(before["source"].get(path) or {}),
-            "source_after": dict(after["source"].get(path) or {}) if after_available else None,
+            "source_before": {},
+            "source_after": {},
             "source_online": dict(online["source"].get(path) or {}) if online_available else None,
         })
 
@@ -1021,9 +1060,16 @@ def _build_round_scoped(round_dir: Path, order: int, version: str, samples=None,
         online_from = meta.get("released_at")
         online_traces = online.get("traces", 0)
     meta["sides"] = {
-        "before": {"traces": side_traces["before"], "hits": sum(before["counter"].values())},
-        "after": ({"traces": side_traces["after"], "hits": sum(after["counter"].values())}
-                  if after_available else None),
+        "before": {
+            "traces": len(common_rows),
+            "hits": sum(common_before.values()),
+            "problem_traces": common_before_problem,
+        },
+        "after": ({
+            "traces": len(common_rows),
+            "hits": sum(common_after.values()),
+            "problem_traces": common_after_problem,
+        } if after_available else None),
         "online": ({
             "traces": online_traces,
             "hits": sum(online["counter"].values()),
@@ -1035,13 +1081,24 @@ def _build_round_scoped(round_dir: Path, order: int, version: str, samples=None,
     meta["models"] = models
     meta["leaves"] = leaves
     meta["sample_refs"] = {"before": before["refs"], "after": after["refs"], "online": online["refs"]}
+    meta["fixed"] = {
+        "total": int(meta.get("targets") or len(all_pairs)),
+        "before": sum(1 for row in all_before if (row.get("state") or "").startswith("已评测")),
+        "after": sum(1 for row in data["after"] if (row.get("state") or "").startswith("已重测")),
+        "scenes": [[task, sub, count] for (task, sub), count in fixed_scenes.items()],
+    }
+    meta["common"] = {
+        "total": len(common_rows),
+        "scenes": [[task, sub, count] for (task, sub), count in common_scenes.items()],
+        "rows": common_rows,
+    }
     meta["pairs"] = pairs
     meta["matrix"] = {
-        "before": matrix_rows(before["matrix"], before["scene_traces"]) if before["available"] else [],
-        "after": matrix_rows(after["matrix"], after["scene_traces"]) if after_available else None,
+        "before": matrix_rows(common_before_matrix, common_before_scene) if before["available"] else [],
+        "after": matrix_rows(common_after_matrix, common_after_scene) if after_available else None,
         "online": matrix_rows(online["matrix"], online.get("scene_traces")) if online_available else None,
     }
-    meta["nodes"] = tree_nodes(before["counter"], after["counter"], online["counter"], names,
+    meta["nodes"] = tree_nodes(common_before, common_after, online["counter"], names,
                                after_available, online_available)
     return meta
 

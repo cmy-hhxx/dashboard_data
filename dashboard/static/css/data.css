@@ -325,6 +325,8 @@ body.is-mx-full { overflow: hidden; }
 .matrix .coltot, .matrix .rowtot-foot { height: var(--mx-rowh); border-top: 1px solid var(--well-2); }
 .matrix .coltot { display: grid; place-items: center; color: var(--ink); cursor: pointer; border: 0; appearance: none; font: inherit; font-size: var(--fs-small); background: color-mix(in oklab, var(--accent) 10%, transparent); transition: background var(--snap), color var(--snap); }
 .matrix .coltot:hover, .matrix .coltot.is-hl, .matrix .rowtot.is-hl { background: color-mix(in oklab, var(--accent) 16%, transparent); }
+/* 场景合计那一行只换底色，不做 hover / active 微放大。 */
+.matrix .coltot:hover, .matrix .coltot:active { transform: none; box-shadow: none; }
 .matrix .cell-data { display: grid; place-items: center; gap: 1px; line-height: 1.08; }
 .matrix .cell-main { display: inline-flex; align-items: baseline; gap: 2px; font-size: var(--fs-small); white-space: nowrap; }
 .matrix .cell-main b { color: var(--ink); font-weight: var(--w-medium); }
