@@ -497,6 +497,8 @@ async function mountDetail(host, spec) {
     // The compared pair is one question inside a whole session; the pane title must name that
     // round, not the session's first question.
     roundQuestion: true,
+    // 版本对比的详情栏用更紧凑的折叠：轨迹可收起、中间链路默认收起、最终答案可收起。
+    compareFolds: true,
     // Cluster paths have no filter on this page; 具体数据 already owns that drill.
     onPattern: (path) => ctx.navigate({ ...SAMPLE_VIEW_RESET, view: "samples", product: ctx.product, pattern: path }),
   });

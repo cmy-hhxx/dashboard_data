@@ -217,12 +217,15 @@ export function createSampleDetail(host, ctxArg, opts = {}) {
   // 版本对比的一个 case 是一整段会话里的某一轮：标题要显示这一轮的提问，
   // 而不是会话第一句（否则左右两栏看起来像不同的问题）。
   const roundQuestion = opts.roundQuestion === true;
+  // 版本对比页：轨道、中间链路、最终答案各自可折叠；具体数据页保持原样。
+  const compareFolds = opts.compareFolds === true;
   const ctx = ctxArg;
   const root = host;
   const S = {
     product: opts.product, prod: opts.prod, all: opts.sessions || [],
     cache: new Map(), loadSeq: 0, D: null, sessionKey: null, session: null,
     round: 0, trace: 0, turn: 0, cturn: 0, sessionView: false, tabPage: 0, open: new Set(),
+    folds: { traj: true, chain: false }, closedAnswers: new Set(),
     active: null, bandOpen: false, traceMiss: null,
   };
   let threadsBound = false;
@@ -597,7 +600,9 @@ function renderTrace() {
   const tr = D.input.traces?.[S.trace];
   if (!tr) return renderMissingState();   // 切回这一轮时恢复空态，别把上一屏留在中间列
   renderOverview();
-  $(`#${prefix}stl`, root).innerHTML = timelineHTML(S.trace, tr.messages || []) || `<div class="empty">该轮没有消息</div>`;
+  $(`#${prefix}stl`, root).innerHTML = timelineHTML(S.trace, tr.messages || [], {
+    chainFold: compareFolds, chainCollapsed: !S.folds.chain,
+  }) || `<div class="empty">该轮没有消息</div>`;
   if (!$(".chain-box", $(`#${prefix}stl`, root))) $(`#${prefix}stl`, root).insertAdjacentHTML("beforeend", bandToggleHTML());
   markProse($(`#${prefix}stl`, root));
   enter();
@@ -619,14 +624,20 @@ function enter() {
    链路在自己的盒子里滚，用户问句和最终回答始终留在盒子的上下。 */
 const CHAIN_KINDS = new Set(["user", "answer"]);
 
-function timelineHTML(t, messages) {
+function timelineHTML(t, messages, ui = {}) {
   const out = [];
   let run = [];
   let pending = [];   // 出现在第一条对话消息之前的 system 之类：挂起来，等问句出来后并入它下面的链路
   const flush = () => {
     if (!run.length) return;
-    out.push(`<div class="chain-box">
-      <div class="chain-head"><span class="chain-k">中间链路</span><span class="num faint">${run.length} 步</span>
+    const head = ui.chainFold
+      ? `<button type="button" class="fold-head chain-fold" data-chain-fold aria-expanded="${!ui.chainCollapsed}">
+          <span class="fold-caret" aria-hidden="true"></span><span class="chain-k">中间链路</span>
+          <span class="num faint">${run.length} 步</span>
+        </button>`
+      : `<span class="chain-k">中间链路</span><span class="num faint">${run.length} 步</span>`;
+    out.push(`<div class="chain-box${ui.chainFold ? " is-collapsible" : ""}${ui.chainFold && ui.chainCollapsed ? " is-collapsed" : ""}">
+      <div class="chain-head">${head}
         <span class="chain-acts">
           <button type="button" class="band-more band-toggle" data-band hidden>展开全部</button>
           <button type="button" class="band-more fold-all" data-fold-all hidden>全部收起</button>
@@ -678,7 +689,9 @@ function msgHTML(t, i, m) {
   const chat = m.k === "user" || (m.k === "answer" && S.sessionView);
   const sevs = [...new Set((m.ev || []).map((e) => D._ix.sev.get(e)).filter(Boolean))]
     .sort((a, b) => SEV.indexOf(b) - SEV.indexOf(a));
-  const folded = !FOLD_OPEN.has(m.k) && !S.open.has(key);
+  const answerFold = compareFolds && m.k === "answer";
+  const foldable = answerFold || !FOLD_OPEN.has(m.k);
+  const folded = answerFold ? S.closedAnswers.has(key) : (!FOLD_OPEN.has(m.k) && !S.open.has(key));
   const time = m.dur != null ? `<span class="num dur">${m.dur >= 1000 ? fmt(m.dur / 1000, 1) + " s" : m.dur + " ms"}</span>` : "";
   const who = KIND[m.k] || m.k;
   const firstUser = t === 0 ? S.D.input.traces[0].messages.findIndex((x) => x.k === "user") : -1;
@@ -692,7 +705,7 @@ function msgHTML(t, i, m) {
       <span class="num idx faint">#${i}</span>
       ${m.name ? `<span class="mname">${esc(m.name)}</span>` : m.model ? `<span class="faint">${esc(m.model)}</span>` : '<span></span>'}
       ${time}
-      ${FOLD_OPEN.has(m.k) || !hasBody ? '<span></span>' : `<button type="button" class="toggle" data-fold="${key}">${folded ? "展开" : "收起"}</button>`}
+      ${!foldable || !hasBody ? '<span></span>' : `<button type="button" class="toggle" data-fold="${key}"${answerFold ? ' data-fold-kind="answer"' : ""}>${folded ? "展开" : "收起"}</button>`}
       <span class="evs">${sevs.map((s) => `<i style="--c:${sevColor(s)}" title="${s} 证据"></i>`).join("")}</span>
     </div>
       ${body}${trans ? `<div class="msg-zh">${esc(trans)}</div>` : ""}</div></div>`;
@@ -882,6 +895,15 @@ function keepBand() {
 }
 
 function onInputClick(e) {
+  const chainFold = e.target.closest("[data-chain-fold]");
+  if (chainFold) {
+    S.folds.chain = !S.folds.chain;
+    const box = chainFold.closest(".chain-box");
+    box?.classList.toggle("is-collapsed", !S.folds.chain);
+    chainFold.setAttribute("aria-expanded", String(S.folds.chain));
+    scheduleThreadsCompensate();
+    return;
+  }
   const more = e.target.closest("[data-band]");
   if (more) {
     const sbody = $(`#${prefix}sbody`, root);
@@ -919,7 +941,12 @@ function onInputClick(e) {
   const fold = e.target.closest("[data-fold]");
   if (fold) {
     const [t, i] = fold.dataset.fold.split(":").map(Number);
-    S.open.has(fold.dataset.fold) ? S.open.delete(fold.dataset.fold) : S.open.add(fold.dataset.fold);
+    const key = fold.dataset.fold;
+    if (fold.dataset.foldKind === "answer") {
+      S.closedAnswers.has(key) ? S.closedAnswers.delete(key) : S.closedAnswers.add(key);
+    } else {
+      S.open.has(key) ? S.open.delete(key) : S.open.add(key);
+    }
     rerenderMsg(t, i);
     return;
   }
@@ -978,6 +1005,9 @@ function jump(eid) {
   S.active = eid;
   if (prev != null && S.D.evidence[prev]) rerenderMsg(S.D.evidence[prev].t, S.D.evidence[prev].m);
   S.open.add(`${ev.t}:${ev.m}`);
+  if (compareFolds && S.D.input?.traces?.[ev.t]?.messages?.[ev.m]?.k === "answer") {
+    S.closedAnswers.delete(`${ev.t}:${ev.m}`);
+  }
   rerenderMsg(ev.t, ev.m);
   const el = $(`#${prefix}m-${ev.t}-${ev.m}`, root);
   if (!el) { threadFocus?.(hoverPid); return; }   // 数据里点到一条这一轮没渲染出来的消息
@@ -1130,10 +1160,13 @@ function alignColumns() {
   const box = $(`#${prefix}sanatomy`, root);
   const stl = $(`#${prefix}stl`, root);
   const outT = $(`#${prefix}sout > .out`, root);
-  const flow = $(`#${prefix}sout .cflow`, root);
+  const trajFold = compareFolds ? $(`#${prefix}sout > .out.traj-fold`, root) : null;
+  const flow = trajFold?.classList.contains("is-collapsed") ? null : $(`#${prefix}sout .cflow`, root);
   const outP = $(`#${prefix}sattr > .out`, root);
   const group = $(`#${prefix}sattr .tgroup`, root);
-  const body = stl ? $(".chain-body", stl) : null;
+  const chainBox = stl ? $(".chain-box", stl) : null;
+  const chainFolded = !!(chainBox && chainBox.classList.contains("is-collapsed"));
+  const body = stl && !chainFolded ? $(".chain-body", stl) : null;
   // Attribution cards stay fully addressable: only the trace/chain columns use
   // the shared collapsed band and its "展开全部" control.
   const lists = [flow, body].filter(Boolean);
@@ -1165,16 +1198,16 @@ function alignColumns() {
     if (answer && group) group.style.marginTop = `${(answer.getBoundingClientRect().top - group.getBoundingClientRect().top) / zoom}px`;
     return;
   }
-  if (!flow || !group) return;
+  if (!group) return;
   // 上沿的锚点：链路第一步 → 对话第一条 → 该轮没有输入时的空态。
-  const anchorEl = (body && $(".msg", body)) || $(".msg", stl) || stl.firstElementChild;
+  const anchorEl = (body && $(".msg", body)) || (chainFolded && chainBox ? $(".chain-head", chainBox) : $(".msg", stl)) || stl.firstElementChild;
   if (!anchorEl) return;
   const anchor = anchorEl.getBoundingClientRect().top;
   const pane = $(`#${prefix}sbody`, root);
   // 版本对比的半屏详情按自己那一屏的一半高度收内容；具体数据页仍保留 720 的舒适下限。
   const cap = Math.max(root.closest(".bench-compare") ? 240 : 720, pane ? pane.clientHeight : 900);
   // 自然高度：cflow / tgroup 都是 grid，scrollHeight 就是内容高度。
-  const nat = { flow: flow.scrollHeight, group: group.scrollHeight, body: body ? body.scrollHeight : 0 };
+  const nat = { flow: flow ? flow.scrollHeight : 0, group: group.scrollHeight, body: body ? body.scrollHeight : 0 };
   const tallest = Math.max(nat.flow, nat.body);
   // 每列最多比自然高度多 stretch 这么多（20%，上限 160px）：矮的一列靠行距补，不能靠留白。
   const stretch = (n) => Math.min(160, Math.round(n * 0.2));
@@ -1198,7 +1231,7 @@ function alignColumns() {
     out.style.paddingTop = "0px";
     el.style.marginTop = `${(anchor - el.getBoundingClientRect().top) / zoom}px`;
   };
-  toBand(flow, outT);
+  if (flow) toBand(flow, outT);
   toBand(group, outP);
   let clipped = 0;
   const fit = (el, natural) => {
@@ -1216,7 +1249,7 @@ function alignColumns() {
     el.style.height = `${H}px`;
     el.classList.add("is-band");
   };
-  fit(flow, flow.scrollHeight);
+  if (flow) fit(flow, flow.scrollHeight);
   if (body) fit(body, body.scrollHeight);
   // 只有当「收起来」真的藏了内容时才出现；展开后变成「收起」。顶部和底部各一个，长链路不用滚到底才点得到。
   const canFold = clipped > 0 || (S.bandOpen && folded < tallest);
@@ -1285,7 +1318,7 @@ function drawThreads(realign = true) {
       // 所以按证据自己的轮次找，而不是当前选中轮；找不到（该轮这类消息没进总评）就跳过。
       if (!ev || ev.m == null || seen.has(key)) return;
       const msg = $(`#${prefix}m-${ev.t}-${ev.m}`, root);
-      if (!msg) return;
+      if (!msg || msg.closest(".is-collapsed")) return;
       seen.add(key);
       const body = $(".msg-body", msg) || msg;
       const r = body.getBoundingClientRect();
@@ -1313,7 +1346,15 @@ function drawThreads(realign = true) {
 function renderOut() {
   const D = S.D;
   if (!D) return;
-  $(`#${prefix}sout`, root).innerHTML = `<div class="out">${compactHTML(D)}</div>`;
+  const flow = compactHTML(D);
+  $(`#${prefix}sout`, root).innerHTML = compareFolds
+    ? `<div class="out traj-fold${S.folds.traj ? "" : " is-collapsed"}">
+        <button type="button" class="fold-head traj-fold-head" data-traj-fold aria-expanded="${S.folds.traj}">
+          <span class="fold-caret" aria-hidden="true"></span><span class="fold-k">轨迹</span>
+        </button>
+        <div class="traj-fold-body">${flow}</div>
+      </div>`
+    : `<div class="out">${flow}</div>`;
   $(`#${prefix}sattr`, root).innerHTML = `<div class="out">${attrHTML(D)}</div>`;
   requestAnimationFrame(markCmapScroll);
   scheduleThreadsCompensate();
@@ -1496,6 +1537,14 @@ function skillPoints(list, D, at) {
 }
 
 function onOutClick(e) {
+  const trajFold = e.target.closest("[data-traj-fold]");
+  if (trajFold) {
+    S.folds.traj = !S.folds.traj;
+    trajFold.closest(".traj-fold")?.classList.toggle("is-collapsed", !S.folds.traj);
+    trajFold.setAttribute("aria-expanded", String(S.folds.traj));
+    scheduleThreadsCompensate();
+    return;
+  }
   const cm = e.target.closest("[data-cf]");
   if (cm) {
     const row = document.getElementById(cm.dataset.cf);

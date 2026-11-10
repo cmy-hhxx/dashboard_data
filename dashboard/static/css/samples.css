@@ -368,6 +368,31 @@
 .chain-k { font-weight: var(--w-medium); color: var(--ink-2); }
 .chain-body { display: grid; gap: 5px; }
 
+/* ---------------------------------------------------------------- compact folds (compare) */
+/* 版本对比的半屏详情：轨迹、中间链路、最终答案各有一条极简的折叠头。
+   只保留 muted 小字 + 三角，沿用看板现有字号和过渡，不引入新的卡片/边框。 */
+.fold-head {
+  display: inline-flex; align-items: center; gap: 6px; width: fit-content;
+  padding: 2px 0; border: 0; background: none; color: var(--muted);
+  font: inherit; font-size: var(--fs-meta); font-weight: var(--w-medium);
+  cursor: pointer; transition: color var(--snap);
+}
+.fold-head:hover { color: var(--ink); }
+.fold-caret {
+  width: 0; height: 0; flex: none;
+  border-left: 5px solid currentColor; border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+  transition: transform var(--snap);
+}
+.fold-head[aria-expanded="true"] .fold-caret { transform: rotate(90deg); }
+.traj-fold { gap: 6px; }
+.traj-fold-head { margin: 0; }
+.traj-fold.is-collapsed .traj-fold-body { display: none; }
+/* 中间链路默认收起：只留标题行，回答紧跟其后；链路里的批量展开按钮在收起态没有意义。 */
+.chain-box.is-collapsed > .chain-body,
+.chain-box.is-collapsed > .band-more[data-band],
+.chain-box.is-collapsed .chain-acts { display: none; }
+.chain-box.is-collapsed > .chain-head { position: static; }
+
 /* ---------------------------------------------------------------- trajectory (compact flow) */
 .cflow { position: relative; display: grid; }
 .cflow::before { content: ""; position: absolute; left: 6px; top: 14px; bottom: 14px; width: 2px; border-radius: 1px; background: var(--t4); }
