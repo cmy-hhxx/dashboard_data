@@ -231,6 +231,9 @@ export function createSampleDetail(host, ctxArg, opts = {}) {
   let threadsBound = false;
   const onThreadResize = () => scheduleThreads();
   const onThreadLoad = () => scheduleThreads();
+  // 归因卡 id 是 `${prefix}pc-<id>`；compare 的 prefix 是 "b"/"a"，只剥 "pc-" 会留下 "a0"
+  // 变成 NaN，连线和悬停聚焦都会整列失效。
+  const cardPid = (card) => Number(card.id.slice(prefix.length + 3));
 
   function questionOf(D) {
     if (roundQuestion && !S.sessionView) {
@@ -1090,7 +1093,7 @@ function wireThreads() {
   threadFocus = focus;
   const trackHover = (e) => {
     const c = e.target.closest(".pcard");
-    const pid = c ? Number(c.id.replace("pc-", "")) : null;
+    const pid = c ? cardPid(c) : null;
     if (pid === hoverPid) return;
     hoverPid = pid;
     focus(pid);
@@ -1302,7 +1305,7 @@ function drawThreads(realign = true) {
   };
   let paths = "";
   $$(`#${prefix}sattr .pcard`, root).forEach((card) => {
-    const pid = Number(card.id.replace("pc-", ""));
+    const pid = cardPid(card);
     const prob = byId.get(pid);
     if (!prob) return;
     const pr = card.getBoundingClientRect();
