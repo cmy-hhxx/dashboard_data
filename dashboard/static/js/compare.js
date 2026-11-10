@@ -498,7 +498,7 @@ async function mountDetail(host, spec) {
     // round, not the session's first question.
     roundQuestion: true,
     // 版本对比的详情栏用更紧凑的折叠：轨迹可收起、中间链路默认收起、最终答案可收起。
-    compareFolds: true,
+    compareFolds: spec.compareFolds === true,
     // Cluster paths have no filter on this page; 具体数据 already owns that drill.
     onPattern: (path) => ctx.navigate({ ...SAMPLE_VIEW_RESET, view: "samples", product: ctx.product, pattern: path }),
   });
@@ -546,6 +546,8 @@ async function paintSides(round, pair, online) {
       ];
   const columns = online ? allColumns : allColumns.filter((column) => C.sides[column.prefix] !== false);
   panes.classList.toggle("is-single", columns.length === 1);
+  // 两列及以上才需要折叠；单列就是具体数据页的完整工作台（含 threads）。
+  const folds = columns.length > 1;
   const modelHost = $(".compare-models", C.root);
   if (modelHost) {
     modelHost.hidden = !!online;
@@ -576,6 +578,7 @@ async function paintSides(round, pair, online) {
       prefix: "o", session: onlineSession(online, ref),
       focus: {},
       expand: true,
+      compareFolds: folds,
       loadDetail: (slug) => getJSON(`samples/${encodeURIComponent(slug)}.json`),
     }));
   } else {
@@ -584,6 +587,7 @@ async function paintSides(round, pair, online) {
         prefix: "b", session: beforeSession(pair, before),
         focus: { focusTrace: before.trace },
         expand: true,
+        compareFolds: folds,
         loadDetail: (slug) => getJSON(`samples/${encodeURIComponent(slug)}.json`),
       }));
     }
@@ -591,6 +595,7 @@ async function paintSides(round, pair, online) {
       jobs.push(mountDetail(panes.querySelector('[data-side="a"]'), {
         prefix: "a", session: afterSession(round, pair, after),
         focus: {},
+        compareFolds: folds,
         loadDetail: (eq) => getJSON(`ab_samples/${encodeURIComponent(round.id)}/${encodeURIComponent(eq)}.json`),
       }));
     }

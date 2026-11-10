@@ -91,6 +91,8 @@ html[data-view="compare"] main { max-width: none; padding-bottom: 24px; }
    the full 具体数据 workbench: trajectory | chain | attribution, with the thread column. */
 .compare-side-row:not(.is-single) .anatomy,
 .compare-side-row:not(.is-single) .anatomy.is-session { grid-template-columns: minmax(0, 1fr); }
+/* 两列/多列对比时详情是堆叠单栏：轨迹、中间链路、回答共用一个左基线，折叠头才对得齐。 */
+.compare-side-row:not(.is-single) .traj > .out { padding-left: calc(var(--col-pad) + 28px); }
 .compare-side-row:not(.is-single) .threads { display: none; }
 /* The single-model pane is the full 具体数据 workbench, including the thread column. */
 .compare-side-row.is-single .anatomy { grid-template-columns: var(--col-traj) minmax(0, 1fr) var(--col-thread) var(--col-attr); }
