@@ -331,7 +331,7 @@ function matrixTableAb(view, rnd, metric, selected) {
 function fitMatrix(m) {
   if (!m) return;
   const pane = m.querySelector(".mx-scroll");
-  // 变化矩阵四数排版是固定的（等宽列 + 数字单位提前格式化），不按当前内容反复撑列宽。
+  // 变化矩阵的列宽交给 CSS（下限 82px，其余按可用宽度均分），这里只维护溢出状态。
   if (m.classList.contains("is-change")) {
     if (pane) {
       pane.classList.toggle("is-overflow", pane.scrollWidth > pane.clientWidth + 1);

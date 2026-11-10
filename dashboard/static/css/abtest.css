@@ -211,10 +211,10 @@ body.is-ab-full { overflow: hidden; }
    读的是差值，才在这里补方向色。变化矩阵两行四数，行高单独放宽一档。 */
 .abmatrix.is-change {
   --mx-rowh: 46px;
-  /* 变化矩阵固定列宽：四数提前排好版，不再按当前内容测量撑宽；横向滚动由 mx-scroll 负责。 */
+  /* 82px 只是列宽下限：列宽由 mx-scroll 的可用空间均分（同其它矩阵），
+     既不会在右侧多出一列空白，也不会窄到把两行四数挤出格子。 */
   --mx-colw: 82px;
 }
-.abmatrix.is-change .mx-grid { grid-template-columns: repeat(var(--cols), var(--mx-colw)); }
 .abmatrix.is-change .cell.is-better { color: var(--accent); background: color-mix(in oklab, var(--accent) calc(var(--v) * 56%), transparent); }
 .abmatrix.is-change .cell.is-worse { color: var(--sev-1); background: color-mix(in oklab, var(--sev-1) calc(var(--v) * 50%), transparent); }
 /* The scene/column totals are the same readout as the cells: semantic tone, same heat ramp,
