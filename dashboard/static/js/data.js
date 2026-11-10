@@ -1704,7 +1704,7 @@ function mxRatePick(model, candle, selected, period) {
    the heat and the lens chrome, and give the trend exactly the remaining height. */
 function analysisChartHeight(panel, chartHost) {
   const lens = panel.querySelector(".mxp-lens");
-  if (lens?.classList.contains("is-full")) return Math.max(420, Math.round(window.innerHeight - 220));
+  if (lens?.classList.contains("is-full")) return Math.max(420, Math.round(window.innerHeight - 300));
   const panels = panel.closest(".mx-panels");
   const issueShell = document.getElementById("mxIssueTrends");
   if (!panels?.classList.contains("is-both") || !issueShell || issueShell.hidden) return 260;

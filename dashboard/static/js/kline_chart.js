@@ -96,7 +96,7 @@ export function createKlineChart(host, spec = {}) {
       attributionLogo: false,
     },
     grid: { vertLines: { color: colors.grid }, horzLines: { color: colors.grid } },
-    rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.08, bottom: 0.08 } },
+    rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.08, bottom: 0 } },
     timeScale: {
       borderVisible: false, fixLeftEdge: true, fixRightEdge: true,
       tickMarkFormatter: (time) => tick(time),

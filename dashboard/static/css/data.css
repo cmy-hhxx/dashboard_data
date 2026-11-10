@@ -353,15 +353,21 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .mxp-lens .mxp-dist { padding-right: 28px; }
 .mxp-lens.is-full {
   position: fixed; inset: 0; z-index: 80; width: auto; height: auto; overflow: auto;
-  border-radius: 0; padding: 20px var(--gutter) 32px; background: var(--card);
-  grid-template-columns: minmax(300px, 0.8fr) minmax(0, 1.6fr); gap: 20px; align-items: start;
+  border-radius: 0; padding: 20px var(--gutter) 28px; background: var(--card);
+  grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; align-content: start;
 }
-.mxp-lens.is-full .mxp-dist { padding-right: 0; align-self: start; }
+/* 全屏改成「顶部环形/图例 + 整宽 K 线」：不再留一列空白，也避开右上角全屏键。 */
+.mxp-lens.is-full .mxp-dist { padding-right: 40px; align-self: center; gap: 28px; }
+.mxp-lens.is-full .mxp-ring-wrap, .mxp-lens.is-full .mxp-ring { width: 112px; height: 112px; }
+.mxp-lens.is-full .mxp-ring-center b { font-size: 16px; }
+.mxp-lens.is-full .mxp-ring-center small { font-size: 10px; }
+.mxp-lens.is-full .mxp-legend { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 2px 16px; }
 .mxp-lens.is-full .mxp-trend { padding-top: 0; border-top: 0; }
 .mxp-lens.is-full .mxp-full { position: fixed; top: 16px; right: 16px; }
 body.is-mxp-full { overflow: hidden; }
 @media (max-width: 900px) {
-  .mxp-lens.is-full { grid-template-columns: minmax(0, 1fr); }
+  .mxp-lens.is-full .mxp-dist { display: grid; grid-template-columns: auto minmax(0, 1fr); padding-right: 36px; }
+  .mxp-lens.is-full .mxp-legend { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 /* 等级分布（环形，合计 100%）+ Trace 趋势：左右并排，给下面的热力图让出高度。 */
 .mxp-overview { display: grid; grid-template-columns: minmax(0, 1fr); align-items: stretch; gap: 12px; }
