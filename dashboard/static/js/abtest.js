@@ -228,7 +228,12 @@ const ratioText = (delta, base) => (base
 /* 同题变化 reads one cell as four numbers: 发版前问题数 → 发版后问题数, the net move and its rate. */
 function changeCellData(before, after) {
   const b = num(before), a = num(after), d = a - b;
-  return `<span class="cell-data is-change"><span class="cell-pair"><b class="is-from">${fmt(b)}</b><i class="cell-arrow" aria-hidden="true">→</i><b class="is-to">${fmt(a)}</b></span><span class="cell-delta"><b>${signed(d)}</b><i class="cell-dot" aria-hidden="true">·</i><span class="cell-ratio">${ratioText(d, b)}</span></span></span>`;
+  // 数字本身居中，正负号和百分号挂在数字外侧，不参与列宽/中心计算。
+  const sign = d > 0 ? "+" : d < 0 ? "−" : "";
+  const rate = ratioText(d, b);
+  const pct = rate.endsWith("%") ? rate.slice(0, -1) : rate;
+  const pctTail = rate.endsWith("%") ? '<span class="cell-ratio-suffix">%</span>' : "";
+  return `<span class="cell-data is-change"><span class="cell-pair"><b class="is-from">${fmt(b)}</b><i class="cell-arrow" aria-hidden="true">→</i><b class="is-to">${fmt(a)}</b></span><span class="cell-delta"><b class="cell-delta-num"><span class="cell-sign">${sign}</span>${fmt(Math.abs(d))}</b><i class="cell-dot" aria-hidden="true">·</i><span class="cell-ratio">${pct}${pctTail}</span></span></span>`;
 }
 function countCellData(v, den) {
   return `<span class="cell-data"><span class="cell-main"><b>${fmt(v)}</b></span><span class="cell-pct">${pct(v, den, 1)}</span></span>`;
