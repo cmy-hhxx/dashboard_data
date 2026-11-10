@@ -527,6 +527,29 @@ def read_attribution_eqs(round_dir: Path):
     return found
 
 
+def read_baseline_traces(round_dir: Path):
+    """Turn trace ids that have a baseline (02_before_release) attribution row."""
+    found = set()
+    base = round_dir / SCOPE_BEFORE / "attribution"
+    if not base.is_dir():
+        return found
+    for path in sorted(base.rglob("*.jsonl")):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                for line in fh:
+                    try:
+                        attr = json.loads(line)
+                    except ValueError:
+                        continue
+                    for turn in attr.get("turns") or []:
+                        trace = str((turn.get("meta") or {}).get("trace_id") or "")
+                        if trace:
+                            found.add(trace)
+        except OSError:
+            continue
+    return found
+
+
 def _model_from_store(value):
     tail = (value or "").rsplit("_", 1)[-1]
     return tail if tail in ("fast", "expert") else ""
@@ -921,7 +944,7 @@ def _paired_only(pairs, sample_refs):
 
 
 def _build_round_scoped(round_dir: Path, order: int, version: str, samples=None,
-                        next_release: str | None = None, meta=None):
+                        next_release: str | None = None, meta=None, input_traces=None):
     meta = meta or round_meta(round_dir, order, version)
     models = round_models(round_dir)
     data = _scope_rows(round_dir)
@@ -951,6 +974,12 @@ def _build_round_scoped(round_dir: Path, order: int, version: str, samples=None,
     after_by_eq = {row["eq"]: row for row in data["after"] if row.get("eq") is not None}
     eq_by_trace = {row["trace"]: row["eq"] for row in after_by_eq.values()}
     detail_by_trace = {trace: _slug_for(row, index) for trace, row in before_by_trace.items()}
+    # Baseline attribution lives under ab_test even when the main sample index has no row.
+    # If its input also exists, the AB detail builder can render a before-<trace> detail.
+    if input_traces:
+        for trace in read_baseline_traces(round_dir) & input_traces:
+            if trace in detail_by_trace:
+                detail_by_trace[trace] = detail_by_trace[trace] or f"before-{trace}"
     attr_eqs = read_attribution_eqs(round_dir)
     if after_by_eq:
         pairs = _round_pairs(after_by_eq, before_by_trace, index, trace_scenes,
@@ -1158,16 +1187,18 @@ def _build_round_legacy(round_dir: Path, order: int, version: str, samples=None,
 
 
 def build_round(round_dir: Path, order: int, version: str, samples=None,
-                next_release: str | None = None, meta=None):
+                next_release: str | None = None, meta=None, input_traces=None):
     """One round, in either layout, always with the same payload shape."""
     if is_scope_layout(round_dir):
         return _build_round_scoped(round_dir, order, version, samples=samples,
-                                   next_release=next_release, meta=meta)
+                                   next_release=next_release, meta=meta,
+                                   input_traces=input_traces)
     return _build_round_legacy(round_dir, order, version, samples=samples,
                                next_release=next_release, meta=meta)
 
 
-def ab_payload(datasets: Path, product: str, generated: str | None = None, samples=None):
+def ab_payload(datasets: Path, product: str, generated: str | None = None, samples=None,
+               input_traces=None):
     """Every round for one product, oldest first; ``None`` when the product has no AB data."""
     found = ab_round_dirs(datasets, product)
     if not found:
@@ -1179,6 +1210,7 @@ def ab_payload(datasets: Path, product: str, generated: str | None = None, sampl
         rounds.append(build_round(
             path, order, version, samples=samples, meta=meta,
             next_release=next_meta.get("released_at") if next_meta else None,
+            input_traces=input_traces,
         ))
     models = set()
     for rnd in rounds:

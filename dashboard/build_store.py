@@ -398,6 +398,24 @@ class BuildStore:
                 out[rel] = json.loads(keys)
         return out
 
+    def input_locations(self) -> dict[str, tuple[str, int]]:
+        """trace_id -> (input file, byte offset) for the daily/lost input trees.
+
+        The A/B baseline attribution often has no row in the main samples index; its input
+        still lives in the dashboard's input files, so this index lets the AB detail builder
+        open that line with one pread instead of rescanning multi-GB JSONL.
+        """
+        out = {}
+        rows = self.db.execute(
+            "SELECT path, tids, offsets FROM files "
+            "WHERE path LIKE '%/eval_input/%' OR path LIKE '%/.archive/%'")
+        for path, tids, offsets in rows:
+            offs = list(array("q", offsets))
+            for i, arr in enumerate(json.loads(tids)):
+                for tid in arr or []:
+                    out.setdefault(str(tid), (path, offs[i]))
+        return out
+
     def get_file(self, rel: str) -> dict | None:
         row = self.db.execute(
             "SELECT path,size,mtime_ns,prefix,lines,committed,ends_nl,offsets,keys,tids,hashes,"

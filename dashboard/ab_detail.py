@@ -35,6 +35,7 @@ import build
 INDEX_VERSION = 2
 
 ATTRIBUTION_DIR = ab_test.SCOPE_AFTER + "/attribution"
+BEFORE_ATTRIBUTION_DIR = ab_test.SCOPE_BEFORE + "/attribution"
 ITEM_INDEX_DIR = ab_test.SCOPE_AFTER + "/cluster_tree"
 COMPACT_DIR = "99_provenance/retest_eval_run/compact"
 INPUT_DIR = "99_provenance/retest_input"
@@ -159,7 +160,10 @@ class ABDetailBuilder:
         self._eq_guard = threading.Lock()
         self._eq_locks = {}
         self._indexes = {}
+        self._before_indexes = {}
         self._rounds = {}
+        self._inputs = None
+        self._inputs_lock = threading.Lock()
 
     def _eq_lock(self, round_id: str, eq: int):
         key = (round_id, eq)
@@ -205,6 +209,30 @@ class ABDetailBuilder:
         inp = sorted(p for p in input_base.glob("*.slim.jsonl") if p.is_file()) if input_base.is_dir() else []
         return attr, items, comp, inp
 
+    @staticmethod
+    def _before_files(round_dir: Path):
+        base = round_dir / BEFORE_ATTRIBUTION_DIR
+        return sorted(p for p in base.rglob("*.jsonl") if p.is_file()) if base.is_dir() else []
+
+    def _input_locations(self):
+        """trace_id -> (relative input path, byte offset) from the dashboard build store."""
+        if self._inputs is not None:
+            return self._inputs
+        with self._inputs_lock:
+            if self._inputs is not None:
+                return self._inputs
+            store_path = self.cache_dir / "build.sqlite3"
+            try:
+                store = bs.BuildStore(store_path, readonly=True)
+                try:
+                    self._inputs = store.input_locations()
+                finally:
+                    store.close()
+            except Exception as exc:  # noqa: BLE001 - before details degrade to unavailable
+                build.debug(f"ab before input index: {exc}")
+                self._inputs = {}
+            return self._inputs
+
     # ---- index -----------------------------------------------------------------------------
 
     @staticmethod
@@ -236,6 +264,42 @@ class ABDetailBuilder:
             index = self._build_index(round_dir, attr, items, comp, inp, coverage, sig)
             self._save_index(path, index)
         self._indexes[round_id] = index
+        return index
+
+    def _before_index(self, round_id: str, round_dir: Path):
+        files = self._before_files(round_dir)
+        stats = [self._stat(path, round_dir) for path in files]
+        sig = hashlib.sha1(json.dumps({"version": INDEX_VERSION, "before": stats},
+                                      separators=(",", ":")).encode()).hexdigest()
+        cached = self._before_indexes.get(round_id)
+        if cached and cached.get("sig") == sig:
+            return cached
+        sources = []
+        traces = {}
+        for path in files:
+            st = path.stat()
+            entry = {
+                "rel": path.relative_to(round_dir).as_posix(),
+                "size": st.st_size, "mtime_ns": st.st_mtime_ns, "offsets": [],
+            }
+            file_idx = len(sources)
+            sources.append(entry)
+            model = _model_from_path(path, round_dir / BEFORE_ATTRIBUTION_DIR)
+            pos = 0
+            with open(path, "rb") as fh:
+                for line_no, raw in enumerate(fh):
+                    entry["offsets"].append(pos)
+                    pos += len(raw)
+                    try:
+                        row = json.loads(raw)
+                    except ValueError:
+                        continue
+                    for turn in row.get("turns") or []:
+                        trace = str((turn.get("meta") or {}).get("trace_id") or "")
+                        if trace:
+                            traces.setdefault(trace, (file_idx, line_no, model))
+        index = {"sig": sig, "built_at_ns": time.time_ns(), "sources": sources, "traces": traces}
+        self._before_indexes[round_id] = index
         return index
 
     def _build_index(self, round_dir: Path, attr, items, comp, inp, coverage, sig):
@@ -428,18 +492,36 @@ class ABDetailBuilder:
                 except Exception as exc:  # noqa: BLE001 - warm is best effort
                     build.debug(f"ab index warm failed {round_dir.name}: {exc}")
 
-    def ensure(self, round_id, eq):
-        """Generate (or reuse) one after-release detail; ``None`` when it cannot be built."""
-        try:
-            eq = int(eq)
-        except (TypeError, ValueError):
-            return None
-        if eq <= 0:
-            return None
+    def ensure(self, round_id, ref):
+        """Generate (or reuse) one after / before detail; ``None`` when it cannot be built."""
+        before_trace = None
+        if isinstance(ref, str) and ref.startswith("before-"):
+            before_trace = ref[len("before-"):]
+            eq = None
+        else:
+            try:
+                eq = int(ref)
+            except (TypeError, ValueError):
+                return None
+            if eq <= 0:
+                return None
         found = self._round(round_id)
         if not found:
             return None
         product, round_dir = found
+        if before_trace:
+            path = self.sample_dir / round_id / f"before-{before_trace}.json"
+            with self._index_lock:
+                index = self._before_index(round_id, round_dir)
+            with self._eq_lock(round_id, "before-" + before_trace):
+                if self._fresh(path, index.get("built_at_ns") or 0):
+                    return path
+                detail = self._build_before_detail(product, round_dir, round_id, before_trace, index)
+                if detail is None:
+                    return None
+                build.write_json(path, detail)
+                build.ensure_detail_gz(path)
+                return path
         path = self.sample_dir / round_id / f"{eq}.json"
         with self._index_lock:
             index = self._index(round_id, round_dir)
@@ -452,6 +534,36 @@ class ABDetailBuilder:
             build.write_json(path, detail)
             build.ensure_detail_gz(path)
             return path
+
+    def _build_before_detail(self, product: str, round_dir: Path, round_id: str, trace: str, index):
+        entry = index["traces"].get(trace)
+        if not entry:
+            return None
+        file_idx, line_no, model = entry
+        attr = self._load(index, round_dir, (file_idx, line_no))
+        if not isinstance(attr, dict):
+            return None
+        location = self._input_locations().get(trace)
+        if not location:
+            return None
+        rel, offset = location
+        try:
+            with open(self.datasets / rel, "rb") as fh:
+                fh.seek(offset)
+                inp = json.loads(fh.readline())
+        except (OSError, ValueError):
+            return None
+        smeta = attr.get("session_meta") or {}
+        date = _retest_date(inp, smeta) or _retest_date_from(smeta.get("request_time"))
+        split = "lost" if "lost_user" in rel else "daily"
+        pair = {
+            "product": product, "model": model,
+            "date": date, "split": split,
+            "input": None, "compact": None, "output": None,
+        }
+        detail, _row, _facts = build.build_sample(pair, inp, attr, None, {}, Counter())
+        detail["ab"] = {"round": round_id, "trace": trace, "side": "before"}
+        return detail
 
     def _build_detail(self, product: str, round_dir: Path, round_id: str, eq: int, index):
         found = index["attribution"].get(str(eq))

@@ -588,7 +588,9 @@ async function paintSides(round, pair, online) {
         focus: { focusTrace: before.trace },
         expand: true,
         compareFolds: folds,
-        loadDetail: (slug) => getJSON(`samples/${encodeURIComponent(slug)}.json`),
+        loadDetail: (ref) => getJSON(String(ref).startsWith("before-")
+          ? `ab_samples/${encodeURIComponent(round.id)}/${encodeURIComponent(ref)}.json`
+          : `samples/${encodeURIComponent(ref)}.json`),
       }));
     }
     if (!gaps.after && C.sides.a) {

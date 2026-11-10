@@ -62,7 +62,7 @@ STATIC = DASHBOARD / "static"
 RELEASES_CONFIG = DASHBOARD / "config" / "releases.json"
 PRODUCTION_DATASETS = Path("/mnt/fin_bench/code_and_clean_data/datasets")
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-10.2"
+PAYLOAD_VERSION = "2026-11-10.3"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 2
 
@@ -3153,8 +3153,10 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
 
         t0 = time.time()
         ab_bytes = 0
+        input_traces = set(store.input_locations())
         for product in products:
-            payload = ab_test.ab_payload(datasets, product, generated, samples[product])
+            payload = ab_test.ab_payload(datasets, product, generated, samples[product],
+                                         input_traces=input_traces)
             if not payload:
                 continue
             latest = payload["rounds"][-1]

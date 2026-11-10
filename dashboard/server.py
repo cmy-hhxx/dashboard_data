@@ -44,7 +44,7 @@ DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 MODEL_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 # /ab_samples/<roundId>/<eq>.json: the round name is validated before it can reach the builder.
 AB_ROUND_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*$")
-AB_DETAIL_RE = re.compile(r"^/ab_samples/([^/]+)/(\d+)\.json$")
+AB_DETAIL_RE = re.compile(r"^/ab_samples/([^/]+)/(before-[0-9A-Za-z_-]+|\d+)\.json$")
 
 
 def prewarm_details():
@@ -389,8 +389,12 @@ class Handler(SimpleHTTPRequestHandler):
         if _ab_builder and path_only.startswith("/ab_samples/"):
             match = AB_DETAIL_RE.match(path_only)
             ref = None
-            if match and AB_ROUND_RE.match(match.group(1)) and int(match.group(2)) > 0:
-                ref = (match.group(1), int(match.group(2)))
+            if match and AB_ROUND_RE.match(match.group(1)):
+                key = match.group(2)
+                if key.startswith("before-"):
+                    ref = (match.group(1), key)
+                elif int(key) > 0:
+                    ref = (match.group(1), int(key))
             generated = None
             if ref:
                 try:
