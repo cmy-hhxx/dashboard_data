@@ -4,13 +4,13 @@
 放到 `/mnt/fin_bench/aime_data/`。端到端约 **2.5–3 分钟**，产物带完整性校验。
 
 > 2026-11-04 起 AIME 数据只在弗吉尼亚更新：在 `aime_rsi_data` 上打包
-> （`SRC_BASE=/mnt/fin_bench/aime_rsi_data/1_aime`）。乌兰的 `1_aime` 是迁移前副本，不要再用于打包。
+> （`SRC_BASE=/mnt/aime_eval_ssd/1_aime`）。乌兰的 `1_aime` 是迁移前副本，不要再用于打包。
 
 ## 用法
 
 ```bash
 scp scripts/pack_aime_io.sh aime_rsi_data:/tmp/
-ssh aime_rsi_data 'chmod +x /tmp/pack_aime_io.sh && SRC_BASE=/mnt/fin_bench/aime_rsi_data/1_aime /tmp/pack_aime_io.sh'
+ssh aime_rsi_data 'chmod +x /tmp/pack_aime_io.sh && SRC_BASE=/mnt/aime_eval_ssd/1_aime /tmp/pack_aime_io.sh'
 ```
 
 产物：`/mnt/fin_bench/aime_data/aime_input_output_<日期>.tar.zst`（同日重复打包用 `--tag` 区分）。

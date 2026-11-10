@@ -22,7 +22,7 @@ docs/接口使用指南.md             # 5003 供数接口 + 5002 页面接口�
 
 ```bash
 scp scripts/pack_aime_io.sh aime_rsi_data:/tmp/
-ssh aime_rsi_data 'chmod +x /tmp/pack_aime_io.sh && SRC_BASE=/mnt/fin_bench/aime_rsi_data/1_aime /tmp/pack_aime_io.sh'
+ssh aime_rsi_data 'chmod +x /tmp/pack_aime_io.sh && SRC_BASE=/mnt/aime_eval_ssd/1_aime /tmp/pack_aime_io.sh'
 ```
 
 产物落在 `/mnt/fin_bench/aime_data/aime_input_output_<日期>.tar.zst`。
@@ -35,8 +35,7 @@ ssh aime_rsi_data 'chmod +x /tmp/pack_aime_io.sh && SRC_BASE=/mnt/fin_bench/aime
 ## 数据现状
 
 2026-11-04 起 AIME 数据只在弗吉尼亚更新（乌兰的 `1_aime` 是迁移前副本，不再用于打包）。
-弗吉尼亚有两份数据根：看板当前读 SSD `/mnt/aime_eval_ssd`（产品目录 `1_aime`）；
-旧 HDD `/mnt/fin_bench/aime_rsi_data` 仍保留，打包脚本默认还指向它。乌兰 ↔ 弗吉尼亚同步已停止。
+弗吉尼亚统一读 SSD `/mnt/aime_eval_ssd`（产品目录 `1_aime`）；旧 HDD `/mnt/fin_bench/aime_rsi_data` 已不再提供 `1_aime`，看板 / 页面 / 供数都不要再指向它。乌兰 ↔ 弗吉尼亚同步已停止。
 
 | 数据 | 位置（远端） | 规模 |
 |---|---|---|
@@ -54,7 +53,7 @@ ssh aime_rsi_data 'chmod +x /tmp/pack_aime_io.sh && SRC_BASE=/mnt/fin_bench/aime
 `dashboard/` 是问财 / AIME 评测看板：原生 ES modules + SVG + Python 起服务；除可选的 `orjson` 外不依赖第三方运行时。
 本地读取仓库根目录的 `datasets/`；生产按产品分两套数据根：问财读乌兰的
 `/mnt/fin_bench/code_and_clean_data/datasets`，AIME 看板读弗吉尼亚的 `/mnt/aime_eval_ssd`
-（产品目录 `1_aime`，旧 HDD `/mnt/fin_bench/aime_rsi_data` 留作冷数据）；
+（产品目录 `1_aime`；旧 HDD `/mnt/fin_bench/aime_rsi_data` 已不再使用）；
 可通过 `EVAL_DATASETS` 显式指定数据根目录（评测输入、输出、cluster_tree、item_index）。
 没有数据时显示待接入空态。将数据放入 `datasets/` 后运行 `./dashboard/local_dev/refresh.sh` 重建；
 本地启动方式见 [本地调试说明](dashboard/local_dev/README.md)。

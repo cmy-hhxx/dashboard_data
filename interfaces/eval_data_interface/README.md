@@ -25,7 +25,7 @@ trace 的 `problems` 问题数组与 P0–P4 严重度，并新增 `GET /severit
 
 ## 数据来源
 
-弗吉尼亚远端只读挂载：`/mnt/fin_bench/aime_rsi_data/1_aime`（`EVAL_DATASETS=/mnt/fin_bench/aime_rsi_data`）
+弗吉尼亚远端只读挂载：`/mnt/aime_eval_ssd/1_aime`（`EVAL_DATASETS=/mnt/aime_eval_ssd`）
 
 | 内容 | 路径 |
 |---|---|
@@ -102,7 +102,7 @@ trace 的 `problems` 问题数组与 P0–P4 严重度，并新增 `GET /severit
 python3 tests/test_acceptance.py
 
 # 直接指向真实挂载（远端机器上；弗吉尼亚的 AIME 数据根）
-EVAL_DATASETS=/mnt/fin_bench/aime_rsi_data python3 run.py serve
+EVAL_DATASETS=/mnt/aime_eval_ssd python3 run.py serve
 
 # 只建索引 / 看索引摘要
 python3 run.py build
