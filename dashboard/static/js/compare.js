@@ -407,9 +407,9 @@ function sideHeadHTML(label, n, side, model) {
   return `<div class="pane-head compare-side-head"><span class="cg"><span class="cg-k">${esc(label)}</span>${tag}${count}</span></div>`;
 }
 
-function sideHTML(prefix, label, ref, gap, model) {
+function sideHTML(prefix, label, ref, gap, model, withThreads = true) {
   const n = ref && !gap ? Number(ref.n || 0) : null;
-  const body = gap ? `<div class="empty">这一侧没有可用的评测详情</div>` : detailPaneHTML(prefix);
+  const body = gap ? `<div class="empty">这一侧没有可用的评测详情</div>` : detailPaneHTML(prefix, withThreads);
   return `<section class="pane pane-out pane-sticky compare-side${gap ? " is-gap" : ""}" data-side="${prefix}" aria-label="${esc(label)}">${sideHeadHTML(label, n, prefix, model)}${body}</section>`;
 }
 
@@ -569,7 +569,7 @@ async function paintSides(round, pair, online) {
       <span class="compare-cap-label">预测能力</span>
       <div class="compare-cap-row" style="--cols:${columns.length}">${caps}</div>
     </div>` : ""}
-    <div class="compare-side-row${columns.length === 1 ? " is-single" : ""}" style="--cols:${columns.length}">${columns.map((column) => sideHTML(column.prefix, column.label, column.ref, column.gap, column.model)).join("")}</div>`;
+    <div class="compare-side-row${columns.length === 1 ? " is-single" : ""}" style="--cols:${columns.length}">${columns.map((column) => sideHTML(column.prefix, column.label, column.ref, column.gap, column.model, !folds)).join("")}</div>`;
   applyLayout();
   const jobs = [];
   if (online) {
@@ -618,6 +618,10 @@ export async function render(root, ctx) {
   const url = parseCompareURL(location.search);
   const round = url.round ? rounds.find((item) => String(item.id) === String(url.round)) : null;
   if (!round) {
+    if (document.documentElement.dataset.compare === "1") {
+      root.innerHTML = `<div class="bento"><div class="card" style="--span:12"><div class="empty">缺少版本对比参数：需要 round + pair（或 online）。</div></div></div>`;
+      return;
+    }
     testsetPicker(root, ctx, rounds);
     return;
   }

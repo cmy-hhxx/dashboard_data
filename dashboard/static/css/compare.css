@@ -4,6 +4,16 @@
 
 html[data-view="compare"] main { max-width: none; padding-bottom: 24px; }
 
+/* 独立版本对比页（/compare/?compare=1）：直接展示某一期的一对样本，不要测试集返回、
+   模型筛选、同步滚动和同题列表；16:9 铺满，32:9 收在 2200px 内。 */
+html[data-compare="1"] main { max-width: 2200px; }
+html[data-compare="1"] #viewSwitch, html[data-compare="1"] #productSwitch { display: none; }
+html[data-compare="1"] .compare-back,
+html[data-compare="1"] .compare-models,
+html[data-compare="1"] .compare-sync,
+html[data-compare="1"] .compare-list { display: none; }
+html[data-compare="1"] .bench-compare { grid-template-columns: minmax(0, 1fr); }
+
 /* ---------------------------------------------------------------- shell */
 .compare-top {
   display: flex; align-items: center; gap: 4px 12px; min-height: 32px; margin-bottom: 8px; min-width: 0;

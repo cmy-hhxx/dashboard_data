@@ -20,13 +20,13 @@ export const utOf = (r) => (r && USER_TYPE_SHORT[r.ut] ? r.ut : "unknown");
 export const isLostRow = (r) => !!(r && (r.ul || r.sp === "lost"));
 
 /* section.pane.pane-out.pane-sticky 的内容；prefix 只影响 id，不影响样式。 */
-export function detailPaneHTML(prefix = "") {
+export function detailPaneHTML(prefix = "", withThreads = true) {
   return `<div class="pane-scroll" id="${prefix}sbody" tabindex="0" aria-label="样本详情">
         <div id="${prefix}shead"></div>
         <div class="anatomy" id="${prefix}sanatomy">
           <div class="traj" id="${prefix}sout"></div>
           <div class="timeline" id="${prefix}stl"></div>
-          <div class="threads"><svg aria-hidden="true"></svg></div>
+          ${withThreads ? `<div class="threads"><svg aria-hidden="true"></svg></div>` : ""}
           <div class="aprobs" id="${prefix}sattr"></div>
         </div>
       </div>`;

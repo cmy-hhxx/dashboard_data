@@ -1552,7 +1552,7 @@ function matrixTable(view) {
   });
   const foot = cols.map((c, ci) => `<button type="button" class="cell coltot" style="--v:0.08" data-mx="${rows.length}:${ci}" title="全部场景 · ${esc(c.name)}：${fmt(colTotals[ci])} 个问题 / ${fmt(grandTraces)} 条 Trace · ${pct(colTotals[ci], grandTraces, 1)}">${cellData(colTotals[ci], grandTraces)}</button>`).join("");
   return `<div class="matrix mx-swap-panel" style="--cols:${cols.length};--rows:${rows.length}">
-    <div class="mx-rows"><span class="mx-corner" aria-hidden="true"></span>${rowLabels}<span class="rh"><span class="mx-lab mx-total-lab">场景合计</span></span></div>
+    <div class="mx-rows"><span class="mx-corner" aria-hidden="true"></span>${rowLabels}<span class="rh"><span class="mx-lab mx-total-lab">场景合计<em class="mx-vol">（${fmt(grandTraces)}条）</em></span></span></div>
     <div class="mx-scroll"><div class="mx-grid">${heads}${gridCells}${foot}</div></div>
     <div class="mx-tots"><span class="rowtot-head" title="该场景在各问题聚类上的问题数合计"><span class="mx-lab mx-total-lab">问题合计</span></span>${tots}<span class="rowtot rowtot-foot">${fmt(grand)}</span></div>
   </div>`;
@@ -1922,6 +1922,11 @@ function matrixPerspectiveHTML(view, trend, loading = false, state = {}, cluster
   </div>`;
 }
 
+/* Fullscreen grows the matrix as one piece. Column widths stay at their content width and every
+   row height / font scales with them; stretching only the columns turned a 38px row into a wide
+   flat strip. The zoom stops at MX_FULL_ZOOM_MAX so a 32:9 monitor does not blow the cells up. */
+const MX_FULL_ZOOM_MAX = 1.5;
+
 /* One line per title: the column pane never gets narrower than its widest title, so a narrow
    card scrolls the pane sideways instead of ending a label in an ellipsis. */
 function fitMatrix(m) {
@@ -1931,6 +1936,20 @@ function fitMatrix(m) {
   const widths = [...labs, ...$$(".mx-grid .cell-main, .mx-grid .cell-pct", m)].map((el) => el.scrollWidth);
   const need = Math.ceil(Math.max(...widths)) + 9; // 4px gap + 5px caret
   m.style.setProperty("--mx-colw", `${need}px`);
+  if (m.closest(".mx-card.is-mx-full, .mx-card.is-page")) {
+    const cols = Number(m.style.getPropertyValue("--cols")) || 0;
+    const rows = m.querySelector(".mx-rows");
+    const tots = m.querySelector(".mx-tots");
+    // offsetWidth stays in unzoomed layout pixels, so repeated fits keep measuring the same table.
+    const natural = cols
+      ? (rows?.offsetWidth || 0) + (tots?.offsetWidth || 0) + cols * need + Math.max(0, cols - 1) * 4 + 8
+      : 0;
+    const avail = m.parentElement?.clientWidth || 0;
+    const zoom = natural && avail ? Math.min(MX_FULL_ZOOM_MAX, Math.max(1, avail / natural)) : 1;
+    m.style.zoom = zoom > 1.001 ? zoom.toFixed(4) : "";
+  } else if (m.style.zoom) {
+    m.style.zoom = "";
+  }
   const pane = m.querySelector(".mx-scroll");
   if (pane) {
     pane.classList.toggle("is-overflow", pane.scrollWidth > pane.clientWidth + 1);
@@ -2400,10 +2419,11 @@ function normalizeTrend(trend, data) {
 }
 
 function matrixCard(p, tax) {
+  const page = document.documentElement.dataset.matrix === "1";
   const abBtn = p.ab && tax
     ? `<button type="button" class="link mx-ab" id="mxAB" aria-expanded="false" aria-controls="mxABFace" title="固定题集改版前后对比 + 线上真实用户验证">A/B Test<small>${esc(p.ab.label || "")}</small></button>`
     : "";
-  const matrix = (body, actions = "", chrome = false) => `<article class="card mx-card" id="mxCard" style="--span:12">
+  const matrix = (body, actions = "", chrome = false) => `<article class="card mx-card${page ? " is-page" : ""}" id="mxCard" style="--span:12">
     <div class="mx-face mx-matrix-face" id="mxMatrixFace">
       <header class="card-head mx-card-head"><h2>聚类矩阵</h2>${actions ? `<div class="mx-head-actions">${actions}</div>` : ""}</header>
       ${body}
@@ -3260,6 +3280,9 @@ function wire(bento, p, tax, u) {
       const first = animate && !REDUCED ? mxCardEl.getBoundingClientRect() : null;
       mxCardEl.classList.toggle("is-mx-full", on);
       document.body.classList.toggle("is-mx-full", on);
+      // The fullscreen card is wider than the bento card, so the table zooms before the FLIP
+      // measures its destination box.
+      fitMatrix(mxCardEl.querySelector(".matrix"));
       if (mxFullBtn) {
         const label = on ? "退出全屏" : "全屏查看聚类矩阵";
         mxFullBtn.setAttribute("aria-pressed", String(on));

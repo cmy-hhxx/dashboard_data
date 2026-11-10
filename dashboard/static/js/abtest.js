@@ -304,6 +304,11 @@ function matrixTableAb(view, rnd, metric, selected) {
       tots += `<span class="rowtot num">${fmt(rowCount[ri])}</span>`;
     }
   });
+  const totalFixed = Array.isArray(rnd.pairs) ? sumOf(rows.map((r) => fixedCount(r))) : null;
+  // 场景合计后的（N条）与各行口径一致：变化矩阵是固定题集条数，其余是当前侧 Trace 数。
+  const totalVolume = change
+    ? (totalFixed == null ? sumOf(traces?.before || []) : totalFixed)
+    : grandDen;
   const foot = cols.map((c, ci) => {
     if (change) {
       const before = sumOf(rows.map((_, ri) => num(cells[ri][ci].before)));
@@ -322,7 +327,7 @@ function matrixTableAb(view, rnd, metric, selected) {
     footTotal = `<span class="rowtot rowtot-foot num" style="--v:0.08">${fmt(sumOf(rowCount))}</span>`;
   }
   return `<div class="matrix abmatrix${change ? " is-change" : ""}" style="--cols:${cols.length};--rows:${rows.length}">
-    <div class="mx-rows"><span class="mx-corner" aria-hidden="true"></span>${rowLabels}<span class="rh"><span class="mx-lab mx-total-lab">场景合计</span></span></div>
+    <div class="mx-rows"><span class="mx-corner" aria-hidden="true"></span>${rowLabels}<span class="rh"><span class="mx-lab mx-total-lab">场景合计<em class="mx-vol">（${fmt(totalVolume)}条）</em></span></span></div>
     <div class="mx-scroll"><div class="mx-grid">${heads}${gridCells}${foot}</div></div>
     <div class="mx-tots"><span class="rowtot-head" title="该场景在当前口径下的问题数合计"><span class="mx-lab mx-total-lab">${change ? "变化合计" : "问题合计"}</span></span>${tots}${footTotal}</div>
   </div>`;

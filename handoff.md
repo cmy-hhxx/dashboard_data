@@ -165,6 +165,9 @@ A/B 面板里的样本入口（旭日图叶子样本、矩阵格趋势的样本�
 | `dashboard/static/js/samples.js` | 具体数据两栏工作台（样本列表 + 详情） | 列表、筛选、分页 |
 | `dashboard/static/js/sample_detail.js` | 样本详情工厂（head + 轨迹 / 中间链路 / 归因、证据连线、轮次切换）；samples 与版本对比共用，`prefix` 控制 id | 详情呈现、证据交互 |
 | `dashboard/static/js/compare.js` + `css/compare.css` | 版本对比页：同题列表 + 改版前 / 后两栏详情，A/B 面板样本的落点 | 同题对比排版、路由 |
+| `page_service/problem_matrix/` | 5002 聚类矩阵独立页 `/matrix/`（反代看板 `?matrix=1`）；样本抽屉 → 样本详情，A/B 抽屉 → `/compare/` | 页面挂载、矩阵展示 |
+| `page_service/compare_details/` | 5002 版本对比展示页 `/compare/`、`/compare_details/`（反代看板 `?view=compare&compare=1`） | A/B 召回落点、展示态裁剪 |
+| `page_service/page_proxy.py` | 5002 页面服务共用的只读反代挂载（`/matrix`、`/compare`、`/dashboard`） | 挂载实现、前缀/查询透传 |
 | `dashboard/ab_detail.py` | 改版后重测详情的懒生成（attribution + compact + retest_input，item_index 回填聚类落点） | 改版后详情、缓存 |
 | `dashboard/tests/test_compare.mjs` / `test_sample_detail.mjs` | 版本对比纯逻辑、详情工厂焊点、样本列表回归 | 改 compare / 详情 |
 | `dashboard/static/js/render.js` | 公共内容渲染：Markdown-lite、JSON 高亮、按偏移保留证据高亮 | 文本 / JSON 呈现 |

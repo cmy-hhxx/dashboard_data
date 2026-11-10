@@ -24,11 +24,50 @@ function readURL() {
   const q = new URLSearchParams(location.search);
   state.view = VIEWS.includes(q.get("view")) ? q.get("view") : "data";
   state.product = PRODUCTS.includes(q.get("product")) ? q.get("product") : state.product;
+  // The standalone matrix / compare pages reuse this router under /matrix/ and /compare/;
+  // the flags keep their own view and survive pushState navigation.
+  document.documentElement.dataset.matrix = q.has("matrix") ? "1" : "";
+  document.documentElement.dataset.compare = q.has("compare") ? "1" : "";
+  if (q.has("matrix")) document.title = "聚类矩阵 · 评测看板";
+  else if (q.has("compare")) document.title = "版本对比 · 评测看板";
+  else if (/^(聚类矩阵|版本对比) · 评测看板$/.test(document.title)) document.title = "评测看板";
 }
 
 export function navigate(params, { replace = false } = {}) {
   const q = new URLSearchParams(location.search);
   Object.entries(params).forEach(([k, v]) => (v == null || v === "" ? q.delete(k) : q.set(k, v)));
+  // A standalone page only owns one view: sample recall opens the detail page, A/B recall opens
+  // the compare page, and anything that still needs the full board opens /dashboard/.  The base
+  // keeps DSW proxy prefixes intact (the frontend must never link to a root-absolute path).
+  const standalone = /^\/(?:.*\/)?(?:matrix|compare|compare_details)\//.test(location.pathname)
+    && (document.documentElement.dataset.matrix === "1" || document.documentElement.dataset.compare === "1");
+  if (standalone && params.view && params.view !== "data") {
+    const view = params.view;
+    const base = location.pathname.replace(/\/(?:matrix|compare|compare_details)(?:\/.*)?$/, "/");
+    const next = new URLSearchParams(q);
+    next.delete("matrix");
+    next.delete("compare");
+    if (view === "samples") {
+      const recalled = next.get("case") || next.get("slug");
+      if (recalled) {
+        // The matrix drawer carries the 10-hex sample slug in `case`; the detail page's
+        // backend resolves slugs only through `slug`.
+        if (next.get("case") && /^[0-9a-f]{10}$/.test(next.get("case"))) {
+          next.set("slug", next.get("case"));
+          next.delete("case");
+        }
+        next.delete("view");
+        location.assign(`${base}?${next}`);
+      } else {
+        location.assign(`${base}dashboard/?${next}`);
+      }
+    } else if (view === "compare") {
+      location.assign(`${base}compare/?compare=1&${next}`);
+    } else {
+      location.assign(`${base}dashboard/?${next}`);
+    }
+    return;
+  }
   history[replace ? "replaceState" : "pushState"](null, "", `${location.pathname}?${q}`);
   if (!replace) render();
 }

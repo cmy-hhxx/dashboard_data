@@ -25,6 +25,9 @@ http://<看板主机>:2833/?product=&case=  ──> /api/context（迷你索引�
 | `/samples/<slug>.json` | 单条详情（与看板同路径，首次请求会触发看板懒生成，0.5–4 s）；测试用户样本返回 404 |
 | `/samples-<product>.json` | 召回索引（给同事的系统对接用），已剔除测试用户行。**2026-11-07 起行内不再含 `lb`**，标签改由 `/labels-<product>.json` 按行号提供 |
 | `/labels-<product>.json` | 问题标签（`{schema, product, labels:[…]}`），按同一测试用户掩码过滤，与 `/samples-<product>.json` 的 `rows[]` 同序同长度 |
+| `/matrix/…` | 聚类矩阵独立页（`/matrix/?matrix=1`，反代看板数据页只留矩阵卡）；见 `page_service/problem_matrix/README.md` |
+| `/compare/…`、`/compare_details/…` | 版本对比展示页（`/compare/?compare=1&product=&round=&pair=`）；见 `page_service/compare_details/README.md` |
+| `/dashboard/…` | 完整看板兜底（矩阵里按筛选条件打开的样本列表走这里） |
 | `/healthz` | 存活 + 上游探活 |
 
 页面链接的用法：在看板里选中一个样本，复制地址栏的
@@ -83,12 +86,14 @@ python3 -m unittest discover -s tests -p 'test_*.py' -v
 
 ```bash
 cd page_service/sample_details
-./deploy.sh                       # rsync 到 eval_data:/opt/page_service/sample_details 并重启
+./deploy.sh                       # 同步 sample_details/problem_matrix/compare_details/page_proxy.py 并重启 5002
 ```
 
-远端目录、日志：`/opt/page_service/sample_details/logs/server.log`；进程号在 `server.pid`。
-单独起停：`./start.sh` / `./stop.sh`。`deploy.sh` 支持 `EVAL_DEPLOY_HOST` / `EVAL_DEPLOY_REMOTE` /
-`PORT` / `UPSTREAM` 覆盖。它**不会**调用、也不会影响看板的 `dashboard/deploy.sh`。
+`deploy.sh` 现在一起同步兄弟模块（矩阵页、版本对比展示页和共用的 `page_proxy.py`），
+所以发布其中任何一个页面都用这一条命令。远端目录、日志：`/opt/page_service/sample_details/logs/server.log`；
+进程号在 `server.pid`。单独起停：`./start.sh` / `./stop.sh`。`deploy.sh` 支持
+`EVAL_DEPLOY_HOST` / `EVAL_DEPLOY_REMOTE` / `PORT` / `UPSTREAM` 覆盖。它**不会**调用、
+也不会影响看板的 `dashboard/deploy.sh`。
 
 验收：
 
@@ -96,6 +101,8 @@ cd page_service/sample_details
 curl -s http://<看板主机>:2833/healthz
 curl -s "http://<看板主机>:2833/api/context?product=wencai&case=daily%7Cb_fast%7Cthread_…" | head -c 200
 curl -sI "http://<看板主机>:2833/samples/<slug>.json"
+curl -sI "http://<看板主机>:2833/matrix/?matrix=1"
+curl -sI "http://<看板主机>:2833/compare/?compare=1&product=wencai&round=…&pair=…"
 ```
 
 ## 已知边界

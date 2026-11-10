@@ -213,8 +213,21 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
   border-radius: 0; padding: 20px var(--gutter) 40px; background: var(--card);
 }
 .mx-card.is-mx-full > .mx-face { max-width: none; margin-inline: 0; }
+/* 全屏 / 独立矩阵页不拉伸列宽：表格按 fitMatrix 算出的等比例 zoom 放大，放不满时才在两侧留白；
+   列宽固定后只有中栏在窗口过窄时横向滚动。 */
+.mx-card.is-mx-full #mxShell .matrix, .mx-card.is-page #mxShell .matrix { justify-content: center; }
+.mx-card.is-mx-full #mxShell .mx-scroll, .mx-card.is-page #mxShell .mx-scroll { flex: 0 1 auto; }
+.mx-card.is-mx-full #mxShell .mx-grid, .mx-card.is-page #mxShell .mx-grid { grid-template-columns: repeat(var(--cols), var(--mx-colw, 0px)); }
 .mx-card.is-mx-full .mx-panels.is-both { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .mx-card.is-mx-full .mx-card-head { position: sticky; top: 0; z-index: 3; padding: 4px 0 10px; background: var(--card); }
+/* 独立矩阵页：/matrix/?matrix=1 只留聚类矩阵卡，页面宽度收在 2000px；32:9 超宽屏把两侧留白，
+   16:9 正好铺满，矩阵本身再用 fitMatrix 等比放大。 */
+html[data-matrix="1"] main { max-width: 2000px; }
+html[data-matrix="1"] .bento > .card:not(.mx-card) { display: none !important; }
+/* 没有矩阵数据时唯一的空态卡保留，不然整页会空白。 */
+html[data-matrix="1"] .bento > .card:not(.mx-card):has(> .empty) { display: block !important; }
+html[data-matrix="1"] #viewSwitch, html[data-matrix="1"] #productSwitch { display: none; }
+html[data-matrix="1"] .mx-full { display: none; }
 body.is-mx-full { overflow: hidden; }
 .mx-back {
   display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 9px;
@@ -352,6 +365,12 @@ body.is-mx-full { overflow: hidden; }
 }
 .mx-panels[hidden] { display: none; }
 .mx-panels.is-both { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); align-items: stretch; }
+/* 全屏 / 独立矩阵页：左右两栏共用一个高度。左栏问题卡片按行铺开，最后一行贴着右栏热力的底边，
+   不再在左栏底部留下比右栏高一截的空白。 */
+.mx-card.is-mx-full .mx-panels.is-both .mx-issue-trends-shell,
+.mx-card.is-page .mx-panels.is-both .mx-issue-trends-shell { display: flex; flex-direction: column; }
+.mx-card.is-mx-full .mx-panels.is-both .mpt, .mx-card.is-page .mx-panels.is-both .mpt { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.mx-card.is-mx-full .mx-panels.is-both .mpt-grid, .mx-card.is-page .mx-panels.is-both .mpt-grid { flex: 1 1 auto; align-content: space-between; }
 /* 右侧热力图铺到左栏 mpt 的底边，全屏内外都对齐。 */
 .mx-panels.is-both .mx-perspective:not([hidden]) { display: flex; flex-direction: column; }
 .mx-panels.is-both .mx-perspective-inner { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }

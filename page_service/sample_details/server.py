@@ -35,6 +35,18 @@ from urllib.parse import parse_qs, urlparse
 HERE = Path(__file__).resolve().parent
 STATIC = HERE / "static"
 
+# The cluster-matrix page lives beside this module and shares the 5002 port.
+if str(HERE.parent) not in sys.path:
+    sys.path.insert(0, str(HERE.parent))
+try:
+    from problem_matrix.proxy import handle as handle_matrix_page
+except ImportError:  # the module is optional: sample details keep working without it
+    handle_matrix_page = None
+try:
+    from compare_details.proxy import handle as handle_compare_page
+except ImportError:  # same for the standalone version-compare page
+    handle_compare_page = None
+
 PORT = int(os.environ.get("PORT", "5002"))
 UPSTREAM = os.environ.get("UPSTREAM", "http://127.0.0.1:5001").rstrip("/")
 PRODUCTS = ("wencai", "aime")
@@ -246,6 +258,11 @@ class Handler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         try:
+            # /matrix/…, /compare/… and /dashboard/… share this port with the sample page.
+            if handle_matrix_page and handle_matrix_page(self):
+                return
+            if handle_compare_page and handle_compare_page(self):
+                return
             if path == "/healthz":
                 return self._health()
             if path == "/api/context":
@@ -274,6 +291,13 @@ class Handler(SimpleHTTPRequestHandler):
                 self._error(502, "upstream error: %s" % exc)
             except Exception:  # noqa: BLE001 - headers may already be on the wire
                 pass
+
+    def do_HEAD(self):
+        if handle_matrix_page and handle_matrix_page(self):
+            return
+        if handle_compare_page and handle_compare_page(self):
+            return
+        super().do_HEAD()
 
     def _health(self):
         info = {"ok": True, "port": PORT, "upstream": UPSTREAM, "upstream_ok": False}

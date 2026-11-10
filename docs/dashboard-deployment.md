@@ -197,6 +197,8 @@ nohup /opt/eval_supervisor.sh >> /opt/eval_supervisor.log 2>&1 &   # 幂等，fl
 ```
 
 - 配置格式：`name|health_url|workdir|start_cmd`；乌兰不列已停用的 5003。
+- 聚类矩阵 `/matrix/`、版本对比 `/compare/` 由 5002 同一进程提供（`page_service/problem_matrix`、
+  `page_service/compare_details` 被 `sample_details/server.py` 导入），**不需要新增守护条目**。
 - 维护 / 发布窗口先 `touch /opt/eval_supervisor.pause`，结束后 `rm`，避免守护进程在 stop 后把旧服务拉起来。
 - **容器重启不会自动拉起**（镜像没有 cron / systemd）：重启后手动跑一次上面的 nohup，或把
   `nohup bash /opt/eval_boot.sh >/dev/null 2>&1 &` 追加到平台实例的启动命令（`scripts/eval_boot.sh` 可直接 scp 到 `/opt/`）。
