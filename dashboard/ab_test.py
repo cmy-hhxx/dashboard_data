@@ -500,13 +500,14 @@ def _as_int(value):
 
 
 def read_attribution_eqs(round_dir: Path):
-    """eq numbers that have a retest attribution row: the only ones a detail can be built for.
+    """eq -> retest trace id for rows that have a retest attribution.
 
     The case id carries the question's fixed-set index (``…_eq_00013``); scanning the 18 MB
     attribution file at payload-build time keeps ``round.pairs[].after.detail`` honest without
-    the dashboard having to probe the source on every page view.
+    the dashboard having to probe the source on every page view.  A retest is a fresh trace:
+    its id is not the target trace from the coverage file.
     """
-    found = set()
+    found = {}
     base = round_dir / SCOPE_AFTER / "attribution"
     if not base.is_dir():
         return found
@@ -521,7 +522,9 @@ def read_attribution_eqs(round_dir: Path):
                     case = str((attr.get("session_meta") or {}).get("case_id") or "")
                     match = ATTRIBUTION_EQ_RE.search(case)
                     if match:
-                        found.add(int(match.group(1)))
+                        turns = attr.get("turns") or []
+                        trace = str(((turns[0].get("meta") or {}).get("trace_id")) if turns else "")
+                        found[int(match.group(1))] = trace
         except OSError:
             continue
     return found
@@ -837,7 +840,7 @@ def _round_pairs(after_by_eq, before_by_trace, index, trace_scenes, detail_by_tr
             "sub": sub,
             "before": before,
             "after": {
-                "trace": trace,
+                "trace": attr_eqs.get(eq) or trace,
                 "model": after_row["model"],
                 "detail": eq if eq in attr_eqs else None,
                 "n": len(after_row["paths"]),
@@ -920,6 +923,9 @@ def _add_pair_refs(refs, before_by_trace, eq_by_trace, detail_by_trace, attr_eqs
         else:
             # after detail opens only when a retest attribution row exists for this eq.
             ref["detail"] = eq if eq is not None and eq in attr_eqs else None
+            # 同题重测是新 trace：after 侧不能沿用 before 的 target trace id。
+            if eq in attr_eqs and attr_eqs[eq]:
+                ref["trace"] = attr_eqs[eq]
 
 
 def _paired_only(pairs, sample_refs):
