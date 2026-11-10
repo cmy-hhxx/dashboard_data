@@ -793,11 +793,10 @@ def _online_from_samples(round_dir, meta, samples, before_rows, next_release, mo
 
 
 def _before_in_scope(row, models):
-    """Whether a before row belongs to the round's model scope (empty/unknown model stays in)."""
+    """Whether a before row belongs to the round's model scope (strict: model must match)."""
     if not models:
         return True
-    model = (row.get("model") or "").strip()
-    return not model or model in models
+    return (row.get("model") or "").strip() in models
 
 
 def _round_pairs(after_by_eq, before_by_trace, index, trace_scenes, detail_by_trace, attr_eqs,
@@ -953,8 +952,7 @@ def _build_round_scoped(round_dir: Path, order: int, version: str, samples=None,
     all_before = list(data["before"])
     if models:
         for side in data:
-            data[side] = [row for row in data[side]
-                          if not row["model"] or row["model"] in models]
+            data[side] = [row for row in data[side] if row["model"] in models]
     index = _sample_index(samples)
     trace_scenes = read_trace_scenes(round_dir)
     before = _collect_side(data["before"], index, trace_scenes)
