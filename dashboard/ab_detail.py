@@ -31,6 +31,7 @@ from pathlib import Path
 
 import ab_test
 import build
+import build_store as bs
 
 INDEX_VERSION = 2
 
