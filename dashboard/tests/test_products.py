@@ -169,6 +169,30 @@ class ProductSplitTests(unittest.TestCase):
             self.assertEqual(daily[("2026-11-03", "a_expert")]["in_sessions"], 1)
             self.assertEqual(volume["input"]["models"]["a_expert"]["sessions"], 1)
 
+    def test_aime_daily_uid_lost_marks_without_lost_dir(self):
+        """All input lives under daily now; lost users are matched by user_rules.lost.ids."""
+        with tempfile.TemporaryDirectory() as folder:
+            datasets, static = Path(folder) / "datasets", Path(folder) / "static"
+            seed(datasets)
+            as_aime(datasets)
+            result = lambda: json.loads((static / "data-aime.json").read_text())["products"]["aime"]
+            # Without the uid in the lost list, the daily row is not lost.
+            build(datasets, static, EVAL_PRODUCTS="aime")
+            self.assertEqual(result()["input"]["lost"], 0)
+            # Adding the uid must invalidate cached stats even though the input bytes are unchanged.
+            (datasets / "user_rules.json").write_text(json.dumps({
+                "lost": {"ids": ["598960105"]},
+            }), encoding="utf-8")
+            build(datasets, static, EVAL_PRODUCTS="aime")
+            product = result()
+            self.assertEqual(product["input"]["lost"], 1)
+            self.assertEqual(product["kpi"]["lost"], 1)
+            self.assertEqual(product["field"][0]["lost"], 1)
+            self.assertEqual(product["field"][0]["cells"][0][4], 1)
+            self.assertIn("lost", [s["id"] for s in product["splits"]])
+            rows = json.loads((static / "samples-aime.json").read_text())["products"]["aime"]["rows"]
+            self.assertEqual(rows[0]["ul"], 1)
+
     def test_aime_lost_user_input_counts_without_archive(self):
         with tempfile.TemporaryDirectory() as folder:
             datasets, static = Path(folder) / "datasets", Path(folder) / "static"

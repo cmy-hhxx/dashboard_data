@@ -453,6 +453,12 @@ def load_stats_sidecar(datasets: Path):
     return None
 
 
+def lost_signature(rules) -> str:
+    """Fingerprint of the lost uid list; changing it invalidates cached input stats."""
+    raw = "\x1f".join(sorted(rules.lost_ids))
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
 def scan_inputs(datasets: Path, top: Path, product: str, store: bs.BuildStore, jobs: int = 0,
                 sidecar_files=None):
     """Scan changed input files once; unchanged files are served from cache.
@@ -466,6 +472,13 @@ def scan_inputs(datasets: Path, top: Path, product: str, store: bs.BuildStore, j
     if sidecar_files and not isinstance(sidecar_files, dict):
         sidecar_files = {item["path"]: item for item in sidecar_files}
     sidecar_files = sidecar_files or {}
+    rules = user_rules.load(datasets)
+    lost_ids = tuple(sorted(rules.lost_ids))
+    lost_sig = lost_signature(rules)
+
+    def lost_fresh(meta):
+        return ((meta.get("stats") or {}).get("_lost_sig") == lost_sig)
+
     # A sidecar entry only carries aggregates; join keys still come from the file index.
     # A cache row written before keys existed (or by a different store) also lacks them.
     # Both would make input_session_counts() return None and silently drop the session
@@ -482,20 +495,20 @@ def scan_inputs(datasets: Path, top: Path, product: str, store: bs.BuildStore, j
         indexed_keys = indexed.get(rel)
         side = sidecar_files.get(rel)
         if (side and side.get("size") == stat.st_size and side.get("mtime_ns") == stat.st_mtime_ns
-                and (indexed_keys or not side.get("lines"))):
+                and (indexed_keys or not side.get("lines")) and lost_fresh(side)):
             metas.append(side)
             from_sidecar += 1
             continue
         cached = store.file_meta(rel)
         if (cached and cached["size"] == stat.st_size and cached["mtime_ns"] == stat.st_mtime_ns
-                and (indexed_keys or not cached.get("lines"))):
+                and (indexed_keys or not cached.get("lines")) and lost_fresh(cached)):
             metas.append(cached)
             continue
         prev = store.get_file(rel) if cached else None
         if prev and prev.get("lines") and not prev.get("keys"):
             prev = None  # full rescan backfills join keys instead of tailing only new lines
         todo.append((str(datasets), rel, "input", prev, True, product,
-                     bs.split_from_rel(rel), bs.model_from_rel(rel)))
+                     bs.split_from_rel(rel), bs.model_from_rel(rel), lost_ids, lost_sig))
     if todo:
         workers = jobs or (min(4, os.cpu_count() or 1) if len(todo) >= 4 else 1)
         debug(f"scan {product}: {len(todo)}/{len(files)} files, workers={workers}")
@@ -739,7 +752,8 @@ def debug(message):
 
 
 def ensure_file(store: bs.BuildStore, root: Path, rel: str, kind: str = "input",
-                product: str = "", need_stats: bool = False, load: bool = True):
+                product: str = "", need_stats: bool = False, load: bool = True,
+                lost_ids=(), lost_sig: str = ""):
     """Return a cached file index, scanning only when ``(size, mtime)`` changed.
 
     ``load=False`` only brings the index up to date; an unchanged file is then
@@ -751,14 +765,14 @@ def ensure_file(store: bs.BuildStore, root: Path, rel: str, kind: str = "input",
         return store.get_file(rel) if load else None
     prev = store.get_file(rel)
     data = bs.scan_file(root, rel, kind, prev, need_stats, product or product_of(rel.split("/")[0]) or "",
-                        bs.split_from_rel(rel), bs.model_from_rel(rel))
+                        bs.split_from_rel(rel), bs.model_from_rel(rel), lost_ids, lost_sig)
     data["product"] = product
     store.put_file(data)
     return data
 
 
-def ensure_input(store, root, rel, product):
-    return ensure_file(store, root, rel, "input", product, True)
+def ensure_input(store, root, rel, product, lost_ids=(), lost_sig=""):
+    return ensure_file(store, root, rel, "input", product, True, True, lost_ids, lost_sig)
 
 
 def ensure_raw(store, root, rel, load=True):
@@ -865,10 +879,10 @@ def discover_outputs(root: Path):
     return found
 
 
-def pair_output(root: Path, item: dict, store: bs.BuildStore):
+def pair_output(root: Path, item: dict, store: bs.BuildStore, lost_ids=(), lost_sig: str = ""):
     slots, compacts = defaultdict(list), defaultdict(list)
     for rel in item["inputs"]:
-        index = ensure_input(store, root, rel, item["product"])
+        index = ensure_input(store, root, rel, item["product"], lost_ids, lost_sig)
         for n, (key, tids, hashes) in enumerate(zip(index["keys"], index["tids"], index["hashes"]), 1):
             if key:
                 slots[key].append((rel, n, tids, hashes))
@@ -928,6 +942,9 @@ def pairs_from_keys(root: Path, store: bs.BuildStore):
     pairs = []
     info = Counter()
     misses = {}
+    rules = user_rules.load(root)
+    lost_ids = tuple(sorted(rules.lost_ids))
+    lost_sig = lost_signature(rules)
     for item in discover_outputs(root):
         # Detail building reads one output line by offset; make sure that index
         # exists even when the pairing itself is served from cache.
@@ -938,7 +955,7 @@ def pairs_from_keys(root: Path, store: bs.BuildStore):
             file_misses = cached[2] or {}
             info["pair_hits"] += 1
         else:
-            file_pairs, unmatched = pair_output(root, item, store)
+            file_pairs, unmatched = pair_output(root, item, store, lost_ids, lost_sig)
             file_misses = {key: value for key, value in unmatched.items() if value}
             store.put_pairs(item["rel"], item["sig"], file_pairs, file_misses)
             info["pair_misses"] += 1
@@ -1623,7 +1640,8 @@ def aggregate(product, samples, taxonomy):
     total = len(samples)
     models = [m for m in PRODUCTS[product]["models"] if any(s[2]["m"] == m for s in samples)]
     models += sorted({s[2]["m"] for s in samples} - set(models))
-    splits = [sp for sp in ("daily", "lost") if any(s[2]["sp"] == sp for s in samples)]
+    splits = [sp for sp in ("daily", "lost")
+              if any((s[2].get("ul") if sp == "lost" else s[2]["sp"] == sp) for s in samples)]
     scene = scene_votes(product, samples)
 
     severity, worst = sev_counter(), {k: 0 for k in WORST_KEYS}
@@ -1659,9 +1677,14 @@ def aggregate(product, samples, taxonomy):
     for m in models:
         rows = [s for s in samples if s[2]["m"] == m]
         entry = {"id": m, "label": MODEL_LABEL.get(m, m), **group_stats(rows)}
-        entry["splits"] = {sp: group_stats([s for s in rows if s[2]["sp"] == sp]) for sp in splits}
+        entry["splits"] = {sp: group_stats([s for s in rows
+                                           if (s[2].get("ul") if sp == "lost" else s[2]["sp"] == sp)])
+                           for sp in splits}
         by_model.append(entry)
-    by_split = [{"id": sp, "label": SPLIT_LABEL[sp], **group_stats([s for s in samples if s[2]["sp"] == sp])} for sp in splits]
+    by_split = [{"id": sp, "label": SPLIT_LABEL[sp],
+                 **group_stats([s for s in samples
+                                if (s[2].get("ul") if sp == "lost" else s[2]["sp"] == sp)])}
+                for sp in splits]
 
     # Component roles in pipeline order.
     roles = {}
@@ -1846,14 +1869,17 @@ def aggregate(product, samples, taxonomy):
     unified = product == "aime"
     keys = [(None, m) for m in models] if unified else [(sp, m) for sp in splits for m in models]
     for sp, m in keys:
-        group = [s for s in samples if s[2]["m"] == m and (sp is None or s[2]["sp"] == sp)]
+        group = [s for s in samples
+                 if s[2]["m"] == m
+                 and (sp is None or (s[2].get("ul") if sp == "lost" else s[2]["sp"] == sp))]
         group.sort(key=lambda s: (order[s[2]["w"]], -s[2]["n"], s[2]["d"]))
         if group:
             field.append({
                 "split": sp or "", "model": m,
-                "lost": sum(1 for s in group if s[2]["sp"] == "lost"),
+                "lost": sum(1 for s in group if s[2].get("ul")),
                 "sessions": len({(s[2]["sp"], s[2]["sid"] or s[0]) for s in group}),
-                "cells": [[s[0], order[s[2]["w"]], s[2]["n"], clip(s[2]["q"], 56), int(s[2]["sp"] == "lost")] for s in group],
+                "cells": [[s[0], order[s[2]["w"]], s[2]["n"], clip(s[2]["q"], 56),
+                           int(bool(s[2].get("ul")))] for s in group],
                 "roles": dict(Counter(p["role"] or "other" for s in group for p in s[1]["attribution"]["problems"])),
                 "tree": task_tree(group),
             })

@@ -417,7 +417,9 @@ attribution / compact」的日期，并给出聚类落点缺口与 A/B 轮次、
   最后一个完整换行继续；没有换行结尾的文件最后一行不会提交，等下一条完整行。
   cluster 快速签名在 `cache/cluster-signature.json`，映射 pickle 在 `cache/clusters-<sig>.pkl`；
   `datasets/stats.json` 是 stats worker 的旁路统计，删除后 build 会局部重扫。
-- **流失口径**：AIME 用 `.archive/1_lost_user_input` 目录；问财用输入 `meta.lost_user`。
+- **流失口径**：数据统一在 `eval_input/0_daily_eval_input`，按 `<datasets>/user_rules.json`
+  的 `lost.ids`（user_id 名单）匹配；目录名不再决定流失。名单变化会让输入统计按
+  `stats._lost_sig` 重扫一次。问财仍兼容输入 `meta.lost_user`。
   AIME 回测暂存目录 `eval_input/2_task_eval` 不计入输入量（`build.input_files` 已跳过），
   回测数据以追加行的方式发布到 `eval_input/0_daily_eval_input` 后才算日常输入。
   改口径时同时改 `build_store.split_from_rel` / `_aggregate_line` 和前端 `volTree`。

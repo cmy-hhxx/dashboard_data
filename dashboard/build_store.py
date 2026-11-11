@@ -145,11 +145,13 @@ def merge_stats(dst: dict, src: dict | None) -> dict:
     return dst
 
 
-def _aggregate_line(stats: dict, payload: dict, product: str, split: str, default_model: str) -> None:
+def _aggregate_line(stats: dict, payload: dict, product: str, split: str, default_model: str,
+                    lost_ids=()) -> None:
     stats["records"] += 1
     meta = payload.get("meta") or {}
     traces = payload.get("traces") or [{"meta": meta, "messages": []}]
     stats["traces"] += len(traces)
+    lost_ids = lost_ids or ()
     base_lost = split == "lost" or bool(meta.get("lost_user"))
     for trace in traces:
         if not isinstance(trace, dict):
@@ -158,7 +160,9 @@ def _aggregate_line(stats: dict, payload: dict, product: str, split: str, defaul
         model = normalize_model(tm.get("model") or meta.get("model"), product, default_model)
         task = tm.get("task") or meta.get("task") or "未接入分类体系"
         sub = tm.get("subtask") or meta.get("subtask") or ""
-        lost = int(base_lost or bool(tm.get("lost_user") or meta.get("lost_user")))
+        uid = str(tm.get("user_id") or meta.get("user_id") or "")
+        lost = int(base_lost or bool(tm.get("lost_user") or meta.get("lost_user"))
+                   or bool(uid and uid in lost_ids))
         usage = tm.get("usage") or meta.get("usage") or {}
         tools = int(tm.get("tool_count") or 0)
         tin = int(tm.get("input_tokens") or usage.get("input_tokens") or 0)
@@ -185,7 +189,7 @@ def _aggregate_line(stats: dict, payload: dict, product: str, split: str, defaul
 
 def scan_file(root: Path | str, rel: str, kind: str = "input", prev: dict | None = None,
               need_stats: bool = True, product: str = "", split: str | None = None,
-              default_model: str = "") -> dict:
+              default_model: str = "", lost_ids=(), lost_sig: str = "") -> dict:
     """Scan one JSONL file, extending ``prev`` when the file only grew.
 
     ``prev`` must be the dict returned by an earlier call.  Only complete lines
@@ -196,11 +200,14 @@ def scan_file(root: Path | str, rel: str, kind: str = "input", prev: dict | None
     path = root / rel
     st = path.stat()
     split = split or split_from_rel(rel)
-    if prev and st.st_size == prev.get("size") and st.st_mtime_ns == prev.get("mtime_ns"):
+    lost_ids = frozenset(lost_ids or ())
+    lost_ok = (not (need_stats and kind == "input")
+               or (prev and (prev.get("stats") or {}).get("_lost_sig") == lost_sig))
+    if prev and lost_ok and st.st_size == prev.get("size") and st.st_mtime_ns == prev.get("mtime_ns"):
         return prev
     ph = prefix_hash(path)
     output = kind != "input"
-    tail = bool(prev and prev.get("ends_nl") and st.st_size > int(prev.get("committed") or 0)
+    tail = bool(prev and lost_ok and prev.get("ends_nl") and st.st_size > int(prev.get("committed") or 0)
                 and ph == prev.get("prefix")
                 # Rows indexed before digests existed are rescanned once to backfill them.
                 and (not output or len(prev.get("digests") or b"") == 32 * int(prev.get("lines") or 0)))
@@ -260,7 +267,7 @@ def scan_file(root: Path | str, rel: str, kind: str = "input", prev: dict | None
                 tids.append([str(x) for x in ids if x])
                 keys.append(key or raw_key(body))
                 if need_stats and kind == "input":
-                    _aggregate_line(stats, payload, product, split, default_model)
+                    _aggregate_line(stats, payload, product, split, default_model, lost_ids)
                 if output:
                     digests += hashlib.sha256(body).digest()
             else:
@@ -277,7 +284,8 @@ def scan_file(root: Path | str, rel: str, kind: str = "input", prev: dict | None
         "lines": len(offsets) - 1, "committed": pos, "ends_nl": ends_nl,
         "offsets": offsets, "keys": keys, "tids": tids, "hashes": hashes,
         "digests": bytes(digests) if output else None,
-        "stats": stats, "scanned_at": time.time(), "model": default_model, "split": split,
+        "stats": {**stats, "_lost_sig": lost_sig} if need_stats and kind == "input" else stats,
+        "scanned_at": time.time(), "model": default_model, "split": split,
     }
 
 
