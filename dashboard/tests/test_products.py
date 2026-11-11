@@ -1,4 +1,4 @@
-"""Split deployments: EVAL_PRODUCTS limits a copy to its product; AIME lost-user input without the archive."""
+"""Split deployments: EVAL_PRODUCTS limits a copy to its product; AIME daily layout."""
 import json
 import os
 import shutil
@@ -14,11 +14,11 @@ except ImportError:  # `cd dashboard && python3 -m unittest discover -s tests`
     from test_empty_data import DASHBOARD, seed, write_jsonl
 
 
-def as_aime(datasets, split="0_daily_eval", input_dir="0_daily_eval_input"):
+def as_aime(datasets):
     """Copy the seeded wencai a_fast session into 1_aime as aime_fast."""
     src_out = datasets / "0_wencai/eval_output/0_daily_eval/a_fast"
-    out = datasets / "1_aime/eval_output" / split / "aime_fast"
-    inp = datasets / "1_aime/eval_input" / input_dir / "aime_fast/2026-11-01.jsonl"
+    out = datasets / "1_aime/eval_output/0_daily_eval/aime_fast"
+    inp = datasets / "1_aime/eval_input/0_daily_eval_input/aime_fast/2026-11-01.jsonl"
     (out / "compact").mkdir(parents=True, exist_ok=True)
     inp.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy(datasets / "0_wencai/eval_input/a_fast/2026-11-01.jsonl", inp)
@@ -63,6 +63,40 @@ class ProductSplitTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             with self.assertRaises(subprocess.CalledProcessError):
                 build(Path(folder), Path(folder) / "static", EVAL_PRODUCTS="wencia")
+
+    def test_attribution_pairs_input_from_another_day(self):
+        """Attribution date and input date can differ after trace-level publishing."""
+        with tempfile.TemporaryDirectory() as folder:
+            datasets, static = Path(folder) / "datasets", Path(folder) / "static"
+            seed(datasets)
+            src = datasets / "0_wencai/eval_input/a_fast/2026-11-01.jsonl"
+            row = json.loads(src.read_text(encoding="utf-8"))
+            row["meta"]["request_time"] = "2026-11-02 12:00:00"
+            src.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+            src.rename(src.with_name("2026-11-02.jsonl"))
+            out = datasets / "0_wencai/eval_output/0_daily_eval/a_fast/a_fast_attribution-2026-11-01.jsonl"
+            attr = json.loads(out.read_text(encoding="utf-8"))
+            attr["turns"][0]["meta"]["trace_id"] = "t1"
+            out.write_text(json.dumps(attr, ensure_ascii=False) + "\n", encoding="utf-8")
+            build(datasets, static)
+            index = json.loads((static / "samples-wencai.json").read_text())["products"]["wencai"]
+            self.assertEqual(index["rows"][0]["tr"], 1)
+            data = json.loads((static / "data-wencai.json").read_text())["products"]["wencai"]
+            self.assertEqual(data["kpi"]["traces"], 1)
+            self.assertEqual(data["input"]["traces"], 1)
+
+    def test_attribution_pairs_input_from_other_model_dir(self):
+        """A trace may be routed to the other model input dir; pairing is product-wide."""
+        with tempfile.TemporaryDirectory() as folder:
+            datasets, static = Path(folder) / "datasets", Path(folder) / "static"
+            seed(datasets)
+            inp = as_aime(datasets)
+            dst = inp.parent.parent / "aime_expert" / inp.name
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            inp.rename(dst)
+            build(datasets, static, EVAL_PRODUCTS="aime")
+            index = json.loads((static / "samples-aime.json").read_text())["products"]["aime"]
+            self.assertEqual(index["rows"][0]["tr"], 1)
 
     def test_input_session_counts_dedupe_snapshots(self):
         """同一 session 的多次输入快照记 1 个 Session，但每一行仍计入记录/轨迹体积。"""
@@ -192,22 +226,6 @@ class ProductSplitTests(unittest.TestCase):
             self.assertIn("lost", [s["id"] for s in product["splits"]])
             rows = json.loads((static / "samples-aime.json").read_text())["products"]["aime"]["rows"]
             self.assertEqual(rows[0]["ul"], 1)
-
-    def test_aime_lost_user_input_counts_without_archive(self):
-        with tempfile.TemporaryDirectory() as folder:
-            datasets, static = Path(folder) / "datasets", Path(folder) / "static"
-            seed(datasets)
-            inp = as_aime(datasets, "1_lost_user_eval", "1_lost_user_eval")
-            volume = lambda: json.loads((static / "data-aime.json").read_text())["products"]["aime"]["input"]
-            build(datasets, static, EVAL_PRODUCTS="aime")
-            self.assertEqual((volume()["records"], volume()["lost"], volume()["sessions"]), (1, 1, 1))
-            # With the archive present the eval folder is the partial copy again: counted once, not twice.
-            archive = datasets / "1_aime/.archive/1_lost_user_input/aime_fast/2026-11-01.jsonl"
-            archive.parent.mkdir(parents=True)
-            shutil.copy(inp, archive)
-            build(datasets, static, EVAL_PRODUCTS="aime")
-            self.assertEqual((volume()["records"], volume()["lost"], volume()["sessions"]), (1, 1, 1))
-
 
     def test_stray_snapshot_under_eval_input_is_not_scanned(self):
         """误放在 eval_input/ 下的快照不能进看板：只扫已发布的输入目录。

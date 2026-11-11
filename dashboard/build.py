@@ -61,10 +61,14 @@ STATIC = DASHBOARD / "static"
 # 发版日期：数据目录里的 releases.json 优先（数据侧可覆盖），仓库内 config/releases.json 是随代码走的默认值。
 RELEASES_CONFIG = DASHBOARD / "config" / "releases.json"
 PRODUCTION_DATASETS = Path("/mnt/fin_bench/code_and_clean_data/datasets")
+# Bump when input index semantics change; also invalidates cached input stats.
+INPUT_INDEX_VERSION = "2026-11-12.1"
+# Bump when pairing semantics change (cache keys are not otherwise versioned).
+PAIRING_VERSION = "2026-11-12.3"
 # Bump when the aggregate payload shape changes (details can stay cached).
 PAYLOAD_VERSION = "2026-11-11.4"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
-CLUSTER_INDEX_VERSION = 2
+CLUSTER_INDEX_VERSION = 3
 
 
 def default_datasets():
@@ -108,10 +112,9 @@ MODEL_LABEL = {
 SPLITS = {"0_daily_eval": "daily", "1_lost_user_eval": "lost"}
 SPLIT_LABEL = {"daily": "日常评测", "lost": "流失用户"}
 
-# eval_input/ folders that hold published days but must not be counted as extra
-# input: lost-user input is read from the archive and back-test staging is
-# published into 0_daily_eval_input first, so counting these would double it.
-# See input_files() and snapshot_input_dirs().
+# Legacy eval_input/ folders that must not be counted as extra input:
+# back-test staging is published into 0_daily_eval_input first, and old lost-user
+# dirs are archived. See input_files() and snapshot_input_dirs().
 EXCLUSIVE_INPUT_DIRS = ("1_lost_user_eval", "2_task_eval")
 
 # The agent's own order: decide → build the request → run it → deliver.
@@ -336,25 +339,14 @@ class LineReader:
 
 
 def input_candidates(root: Path, top: str, split: str, model: str, date: str) -> list[str]:
-    """Input files for one output, newest layout first.
-
-    AIME lost-user evaluation is temporarily reading the archived full input
-    (``.archive/1_lost_user_input``) while the published output keeps updating
-    under ``eval_output/1_lost_user_eval``.
-    """
+    """Same-day input files for one output (pairing itself indexes all dates)."""
+    if split != "daily":
+        return []
     top_dir = root / top
-    if split == "daily":
-        paths = [
-            top_dir / "eval_input" / "0_daily_eval_input" / model / f"{date}.jsonl",
-            top_dir / "eval_input" / model / f"{date}.jsonl",
-        ]
-    else:
-        paths = [
-            top_dir / ".archive" / "1_lost_user_input" / model / f"{model}-{date}_input.jsonl",
-            top_dir / ".archive" / "1_lost_user_input" / model / f"{date}.jsonl",
-            top_dir / "eval_input" / "1_lost_user_eval" / model / f"{date}.jsonl",
-            top_dir / "eval_input" / "1_lost_user_input" / model / f"{date}.jsonl",
-        ]
+    paths = [
+        top_dir / "eval_input" / "0_daily_eval_input" / model / f"{date}.jsonl",
+        top_dir / "eval_input" / model / f"{date}.jsonl",
+    ]
     return [p.relative_to(root).as_posix() for p in paths if p.is_file()]
 
 
@@ -386,8 +378,7 @@ def snapshot_input_dirs(top: Path, product: str):
         # eval_input, so there is no fixed set of roots to compare against and
         # nothing can be told apart as a stray; the board has no such case yet.
         return []
-    # These hold published days but are counted elsewhere (the archive covers
-    # lost-user input), so they are excluded, not reported as strays.
+    # Legacy input dirs are excluded from both scanning and stray reporting.
     accounted = set(EXCLUSIVE_INPUT_DIRS)
     found = []
     for candidate in sorted(base.glob("*")):
@@ -401,19 +392,13 @@ def snapshot_input_dirs(top: Path, product: str):
 
 
 def input_files(datasets: Path, top: Path, product: str):
-    """Every input file the volume card reads.
+    """Every published input file the volume card reads.
 
-    The scan is limited to ``input_roots``: published eval input only.
-
-    AIME lost-user inputs come from the archive; the smaller
-    ``eval_input/1_lost_user_eval`` copy is excluded so days are not counted
-    twice while that evaluation is in flight.  A root without the archive (the
-    弗吉尼亚 copy) keeps the full lost-user input in that eval folder, so it counts.
-    AIME back-test staging (``eval_input/2_task_eval``) is excluded as well: its
-    rows are published into ``eval_input/0_daily_eval_input`` first, and the sync
-    loop keeps the staging copy, so counting both would double the volume.
-    Wencai marks lost users inside the task-eval input with ``meta.lost_user``
-    instead of a separate directory.
+    The scan is limited to ``input_roots``.  AIME back-test staging
+    (``eval_input/2_task_eval``) is excluded: its rows are published into
+    ``eval_input/0_daily_eval_input`` first, so counting both would double the
+    volume.  Wencai marks lost users inside the task-eval input with
+    ``meta.lost_user`` rather than a separate directory.
     """
     # rglob 在弗吉尼亚的 ceph 上要 50 秒（目录太多），改成走目录清单缓存：
     # 只有 mtime 变过的目录才重新 readdir，数据没变时就是几十次 stat。
@@ -427,10 +412,6 @@ def input_files(datasets: Path, top: Path, product: str):
         key = f"in-{product}-" + root.relative_to(top).as_posix().replace("/", "_") + \
               ("-" + "-".join(skip) if skip else "")
         files += [root / rel for rel in tree.walk(root, key, skip_parts=skip)]
-    if product == "aime":
-        archive = top / ".archive" / "1_lost_user_input"
-        lost = archive if archive.is_dir() else top / "eval_input" / "1_lost_user_eval"
-        files += [lost / rel for rel in tree.walk(lost, f"in-{product}-lost")]
     return sorted(files)
 
 
@@ -455,7 +436,7 @@ def load_stats_sidecar(datasets: Path):
 
 def lost_signature(rules) -> str:
     """Fingerprint of the lost uid list; changing it invalidates cached input stats."""
-    raw = "\x1f".join(sorted(rules.lost_ids))
+    raw = INPUT_INDEX_VERSION + "\x1f" + "\x1f".join(sorted(rules.lost_ids))
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -879,14 +860,50 @@ def discover_outputs(root: Path):
     return found
 
 
-def pair_output(root: Path, item: dict, store: bs.BuildStore, lost_ids=(), lost_sig: str = ""):
-    slots, compacts = defaultdict(list), defaultdict(list)
-    for rel in item["inputs"]:
-        index = ensure_input(store, root, rel, item["product"], lost_ids, lost_sig)
+def input_slots(root: Path, store: bs.BuildStore, metas, product: str,
+                lost_ids=(), lost_sig: str = ""):
+    """All input lines for one product, keyed by (model, session+request_time).
+
+    Attribution dates can differ from the input file date after trace-level
+    splitting/delivery, so pairing must not be limited to the output's own day.
+    """
+    slots = defaultdict(list)
+    traces = defaultdict(list)
+    slots_any = defaultdict(list)
+    traces_any = defaultdict(list)
+    for meta in metas or []:
+        rel = meta.get("path")
+        if not rel:
+            continue
+        index = ensure_input(store, root, rel, product, lost_ids, lost_sig)
+        model = meta.get("model") or bs.model_from_rel(rel)
         for n, (key, tids, hashes) in enumerate(zip(index["keys"], index["tids"], index["hashes"]), 1):
             if key:
-                slots[key].append((rel, n, tids, hashes))
-    if item["compact"]:
+                slots[(model, key)].append((rel, n, tids, hashes))
+                slots_any[key].append((rel, n, tids, hashes))
+            for tid in tids or ():
+                traces[(model, tid)].append((rel, n, tids, hashes))
+                traces_any[tid].append((rel, n, tids, hashes))
+    return slots, traces, slots_any, traces_any
+
+
+def pair_output(root: Path, item: dict, store: bs.BuildStore, lost_ids=(), lost_sig: str = "",
+                slots=None, trace_slots=None, slots_any=None, trace_slots_any=None,
+                compact_slots=None, compact_any=None, compact_sid=None, compact_sid_any=None,
+                used=None, used_compact=None):
+    global_slots = slots is not None
+    slots_local, traces_local, compacts = defaultdict(list), defaultdict(list), defaultdict(list)
+    if slots is None:
+        for rel in item["inputs"]:
+            index = ensure_input(store, root, rel, item["product"], lost_ids, lost_sig)
+            for n, (key, tids, hashes) in enumerate(zip(index["keys"], index["tids"], index["hashes"]), 1):
+                if key:
+                    slots_local[key].append((rel, n, tids, hashes))
+                for tid in tids or ():
+                    traces_local[tid].append((rel, n, tids, hashes))
+        slots = slots_local
+        trace_slots = traces_local
+    if compact_slots is None and item["compact"]:
         index = ensure_raw(store, root, item["compact"])
         for n, (key, hashes) in enumerate(zip(index["keys"], index["hashes"]), 1):
             if key:
@@ -908,14 +925,55 @@ def pair_output(root: Path, item: dict, store: bs.BuildStore, lost_ids=(), lost_
         digest = digests[32 * (n - 1):32 * n]
         if digest == bs.NO_DIGEST:
             continue
-        cands = slots.get(key) or []
+        if global_slots:
+            pool = (slots.get((item["model"], key))
+                    or (slots_any or {}).get(key)
+                    or slots.get(("", key)) or [])
+            trace_pools = [
+                (trace_slots.get((item["model"], tid))
+                 or (trace_slots_any or {}).get(tid)
+                 or trace_slots.get(("", tid)))
+                for tid in turn_tids] if trace_slots else []
+        else:
+            pool = slots.get(key) or []
+            trace_pools = [trace_slots.get(tid) for tid in turn_tids] if trace_slots else []
+        if not pool and trace_pools:
+            merged, seen_refs = [], set()
+            for part in trace_pools:
+                for cand in part or ():
+                    ref = (cand[0], cand[1])
+                    if ref not in seen_refs:
+                        seen_refs.add(ref)
+                        merged.append(cand)
+            pool = merged
+        if used is not None:
+            avail = [c for c in pool if (c[0], c[1]) not in used]
+            pool = avail or pool
+        cands = pool
         inp = choose_input(cands, turn_tids)
         if inp:
-            try:
-                cands.remove(inp)
-            except ValueError:
-                pass
-        comp = compacts[key].pop(0) if compacts.get(key) else None
+            if used is not None:
+                used.add((inp[0], inp[1]))
+            if not global_slots:
+                try:
+                    cands.remove(inp)
+                except ValueError:
+                    pass
+        if compact_slots is not None:
+            sid = key.split("\x1f", 1)[0] if key else ""
+            pool = (compact_slots.get((item["model"], key))
+                    or (compact_any or {}).get(key) or [])
+            if not pool and sid:
+                pool = ((compact_sid or {}).get((item["model"], sid))
+                        or (compact_sid_any or {}).get(sid) or [])
+            if used_compact is not None:
+                avail = [c for c in pool if (c[0], c[1]) not in used_compact]
+                pool = avail or pool
+            comp = pool[0] if pool else None
+            if comp is not None and used_compact is not None:
+                used_compact.add((comp[0], comp[1]))
+        else:
+            comp = compacts[key].pop(0) if compacts.get(key) else None
         if inp is None:
             unmatched["input"] += 1
         if comp is None:
@@ -933,11 +991,13 @@ def pair_output(root: Path, item: dict, store: bs.BuildStore, lost_ids=(), lost_
     return pairs, unmatched
 
 
-def pairs_from_keys(root: Path, store: bs.BuildStore):
+def pairs_from_keys(root: Path, store: bs.BuildStore, product_metas=None):
     """Pair each attribution file by session id + request time.
 
     Unchanged attribution files are served from the pairing cache; only a new or
-    changed output (including a changed input snapshot) is re-paired.
+    changed output (including a changed input snapshot) is re-paired.  Input is
+    indexed once per product across all dates: trace-level publishing can put an
+    attribution row in a different date file than its input row.
     """
     pairs = []
     info = Counter()
@@ -945,19 +1005,90 @@ def pairs_from_keys(root: Path, store: bs.BuildStore):
     rules = user_rules.load(root)
     lost_ids = tuple(sorted(rules.lost_ids))
     lost_sig = lost_signature(rules)
-    for item in discover_outputs(root):
+    metas_by_product = product_metas or {}
+    slots_cache = {}
+    used_by_product = defaultdict(set)
+    model_sigs = {}
+    for product, metas in metas_by_product.items():
+        by_model = defaultdict(list)
+        for meta in metas:
+            rel = meta.get("path")
+            if not rel:
+                continue
+            model = meta.get("model") or bs.model_from_rel(rel)
+            by_model[model].append([rel, meta.get("size"), meta.get("mtime_ns")])
+        model_sigs[product] = {
+            model: hashlib.sha1(json.dumps(parts, separators=(",", ":")).encode()).hexdigest()
+            for model, parts in by_model.items()
+        }
+
+    def slots_for(product):
+        if product not in slots_cache:
+            slots_cache[product] = input_slots(
+                root, store, metas_by_product.get(product) or [], product, lost_ids, lost_sig)
+        return slots_cache[product]
+
+    items = discover_outputs(root)
+    compact_rels = {item["compact"] for item in items if item.get("compact")}
+    # A compact file can exist under a different date than its attribution row;
+    # include every published split's compact files, not only the paths predicted
+    # from output dates.
+    for path in root.glob("*/eval_output/*/*/compact/*.jsonl"):
+        rel = path.relative_to(root).as_posix()
+        if rel.split("/")[2] in SPLITS:
+            compact_rels.add(rel)
+    compact_slots = defaultdict(list)
+    compact_any = defaultdict(list)
+    compact_sid = defaultdict(list)
+    compact_sid_any = defaultdict(list)
+    for rel in sorted(compact_rels):
+        index = ensure_raw(store, root, rel)
+        model = bs.model_from_rel(rel)
+        for n, (key, hashes) in enumerate(zip(index["keys"], index["hashes"]), 1):
+            if not key:
+                continue
+            entry = (rel, n, hashes)
+            compact_slots[(model, key)].append(entry)
+            compact_any[key].append(entry)
+            sid = key.split("\x1f", 1)[0]
+            if sid:
+                compact_sid[(model, sid)].append(entry)
+                compact_sid_any[sid].append(entry)
+    used_compact = defaultdict(set)
+
+    for item in items:
         # Detail building reads one output line by offset; make sure that index
         # exists even when the pairing itself is served from cache.
         ensure_raw(store, root, item["rel"], load=False)
+        model_sig = model_sigs.get(item["product"], {}).get(item["model"], "")
+        sig = "|".join((PAIRING_VERSION, item["sig"], model_sig))
         cached = store.get_pairs(item["rel"])
-        if cached and cached[0] == item["sig"]:
+        if cached and cached[0] == sig:
             file_pairs = cached[1]
             file_misses = cached[2] or {}
             info["pair_hits"] += 1
+            for pair in file_pairs:
+                ref = pair.get("input")
+                if ref:
+                    used_by_product[item["product"]].add((ref[0], ref[1]))
+                cref = pair.get("compact")
+                if cref:
+                    used_compact[item["product"]].add((cref[0], cref[1]))
         else:
-            file_pairs, unmatched = pair_output(root, item, store, lost_ids, lost_sig)
+            if product_metas is not None:
+                slots, trace_slots, slots_any, trace_slots_any = slots_for(item["product"])
+            else:
+                slots = trace_slots = slots_any = trace_slots_any = None
+            file_pairs, unmatched = pair_output(
+                root, item, store, lost_ids, lost_sig,
+                slots=slots, trace_slots=trace_slots,
+                slots_any=slots_any, trace_slots_any=trace_slots_any,
+                compact_slots=compact_slots, compact_any=compact_any,
+                compact_sid=compact_sid, compact_sid_any=compact_sid_any,
+                used=used_by_product[item["product"]] if slots is not None else None,
+                used_compact=used_compact[item["product"]])
             file_misses = {key: value for key, value in unmatched.items() if value}
-            store.put_pairs(item["rel"], item["sig"], file_pairs, file_misses)
+            store.put_pairs(item["rel"], sig, file_pairs, file_misses)
             info["pair_misses"] += 1
         for key, value in file_misses.items():
             info[f"unmatched_{key}"] += value
@@ -1066,9 +1197,24 @@ def load_clusters(root: Path):
                     except ValueError:
                         continue
                     entry = {"path": it.get("path"), "edge": bool(it.get("edge")), "tags": it.get("tags") or []}
+                    label = it.get("label")
+                    json_path = it.get("json_path")
+                    problem_index = it.get("problem_index")
+                    turn_index = it.get("turn_index", 0)
                     for ident in (it.get("session_id"), it.get("trace_id"), it.get("case_id")):
-                        if ident:
-                            index.setdefault((product, model, ident, it.get("json_path"), it.get("label")), entry)
+                        if not ident:
+                            continue
+                        if json_path:
+                            index.setdefault((product, model, ident, json_path, label), entry)
+                        if problem_index is not None:
+                            index.setdefault(
+                                (product, model, ident, "pi", f"{turn_index}:{problem_index}", label), entry)
+                            index.setdefault(
+                                (product, model, ident, "pi", str(problem_index), label), entry)
+                            index.setdefault(
+                                (product, model, ident, "pix", f"{turn_index}:{problem_index}"), entry)
+                            index.setdefault(
+                                (product, model, ident, "pix", str(problem_index)), entry)
     for stage in taxonomy["stages"].values():
         stage["components"] = sorted(stage["components"])
     return taxonomy, index
@@ -1392,7 +1538,7 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
 
     problems = []
 
-    def take_problem(p, json_path, turn):
+    def take_problem(p, json_path, turn, problem_index):
         evs = []
         for ev in p.get("evidence") or []:
             pos = POSITION.search(ev.get("position") or "")
@@ -1404,11 +1550,22 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
             if loc and "m" in loc:
                 traces[loc["t"]][1][loc["m"]]["ev"].append(eid)
         cl = None
+        label = p.get("label")
         for ident in (sid, tid, case):
-            if ident:
-                cl = clusters.get((product, model, ident, json_path, p.get("label")))
-                if cl:
-                    break
+            if not ident:
+                continue
+            if json_path:
+                cl = clusters.get((product, model, ident, json_path, label))
+            if not cl:
+                cl = clusters.get((product, model, ident, "pi", f"{turn}:{problem_index}", label))
+            if not cl:
+                cl = clusters.get((product, model, ident, "pi", str(problem_index), label))
+            if not cl:
+                cl = clusters.get((product, model, ident, "pix", f"{turn}:{problem_index}"))
+            if not cl:
+                cl = clusters.get((product, model, ident, "pix", str(problem_index)))
+            if cl:
+                break
         sev = p.get("severity") if p.get("severity") in SEVERITIES else None
         problems.append({
             "id": len(problems), "turn": turn, "sev": sev, "label": p.get("label"),
@@ -1424,7 +1581,7 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
     for ti, t in enumerate(attr.get("turns") or []):
         before = len(problems)
         for pi, p in enumerate(t.get("problem") or []):
-            take_problem(p, f"turns[{ti}].problem[{pi}]", ti)
+            take_problem(p, f"turns[{ti}].problem[{pi}]", ti, pi)
         tm = t.get("meta") or {}
         turns.append({
             "summary": t.get("summary"), "correct": t.get("is_correct"), "correct_reason": t.get("correct_reason"),
@@ -1433,7 +1590,7 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
         })
     session_problems = []
     for pi, p in enumerate(attr.get("session_problem") or []):
-        take_problem(p, f"session_problem[{pi}]", None)
+        take_problem(p, f"session_problem[{pi}]", None, pi)
         session_problems.append(len(problems) - 1)
 
     # ---- compact
@@ -2480,7 +2637,8 @@ def sample_fingerprint(pair, cluster_sig=None):
         # Cached pairs round-trip through JSON as lists; format both forms alike.
         return f"{value[0]}:{value[1]}" if value else ""
     values = [
-        bs.BUILD_VERSION, pair.get("oh") or "", pair.get("ih") or "",
+        bs.BUILD_VERSION, INPUT_INDEX_VERSION,
+        pair.get("oh") or "", pair.get("ih") or "",
         pair.get("ch") or "", ref(pair.get("input")), ref(pair.get("compact")),
     ]
     return hashlib.sha1("\x1f".join(values).encode()).hexdigest()
@@ -2501,6 +2659,11 @@ def _problem_path(brief, problem):
     return f"turns[{turn}].problem[{pos}]"
 
 
+def _problem_index_from_path(path: str):
+    match = re.search(r"(?:session_problem|problem)\[(\d+)\]", path or "")
+    return int(match.group(1)) if match else None
+
+
 def remap_clusters(brief, row, cluster_index):
     """Reapply the current cluster mapping to a cached compact summary."""
     product, model = brief.get("product"), brief.get("model")
@@ -2511,8 +2674,19 @@ def remap_clusters(brief, row, cluster_index):
         found = None
         if path:
             for ident in (ids.get("session"), ids.get("trace"), ids.get("case")):
-                if ident:
-                    found = cluster_index.get((product, model, ident, path, problem.get("label")))
+                if not ident:
+                    continue
+                found = cluster_index.get((product, model, ident, path, problem.get("label")))
+                if found:
+                    break
+                pi = _problem_index_from_path(path)
+                if pi is not None:
+                    turn = problem.get("turn")
+                    label = problem.get("label")
+                    found = (cluster_index.get((product, model, ident, "pi", f"{turn}:{pi}", label))
+                             or cluster_index.get((product, model, ident, "pi", str(pi), label))
+                             or cluster_index.get((product, model, ident, "pix", f"{turn}:{pi}"))
+                             or cluster_index.get((product, model, ident, "pix", str(pi))))
                     if found:
                         break
         problem["cl"] = ({"path": found["path"], "edge": found["edge"], "tags": found["tags"]}
@@ -3040,7 +3214,7 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
         if pairing in ("auto", "csv") and (datasets / "对应关系.csv").exists():
             pairs, pairing_info = pairs_from_csv(datasets, store, reader)
         else:
-            pairs, pairing_info = pairs_from_keys(datasets, store)
+            pairs, pairing_info = pairs_from_keys(datasets, store, product_metas)
         timers["pair"] = round(time.time() - t0, 1)
         if not pairs:
             return empty_payloads("no-pairs"), {}
@@ -3048,7 +3222,14 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
 
         t0 = time.time()
         cluster_sig = cluster_signature(datasets, out_dir.parent / "cache")
-        pairs_sig = hashlib.sha1("\x1f".join(p.get("oh") or "" for p in pairs).encode()).hexdigest()
+        pairs_sig = hashlib.sha1(
+            "\x1f".join([PAIRING_VERSION] + [
+                "%s|%s|%s" % (
+                    f"{p['input'][0]}:{p['input'][1]}" if p.get("input") else "",
+                    f"{p['compact'][0]}:{p['compact'][1]}" if p.get("compact") else "",
+                    p.get("oh") or "")
+                for p in pairs
+            ]).encode()).hexdigest()
         feed_sig = feed_signature(datasets)
         release_sig = release_signature(datasets)
         ab_sig = ab_test.rounds_signature(datasets)

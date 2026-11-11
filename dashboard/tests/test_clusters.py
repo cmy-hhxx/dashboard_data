@@ -50,6 +50,23 @@ class ClusterTaxonomyTests(unittest.TestCase):
             entry = payload["patterns"]["S1.M1.1.1"]
             self.assertEqual((entry["name"], entry["def"]), ("子模式", "子模式 定义"))
 
+    def test_problem_index_item_is_indexed_without_json_path(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            out = root / "1_aime/eval_output/cluster/aime_fast"
+            out.mkdir(parents=True)
+            tree = {"meta": {}, "tree": node("root", 0, "全部", [node("S1", 1, "取数")])}
+            (out / "cluster_tree.json").write_text(json.dumps(tree, ensure_ascii=False), encoding="utf-8")
+            (out / "item_index.jsonl").write_text(json.dumps({
+                "session_id": "s1", "trace_id": "t1", "problem_index": 2, "turn_index": 0,
+                "path": "S1.M1.1", "label": "原因", "edge": False, "tags": ["时效"],
+            }, ensure_ascii=False) + "\n", encoding="utf-8")
+
+            _, index = build.load_clusters(root)
+            entry = index[("aime", "aime_fast", "s1", "pi", "0:2", "原因")]
+            self.assertEqual((entry["path"], entry["tags"]), ("S1.M1.1", ["时效"]))
+            self.assertIn(("aime", "aime_fast", "t1", "pi", "2", "原因"), index)
+
     def test_trees_of_products_served_elsewhere_are_skipped(self):
         with tempfile.TemporaryDirectory() as folder, mock.patch.object(build, "ENABLED", {"wencai"}):
             out = Path(folder) / "1_aime/eval_output/cluster/aime_fast"

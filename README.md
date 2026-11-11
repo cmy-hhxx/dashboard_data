@@ -159,23 +159,21 @@ tokens / task-subtask / lost 统计写到 `<datasets>/stats.json`；`build.py` �
 AIME 看板路径相对弗吉尼亚数据根 `/mnt/aime_eval_ssd`，问财相关路径相对乌兰数据根
 `/mnt/fin_bench/code_and_clean_data/datasets`。
 
-AIME 日常输出以 `1_aime/eval_output/0_daily_eval/<model>/<model>_attribution-<date>.jsonl` 与
-`compact/<model>_compact-<date>.jsonl` 为准；流失用户输出在
-`1_aime/eval_output/1_lost_user_eval/`，其评测输入暂时读取归档
-`1_aime/.archive/1_lost_user_input/<model>/<model>-<date>_input.jsonl`（该目录正在持续补评测，
-看板每轮构建会重新配对）。问财输出与输入都在 `0_wencai/eval_output/0_daily_eval/` 与
-`0_wencai/eval_input/<model>/<date>.jsonl`。
-`cluster_tree` 仍按现有 `eval_output/**/cluster/` 快照读取，没有聚类的样本在聚类卡片中计为未聚类。
+AIME 输入统一在 `1_aime/eval_input/0_daily_eval_input/<model>/<date>.jsonl`；输出在
+`1_aime/eval_output/0_daily_eval/<model>/<model>_attribution-<date>.jsonl` 与
+`compact/<model>_compact-<date>.jsonl`。流失用户不再看目录：按 `<datasets>/user_rules.json`
+的 `lost.ids`（user_id 名单）匹配，名单变化会让输入统计重扫一次。问财输出与输入都在
+`0_wencai/eval_output/0_daily_eval/` 与 `0_wencai/eval_input/<model>/<date>.jsonl`。
+`cluster_tree` 读取 `1_aime/eval_output/cluster/<model>/`（4.4+，`item_index` 用
+`turn_index/problem_index` 关联；旧的 `json_path` 仍兼容）。
 
-口径：输入 = 数据集中的 `*_input.jsonl`，以及 AIME / 问财新布局的 `<date>.jsonl`；输入侧同时统计 records / traces / tool_calls / tokens、按 `meta.task` / `meta.subtask` 的分布，以及流失轨迹（AIME `1_lost_user_input` 目录、问财 `meta.lost_user`）；另按 `(split, 归一化模型, session_id)` 去重得到「输入 Session」，作为评测量卡「完成 Session」的分母（「完成 Trace」分母用输入 traces）。已评测 = 输出侧回答记录数（问财四个版本 answer 合计，
+口径：输入 = 数据集中的 `*_input.jsonl`，以及 AIME / 问财新布局的 `<date>.jsonl`；输入侧同时统计 records / traces / tool_calls / tokens、按 `meta.task` / `meta.subtask` 的分布，以及流失轨迹（`user_rules.json` 的 `lost.ids` 命中 user_id；问财仍兼容 `meta.lost_user`）；另按 `(split, 归一化模型, session_id)` 去重得到「输入 Session」，作为评测量卡「完成 Session」的分母（「完成 Trace」分母用输入 traces）。已评测 = 输出侧回答记录数（问财四个版本 answer 合计，
 不含 comparison / compact 汇总记录；AIME 统计 `*_attribution-YYYY-MM-DD.jsonl`）；待评测 = 输入 − 已评测。
 会话场格数 = 已评测记录数；同一 session 的不同 `request_time` 各占一格，按 `(split, 归一化模型, session_id)` 去重后才是「场数」，与评测量完成 Session 对账。
 问财 / AIME 都按 `meta.task` 展示任务分布：问财不展示「其他/其它」，AIME 把「其它」并进「其他」。
-样本 = demo_data 的 attribution + compact 按 session_id 配对；输入按 trace_id/session_id 回接，不补造缺失内容。
-同一 `session_id + request_time` 有多个输入快照时，选覆盖归因各轮 `trace_id` 的那份（不再按文件顺序取第一条），否则后续轮次的 evidence 会没有 transcript、只能显示「未定位」。
-当前真实快照：输入覆盖至 2026-10-31；AIME 日常归因（demo_data）覆盖至 2026-10-31，
-问财归因回退归档（至 2026-10-23），AIME lost 回退归档（至 2026-10-14）；聚类产物生成于
-2026-10-30（v2.5.0），聚类覆盖至 2026-10-23，顶栏因此标「待刷新」。
+样本 = demo_data 的 attribution + compact 配对；输入按 `(session_id, request_time)` 全日期索引回接，key 不匹配时再按 `trace_id` 回退，不补造缺失内容。
+同一 key 有多个输入快照时，选覆盖归因各轮 `trace_id` 的那份（不再按文件顺序取第一条），否则后续轮次的 evidence 会没有 transcript、只能显示「未定位」。
+输入/归因/聚类的可用日期以数据目录实际文件为准；看板按文件扫描结果展示，不再在文档里固定快照日期。
 AIME demo 归因带 P0–P4（P4 为提示级）；问财暂无 demo 样本。
 
 ### 设计规则（可复现的 token）
