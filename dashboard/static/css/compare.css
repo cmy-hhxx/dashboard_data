@@ -34,10 +34,14 @@ html[data-compare="1"] .compare-standalone-head .compare-top-count { margin-left
   font-weight: var(--w-medium); text-overflow: ellipsis; white-space: nowrap;
 }
 .compare-top-count { margin-left: auto; color: var(--muted); font-size: var(--fs-small); white-space: nowrap; }
-.compare-modes { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.compare-mode { min-width: 0; overflow: hidden; color: var(--muted); font-size: var(--fs-small); text-overflow: ellipsis; white-space: nowrap; }
+/* 三列（改版前 / 改版后 / GPT）比原来的两列多一个开关：放在模式标签同一行右侧；
+   「有核验」筛选挪到底部与题量、同步/折叠同排，左栏不会再多出一行空位。 */
+.compare-modes {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0;
+}
+.compare-mode { min-width: 0; flex: 0 1 auto; overflow: hidden; color: var(--muted); font-size: var(--fs-small); text-overflow: ellipsis; white-space: nowrap; }
 .compare-filter {
-  flex: none; display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 7px;
+  flex: none; display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 6px;
   border-radius: var(--r-chip); background: var(--well); color: var(--muted);
   font-size: var(--fs-meta); white-space: nowrap; transition: background var(--snap), color var(--snap);
 }
@@ -46,7 +50,10 @@ html[data-compare="1"] .compare-standalone-head .compare-top-count { margin-left
 .compare-filter:hover { background: var(--hover); color: var(--ink-2); }
 .compare-filter[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
 .compare-filter[aria-pressed="true"] b { color: var(--accent); }
-.compare-models { display: flex; align-items: center; gap: 2px; min-width: 0; margin-left: auto; }
+.compare-models {
+  display: flex; flex-wrap: nowrap; align-items: center; justify-content: flex-end;
+  gap: 2px; min-width: 0; margin-left: auto;
+}
 .compare-models[hidden] { display: none; }
 .compare-model {
   height: 24px; padding: 0 7px; border-radius: var(--r-chip); color: var(--muted);
@@ -63,7 +70,7 @@ html[data-compare="1"] .compare-standalone-head .compare-top-count { margin-left
 
 .compare-list-head .list-meta { align-items: center; gap: 4px; min-width: 0; }
 #cmpcount { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.compare-list-head .meta-end { gap: 2px; }
+.compare-list-head .meta-end { gap: 4px; }
 .compare-list .pane-head { padding-bottom: 8px; }
 .compare-list .srow .m { gap: 4px 10px; align-items: center; }
 .srow-verify { display: inline-flex; align-items: center; color: var(--accent); }
@@ -165,6 +172,12 @@ html[data-compare-full="1"], html[data-compare-full="1"] body { overflow: hidden
 .cv-verdict.is-bad { background: color-mix(in oklab, var(--sev-0) 14%, transparent); color: var(--sev-0); }
 .cv-line { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 8px; color: var(--ink-2); font-size: var(--fs-small); line-height: 1.55; }
 .cv-k2 { color: var(--muted); font-size: var(--fs-meta); }
+.cv-source a { color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
+.cv-source a:hover { text-decoration: underline; }
+.cv-comp {
+  display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: var(--r-chip);
+  background: var(--well-2); color: var(--muted); font-size: var(--fs-meta); white-space: nowrap;
+}
 .cv-why { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 8px; color: var(--muted); font-size: var(--fs-meta); line-height: 1.55; }
 .cv-tally-item.is-ok { color: var(--accent); }
 .cv-tally-item.is-part { color: var(--sev-1); }
@@ -191,6 +204,33 @@ html[data-compare-full="1"], html[data-compare-full="1"] body { overflow: hidden
 .compare-side-row:not(.is-single) .msg-top { gap: 6px; }
 .compare-side .ov-n { font-size: var(--fs-meta); }
 .compare-side .sev-badge { font-size: var(--fs-meta); }
+
+/* GPT 列：只有一段回答，没有轨迹 / 归因；正文直接排版 Markdown，来源与检索折叠在末尾。 */
+.compare-gpt > .pane-scroll { display: flex; flex-direction: column; }
+#gptbody { display: grid; gap: 10px; min-width: 0; padding: 10px calc(var(--col-pad) + 8px) 20px; }
+.gpt-body { display: grid; gap: 12px; min-width: 0; }
+.gpt-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--muted); font-size: var(--fs-meta); }
+.gpt-question {
+  margin: 0; padding-left: 10px; border-left: 2px solid var(--well-2);
+  color: var(--ink-2); font-size: var(--fs-small); line-height: 1.55; overflow-wrap: anywhere;
+}
+.gpt-answer { min-width: 0; color: var(--ink-2); font-size: var(--fs-small); line-height: 1.65; overflow-wrap: anywhere; }
+.gpt-answer > :first-child { margin-top: 0; }
+.gpt-answer h1, .gpt-answer h2, .gpt-answer h3, .gpt-answer h4 { margin: 14px 0 6px; font-size: var(--fs-small); }
+.gpt-answer p { margin: 0 0 9px; }
+.gpt-answer ul, .gpt-answer ol { margin: 0 0 9px; padding-left: 18px; }
+.gpt-answer table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: var(--fs-meta); }
+.gpt-answer th, .gpt-answer td { padding: 4px 6px; border-bottom: 1px solid var(--well-2); text-align: left; white-space: nowrap; }
+.gpt-answer pre { margin: 0 0 9px; padding: 8px; border-radius: var(--r-well); background: var(--well); overflow: auto; }
+.gpt-answer code { font-family: var(--mono); font-size: var(--fs-meta); }
+.gpt-sources { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-size: var(--fs-meta); }
+.gpt-k { color: var(--muted); }
+.gpt-sources a { color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
+.gpt-sources a:hover { text-decoration: underline; }
+.gpt-searches { color: var(--muted); font-size: var(--fs-meta); }
+.gpt-searches summary { cursor: pointer; }
+.gpt-searches ul { margin: 6px 0 0; padding-left: 18px; }
+.gpt-searches li { overflow-wrap: anywhere; }
 
 /* ---------------------------------------------------------------- responsive */
 /* 窄一点就不并列了：两块各占 340px 没法读，回到上下；列表收起状态仍保留。 */

@@ -6,6 +6,7 @@
    Route: ?view=compare&product=…&round=<roundId>&pair=<口径① trace>[&online=<slug>]
    Sample entries in the A/B panel land here; every other sample entry stays on 具体数据. */
 import { $, $$, esc, fmt, getJSON } from "./core.js";
+import { md } from "./render.js";
 import { createSampleDetail, detailPaneHTML } from "./sample_detail.js";
 
 const PAGE = 50;
@@ -18,7 +19,7 @@ const SAMPLE_VIEW_RESET = {
 const C = {
   root: null, ctx: null, product: null, round: null, pairs: [], list: [], page: 1, query: "",
   online: null, pairId: null, gen: "", skelKey: "", listKey: "", sidesKey: "", token: 0, details: [],
-  listOff: false, syncScroll: false, verifyOnly: false, sides: { b: true, a: true }, fold: { b: false, a: false },
+  listOff: false, syncScroll: false, verifyOnly: false, sides: { b: true, a: true, g: true }, fold: { b: false, a: false },
 };
 
 /* ---------------------------------------------------------------- pure helpers (tested) */
@@ -299,13 +300,13 @@ function skeleton(root, round) {
         </div>
         <div class="compare-modes">
           ${mode ? `<span class="compare-mode">${esc(mode)} 模式</span>` : ""}
-          ${verifiedCount(round) ? `<button type="button" class="compare-filter" data-act="verify-only" aria-pressed="${C.verifyOnly}" title="只看有事实核验的题目">${VERIFY_ICON}<span>有核验</span><b class="num">${verifiedCount(round)}</b></button>` : ""}
           <span class="compare-models" role="group" aria-label="选择要展示的模型"></span>
         </div>
         <input class="search" id="cmpq" type="search" placeholder="搜索问题" autocomplete="off">
         <div class="list-meta">
           <span id="cmpcount" class="num"></span>
           <span class="meta-end">
+            ${verifiedCount(round) ? `<button type="button" class="compare-filter" data-act="verify-only" aria-pressed="${C.verifyOnly}" title="只看有事实核验的题目">${VERIFY_ICON}<span>有核验</span><b class="num">${verifiedCount(round)}</b></button>` : ""}
             <button type="button" class="compare-icon-btn compare-sync" data-act="sync" aria-pressed="${C.syncScroll}" title="同步滚动" aria-label="同步滚动">${SYNC_ICON}</button>
             <button type="button" class="compare-icon-btn" data-act="toggle-list" title="折叠同题列表" aria-label="折叠同题列表">${CHEV_LEFT}</button>
           </span>
@@ -378,13 +379,17 @@ async function toggleSideFull(side) {
   const prefix = side.dataset.side;
   const pair = (C.pairs || []).find((item) => String(item.id) === String(C.pairId));
   // Online samples have one side already; a single selected model also needs no refold.
-  const both = !C.online && pair && C.sides.b && C.sides.a;
-  if (!both) {
+  const available = C.online || !pair ? [] : [
+    ...(pair.before ? ["b"] : []),
+    ...(pair.after ? ["a"] : []),
+    ...(C.round?.gpt ? ["g"] : []),
+  ].filter((key) => C.sides[key] !== false);
+  if (available.length <= 1) {
     enterFull(side);
     return;
   }
   fullRestore = { ...C.sides };
-  C.sides = { b: prefix === "b", a: prefix === "a" };
+  C.sides = { b: prefix === "b", a: prefix === "a", g: prefix === "g" };
   C.sidesKey = "";
   await paintSides(C.round, pair, null);
   enterFull($(`.compare-side[data-side="${prefix}"]`, C.root));
@@ -465,7 +470,8 @@ function wireSkeleton(root) {
       const side = act.dataset.side;
       if (!C.sides || !(side in C.sides)) return;
       const next = { ...C.sides, [side]: !C.sides[side] };
-      if (!next.b && !next.a) return;
+      const gpt = !!C.round?.gpt;
+      if (!next.b && !next.a && (!gpt || !next.g)) return;
       C.sides = next;
       C.sidesKey = "";
       const pair = (C.pairs || []).find((item) => String(item.id) === String(C.pairId));
@@ -527,44 +533,39 @@ function renderPager(pages) {
 }
 
 /* ---------------------------------------------------------------- detail panes */
-const VERDICT_CLASS = { "对": "is-ok", "部分对": "is-part", "错": "is-bad", "未到期": "is-wait" };
+const VERDICT_CLASS = {
+  "对": "is-ok", "部分对": "is-part", "错": "is-bad", "没回答": "is-bad", "未到期": "is-wait",
+};
 const verdictClass = (value) => VERDICT_CLASS[String(value || "").trim()] || "is-wait";
 
-/* verify.jsonl 里同一道题每个模型一份 checks / results；side 前缀对应模型 id。
-   id 以后可能改名，所以先认 before/after/online 语义，再退回列表顺序。 */
+/* verify.jsonl 现在按模型分块（before_release / after_retest / 以后追加的 gpt），每块里是
+   common + special 两组已合并好的 facts。先认 id 语义，再按模型列表顺序回退；GPT 列排在
+   第三，所以它的回退下标是 2。 */
 function verifyItems(entry, side) {
   if (!entry) return null;
-  const lists = Array.isArray(entry.verifiable_fact_check_list) ? entry.verifiable_fact_check_list : [];
-  const evals = Array.isArray(entry.eval_per_model) ? entry.eval_per_model : [];
+  const models = Array.isArray(entry.models) ? entry.models : [];
   const match = (id) => {
     const text = String(id || "").toLowerCase();
+    if (side === "g") return text.includes("gpt");
     if (side === "o") return text.includes("online");
     if (side === "b") return text.includes("before");
     return text.includes("after") && !text.includes("online");
   };
-  let checks = lists.find((item) => match(item?.model_id))?.checks;
-  let results = evals.find((item) => match(item?.model_id))?.results;
-  if (!checks && !results) {
-    const at = side === "a" ? 1 : 0;
-    checks = lists[at]?.checks;
-    results = evals[at]?.results;
-    // Only a single unlabelled batch can serve the first side; never reuse a 'before' batch
-    // for the after pane just because the id changed.
-    if (!checks && !results && at === 0 && lists.length <= 1) {
-      checks = lists[0]?.checks;
-      results = evals[0]?.results;
-    }
+  let hit = models.find((model) => match(model?.id || model?.model_id));
+  if (!hit) {
+    const at = side === "a" ? 1 : side === "g" ? 2 : 0;
+    hit = models[at] || (at === 0 && models.length <= 1 ? models[0] : null);
   }
-  const byId = new Map();
-  (checks || []).forEach((item) => {
-    if (item?.fact_id) byId.set(String(item.fact_id), { ...item });
-  });
-  (results || []).forEach((item) => {
-    if (!item?.fact_id) return;
-    const id = String(item.fact_id);
-    byId.set(id, { ...(byId.get(id) || {}), ...item });
-  });
-  return byId.size ? [...byId.values()] : null;
+  const facts = Array.isArray(hit?.facts) ? hit.facts : [];
+  return facts.length ? facts : null;
+}
+
+const SOURCE_URL_RE = /(https?:\/\/[^\s]+)/;
+function sourceLink(text) {
+  const match = text.match(SOURCE_URL_RE);
+  if (!match) return esc(text);
+  const label = text.slice(0, match.index).replace(/[；;:：\s]+$/, "") || match[0];
+  return `<a href="${esc(match[0])}" target="_blank" rel="noopener" title="${esc(text)}">${esc(label)}</a>`;
 }
 
 function verifyHTML(round, pair, side) {
@@ -583,11 +584,14 @@ function verifyHTML(round, pair, side) {
     const verdict = String(item.is_correct || "").trim();
     const fact = item.fact_id ? `<span class="cv-id num">${esc(item.fact_id)}</span>` : "";
     const attribution = item.attribution ?? item.why_wrong ?? "";
+    const source = String(item.correct_answer_source || "").trim();
+    const component = String(item.responsible_component || "").trim();
     return `<article class="cv-item" data-v="${esc(verdict)}">
       <div class="cv-top">${fact}<span class="cv-check">${esc(item.what_to_check || "—")}</span><span class="cv-verdict ${verdictClass(verdict)}">${esc(verdict || "—")}</span></div>
       ${item.model_answer ? `<p class="cv-line"><span class="cv-k2">回复</span><span>${esc(item.model_answer)}</span></p>` : ""}
       ${item.correct_answer ? `<p class="cv-line"><span class="cv-k2">事实</span><span>${esc(item.correct_answer)}</span></p>` : ""}
-      <p class="cv-why"><span class="cv-k2">归因</span><span>${esc(attribution || "—")}</span></p>
+      ${source ? `<div class="cv-line cv-source"><span class="cv-k2">来源</span><span>${sourceLink(source)}</span></div>` : ""}
+      <p class="cv-why"><span class="cv-k2">归因</span><span>${esc(attribution || "—")}${component ? `<span class="cv-comp">${esc(component)}</span>` : ""}</span></p>
     </article>`;
   }).join("");
   return `<section class="compare-verify" aria-label="事实核验">
@@ -596,19 +600,64 @@ function verifyHTML(round, pair, side) {
   </section>`;
 }
 
-function sideHeadHTML(label, n, side, model) {
-  const count = n == null ? "" : `<span class="pill">${fmt(n)} 个落点</span>`;
+function paneHeadHTML(label, model, badge) {
   const tag = model ? `<small class="compare-model-tag">${esc(model)}</small>` : "";
   return `<div class="pane-head compare-side-head">
-    <span class="cg"><span class="cg-k">${esc(label)}</span>${tag}${count}</span>
+    <span class="cg"><span class="cg-k">${esc(label)}</span>${tag}${badge || ""}</span>
     <button type="button" class="compare-icon-btn compare-expand" data-act="expand" aria-pressed="false" title="全屏显示${esc(label)}" aria-label="全屏显示${esc(label)}"><span class="ico-expand">${EXPAND_ICON}</span><span class="ico-collapse">${COLLAPSE_ICON}</span></button>
   </div>`;
+}
+
+function sideHeadHTML(label, n, model) {
+  const count = n == null ? "" : `<span class="pill">${fmt(n)} 个落点</span>`;
+  return paneHeadHTML(label, model, count);
 }
 
 function sideHTML(prefix, label, ref, gap, model, withThreads = true) {
   const n = ref && !gap ? Number(ref.n || 0) : null;
   const body = gap ? `<div class="empty">这一侧没有可用的评测详情</div>` : detailPaneHTML(prefix, withThreads);
-  return `<section class="pane pane-out pane-sticky compare-side${gap ? " is-gap" : ""}" data-side="${prefix}" aria-label="${esc(label)}">${sideHeadHTML(label, n, prefix, model)}${body}</section>`;
+  return `<section class="pane pane-out pane-sticky compare-side${gap ? " is-gap" : ""}" data-side="${prefix}" aria-label="${esc(label)}">${sideHeadHTML(label, n, model)}${body}</section>`;
+}
+
+/* GPT 只有一段回答，没有归因 / 轨迹可挂：一列纯回答，头部保留全屏键，正文懒加载。 */
+function gptPaneHTML(label, ref, model) {
+  const badge = ref?.has ? "" : `<span class="pill">待补</span>`;
+  const body = ref?.has
+    ? `<div class="empty">正在读取 GPT 回答…</div>`
+    : `<div class="empty">这道题的 GPT 回答待补</div>`;
+  return `<section class="pane pane-out pane-sticky compare-side compare-gpt" data-side="g" aria-label="${esc(label)}">${paneHeadHTML(label, model, badge)}<div class="pane-scroll" id="gptscroll"><div id="gptbody">${body}</div></div></section>`;
+}
+
+function gptBodyHTML(data, verify) {
+  const meta = [
+    data.effort ? `${data.effort} effort` : "",
+    Number.isFinite(Number(data.latency_s)) && data.latency_s != null ? `${fmt(Number(data.latency_s), 1)} s` : "",
+    data.question_time ? String(data.question_time).replace("T", " ").slice(0, 16) : "",
+  ].filter(Boolean);
+  const sources = Array.isArray(data.sources) && data.sources.length
+    ? `<div class="gpt-sources"><span class="gpt-k">来源</span>${data.sources.map((item) => `<a href="${esc(item.url)}" target="_blank" rel="noopener" title="${esc(item.title || item.url)}">${esc(item.title || item.url)}</a>`).join("")}</div>`
+    : "";
+  const searches = Array.isArray(data.searches) && data.searches.length
+    ? `<details class="gpt-searches"><summary>检索 ${data.searches.length} 次</summary><ul>${data.searches.map((query) => `<li>${esc(query)}</li>`).join("")}</ul></details>`
+    : "";
+  return `${verify}
+    <div class="gpt-body">
+      <div class="gpt-meta">${meta.map((item) => `<span>${esc(item)}</span>`).join("")}</div>
+      ${data.question ? `<p class="gpt-question">${esc(data.question)}</p>` : ""}
+      <div class="gpt-answer">${md(data.answer)}</div>
+      ${sources}${searches}
+    </div>`;
+}
+
+async function mountGpt(host, round, pair, ref) {
+  if (!host || !ref?.has) return;
+  const body = $("#gptbody", host);
+  try {
+    const data = await getJSON(`gpt_samples/${encodeURIComponent(round.id)}/${encodeURIComponent(ref.key)}.json`);
+    if (body) body.innerHTML = gptBodyHTML(data, verifyHTML(round, pair, "g"));
+  } catch (err) {
+    if (body) body.innerHTML = `<div class="empty">GPT 回答读取失败，稍后刷新重试</div>`;
+  }
 }
 
 /* One switch mirrors the two model columns. Ratio keeps the same part of both details visible
@@ -726,7 +775,7 @@ function onlineSession(slug, ref) {
 
 async function paintSides(round, pair, online) {
   const panes = $("#cmppanes", C.root);
-  const sidesKey = `${C.sides.b ? 1 : 0}${C.sides.a ? 1 : 0}`;
+  const sidesKey = `${C.sides.b ? 1 : 0}${C.sides.a ? 1 : 0}${C.sides.g ? 1 : 0}`;
   const key = online
     ? `${C.gen}|online|${C.product}|${round.id}|${online}`
     : `${C.gen}|pair|${C.product}|${round.id}|${pair.id}|${sidesKey}`;
@@ -740,11 +789,17 @@ async function paintSides(round, pair, online) {
   const after = online ? null : (pair.after || null);
   const gaps = online ? { before: true, after: true } : pairGaps(pair);
   const onlineSource = online ? onlineRef(round, online) : null;
+  // 有 07_gpt_answer 的轮次才有第三列；没跑到的题在列里显示「待补」，而不是少一列。
+  const gptOn = !online && !!round.gpt;
+  const gptRef = gptOn
+    ? (pair.gpt || { key: pair.id, has: false, model: round.gpt?.model || "GPT" })
+    : null;
   const allColumns = online
     ? [{ prefix: "o", label: "线上真实", ref: onlineSource, gap: false, model: onlineSource?.model || fallbackModel, online: true }]
     : [
         { prefix: "b", label: "改版前", ref: before, gap: gaps.before, model: before?.model || fallbackModel },
         { prefix: "a", label: "改版后", ref: after, gap: gaps.after, model: after?.model || fallbackModel },
+        ...(gptOn ? [{ prefix: "g", label: "GPT", ref: gptRef, gap: !gptRef.has, model: gptRef.model || round.gpt?.model || "GPT", gpt: true }] : []),
       ];
   const columns = online ? allColumns : allColumns.filter((column) => C.sides[column.prefix] !== false);
   panes.classList.toggle("is-single", columns.length === 1);
@@ -768,7 +823,9 @@ async function paintSides(round, pair, online) {
       <span class="compare-cap-label">预测能力</span>
       <div class="compare-cap-row" style="--cols:${columns.length}">${caps}</div>
     </div>` : ""}
-    <div class="compare-side-row${columns.length === 1 ? " is-single" : ""}" style="--cols:${columns.length}">${columns.map((column) => sideHTML(column.prefix, column.label, column.ref, column.gap, column.model, !folds)).join("")}</div>`;
+    <div class="compare-side-row${columns.length === 1 ? " is-single" : ""}" style="--cols:${columns.length}">${columns.map((column) => (column.gpt
+      ? gptPaneHTML(column.label, column.ref, column.model)
+      : sideHTML(column.prefix, column.label, column.ref, column.gap, column.model, !folds))).join("")}</div>`;
   applyLayout();
   const jobs = [];
   const initialFolds = folds ? { traj: false, chain: false } : null;
@@ -806,6 +863,9 @@ async function paintSides(round, pair, online) {
         folds: initialFolds,
         loadDetail: (eq) => getJSON(`ab_samples/${encodeURIComponent(round.id)}/${encodeURIComponent(eq)}.json`),
       }));
+    }
+    if (gptOn && C.sides.g) {
+      jobs.push(mountGpt(panes.querySelector('[data-side="g"]'), round, pair, gptRef));
     }
   }
   wireSyncScroll();

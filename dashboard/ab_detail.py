@@ -162,6 +162,7 @@ class ABDetailBuilder:
         self._eq_locks = {}
         self._indexes = {}
         self._before_indexes = {}
+        self._gpt_cache = {}
         self._rounds = {}
         self._inputs = None
         self._inputs_lock = threading.Lock()
@@ -492,6 +493,26 @@ class ABDetailBuilder:
                     build.debug(f"ab index ready: {round_dir.name} ({len(index.get('attribution') or {})} rows)")
                 except Exception as exc:  # noqa: BLE001 - warm is best effort
                     build.debug(f"ab index warm failed {round_dir.name}: {exc}")
+
+    def gpt(self, round_id, key):
+        """One GPT answer for the compare page; ``None`` when it is not on disk yet."""
+        found = self._round(round_id)
+        if not found:
+            return None
+        _product, round_dir = found
+        path = round_dir / ab_test.GPT_RAW_REL / f"{key}.json"
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+        cache_key = (round_id, key)
+        cached = self._gpt_cache.get(cache_key)
+        if cached and cached[0] == (stat.st_size, stat.st_mtime_ns):
+            return cached[1]
+        answer = ab_test.read_gpt_answer(round_dir, key)
+        with self._index_lock:
+            self._gpt_cache[cache_key] = ((stat.st_size, stat.st_mtime_ns), answer)
+        return answer
 
     def ensure(self, round_id, ref):
         """Generate (or reuse) one after / before detail; ``None`` when it cannot be built."""

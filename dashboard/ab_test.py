@@ -43,9 +43,12 @@ from pathlib import Path
 
 AB_DIR = "ab_test"
 VERIFY_REL = "06_verify/verify.jsonl"
-# Bump when the payload's meaning changes (model scoping, leaf/matrix assembly) so an unchanged
-# dataset still rebuilds its abtests-*.json instead of serving a stale payload.
-AB_PAYLOAD_VERSION = 7
+GPT_DIR = "07_gpt_answer"
+GPT_QUESTIONS_REL = f"{GPT_DIR}/questions.jsonl"
+GPT_RAW_REL = f"{GPT_DIR}/raw"
+# Bump when the payload's meaning changes (model scoping, leaf/matrix assembly, verify shape) so
+# an unchanged dataset still rebuilds its abtests-*.json instead of serving a stale payload.
+AB_PAYLOAD_VERSION = 8
 ROUND_RE = re.compile(r"^(\d+)_version(?P<version>[0-9A-Za-z.]+?)(?:_test)?$")
 # 重测归因的 session_meta.case_id 结尾是 ``_eq_00013``：只有它的 eq 能生成改版后详情。
 ATTRIBUTION_EQ_RE = re.compile(r"_eq_(\d+)$")
@@ -152,6 +155,11 @@ def _round_signature_files(round_dir: Path):
     add(round_dir / "round.json")
     add(round_dir / "01_targets" / "questions.jsonl")
     add(round_dir / VERIFY_REL)
+    add(round_dir / GPT_QUESTIONS_REL)
+    gpt_raw = round_dir / GPT_RAW_REL
+    if gpt_raw.is_dir():
+        for path in sorted(gpt_raw.glob("*.json")):
+            add(path)
     manifest = round_dir / "00_manifest"
     if manifest.is_dir():
         for path in sorted(manifest.glob("coverage*.csv")):
@@ -1249,13 +1257,110 @@ def _build_round_legacy(round_dir: Path, order: int, version: str, samples=None,
     return meta
 
 
-def read_verify(round_dir: Path):
-    """`06_verify/verify.jsonl` → question_id → the two fact-check fields.
+def _fact_groups(item):
+    """``(kind, facts)`` pairs for one model, in either verify.jsonl layout.
 
-    The verification batch is keyed by the fixed set's question id (the same id as a pair),
-    and carries one entry per compared model.  Keep only the two fields the compare page
-    renders: the checks a model answered and the per-fact grading.  A round without the
-    batch simply has no ``verify`` key and the page shows a quiet empty state.
+    Current rows use ``common`` / ``special`` groups; the older batch used a single
+    ``checks`` / ``results`` list.  Both map to the same per-fact shape.
+    """
+    if isinstance(item.get("common"), list) or isinstance(item.get("special"), list):
+        return [("common", item.get("common") or []),
+                ("special", item.get("special") or [])]
+    for key in ("checks", "results"):
+        if isinstance(item.get(key), list):
+            return [("", item.get(key) or [])]
+    return []
+
+
+def _verify_facts(checks, evals):
+    """Merge a model's checklist and grading rows by ``fact_id``, keeping source order."""
+    order, facts = [], {}
+
+    def add(fact_id, kind, payload):
+        fid = str(fact_id or "")
+        if not fid:
+            return
+        fact = facts.get(fid)
+        if fact is None:
+            fact = {"fact_id": fid}
+            facts[fid] = fact
+            order.append(fid)
+        if kind and not fact.get("kind"):
+            fact["kind"] = kind
+        for key, value in payload.items():
+            if value not in (None, ""):
+                fact[key] = value
+
+    for kind, items in checks:
+        for item in items or []:
+            if isinstance(item, dict):
+                add(item.get("fact_id"), kind, {"what_to_check": item.get("what_to_check")})
+    for kind, items in evals:
+        for item in items or []:
+            if isinstance(item, dict):
+                add(item.get("fact_id"), kind, {
+                    key: item.get(key) for key in (
+                        "what_to_check", "model_answer", "is_correct", "correct_answer",
+                        "correct_answer_source", "responsible_component", "attribution",
+                    )
+                })
+    return [facts[fid] for fid in order]
+
+
+def _verify_models(row):
+    """One verify row → ``[{id, label, facts}]`` in model order.
+
+    ``paired_model`` defines the order and the display label; the check/eval arrays are
+    aligned with it and also carry ``model_id``.  Rows from the older batch have no
+    ``paired_model``, so the two arrays supply both the order and the ids.
+    """
+    paired = row.get("paired_model") if isinstance(row.get("paired_model"), list) else []
+    lists = row.get("verifiable_fact_check_list")
+    evals = row.get("eval_per_model")
+    lists = lists if isinstance(lists, list) else []
+    evals = evals if isinstance(evals, list) else []
+    order, labels = [], {}
+
+    def note(item):
+        if not isinstance(item, dict):
+            return ""
+        mid = str(item.get("model_id") or "")
+        if not mid:
+            return ""
+        if mid not in labels:
+            order.append(mid)
+            labels[mid] = str(item.get("model_label") or "") or mid
+        elif item.get("model_label") and labels.get(mid) == mid:
+            labels[mid] = str(item["model_label"])
+        return mid
+
+    for item in paired:
+        note(item)
+
+    checks, grades = defaultdict(list), defaultdict(list)
+    for item in lists:
+        mid = note(item)
+        if mid:
+            checks[mid].extend(_fact_groups(item))
+    for item in evals:
+        mid = note(item)
+        if mid:
+            grades[mid].extend(_fact_groups(item))
+
+    models = []
+    for mid in order:
+        facts = _verify_facts(checks.get(mid) or [], grades.get(mid) or [])
+        if facts:
+            models.append({"id": mid, "label": labels.get(mid) or mid, "facts": facts})
+    return models
+
+
+def read_verify(round_dir: Path):
+    """`06_verify/verify.jsonl` → question_id → per-model fact checks.
+
+    The batch is keyed by the fixed set's question id (the same id as a pair) and carries
+    one group per compared model.  The payload only ships the merged facts; the compare
+    page decides which pane (before / after / GPT) a model belongs to by its id.
     """
     path = round_dir / VERIFY_REL
     if not path.is_file():
@@ -1271,13 +1376,152 @@ def read_verify(round_dir: Path):
                 qid = str(row.get("question_id") or "")
                 if not qid:
                     continue
-                found[qid] = {
-                    "verifiable_fact_check_list": row.get("verifiable_fact_check_list") or [],
-                    "eval_per_model": row.get("eval_per_model") or [],
-                }
+                models = _verify_models(row)
+                if models:
+                    found[qid] = {"models": models}
     except OSError:
         return {}
     return found
+
+
+def read_gpt_index(round_dir: Path):
+    """`07_gpt_answer/` → the question keys and which already have an answer.
+
+    ``questions.jsonl`` is the run's work list; ``raw/<key>.json`` is one finished answer.
+    A key on the list without a raw file is the compare page's「待补」state, not an error.
+    """
+    base = round_dir / GPT_DIR
+    if not base.is_dir():
+        return None
+    questions = {}
+    try:
+        with open(round_dir / GPT_QUESTIONS_REL, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                key = str(row.get("key") or "")
+                if key:
+                    questions[key] = str(row.get("question") or "")
+    except OSError:
+        pass
+    raw = {}
+    raw_dir = round_dir / GPT_RAW_REL
+    if raw_dir.is_dir():
+        try:
+            for path in sorted(raw_dir.glob("*.json")):
+                if path.is_file() and path.stat().st_size > 0:
+                    raw[path.stem] = path
+        except OSError:
+            pass
+    keys = sorted(set(questions) | set(raw))
+    model = effort = ""
+    for key in keys:
+        path = raw.get(key)
+        if not path:
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(payload, dict):
+            model = str(payload.get("model") or "")
+            effort = str(payload.get("effort") or "")
+            if model:
+                break
+    return {
+        "total": len(keys),
+        "answered": sum(1 for key in keys if key in raw),
+        "model": model or "GPT",
+        "effort": effort,
+        "questions": {key: {"question": questions.get(key) or "", "has": key in raw}
+                      for key in keys},
+    }
+
+
+def read_gpt_answer(round_dir: Path, key: str):
+    """One GPT answer from ``07_gpt_answer/raw/<key>.json``, or ``None``.
+
+    The raw file is the provider response: keep the assistant text, its URL citations and
+    the web-search queries; the transport payload (reasoning, tool ids) is not shipped.
+    """
+    key = str(key or "")
+    if not re.fullmatch(r"[0-9A-Za-z_-]+", key):
+        return None
+    path = round_dir / GPT_RAW_REL / f"{key}.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    response = payload.get("response") if isinstance(payload.get("response"), dict) else {}
+    texts, sources, searches = [], [], []
+    seen_urls, seen_queries = set(), set()
+    for item in response.get("output") or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "message":
+            for part in item.get("content") or []:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") not in ("output_text", "text"):
+                    continue
+                text = str(part.get("text") or "")
+                if text.strip():
+                    texts.append(text.strip())
+                for annotation in part.get("annotations") or []:
+                    if not isinstance(annotation, dict):
+                        continue
+                    url = str(annotation.get("url") or "")
+                    if url and url not in seen_urls:
+                        seen_urls.add(url)
+                        sources.append({"title": str(annotation.get("title") or url), "url": url})
+        elif item.get("type") == "web_search_call":
+            action = item.get("action") if isinstance(item.get("action"), dict) else {}
+            queries = action.get("queries") or ([action.get("query")] if action.get("query") else [])
+            for query in queries:
+                text = str(query or "")
+                if text and text not in seen_queries:
+                    seen_queries.add(text)
+                    searches.append(text)
+    answer = "\n\n".join(texts).strip()
+    if not answer:
+        return None
+    usage = response.get("usage") if isinstance(response.get("usage"), dict) else {}
+    return {
+        "key": key,
+        "question": str(payload.get("question") or ""),
+        "model": str(payload.get("model") or ""),
+        "effort": str(payload.get("effort") or ""),
+        "question_time": str(payload.get("question_time") or ""),
+        "latency_s": payload.get("latency_s"),
+        "status": str(response.get("status") or ""),
+        "answer": answer,
+        "sources": sources,
+        "searches": searches,
+        "usage": {
+            "input": usage.get("input_tokens"),
+            "output": usage.get("output_tokens"),
+        },
+    }
+
+
+def _attach_gpt(meta, round_dir: Path):
+    """Give every pair its GPT key/availability; the answer body stays lazy."""
+    index = read_gpt_index(round_dir)
+    if index is None:
+        return
+    meta["gpt"] = {key: index[key] for key in ("total", "answered", "model", "effort")}
+    for pair in meta.get("pairs") or []:
+        key = str(pair.get("id") or "")
+        entry = index["questions"].get(key)
+        pair["gpt"] = {
+            "key": key,
+            "has": bool(entry and entry.get("has")),
+            "model": index.get("model") or "GPT",
+        }
 
 
 def build_round(round_dir: Path, order: int, version: str, samples=None,
@@ -1288,11 +1532,14 @@ def build_round(round_dir: Path, order: int, version: str, samples=None,
     # the same verification batch in every pair.
     meta["verify"] = read_verify(round_dir)
     if is_scope_layout(round_dir):
-        return _build_round_scoped(round_dir, order, version, samples=samples,
-                                   next_release=next_release, meta=meta,
-                                   input_traces=input_traces)
-    return _build_round_legacy(round_dir, order, version, samples=samples,
-                               next_release=next_release, meta=meta)
+        built = _build_round_scoped(round_dir, order, version, samples=samples,
+                                    next_release=next_release, meta=meta,
+                                    input_traces=input_traces)
+    else:
+        built = _build_round_legacy(round_dir, order, version, samples=samples,
+                                    next_release=next_release, meta=meta)
+    _attach_gpt(built, round_dir)
+    return built
 
 
 def ab_payload(datasets: Path, product: str, generated: str | None = None, samples=None,

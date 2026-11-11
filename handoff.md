@@ -129,16 +129,22 @@ payload 的 `rounds[].models` 暴露该集合，页面上只用一个标签表�
 点格子看跨期趋势，趋势头可按「改版前 / 改版后 / 线上真实」召回样本。
 
 顶部导航「版本对比」的初始页是一条全宽版本时间轴（无标题 / 无说明小字，按 released_at 排布、单版本居中、上下交替、轴线画出、节点 spring 入场、hover 光晕，窄屏退化纵向轴），点节点进入同题对比页；左栏列出当前轮次固定题集（`pairs`，可比的两侧优先、再按「改版后 −
-改版前」的落点变化降序，可搜索、分页），右侧把 **改版前 / 改版后** 两块样本详情上下排、各占首屏一半，
-中间一条发丝线分开（两块各自内部滚动）；详情仍是原工作台（`pane pane-out pane-sticky`：轨迹 / 中间链路 /
-证据连线 / 归因三列 + 折叠），由 `sample_detail.js` 的同一个工厂渲染（samples 页与 compare 页共用）；
-改版前用主 samples 的会话 slug，改版后用 `/ab_samples/<round>/<eq>.json`。缺一侧详情时该侧只留标题条与
-一句空态、不占半边，不编造。
+改版前」的落点变化降序，可搜索、分页），右侧把 **改版前 / 改版后 / GPT** 三块并排（窄屏仍是同一条
+三列栅格，不折行）；详情仍是原工作台（`pane pane-out pane-sticky`：轨迹 / 中间链路 / 证据连线 / 归因
+三列 + 折叠），由 `sample_detail.js` 的同一个工厂渲染（samples 页与 compare 页共用）；
+改版前用主 samples 的会话 slug，改版后用 `/ab_samples/<round>/<eq>.json`；GPT 列读
+`/gpt_samples/<round>/<key>.json`（`07_gpt_answer/raw/<key>.json` 的懒解析，只有回答正文、URL 引用和
+web-search query）。缺一侧详情时该侧只留标题条与一句空态；GPT 尚未跑到的题保留该列并显示「待补」，
+不编造。
 - 一屏两种看法：默认上下对照；任一侧的「折叠」把它收成底部 40px 的标题条、另一侧占满；左栏列表收起后
-  （窄轨「同题列表」）两块改为左右并列，窄于 1180px 时并列自动降级回上下。
-- 期次信息（v1106 / 题量 / 模型 / 改版前·改版后开关）收在左栏筛选头；有核验的题在列表里用对勾标记，
-  「有核验」筛选只看这些题。详情头不再重复标题 / chip / 轮次标签，换成 `06_verify/verify.jsonl` 的
-  事实核验区（`verifiable_fact_check_list` + `eval_per_model` 按 `fact_id` 合并），没有核验不渲染。
+  （窄轨「同题列表」）各块改为左右并列，窄于 1180px 时并列自动降级回上下。
+- 期次信息（v1106 / 题量 / 模型）收在左栏筛选头：模型模式与「改版前 / 改版后 / GPT」三列开关同排，
+  「有核验」筛选与题量、同步滚动 / 折叠按钮同排；有核验的题在列表里用对勾
+  标记，「有核验」筛选只看这些题。详情头不再重复标题 / chip / 轮次标签，换成 `06_verify/verify.jsonl`
+  的事实核验区：新格式按 `paired_model` 的模型分块，`verifiable_fact_check_list` 的 `common` / `special`
+  与 `eval_per_model` 同组同 `fact_id` 合并且按模型 id 落到对应列（`before_release` → 改版前、
+  `after_retest` → 改版后、以后含 `gpt` 的块 → GPT），没有核验不渲染。verify.jsonl 的 mtime 进
+  `rounds_signature`，最新的文件在下一次构建后自动替换。
   每侧头部的放大键把该侧铺满视口，Esc / 同一键退出。
 - 对比的是「整段会话里的某一轮」：标题按当前选中轮次的用户提问显示（`createSampleDetail` 的
   `roundQuestion` 选项），不显示会话第一句；轮次 / session 总评切换时标题一起换，左右两栏才是同一个问题。
@@ -168,7 +174,7 @@ A/B 面板里的样本入口（旭日图叶子样本、矩阵格趋势的样本�
 | `dashboard/static/js/system.js` | 评测体系机制图、聚类（阶段 → 环节 → 机制 → 模式）、证据闭环 | 体系页 |
 | `dashboard/static/js/samples.js` | 具体数据两栏工作台（样本列表 + 详情） | 列表、筛选、分页 |
 | `dashboard/static/js/sample_detail.js` | 样本详情工厂（head + 轨迹 / 中间链路 / 归因、证据连线、轮次切换）；samples 与版本对比共用，`prefix` 控制 id | 详情呈现、证据交互 |
-| `dashboard/static/js/compare.js` + `css/compare.css` | 版本对比页：同题列表 + 改版前 / 后两栏详情，A/B 面板样本的落点 | 同题对比排版、路由 |
+| `dashboard/static/js/compare.js` + `css/compare.css` | 版本对比页：同题列表 + 改版前 / 改版后 / GPT 三栏详情（GPT 懒读 `/gpt_samples/`），A/B 面板样本的落点 | 同题对比排版、路由、事实核验 |
 | `page_service/problem_matrix/` | 5002 聚类矩阵独立页 `/matrix/`（反代看板 `?matrix=1`）；样本抽屉 → 样本详情，A/B 抽屉 → `/compare/` | 页面挂载、矩阵展示 |
 | `page_service/compare_details/` | 5002 版本对比展示页 `/compare/`、`/compare_details/`（反代看板 `?view=compare&compare=1`） | A/B 召回落点、展示态裁剪 |
 | `page_service/page_proxy.py` | 5002 页面服务共用的只读反代挂载（`/matrix`、`/compare`、`/dashboard`） | 挂载实现、前缀/查询透传 |
@@ -251,7 +257,12 @@ uid 用户 ID（输入 meta.user_id）· ut 用户类型 real/test/internal/unkn
            matrix{before[[task,sub,[[path,n]…]]…], after|null, online|null},
            pairs[{id,eq,q,scene,sub,
                   before{trace,model,detail,n,paths,status},
-                  after{trace,model,detail,n,paths,status}|null}…],
+                  after{trace,model,detail,n,paths,status}|null,
+                  gpt{key,has,model}}…],
+           gpt{total,answered,model,effort}?,
+           verify{question_id:{models[{id,label,facts[{fact_id,kind,what_to_check,
+                  model_answer,is_correct,correct_answer,correct_answer_source,
+                  responsible_component,attribution}]}…]}}?,
            sample_refs{before[{trace,model,task,sub,paths,slug?,pair,eq,q,detail}…],
                        after[{trace,model,task,sub,paths,pair,eq,q,detail}…],
                        online[{slug,trace,model,task,sub,paths}…]}}] }
@@ -259,6 +270,13 @@ uid 用户 ID（输入 meta.user_id）· ut 用户类型 real/test/internal/unkn
 - `pairs` = 固定题集全部 1137 行（`01_targets/questions.jsonl` 顺序 = `coverage_after_release_retest.eq_index`），
   供「版本对比」左栏；`before.detail` 是主 samples 的会话 slug（多 slug 无唯一解时 null），
   `after.detail` 是能生成改版后详情的 eq（attribution 里存在该 `case_id` 才算）。
+  `gpt` 是 `07_gpt_answer/questions.jsonl` + `raw/<key>.json` 的存在性：`has=false` 就是页面上的「待补」；
+  回答正文不进 payload，打开该列时才请求 `/gpt_samples/<round>/<key>.json`。
+- `gpt` 汇总（总题数 / 已完成 / 模型与 effort）只在轮次有 `07_gpt_answer/` 时出现；没有该目录就没有
+  第三列，不会伪造空列。
+- `verify` 是新版 `06_verify/verify.jsonl` 归一化后的结果：按 `paired_model` 的模型顺序输出，`common` /
+  `special` 与 `eval_per_model` 按 `fact_id` 合并；旧版只有 `checks` / `results` 的批次也照常读。
+  verify.jsonl 的 (size, mtime) 与 GPT raw 文件一起进 `rounds_signature`，数据一更新就重建 payload。
 - `sample_refs` 的三批保留聚合口径：`before/after` 是命中叶子的 trace 级引用（after 不带主 samples slug），
   `online` 是线上真实用户样本；`pair/eq/q/detail` 只用于从 A/B 面板跳到版本对比。
 - `schema` 2 → 3 只因新增 `pairs` 与 refs 字段；旧 payload 会自动重建。

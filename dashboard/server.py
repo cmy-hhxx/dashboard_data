@@ -45,6 +45,7 @@ MODEL_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 # /ab_samples/<roundId>/<eq>.json: the round name is validated before it can reach the builder.
 AB_ROUND_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*$")
 AB_DETAIL_RE = re.compile(r"^/ab_samples/([^/]+)/(before-[0-9A-Za-z_-]+|\d+)\.json$")
+GPT_DETAIL_RE = re.compile(r"^/gpt_samples/([^/]+)/([0-9A-Za-z_-]+)\.json$")
 
 
 def prewarm_details():
@@ -406,6 +407,20 @@ class Handler(SimpleHTTPRequestHandler):
             if generated is None and (ref is None or not os.path.isfile(self.translate_path(path_only))):
                 self._send_body(404, b"ab sample detail unavailable", "text/plain; charset=utf-8")
                 return
+        if _ab_builder and path_only.startswith("/gpt_samples/"):
+            match = GPT_DETAIL_RE.match(path_only)
+            answer = None
+            if match and AB_ROUND_RE.match(match.group(1)):
+                try:
+                    answer = _ab_builder.gpt(match.group(1), match.group(2))
+                except Exception as exc:  # noqa: BLE001 - an unreadable answer is a 404
+                    print(f"[serve] gpt answer {match.group(1)}/{match.group(2)} failed: {exc}",
+                          flush=True)
+            if answer is None:
+                self._send_body(404, b'{"error":"gpt answer unavailable"}', "application/json")
+                return
+            self._send_body(200, json.dumps(answer, ensure_ascii=False).encode(), "application/json")
+            return
         accept = {part.strip().split(";")[0] for part in self.headers.get("Accept-Encoding", "").split(",")}
         path = self.translate_path(self.path)
         if os.path.isdir(path):

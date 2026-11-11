@@ -543,3 +543,161 @@ class ScopeLayoutTests(unittest.TestCase):
             (attr / "aime_expert_attribution-batch.jsonl").write_text(
                 json.dumps({"session_meta": {"case_id": "set_eq_00009"}}) + "\n", encoding="utf-8")
             self.assertNotEqual(ab_test.rounds_signature(root), signature)
+
+
+class VerifyAndGptTests(unittest.TestCase):
+    """The current verify batch (per-model common/special facts) and the GPT answer column."""
+
+    VERIFY_ROW = {
+        "question_id": "t1",
+        "question": "q1",
+        "paired_model": [
+            {"model_id": "before_release", "model_label": "发版前", "has_answer": True},
+            {"model_id": "after_retest", "model_label": "发版后原样重测", "has_answer": True},
+        ],
+        "verifiable_fact_check_list": [
+            {"model_id": "before_release",
+             "common": [{"fact_id": "c1", "what_to_check": "通用事实"}],
+             "special": [{"fact_id": "s1", "what_to_check": "专属事实"}]},
+            {"model_id": "after_retest",
+             "common": [{"fact_id": "c1", "what_to_check": "通用事实"}],
+             "special": []},
+        ],
+        "eval_per_model": [
+            {"model_id": "before_release",
+             "common": [{"fact_id": "c1", "what_to_check": "通用事实", "model_answer": "答 1",
+                         "is_correct": "对", "correct_answer": "实际 1",
+                         "correct_answer_source": "Yahoo；核对：https://example.com/a",
+                         "responsible_component": "", "attribution": "对在区间"}],
+             "special": [{"fact_id": "s1", "what_to_check": "专属事实", "model_answer": "答 2",
+                          "is_correct": "错", "correct_answer": "实际 2",
+                          "correct_answer_source": "", "responsible_component": "答案合成·推断",
+                          "attribution": "错在幅度"}]},
+            {"model_id": "after_retest",
+             "common": [{"fact_id": "c1", "what_to_check": "通用事实", "model_answer": "答 3",
+                         "is_correct": "部分对", "correct_answer": "实际 3",
+                         "correct_answer_source": "", "responsible_component": "",
+                         "attribution": "部分命中"}],
+             "special": []},
+        ],
+    }
+
+    GPT_RAW = {
+        "key": "t1", "question": "q1", "question_time": "2026-11-11T07:50:44+00:00",
+        "latency_s": 58.4, "model": "gpt-6.1-sol", "effort": "medium",
+        "response": {
+            "status": "completed",
+            "usage": {"input_tokens": 10, "output_tokens": 20},
+            "output": [
+                {"type": "web_search_call", "status": "completed",
+                 "action": {"queries": ["AAPL forecast"]}},
+                {"type": "message", "role": "assistant", "content": [{
+                    "type": "output_text", "text": "GPT 回答正文",
+                    "annotations": [{"type": "url_citation", "title": "Yahoo",
+                                     "url": "https://example.com/a"}],
+                }]},
+            ],
+        },
+    }
+
+    def add_verify(self, base: Path, rows):
+        (base / "06_verify").mkdir(parents=True, exist_ok=True)
+        (base / "06_verify" / "verify.jsonl").write_text(
+            "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
+
+    def add_gpt(self, base: Path, keys, raws):
+        gpt = base / "07_gpt_answer"
+        (gpt / "raw").mkdir(parents=True, exist_ok=True)
+        (gpt / "questions.jsonl").write_text(
+            "".join(json.dumps({"key": key, "question": f"q {key}"}) + "\n" for key in keys),
+            encoding="utf-8")
+        for key, payload in raws.items():
+            (gpt / "raw" / f"{key}.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    def test_current_verify_batch_merges_common_and_special_by_fact(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            base = scope_round_dir(root)
+            self.add_verify(base, [self.VERIFY_ROW])
+            rnd = ab_test.ab_payload(root, "aime")["rounds"][0]
+            entry = rnd["verify"]["t1"]
+            models = {model["id"]: model for model in entry["models"]}
+            self.assertEqual(list(models), ["before_release", "after_retest"])
+            self.assertEqual(models["before_release"]["label"], "发版前")
+            before = models["before_release"]["facts"]
+            self.assertEqual([fact["fact_id"] for fact in before], ["c1", "s1"])
+            self.assertEqual([fact["kind"] for fact in before], ["common", "special"])
+            self.assertEqual((before[0]["is_correct"], before[0]["what_to_check"]),
+                             ("对", "通用事实"))
+            self.assertEqual(before[0]["correct_answer_source"], "Yahoo；核对：https://example.com/a")
+            self.assertEqual((before[1]["is_correct"], before[1]["responsible_component"]),
+                             ("错", "答案合成·推断"))
+            after = models["after_retest"]["facts"]
+            self.assertEqual([(fact["fact_id"], fact["is_correct"]) for fact in after], [("c1", "部分对")])
+            # The pair and the verify batch share the fixed-set id; no facts means no entry.
+            self.assertNotIn("t2", rnd["verify"])
+
+    def test_older_verify_batch_uses_checks_and_results(self):
+        row = {
+            "question_id": "t1",
+            "verifiable_fact_check_list": [
+                {"model_id": "before", "checks": [{"fact_id": "c1", "what_to_check": "旧字段"}]},
+                {"model_id": "after", "checks": [{"fact_id": "c1", "what_to_check": "旧字段"}]},
+            ],
+            "eval_per_model": [
+                {"model_id": "before", "results": [{"fact_id": "c1", "is_correct": "对"}]},
+                {"model_id": "after", "results": [{"fact_id": "c1", "is_correct": "错"}]},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            base = scope_round_dir(root)
+            self.add_verify(base, [row])
+            entry = ab_test.ab_payload(root, "aime")["rounds"][0]["verify"]["t1"]
+            self.assertEqual([(model["id"], model["facts"][0]["is_correct"])
+                              for model in entry["models"]],
+                             [("before", "对"), ("after", "错")])
+            self.assertEqual(entry["models"][0]["facts"][0]["what_to_check"], "旧字段")
+
+    def test_gpt_index_marks_pending_questions_and_extracts_the_answer(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            base = scope_round_dir(root)
+            self.add_gpt(base, ["t1", "t3"], {"t1": self.GPT_RAW})
+            index = ab_test.read_gpt_index(base)
+            self.assertEqual((index["total"], index["answered"]), (2, 1))
+            self.assertEqual((index["model"], index["effort"]), ("gpt-6.1-sol", "medium"))
+            self.assertTrue(index["questions"]["t1"]["has"])
+            self.assertFalse(index["questions"]["t3"]["has"])
+
+            answer = ab_test.read_gpt_answer(base, "t1")
+            self.assertEqual(answer["answer"], "GPT 回答正文")
+            self.assertEqual(answer["sources"], [{"title": "Yahoo", "url": "https://example.com/a"}])
+            self.assertEqual(answer["searches"], ["AAPL forecast"])
+            self.assertEqual(answer["usage"], {"input": 10, "output": 20})
+            self.assertIsNone(ab_test.read_gpt_answer(base, "t3"))
+            self.assertIsNone(ab_test.read_gpt_answer(base, "../t1"))
+
+            rnd = ab_test.ab_payload(root, "aime", samples=ScopeLayoutTests().samples())["rounds"][0]
+            self.assertEqual(rnd["gpt"], {"total": 2, "answered": 1,
+                                          "model": "gpt-6.1-sol", "effort": "medium"})
+            pairs = {pair["id"]: pair for pair in rnd["pairs"]}
+            self.assertEqual(pairs["t1"]["gpt"], {"key": "t1", "has": True,
+                                                  "model": "gpt-6.1-sol"})
+            # Questions still on the run list, and every other fixed-set question, are pending.
+            self.assertFalse(pairs["t2"]["gpt"]["has"])
+
+    def test_round_signature_tracks_verify_and_gpt_updates(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            base = scope_round_dir(root)
+            signature = ab_test.rounds_signature(root)
+            self.add_verify(base, [self.VERIFY_ROW])
+            self.assertNotEqual(ab_test.rounds_signature(root), signature)
+            signature = ab_test.rounds_signature(root)
+            self.add_gpt(base, ["t1"], {"t1": self.GPT_RAW})
+            self.assertNotEqual(ab_test.rounds_signature(root), signature)
+            signature = ab_test.rounds_signature(root)
+            self.GPT_RAW["response"]["output"][1]["content"][0]["text"] = "更新后的回答"
+            self.add_gpt(base, ["t1"], {"t1": self.GPT_RAW})
+            self.assertNotEqual(ab_test.rounds_signature(root), signature)
