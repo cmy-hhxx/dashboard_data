@@ -1790,7 +1790,7 @@ function wireMatrixAnalysis(panel, model, state, trend) {
         tickText: isIntraday ? (time) => clockOf(time) : undefined,
         tipTime: isIntraday ? (candle) => `${intraday.date} ${candle.label}` : undefined,
         tipPeriod: isIntraday ? () => "日内行情" : undefined,
-        legendNote: isIntraday ? intraday.date : "",
+        legendNote: isIntraday ? `${intraday.date} · 00:00–23:59` : "",
         onPick: (candle) => drawer.open(isIntraday
           ? mxIntradayPick(intraday, model, candle, state.analysisLevels)
           : mxRatePick(model, candle, state.analysisLevels, period)),
