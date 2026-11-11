@@ -203,10 +203,10 @@ def parse_filters(params: dict, snap: Snapshot) -> Filters:
 
     problem_codes = tuple(params.get("problem") or ())
     if problem_codes:
-        known = set()
-        for tree in snap.problem_trees.values():
-            known.update(tree.nodes)
-        unknown = [code for code in problem_codes if code not in known]
+        unknown = [
+            code for code in problem_codes
+            if not any(tree.canonical(code) for tree in snap.problem_trees.values())
+        ]
         if unknown:
             raise errors.unknown_codes("problem", unknown, snap.taxonomy_version())
 
@@ -285,6 +285,7 @@ class Matcher:
 
     def __init__(self, snap: Snapshot, filters: Filters):
         self.filters = filters
+        self.snap = snap
         self.intent_codes = None
         if filters.intent:
             expanded = set()
@@ -297,8 +298,9 @@ class Matcher:
             per_version: dict[str, set] = {}
             for code in filters.problem:
                 for app_version, tree in snap.problem_trees.items():
-                    if code in tree:
-                        per_version.setdefault(app_version, set()).update(tree.descendants(code))
+                    current = tree.canonical(code)
+                    if current:
+                        per_version.setdefault(app_version, set()).update(tree.descendants(current))
             self.problem_codes = per_version
         self.severities = set(filters.severity) if filters.severity else None
 
@@ -330,7 +332,10 @@ class Matcher:
             return False
         if self.problem_codes is not None:
             allowed = self.problem_codes.get(trace.app_version)
-            if not allowed or not any(code in allowed for code in trace.problem_codes):
+            tree = self.snap.tree_for(trace)
+            if not allowed or tree is None:
+                return False
+            if not any(tree.canonical(code) in allowed for code in trace.problem_codes):
                 return False
         return True
 
@@ -341,16 +346,64 @@ def _sort_token(value):
     return "\x00" if value is None else str(value)
 
 
+def _current_code(tree, code):
+    return tree.canonical(code) if tree is not None and code else None
+
+
+def _problem_label(snap: Snapshot, code):
+    """Label of the nearest node that still exists in the current tree."""
+    if not code:
+        return None
+    for tree in snap.problem_trees.values():
+        current = tree.canonical(code)
+        node = tree.node(current) if current else None
+        if node is not None:
+            return node.label
+    return None
+
+
+def _current_problems(snap: Snapshot, trace: Trace, problems=None):
+    """Keep each stored code, but add the current tree's code and the retired original."""
+    tree = snap.tree_for(trace)
+    out = []
+    for problem in trace.problems if problems is None else problems:
+        item = dict(problem)
+        code = item.get("code")
+        current = _current_code(tree, code)
+        if current:
+            item["current_code"] = current
+            if current != code:
+                item["legacy_code"] = code
+        out.append(item)
+    return out
+
+
+def _current_codes(snap: Snapshot, trace: Trace):
+    """Deduplicated current-tree codes for a trace's stored problem codes."""
+    tree = snap.tree_for(trace)
+    out = []
+    for code in trace.problem_codes:
+        current = _current_code(tree, code)
+        if current and current not in out:
+            out.append(current)
+    return out
+
+
 def _problem_group_value(snap: Snapshot, trace: Trace, problem, level, filters):
     """问题条目在 problem 维度上的分组值：top 归到环节、children 归到筛选值的下一层、leaf 用原编码。"""
     code = problem.get("code")
     tree = snap.tree_for(trace)
     if not code or tree is None:
         return None
+    # Retired L4 leaves still count; roll them up far enough to reach the current tree.
+    current = tree.canonical(code)
+    if current is None:
+        return None
     if level == "top":
-        return tree.l1(code)
+        return tree.l1(current)
     if level == "children":
-        return tree.child_below(filters.problem[0], code)
+        anchor = tree.canonical(filters.problem[0]) if filters.problem else None
+        return tree.child_below(anchor, current) if anchor else None
     return code
 
 
@@ -428,8 +481,8 @@ def _validate_group(group_by, level, filters, allow_empty=False):
                 )
 
 
-def _group_row(keys, count, users, problem_traces, problems, analyzed):
-    return {
+def _group_row(keys, count, users, problem_traces, problems, analyzed, problem_label=None):
+    row = {
         "keys": dict(keys),
         "analyzed": analyzed,
         "traces": count,
@@ -437,6 +490,9 @@ def _group_row(keys, count, users, problem_traces, problems, analyzed):
         "problem_traces": problem_traces,
         "problems": problems,
     }
+    if problem_label is not None:
+        row["problem_label"] = problem_label
+    return row
 
 
 def _rate(row):
@@ -532,6 +588,8 @@ def summary(snap: Snapshot, filters: Filters, group_by, level="top", sort=None, 
     for combo, bucket in stats.items():
         analyzed_key = tuple(pair for pair in combo if pair[0] != "problem")
         analyzed = analyzed_map.get(analyzed_key, 0)
+        keys = dict(combo)
+        label = _problem_label(snap, keys.get("problem")) if "problem" in keys else None
         rows.append(
             _group_row(
                 combo,
@@ -540,6 +598,7 @@ def summary(snap: Snapshot, filters: Filters, group_by, level="top", sort=None, 
                 bucket["problem_traces"],
                 bucket["problems"],
                 analyzed,
+                problem_label=label,
             )
         )
 
@@ -618,15 +677,19 @@ def severity(snap: Snapshot, filters: Filters, group_by=(), level="top", sort=No
     rows = []
     for combo, entries_per_trace in stats.items():
         analyzed_key = tuple(pair for pair in combo if pair[0] != "problem")
-        rows.append(
-            {
-                "keys": dict(combo),
-                "analyzed": analyzed_map.get(analyzed_key, 0),
-                "traces": len(entries_per_trace),
-                "problems": sum(len(entries) for entries in entries_per_trace),
-                **_severity_counts(entries_per_trace),
-            }
-        )
+        keys = dict(combo)
+        row = {
+            "keys": keys,
+            "analyzed": analyzed_map.get(analyzed_key, 0),
+            "traces": len(entries_per_trace),
+            "problems": sum(len(entries) for entries in entries_per_trace),
+            **_severity_counts(entries_per_trace),
+        }
+        if "problem" in keys:
+            label = _problem_label(snap, keys.get("problem"))
+            if label is not None:
+                row["problem_label"] = label
+        rows.append(row)
 
     filter_key = filters.cache_key() + "|" + ",".join(group_by) + "|" + level + "|" + sort
     page, next_cursor, has_more = _page_rows(
@@ -642,7 +705,7 @@ def severity(snap: Snapshot, filters: Filters, group_by=(), level="top", sort=No
 
 # --------------------------------------------------------------------------- /traces
 
-def _item(trace: Trace):
+def _item(snap: Snapshot, trace: Trace):
     preview = trace.question or ""
     if len(preview) > config.QUERY_PREVIEW_CHARS:
         preview = preview[: config.QUERY_PREVIEW_CHARS]
@@ -659,7 +722,8 @@ def _item(trace: Trace):
         "is_correct": trace.is_correct,
         "problem_count": trace.problem_count,
         "problem_codes": list(trace.problem_codes),
-        "problems": list(trace.problems),
+        "problem_current_codes": _current_codes(snap, trace),
+        "problems": _current_problems(snap, trace),
         "analysis_id": trace.analysis_id,
         "analyzed_at": trace.analyzed_at,
     }
@@ -691,7 +755,7 @@ def traces(snap: Snapshot, filters: Filters, page_size=20, cursor=None, ids_only
         tail = page[-1]
         next_cursor = cursors.encode("traces", filter_key, page_size, [tail.asked_at or "", tail.trace_id])
 
-    items = [t.trace_id for t in page] if ids_only else [_item(t) for t in page]
+    items = [t.trace_id for t in page] if ids_only else [_item(snap, t) for t in page]
     return {
         "items": items,
         "total": total,
@@ -732,7 +796,7 @@ def batch(snap: Snapshot, trace_ids, filters: Filters):
             )
             continue
         trace = max(candidates, key=lambda t: (t.analyzed_at or "", t.day))
-        item = _item(trace)
+        item = _item(snap, trace)
         item["status"] = "analyzed"
         items.append(item)
     return {"items": items}
@@ -827,6 +891,7 @@ def detail(snap: Snapshot, db_path, dataset: str, trace_id: str, day: str | None
             {"code": code, "label": code, "severity": None, "evidence": [], "session_level": False}
             for code in trace.problem_codes
         ]
+    problems = _current_problems(snap, trace, problems)
 
     input_row = _read_offset_line(*input_ref) if input_ref else None
 
@@ -842,7 +907,8 @@ def detail(snap: Snapshot, db_path, dataset: str, trace_id: str, day: str | None
         "is_correct": trace.is_correct,
         "problem_count": trace.problem_count,
         "problem_codes": list(trace.problem_codes),
-        "problems": list(trace.problems),
+        "problem_current_codes": _current_codes(snap, trace),
+        "problems": _current_problems(snap, trace),
         "analysis_id": trace.analysis_id,
         "analyzed_at": trace.analyzed_at,
         "taxonomy_version": snap.taxonomy_version(),

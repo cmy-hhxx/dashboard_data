@@ -48,6 +48,23 @@ class Tree:
     def node(self, code):
         return self.nodes.get(code)
 
+    def canonical(self, code):
+        """Map a retired code to its nearest surviving ancestor.
+
+        A rebuilt tree can drop a level-4 leaf while keeping its level-3 parent.  Callers need
+        the current taxonomy's code/name for an old stored problem, not the raw retired code.
+        """
+        cur = code
+        seen = 0
+        while cur and cur not in self.nodes:
+            if "." not in cur:
+                return None
+            cur = cur.rsplit(".", 1)[0]
+            seen += 1
+            if seen > 32:
+                return None
+        return cur if cur in self.nodes else None
+
     def children(self, code):
         return list(self._children.get(code, ()))
 

@@ -58,6 +58,8 @@ trace 的 `problems` 问题数组与 P0–P4 严重度，并新增 `GET /severit
 - **问题**：直接来自数据的 `cluster_tree.json`，按模型两份：
   `aime_expert` / `aime_fast`，层级为 环节 `S*` → 机制 `S*.M*` → 模式 `S*.M*.x`
   （个别还有第 4 层变体）。`/taxonomy?kind=problem` 用 `app_version` 选树。
+  树升版后，旧分析里的退役编码按当前树**最近祖先**解释：`code` 原样保留，另给
+  `current_code` / `legacy_code`，分组另给 `problem_label`。
 - **严重度**：`/taxonomy?kind=severity` 返回固定的 P0–P4 定义；P4 是「过程缺陷已恢复、未进入交付」，
   v2 不做“是否算错误”的判定，全部按严重度原样统计。
 
