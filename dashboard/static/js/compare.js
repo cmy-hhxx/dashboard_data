@@ -319,18 +319,30 @@ function skeleton(root, round) {
   wireSkeleton(root);
 }
 
-/* 单侧详情全屏：pane 本身变成 fixed 面板，背后一层同色遮罩，Esc / 再点一次退出。 */
+/* 单侧全屏：先收起另一侧，让这一侧按单模型工作台重新挂载（轨迹 / 链路 / threads / 归因列），
+   再把这个 pane 固定到视口。关闭时恢复原来的双侧状态。 */
 let fullSide = null;
 let fullBackdrop = null;
-function closeSideFull() {
-  if (!fullSide) return;
+let fullRestore = null;
+
+function closeSideFull(restoreView = true) {
   const side = fullSide;
+  const restore = fullRestore;
   fullSide = null;
-  side.classList.remove("is-full");
-  side.querySelector(".compare-expand")?.setAttribute("aria-pressed", "false");
+  fullRestore = null;
+  if (side) {
+    side.classList.remove("is-full");
+    side.querySelector(".compare-expand")?.setAttribute("aria-pressed", "false");
+  }
   fullBackdrop?.remove();
   fullBackdrop = null;
   if (document.documentElement.dataset.compareFull) delete document.documentElement.dataset.compareFull;
+  if (restore) C.sides = restore;
+  if (restoreView && restore) {
+    C.sidesKey = "";
+    const pair = (C.pairs || []).find((item) => String(item.id) === String(C.pairId));
+    if (!C.online && pair) paintSides(C.round, pair, null);
+  }
   realignDetails();
 }
 
@@ -343,22 +355,39 @@ function realignDetails() {
   setTimeout(run, 180);
 }
 
-function toggleSideFull(side) {
+function enterFull(side) {
   if (!side) return;
-  if (fullSide === side) {
-    closeSideFull();
-    return;
-  }
-  closeSideFull();
   fullSide = side;
   side.classList.add("is-full");
   side.querySelector(".compare-expand")?.setAttribute("aria-pressed", "true");
   fullBackdrop = document.createElement("div");
   fullBackdrop.className = "compare-full-backdrop";
-  fullBackdrop.addEventListener("click", closeSideFull);
+  fullBackdrop.addEventListener("click", () => closeSideFull());
   side.parentElement?.append(fullBackdrop);
   document.documentElement.dataset.compareFull = "1";
   realignDetails();
+}
+
+async function toggleSideFull(side) {
+  if (!side) return;
+  if (fullSide === side) {
+    closeSideFull();
+    return;
+  }
+  if (fullSide) closeSideFull(false);
+  const prefix = side.dataset.side;
+  const pair = (C.pairs || []).find((item) => String(item.id) === String(C.pairId));
+  // Online samples have one side already; a single selected model also needs no refold.
+  const both = !C.online && pair && C.sides.b && C.sides.a;
+  if (!both) {
+    enterFull(side);
+    return;
+  }
+  fullRestore = { ...C.sides };
+  C.sides = { b: prefix === "b", a: prefix === "a" };
+  C.sidesKey = "";
+  await paintSides(C.round, pair, null);
+  enterFull($(`.compare-side[data-side="${prefix}"]`, C.root));
 }
 
 if (typeof document !== "undefined") {
@@ -703,7 +732,6 @@ async function paintSides(round, pair, online) {
     : `${C.gen}|pair|${C.product}|${round.id}|${pair.id}|${sidesKey}`;
   if (C.sidesKey === key) return;
   C.sidesKey = key;
-  closeSideFull();
   destroyDetails();
   const token = ++C.token;
   const productData = C.ctx.data?.products?.[C.product];
@@ -787,7 +815,7 @@ async function paintSides(round, pair, online) {
 
 /* ---------------------------------------------------------------- render */
 export async function render(root, ctx) {
-  if (fullSide) closeSideFull();
+  if (fullSide || fullRestore) closeSideFull(false);
   stopPickerObserver();
   C.root = root;
   C.ctx = ctx;
