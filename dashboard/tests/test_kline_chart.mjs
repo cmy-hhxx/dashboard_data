@@ -65,7 +65,7 @@ test("all five period buttons exist in display order", () => {
   assert.deepEqual(KLINE_PERIODS, [["intraday", "日内行情"], ["day", "日K"], ["week", "周K"], ["month", "月K"], ["year", "年K"]]);
 });
 
-test("intraday 5-minute candles carry yesterday's total as the first open and stay flat on empty slots", () => {
+test("intraday 5-minute candles fill the full day and stay flat on empty slots", () => {
   const intraday = {
     date: "2026-11-09",
     bucket_minutes: 5,
@@ -77,8 +77,8 @@ test("intraday 5-minute candles carry yesterday's total as the first open and st
     ],
   };
   const candles = buildIntradayCandles(intraday, ["P0", "P1"], ["P0", "P1", "P2", "P3", "P4", "none"]);
-  assert.equal(candles.length, 6);
-  assert.deepEqual(candles.map(({ label, open, high, low, close, volume }) => ({ label, open, high, low, close, volume })), [
+  assert.equal(candles.length, 288);
+  assert.deepEqual(candles.slice(0, 6).map(({ label, open, high, low, close, volume }) => ({ label, open, high, low, close, volume })), [
     { label: "00:00", open: 0, high: 2, low: 0, close: 2, volume: 2 },
     { label: "00:05", open: 2, high: 2, low: 2, close: 2, volume: 0 },
     { label: "00:10", open: 2, high: 5, low: 2, close: 5, volume: 3 },
@@ -86,9 +86,12 @@ test("intraday 5-minute candles carry yesterday's total as the first open and st
     { label: "00:20", open: 5, high: 5, low: 5, close: 5, volume: 0 },
     { label: "00:25", open: 5, high: 6, low: 5, close: 6, volume: 1 },
   ]);
+  assert.equal(candles[287].label, "23:55");
+  assert.equal(candles[287].close, 6);
   const midnight = Date.parse("2026-11-09T00:00:00+08:00") / 1000;
   assert.equal(candles[0].time, midnight);
   assert.equal(candles[1].time, midnight + 5 * 60);
+  assert.equal(candles[287].time, midnight + 1435 * 60);
 });
 
 test("intraday without buckets or selected levels stays empty", () => {
@@ -96,7 +99,7 @@ test("intraday without buckets or selected levels stays empty", () => {
   assert.deepEqual(buildIntradayCandles({ date: "2026-11-09", buckets: [[0, 1]] }, [], ["P0"]), []);
 });
 
-test("intraday drops buckets that fall outside the local day", () => {
+test("intraday keeps the full 24-hour axis and drops buckets outside the local day", () => {
   const levels = ["P0", "P1"];
   const intraday = {
     date: "2026-11-09",
@@ -104,6 +107,9 @@ test("intraday drops buckets that fall outside the local day", () => {
     buckets: [[1440, 3, 0], [1500, 0, 7], [785, 1, 2]],
   };
   const candles = buildIntradayCandles(intraday, ["P0", "P1"], levels);
-  assert.deepEqual(candles.map(({ label, close }) => [label, close]), [["13:05", 3]]);
+  assert.equal(candles.length, 288);
+  assert.deepEqual([candles[157].label, candles[157].close], ["13:05", 3]);
+  assert.equal(candles[0].close, 0);
+  assert.equal(candles[287].label, "23:55");
   assert.deepEqual(buildIntradayCandles({ date: "2026-11-09", bucket_minutes: 5, buckets: [[1440, 1, 0]] }, ["P0"], levels), []);
 });

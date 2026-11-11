@@ -62,7 +62,7 @@ STATIC = DASHBOARD / "static"
 RELEASES_CONFIG = DASHBOARD / "config" / "releases.json"
 PRODUCTION_DATASETS = Path("/mnt/fin_bench/code_and_clean_data/datasets")
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-11.1"
+PAYLOAD_VERSION = "2026-11-11.2"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 2
 
@@ -2118,7 +2118,9 @@ def trend_payload(product, samples, releases=(), generated=None):
             "bucket_minutes": 5,
             # 前一交易日按等级计；前端用它作为当天第一根蜡烛的开盘。
             "prev": list(trace_days[latest_at - 1]) if latest_at > 0 else [0] * 6,
-            "buckets": [[minute, *counts] for minute, counts in sorted(intraday_buckets.items())],
+            # 评测是 24 小时的：固定落地 00:00–23:55 的 288 个 5 分钟槽，空槽补 0。
+            "buckets": [[minute, *intraday_buckets.get(minute, [0] * 6)]
+                        for minute in range(0, 24 * 60, 5)],
         }
 
     return {

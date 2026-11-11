@@ -136,7 +136,6 @@ html[data-compare="1"] .compare-standalone-head .compare-top-count { margin-left
   border-radius: var(--r-card); background: var(--card); box-shadow: var(--shadow-pop);
 }
 .compare-side.is-full > .pane-scroll { flex: 1 1 auto; min-height: 0; }
-.compare-side.is-full .compare-verify { max-height: none; }
 html[data-compare-full="1"], html[data-compare-full="1"] body { overflow: hidden; }
 
 /* 事实核验：侧栏顶部一块独立区域，把模型答案和实际结果按 fact 对齐。 */

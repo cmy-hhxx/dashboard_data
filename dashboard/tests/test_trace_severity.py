@@ -75,7 +75,11 @@ class TraceSeverityTests(unittest.TestCase):
         self.assertEqual(intraday["date"], "2026-11-02")
         self.assertEqual(intraday["prev"], [1, 0, 0, 0, 0, 0])
         self.assertEqual(intraday["bucket_minutes"], 5)
-        self.assertEqual(intraday["buckets"], [[550, 0, 1, 0, 0, 0, 0]])
+        self.assertEqual(len(intraday["buckets"]), 288)
+        self.assertEqual(intraday["buckets"][0][0], 0)
+        self.assertEqual(intraday["buckets"][-1][0], 1435)
+        self.assertEqual([row for row in intraday["buckets"] if row[0] == 550],
+                         [[550, 0, 1, 0, 0, 0, 0]])
 
 
 if __name__ == "__main__":

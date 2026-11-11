@@ -77,7 +77,8 @@ export function buildIntradayCandles(intraday, selected, levels) {
   let cumulative = 0;
   let previous = 0;
   const candles = [];
-  for (let minute = minutes[0]; minute <= minutes[minutes.length - 1]; minute += step) {
+  // 评测是 24 小时的：固定画 00:00–23:55 的完整一天，空槽沿用上一个累计值。
+  for (let minute = 0; minute < 24 * 60; minute += step) {
     const counts = at.get(minute);
     const added = counts ? idx.reduce((n, i) => n + (counts[i] || 0), 0) : 0;
     const volume = counts ? counts.reduce((n, value) => n + (value || 0), 0) : 0;
