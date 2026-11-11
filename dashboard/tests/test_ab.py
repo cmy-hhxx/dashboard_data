@@ -382,8 +382,11 @@ class ScopeLayoutTests(unittest.TestCase):
             self.assertEqual(rnd["status"], {"A": 2, "C": 1})
             self.assertEqual(rnd["sources"], [["daily", 1], ["lost_user", 1]])
             self.assertEqual(rnd["dates"], ["2026-10-20", "2026-10-22"])
-            self.assertEqual(rnd["sides"]["before"], {"traces": 2, "hits": 3})
-            self.assertEqual(rnd["sides"]["after"], {"traces": 1, "hits": 1})
+            before, after = rnd["sides"]["before"], rnd["sides"]["after"]
+            self.assertEqual((before["traces"], before["hits"], before["problem_traces"]),
+                             (2, 3, 2))
+            self.assertEqual((after["traces"], after["hits"], after["problem_traces"]),
+                             (2, 1, 1))
             self.assertEqual((rnd["sides"]["online"]["traces"], rnd["sides"]["online"]["hits"]),
                              (1, 1))
             self.assertEqual(rnd["sides"]["online"]["from"], "2026-11-06")
@@ -467,7 +470,9 @@ class ScopeLayoutTests(unittest.TestCase):
             # 1106 retests expert only: the older fast trace and the fast online sample are out.
             self.assertEqual(rnd["models"], ["expert"])
             self.assertNotIn("t4", {ref["trace"] for ref in rnd["sample_refs"]["before"]})
-            self.assertEqual(rnd["sides"]["before"], {"traces": 2, "hits": 3})
+            before = rnd["sides"]["before"]
+            self.assertEqual((before["traces"], before["hits"], before["problem_traces"]),
+                             (2, 3, 2))
             self.assertEqual(rnd["sides"]["online"]["traces"], 1)
             self.assertEqual([ref["slug"] for ref in rnd["sample_refs"]["online"]], ["online-1"])
             # 只保留两侧都有详情的专家题；跨模型 before 为 null 的 t4 不再进入召回列表。
@@ -518,7 +523,7 @@ class ScopeLayoutTests(unittest.TestCase):
             self.assertGreater(json.loads(proc.stdout.strip().splitlines()[-1])["ab_kb"], 0)
             payload = json.loads((static / "abtests-aime.json").read_text(encoding="utf-8"))
             rnd = payload["rounds"][0]
-            self.assertEqual((rnd["sides"]["before"]["traces"], rnd["sides"]["after"]["traces"]), (2, 1))
+            self.assertEqual((rnd["sides"]["before"]["traces"], rnd["sides"]["after"]["traces"]), (2, 2))
             self.assertEqual(len(rnd["pairs"]), 1)
             self.assertIsInstance(rnd["matrix"]["after"], list)
             self.assertIsInstance(rnd["matrix"]["online"], list)
