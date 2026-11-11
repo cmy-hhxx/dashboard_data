@@ -2401,10 +2401,15 @@ def load_clusters_cached(root: Path, sig: str, cache_dir: Path):
         pass
     taxonomy, index = load_clusters(root)
     cache_dir.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "wb") as fh:
-        pickle.dump((taxonomy, index), fh, protocol=pickle.HIGHEST_PROTOCOL)
-    os.replace(tmp, path)
+    # A deploy can leave the previous build alive for a moment; both then write the same
+    # cache file.  A per-process tmp keeps the loser from renaming a file the winner moved.
+    tmp = path.with_suffix(f"{path.suffix}.{os.getpid()}.tmp")
+    try:
+        with open(tmp, "wb") as fh:
+            pickle.dump((taxonomy, index), fh, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
     for old in cache_dir.glob("clusters-*.pkl"):
         if old != path:
             old.unlink(missing_ok=True)
