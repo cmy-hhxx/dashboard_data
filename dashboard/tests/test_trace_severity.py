@@ -71,13 +71,11 @@ class TraceSeverityTests(unittest.TestCase):
         samples = [("s1", build.slim_detail(first), {"d": "2026-11-01", "m": "a_fast"}, {}),
                    ("s2", build.slim_detail(second), {"d": "2026-11-02", "m": "a_fast"}, {}),
                    ("s3", build.slim_detail(late), {"d": "2026-11-02", "m": "a_fast"}, {})]
-        intraday = build.trend_payload("wencai", samples, today="2026-11-02")["trace_severity"]["intraday"]
+        intraday = build.trend_payload("wencai", samples)["trace_severity"]["intraday"]
         self.assertEqual(intraday["date"], "2026-11-02")
         self.assertEqual(intraday["prev"], [1, 0, 0, 0, 0, 0])
         self.assertEqual(intraday["bucket_minutes"], 5)
         self.assertEqual(intraday["buckets"], [[550, 0, 1, 0, 0, 0, 0]])
-        # 今天没有评测数据时，日内行情必须是空，而不是回退到历史最新一天。
-        self.assertIsNone(build.trend_payload("wencai", samples, today="2026-11-03")["trace_severity"]["intraday"])
 
 
 if __name__ == "__main__":

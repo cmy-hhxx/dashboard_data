@@ -2004,7 +2004,7 @@ def local_day_minute(raw):
     return local.date().isoformat(), local.hour * 60 + local.minute
 
 
-def trend_payload(product, samples, releases=(), generated=None, today=None):
+def trend_payload(product, samples, releases=(), generated=None):
     """Lazy payload behind a cluster-matrix cell's in-card trend chart.
 
     ``base`` counts every evaluated record per day × scene × model × user type,
@@ -2094,9 +2094,8 @@ def trend_payload(product, samples, releases=(), generated=None, today=None):
     trace_days = [[0] * 6 for _ in dates]
     trace_refs = []
     unresolved = 0
-    # 日内行情只讲“今天”：历史最新一天可能是 11-09，不能把它当成当天展示。
-    today = today or datetime.now(TZ).date().isoformat()
-    latest_day = today if today in day_idx else None
+    # 日内行情只讲“最新有数据的一天”：今天还没落盘时展示上一交易日，而不是留空。
+    latest_day = dates[-1] if dates else None
     intraday_buckets = {}
     for slug, detail, row, _, _pair in prepared:
         trace = detail.get("trace_severity") or trace_severity(detail, include_refs=True)
