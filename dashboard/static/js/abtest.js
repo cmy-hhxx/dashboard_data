@@ -17,14 +17,13 @@ const SIDES = ["before", "after", "online"];
 const SIDE_SHORT = { before: "改版前", after: "改版后", online: "线上" };
 const METRICS = [
   ["paired", "同题变化"],
-  ["before", "发版前"],
-  ["after", "发版后同题测试"],
-  ["online", "发版后线上真实"],
+  ["online", "线上真实"],
 ];
-const TREND_LABEL = { paired: "同题变化", before: "发版前", after: "发版后同题测试", online: "发版后线上真实" };
+const METRIC_LABEL = { paired: "同题变化", before: "发版前", after: "发版后同题测试", online: "线上真实" };
+const TREND_LABEL = METRIC_LABEL;
 const TREE_LABEL = { before: "发版前", after: "发版后同题", online: "发版后线上" };
 const NO_SCENE = "未接入分类体系";
-const metricLabel = (key) => (METRICS.find(([k]) => k === key) || ["", ""])[1];
+const metricLabel = (key) => METRIC_LABEL[key] || "";
 // The round may test one model or both; the page only needs the three pre-defined tags.
 const MODEL_BADGE = { expert: "expert", fast: "fast", both: "fast+expert" };
 const modelBadge = (rnd) => {
@@ -52,8 +51,7 @@ const sideReady = (rnd, side) => !!(rnd.sides && rnd.sides[side]);
 const metricReady = (rnd, metric) => metric === "paired"
   ? sideReady(rnd, "before") && sideReady(rnd, "after")
   : sideReady(rnd, metric);
-const defaultMetric = (rnd) => (sideReady(rnd, "before") && sideReady(rnd, "after") ? "paired"
-  : sideReady(rnd, "after") ? "after" : sideReady(rnd, "online") ? "online" : "before");
+const defaultMetric = (rnd) => (sideReady(rnd, "before") && sideReady(rnd, "after") ? "paired" : "online");
 const roundLabel = (rnd, i) => rnd.label || rnd.release_label || `第 ${i + 1} 期`;
 
 /* The comparison records live in the card head, so a new AB round is one more chip there instead of
@@ -707,7 +705,26 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     });
   }
 
-  function trend(rnd, selectedCell, metric) {
+  /* 变化矩阵按 Trace 数读：一道题可能命中同一格的多条问题，格子里的数字是问题数，
+   旁边的条数是命中这一格的不同 Trace。交集行自带两侧路径，旧 payload 退回 pairs。 */
+function cellTraceCount(rnd, row, colPrefix) {
+  const hit = (paths) => (paths || []).some((pid) => String(pid) === colPrefix || String(pid).startsWith(`${colPrefix}.`));
+  let n = 0;
+  const common = Array.isArray(rnd.common?.rows) ? rnd.common.rows : null;
+  if (common) {
+    common.forEach(([task, sub, beforePaths, afterPaths]) => {
+      if (sceneMatches(row, task || NO_SCENE, sub || "") && (hit(beforePaths) || hit(afterPaths))) n += 1;
+    });
+    return n;
+  }
+  (Array.isArray(rnd.pairs) ? rnd.pairs : []).forEach((pair) => {
+    if (!sceneMatches(row, pair.scene || NO_SCENE, pair.sub || "")) return;
+    if (hit(pair.before?.paths) || hit(pair.after?.paths)) n += 1;
+  });
+  return n;
+}
+
+function trend(rnd, selectedCell, metric) {
     if (!selectedCell) return "";
     const { row, col } = selectedCell;
     const values = rounds.map((r, i) => ({
@@ -721,6 +738,7 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     const current = metric === "paired"
       ? (cur.before == null || cur.after == null ? null : cur.after - cur.before)
       : cur[metric];
+    const inCell = metric === "paired" ? cellTraceCount(rnd, row, col.prefix) : null;
     let cols, series;
     if (metric === "paired") {
       if (values.length === 1) {
@@ -767,7 +785,7 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     return `<section class="ab-trend is-on" aria-live="polite">
       <div class="ab-trendhead">
         <span class="ab-trendname">${esc(row.name)} · ${esc(col.name)}</span>
-        <span class="ab-trendmetric">${esc(label)} <b class="num">${current == null ? DASH : metric === "paired" ? signed(current) : fmt(current)}</b></span>
+        <span class="ab-trendmetric">${esc(label)} <b class="num">${current == null ? DASH : metric === "paired" ? signed(current) : fmt(current)}</b>${inCell == null ? "" : `<span class="ab-trendtraces"><b class="num">${fmt(inCell)}</b> 条 Trace</span>`}</span>
         <span class="ab-trendacts">${chips || '<small class="ab-trendhint">当前簇没有可召回样本</small>'}</span>
       </div>
       ${trendSampleFrame(`<div class="mxt-plot" id="abCellTrend" data-own-tip>${lineTrendSVG({ ...chart, width }).html}</div>`)}

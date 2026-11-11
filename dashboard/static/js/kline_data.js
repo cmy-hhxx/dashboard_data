@@ -68,7 +68,12 @@ export function buildIntradayCandles(intraday, selected, levels) {
   if (!Number.isFinite(base)) return [];
   const step = Math.max(1, Number(intraday.bucket_minutes) || 5);
   const at = new Map(buckets.map(([minute, ...counts]) => [Number(minute), counts.map(Number)]));
-  const minutes = [...at.keys()].sort((a, b) => a - b);
+  // A bucket outside the local day would stretch the axis into a second date; the backend
+  // already scopes by local date, this keeps a malformed row from doing it again.
+  const minutes = [...at.keys()]
+    .filter((minute) => Number.isInteger(minute) && minute >= 0 && minute < 1440)
+    .sort((a, b) => a - b);
+  if (!minutes.length) return [];
   let cumulative = 0;
   let previous = 0;
   const candles = [];

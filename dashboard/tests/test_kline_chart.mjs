@@ -95,3 +95,15 @@ test("intraday without buckets or selected levels stays empty", () => {
   assert.deepEqual(buildIntradayCandles({ date: "2026-11-09", buckets: [] }, ["P0"], ["P0"]), []);
   assert.deepEqual(buildIntradayCandles({ date: "2026-11-09", buckets: [[0, 1]] }, [], ["P0"]), []);
 });
+
+test("intraday drops buckets that fall outside the local day", () => {
+  const levels = ["P0", "P1"];
+  const intraday = {
+    date: "2026-11-09",
+    bucket_minutes: 5,
+    buckets: [[1440, 3, 0], [1500, 0, 7], [785, 1, 2]],
+  };
+  const candles = buildIntradayCandles(intraday, ["P0", "P1"], levels);
+  assert.deepEqual(candles.map(({ label, close }) => [label, close]), [["13:05", 3]]);
+  assert.deepEqual(buildIntradayCandles({ date: "2026-11-09", bucket_minutes: 5, buckets: [[1440, 1, 0]] }, ["P0"], levels), []);
+});

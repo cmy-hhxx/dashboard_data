@@ -42,9 +42,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 AB_DIR = "ab_test"
+VERIFY_REL = "06_verify/verify.jsonl"
 # Bump when the payload's meaning changes (model scoping, leaf/matrix assembly) so an unchanged
 # dataset still rebuilds its abtests-*.json instead of serving a stale payload.
-AB_PAYLOAD_VERSION = 6
+AB_PAYLOAD_VERSION = 7
 ROUND_RE = re.compile(r"^(\d+)_version(?P<version>[0-9A-Za-z.]+?)(?:_test)?$")
 # 重测归因的 session_meta.case_id 结尾是 ``_eq_00013``：只有它的 eq 能生成改版后详情。
 ATTRIBUTION_EQ_RE = re.compile(r"_eq_(\d+)$")
@@ -150,6 +151,7 @@ def _round_signature_files(round_dir: Path):
 
     add(round_dir / "round.json")
     add(round_dir / "01_targets" / "questions.jsonl")
+    add(round_dir / VERIFY_REL)
     manifest = round_dir / "00_manifest"
     if manifest.is_dir():
         for path in sorted(manifest.glob("coverage*.csv")):
@@ -1247,9 +1249,44 @@ def _build_round_legacy(round_dir: Path, order: int, version: str, samples=None,
     return meta
 
 
+def read_verify(round_dir: Path):
+    """`06_verify/verify.jsonl` → question_id → the two fact-check fields.
+
+    The verification batch is keyed by the fixed set's question id (the same id as a pair),
+    and carries one entry per compared model.  Keep only the two fields the compare page
+    renders: the checks a model answered and the per-fact grading.  A round without the
+    batch simply has no ``verify`` key and the page shows a quiet empty state.
+    """
+    path = round_dir / VERIFY_REL
+    if not path.is_file():
+        return {}
+    found = {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                qid = str(row.get("question_id") or "")
+                if not qid:
+                    continue
+                found[qid] = {
+                    "verifiable_fact_check_list": row.get("verifiable_fact_check_list") or [],
+                    "eval_per_model": row.get("eval_per_model") or [],
+                }
+    except OSError:
+        return {}
+    return found
+
+
 def build_round(round_dir: Path, order: int, version: str, samples=None,
                 next_release: str | None = None, meta=None, input_traces=None):
     """One round, in either layout, always with the same payload shape."""
+    meta = meta or round_meta(round_dir, order, version)
+    # The compare page reads this by pair id; keeping it off the 1k-pair list avoids repeating
+    # the same verification batch in every pair.
+    meta["verify"] = read_verify(round_dir)
     if is_scope_layout(round_dir):
         return _build_round_scoped(round_dir, order, version, samples=samples,
                                    next_release=next_release, meta=meta,

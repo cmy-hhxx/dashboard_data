@@ -243,6 +243,8 @@ body.is-ab-full { overflow: hidden; }
 .ab-trendmetric { display: inline-flex; align-items: baseline; gap: 5px; color: var(--muted); font-size: var(--fs-meta); }
 .ab-trendmetric b { color: var(--ink-2); font-size: var(--fs-body); font-weight: var(--w-medium); }
 .ab-trendmetric small { color: var(--faint); }
+.ab-trendtraces { display: inline-flex; align-items: baseline; gap: 3px; margin-left: 6px; padding-left: 8px; border-left: 1px solid var(--well-2); color: var(--muted); }
+.ab-trendtraces b { font-size: var(--fs-meta); color: var(--ink-2); }
 .ab-trendacts { display: flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
 .ab-trendhint { color: var(--faint); font-size: var(--fs-meta); }
 .ab-samplechip {

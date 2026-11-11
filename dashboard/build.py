@@ -62,7 +62,7 @@ STATIC = DASHBOARD / "static"
 RELEASES_CONFIG = DASHBOARD / "config" / "releases.json"
 PRODUCTION_DATASETS = Path("/mnt/fin_bench/code_and_clean_data/datasets")
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-10.5"
+PAYLOAD_VERSION = "2026-11-11.1"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 2
 
@@ -1984,22 +1984,27 @@ def trace_severity(detail, include_refs=False):
     return result
 
 
-def local_minute(raw):
-    """request_time (UTC ISO) → Asia/Shanghai minute of day, or None when unusable."""
+def local_day_minute(raw):
+    """request_time (UTC ISO) → (Asia/Shanghai date, minute of day), or (None, None).
+
+    The intraday chart is keyed to one local day.  The evaluation date (`row[`d`]`) and the
+    request timestamp can land on different days when a run crosses midnight, so the caller
+    must compare the local date as well as the minute-of-day.
+    """
     text = str(raw or "").strip()
     if not text:
-        return None
+        return None, None
     try:
         stamp = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
-        return None
+        return None, None
     if stamp.tzinfo is None:
         stamp = stamp.replace(tzinfo=timezone.utc)
     local = stamp.astimezone(TZ)
-    return local.hour * 60 + local.minute
+    return local.date().isoformat(), local.hour * 60 + local.minute
 
 
-def trend_payload(product, samples, releases=(), generated=None):
+def trend_payload(product, samples, releases=(), generated=None, today=None):
     """Lazy payload behind a cluster-matrix cell's in-card trend chart.
 
     ``base`` counts every evaluated record per day × scene × model × user type,
@@ -2089,7 +2094,9 @@ def trend_payload(product, samples, releases=(), generated=None):
     trace_days = [[0] * 6 for _ in dates]
     trace_refs = []
     unresolved = 0
-    latest_day = dates[-1] if dates else None
+    # 日内行情只讲“今天”：历史最新一天可能是 11-09，不能把它当成当天展示。
+    today = today or datetime.now(TZ).date().isoformat()
+    latest_day = today if today in day_idx else None
     intraday_buckets = {}
     for slug, detail, row, _, _pair in prepared:
         trace = detail.get("trace_severity") or trace_severity(detail, include_refs=True)
@@ -2098,8 +2105,8 @@ def trend_payload(product, samples, releases=(), generated=None):
         unresolved += trace["unresolved"]
         trace_refs.extend([day_idx[row["d"]], slug, *ref] for ref in trace.get("refs", []))
         if row["d"] == latest_day:
-            minute = local_minute((detail.get("meta") or {}).get("request_time"))
-            if minute is not None:
+            day_of_request, minute = local_day_minute((detail.get("meta") or {}).get("request_time"))
+            if day_of_request == latest_day and minute is not None:
                 counts = intraday_buckets.setdefault((minute // 5) * 5, [0] * 6)
                 for level, count in enumerate(trace["counts"]):
                     counts[level] += count

@@ -170,6 +170,7 @@ export function createKlineChart(host, spec = {}) {
   host.innerHTML = `<div class="kl-legend">
       ${MA_DEFS.map(([name, , key]) => `<span><i style="--c:${colors[key]}"></i>${name}</span>`).join("")}
       <span class="kl-vol-key"><i class="is-vol"></i>量能 · ${esc(spec.volumeName || "Trace")}</span>
+      ${spec.legendNote ? `<span class="kl-note">${esc(spec.legendNote)}</span>` : ""}
     </div><div class="kl-canvas"></div><div class="kl-tip" hidden></div>`;
   const canvas = host.querySelector(".kl-canvas");
   const tip = host.querySelector(".kl-tip");
@@ -185,7 +186,7 @@ export function createKlineChart(host, spec = {}) {
       attributionLogo: false,
     },
     grid: { vertLines: { color: colors.grid }, horzLines: { color: colors.grid } },
-    rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.08, bottom: 0 } },
+    rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.14, bottom: 0.02 } },
     timeScale: {
       borderVisible: false, fixLeftEdge: true, fixRightEdge: true,
       tickMarkFormatter: (time) => tick(time),

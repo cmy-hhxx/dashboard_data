@@ -18,7 +18,7 @@ const SAMPLE_VIEW_RESET = {
 const C = {
   root: null, ctx: null, product: null, round: null, pairs: [], list: [], page: 1, query: "",
   online: null, pairId: null, gen: "", skelKey: "", listKey: "", sidesKey: "", token: 0, details: [],
-  listOff: false, syncScroll: false, sides: { b: true, a: true }, fold: { b: false, a: false },
+  listOff: false, syncScroll: false, verifyOnly: false, sides: { b: true, a: true }, fold: { b: false, a: false },
 };
 
 /* ---------------------------------------------------------------- pure helpers (tested) */
@@ -56,11 +56,6 @@ export function predictionRate(productData, model) {
 
 const roundName = (round, i = 0) => round?.label || round?.title || round?.version || `第 ${i + 1} 期`;
 const roundDate = (round) => String(round?.released_at || round?.release_label || "").slice(0, 10);
-const roundMeta = (round) => {
-  const models = (Array.isArray(round?.models) ? round.models : []).join(" + ");
-  const pairs = Array.isArray(round?.pairs) ? round.pairs.length : 0;
-  return [models, roundDate(round), pairs ? `${fmt(pairs)} 道同题` : ""].filter(Boolean).join(" · ");
-};
 
 /* ---------------------------------------------------------------- testset timeline */
 const DAY = 86400000;
@@ -264,23 +259,57 @@ function onlineRef(round, slug) {
 const ICON = (d) => `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true"><path d="${d}" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const CHEV_LEFT = ICON("M10 3.5 5.5 8 10 12.5");
 const CHEV_RIGHT = ICON("M6 3.5 10.5 8 6 12.5");
-const CHEV_UP = ICON("M3.5 10 8 5.5 12.5 10");
+const SYNC_ICON = ICON("M3 5.5h7.5M8.5 3.5 10.5 5.5 8.5 7.5M13 10.5H5.5M7.5 8.5 5.5 10.5 7.5 12.5");
+const EXPAND_ICON = ICON("M3 6V3h3M10 3h3v3M13 10v3h-3M6 13H3v-3");
+const COLLAPSE_ICON = ICON("M6 3v3H3m7-3v3h3m0 4h-3v3m-4 0v-3H3");
+
+const modelMode = (round) => (Array.isArray(round?.models) ? round.models : [])
+  .filter(Boolean)
+  .map((model) => {
+    const text = String(model);
+    return text.length <= 3 ? text.toUpperCase() : text.charAt(0).toUpperCase() + text.slice(1);
+  })
+  .join(" + ");
+const roundCount = (round) => Number(round?.fixed?.total) || Number(round?.targets)
+  || (Array.isArray(round?.pairs) ? round.pairs.length : 0);
+const isVerified = (pair) => !!C.round?.verify?.[pair?.id];
+const verifiedCount = (round) => (Array.isArray(round?.pairs) ? round.pairs : [])
+  .filter((pair) => !!round.verify?.[pair.id]).length;
+function listPairs() {
+  const base = filterPairs(sortPairs(C.pairs), C.query);
+  return C.verifyOnly ? base.filter(isVerified) : base;
+}
 
 /* ---------------------------------------------------------------- shell */
 function skeleton(root, round) {
-  root.innerHTML = `<div class="compare-top">
-    <button type="button" class="compare-back" data-act="testsets">${CHEV_LEFT}<span>测试集</span></button>
-    <b class="compare-top-name">${esc(roundName(round))}</b>
-    <span class="compare-top-meta">${esc(roundMeta(round))}</span>
-    <span class="compare-models" role="group" aria-label="选择要展示的模型"></span>
-    <button type="button" class="compare-sync" data-act="sync" aria-pressed="${C.syncScroll}"><span class="compare-sync-knob" aria-hidden="true"></span>同步滚动</button>
-  </div>
-  <div class="bench bench-compare">
+  const mode = modelMode(round);
+  root.innerHTML = `<div class="compare-standalone-head">
+      <b class="compare-top-name">${esc(roundName(round))}</b>
+      ${mode ? `<span class="compare-mode">${esc(mode)} 模式</span>` : ""}
+      <span class="compare-top-count num">${fmt(roundCount(round))} 道题目</span>
+    </div>
+    <div class="bench bench-compare">
     <aside class="pane pane-sticky compare-list" aria-label="同题列表">
       <button type="button" class="compare-rail-btn" data-act="toggle-list" title="展开同题列表" aria-label="展开同题列表">${CHEV_RIGHT}<span class="compare-rail-label">同题列表</span></button>
       <div class="pane-head compare-list-head">
+        <div class="compare-round">
+          <button type="button" class="compare-back" data-act="testsets" title="返回测试集" aria-label="返回测试集">${CHEV_LEFT}</button>
+          <b class="compare-top-name">${esc(roundName(round))}</b>
+          <span class="compare-top-count num">${fmt(roundCount(round))} 道题目</span>
+        </div>
+        <div class="compare-modes">
+          ${mode ? `<span class="compare-mode">${esc(mode)} 模式</span>` : ""}
+          ${verifiedCount(round) ? `<button type="button" class="compare-filter" data-act="verify-only" aria-pressed="${C.verifyOnly}" title="只看有事实核验的题目">${VERIFY_ICON}<span>有核验</span><b class="num">${verifiedCount(round)}</b></button>` : ""}
+          <span class="compare-models" role="group" aria-label="选择要展示的模型"></span>
+        </div>
         <input class="search" id="cmpq" type="search" placeholder="搜索问题" autocomplete="off">
-        <div class="list-meta"><span id="cmpcount" class="num"></span><button type="button" class="compare-icon-btn" data-act="toggle-list" title="折叠同题列表" aria-label="折叠同题列表">${CHEV_LEFT}</button></div>
+        <div class="list-meta">
+          <span id="cmpcount" class="num"></span>
+          <span class="meta-end">
+            <button type="button" class="compare-icon-btn compare-sync" data-act="sync" aria-pressed="${C.syncScroll}" title="同步滚动" aria-label="同步滚动">${SYNC_ICON}</button>
+            <button type="button" class="compare-icon-btn" data-act="toggle-list" title="折叠同题列表" aria-label="折叠同题列表">${CHEV_LEFT}</button>
+          </span>
+        </div>
       </div>
       <div class="pane-scroll" id="cmplist" tabindex="0" aria-label="同题"></div>
       <div class="pager" id="cmppager" hidden></div>
@@ -288,6 +317,54 @@ function skeleton(root, round) {
     <div class="compare-panes" id="cmppanes"></div>
   </div>`;
   wireSkeleton(root);
+}
+
+/* 单侧详情全屏：pane 本身变成 fixed 面板，背后一层同色遮罩，Esc / 再点一次退出。 */
+let fullSide = null;
+let fullBackdrop = null;
+function closeSideFull() {
+  if (!fullSide) return;
+  const side = fullSide;
+  fullSide = null;
+  side.classList.remove("is-full");
+  side.querySelector(".compare-expand")?.setAttribute("aria-pressed", "false");
+  fullBackdrop?.remove();
+  fullBackdrop = null;
+  if (document.documentElement.dataset.compareFull) delete document.documentElement.dataset.compareFull;
+  realignDetails();
+}
+
+function realignDetails() {
+  const details = (C.details || []).slice();
+  const run = () => details.forEach((detail) => {
+    try { detail.refreshThreads?.(); } catch (err) { /* detached */ }
+  });
+  requestAnimationFrame(run);
+  setTimeout(run, 180);
+}
+
+function toggleSideFull(side) {
+  if (!side) return;
+  if (fullSide === side) {
+    closeSideFull();
+    return;
+  }
+  closeSideFull();
+  fullSide = side;
+  side.classList.add("is-full");
+  side.querySelector(".compare-expand")?.setAttribute("aria-pressed", "true");
+  fullBackdrop = document.createElement("div");
+  fullBackdrop.className = "compare-full-backdrop";
+  fullBackdrop.addEventListener("click", closeSideFull);
+  side.parentElement?.append(fullBackdrop);
+  document.documentElement.dataset.compareFull = "1";
+  realignDetails();
+}
+
+if (typeof document !== "undefined") {
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && fullSide) closeSideFull();
+  });
 }
 
 function wireSkeleton(root) {
@@ -299,7 +376,7 @@ function wireSkeleton(root) {
     timer = setTimeout(() => {
       C.query = search.value.trim();
       C.page = 1;
-      C.list = filterPairs(sortPairs(C.pairs), C.query);
+      C.list = listPairs();
       C.listKey = "";
       paintList(pagePairs(C.list, C.page));
     }, 140);
@@ -327,9 +404,13 @@ function wireSkeleton(root) {
     if (act?.dataset.act === "toggle-list") {
       C.listOff = !C.listOff;
       applyLayout();
+      return;
+    }
+    if (act?.dataset.act === "expand") {
+      toggleSideFull(act.closest(".compare-side"));
     }
   });
-  $(".compare-top", root).addEventListener("click", (e) => {
+  $(".compare-list-head", root).addEventListener("click", (e) => {
     const act = e.target.closest("[data-act]");
     if (act?.dataset.act === "testsets") {
       if (C.ctx) C.ctx.navigate({ round: null, pair: null, online: null });
@@ -339,6 +420,17 @@ function wireSkeleton(root) {
       C.syncScroll = !C.syncScroll;
       act.setAttribute("aria-pressed", String(C.syncScroll));
       wireSyncScroll();
+      return;
+    }
+    if (act?.dataset.act === "verify-only") {
+      C.verifyOnly = !C.verifyOnly;
+      act.setAttribute("aria-pressed", String(C.verifyOnly));
+      C.page = 1;
+      C.list = listPairs();
+      C.listKey = "";
+      paintList(pagePairs(C.list, C.page));
+      $("#cmplist", root).scrollTop = 0;
+      return;
     }
     if (act?.dataset.act === "side") {
       const side = act.dataset.side;
@@ -362,22 +454,27 @@ function applyLayout() {
   list.classList.toggle("is-collapsed", C.listOff);
 }
 
+const VERIFY_ICON = `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true"><path d="M3.5 8.5 6.5 11.5 12.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
 function rowHTML(pair) {
   // A missing side is unknown, never "0 problems": the count is cluster hits, and the row must
   // not imply the release fixed something the data simply does not cover.
   const before = pair.before ? Number(pair.before.n || 0) : null;
   const after = pair.after ? Number(pair.after.n || 0) : null;
+  const verified = !!C.round?.verify?.[pair.id];
   return `<button type="button" class="srow" data-pair="${esc(pair.id)}" style="--c:var(--t3)">
     <span class="bar"></span>
     <span class="srow-body"><span class="q">${esc(pair.q || "（无提问）")}</span>
-    <span class="m num"><span class="srow-model">改版前 ${before == null ? "—" : fmt(before)} · 改版后 ${after == null ? "—" : fmt(after)}</span></span></span>
+    <span class="m num"><span class="srow-model">改版前 ${before == null ? "—" : fmt(before)} · 改版后 ${after == null ? "—" : fmt(after)}</span>${verified ? `<span class="srow-verify" role="img" aria-label="事实核验" title="事实核验">${VERIFY_ICON}</span>` : ""}</span></span>
   </button>`;
 }
 
 function paintList(page) {
   const root = C.root;
-  const key = `${C.gen}|${C.round.id}|${C.query}|${C.page}|${C.list.length}|${C.online || ""}`;
-  $("#cmpcount", root).textContent = `${fmt(C.list.length)} / ${fmt(C.pairs.length)} 道同题`;
+  const key = `${C.gen}|${C.round.id}|${C.query}|${C.page}|${C.list.length}|${C.online || ""}|${C.verifyOnly ? 1 : 0}`;
+  $("#cmpcount", root).textContent = C.verifyOnly
+    ? `${fmt(C.list.length)} / ${fmt(verifiedCount(C.round))} 有核验`
+    : `${fmt(C.list.length)} / ${fmt(C.pairs.length)} 道同题`;
   const list = $("#cmplist", root);
   if (key !== C.listKey) {
     C.listKey = key;
@@ -401,10 +498,82 @@ function renderPager(pages) {
 }
 
 /* ---------------------------------------------------------------- detail panes */
+const VERDICT_CLASS = { "对": "is-ok", "部分对": "is-part", "错": "is-bad", "未到期": "is-wait" };
+const verdictClass = (value) => VERDICT_CLASS[String(value || "").trim()] || "is-wait";
+
+/* verify.jsonl 里同一道题每个模型一份 checks / results；side 前缀对应模型 id。
+   id 以后可能改名，所以先认 before/after/online 语义，再退回列表顺序。 */
+function verifyItems(entry, side) {
+  if (!entry) return null;
+  const lists = Array.isArray(entry.verifiable_fact_check_list) ? entry.verifiable_fact_check_list : [];
+  const evals = Array.isArray(entry.eval_per_model) ? entry.eval_per_model : [];
+  const match = (id) => {
+    const text = String(id || "").toLowerCase();
+    if (side === "o") return text.includes("online");
+    if (side === "b") return text.includes("before");
+    return text.includes("after") && !text.includes("online");
+  };
+  let checks = lists.find((item) => match(item?.model_id))?.checks;
+  let results = evals.find((item) => match(item?.model_id))?.results;
+  if (!checks && !results) {
+    const at = side === "a" ? 1 : 0;
+    checks = lists[at]?.checks;
+    results = evals[at]?.results;
+    // Only a single unlabelled batch can serve the first side; never reuse a 'before' batch
+    // for the after pane just because the id changed.
+    if (!checks && !results && at === 0 && lists.length <= 1) {
+      checks = lists[0]?.checks;
+      results = evals[0]?.results;
+    }
+  }
+  const byId = new Map();
+  (checks || []).forEach((item) => {
+    if (item?.fact_id) byId.set(String(item.fact_id), { ...item });
+  });
+  (results || []).forEach((item) => {
+    if (!item?.fact_id) return;
+    const id = String(item.fact_id);
+    byId.set(id, { ...(byId.get(id) || {}), ...item });
+  });
+  return byId.size ? [...byId.values()] : null;
+}
+
+function verifyHTML(round, pair, side) {
+  const entry = pair ? round?.verify?.[pair.id] : null;
+  const items = verifyItems(entry, side);
+  if (!items) return "";
+  const tally = new Map();
+  items.forEach((item) => {
+    const value = String(item.is_correct || "").trim();
+    if (value) tally.set(value, (tally.get(value) || 0) + 1);
+  });
+  const counts = [...tally.entries()]
+    .map(([value, n]) => `<span class="cv-tally-item ${verdictClass(value)}">${esc(value)} <b class="num">${n}</b></span>`)
+    .join("");
+  const rows = items.map((item) => {
+    const verdict = String(item.is_correct || "").trim();
+    const fact = item.fact_id ? `<span class="cv-id num">${esc(item.fact_id)}</span>` : "";
+    const attribution = item.attribution ?? item.why_wrong ?? "";
+    return `<article class="cv-item" data-v="${esc(verdict)}">
+      <div class="cv-top">${fact}<span class="cv-check">${esc(item.what_to_check || "—")}</span><span class="cv-verdict ${verdictClass(verdict)}">${esc(verdict || "—")}</span></div>
+      ${item.model_answer ? `<p class="cv-line"><span class="cv-k2">回复</span><span>${esc(item.model_answer)}</span></p>` : ""}
+      ${item.correct_answer ? `<p class="cv-line"><span class="cv-k2">事实</span><span>${esc(item.correct_answer)}</span></p>` : ""}
+      <p class="cv-why"><span class="cv-k2">归因</span><span>${esc(attribution || "—")}</span></p>
+    </article>`;
+  }).join("");
+  return `<section class="compare-verify" aria-label="事实核验">
+    <header class="cv-head"><span class="cv-k">事实核验</span><span class="cv-tally">${counts}</span></header>
+    <div class="cv-list">${rows}</div>
+  </section>`;
+}
+
 function sideHeadHTML(label, n, side, model) {
   const count = n == null ? "" : `<span class="pill">${fmt(n)} 个落点</span>`;
   const tag = model ? `<small class="compare-model-tag">${esc(model)}</small>` : "";
-  return `<div class="pane-head compare-side-head"><span class="cg"><span class="cg-k">${esc(label)}</span>${tag}${count}</span></div>`;
+  return `<div class="pane-head compare-side-head">
+    <span class="cg"><span class="cg-k">${esc(label)}</span>${tag}${count}</span>
+    <button type="button" class="compare-icon-btn compare-expand" data-act="expand" aria-pressed="false" title="全屏显示${esc(label)}" aria-label="全屏显示${esc(label)}"><span class="ico-expand">${EXPAND_ICON}</span><span class="ico-collapse">${COLLAPSE_ICON}</span></button>
+  </div>`;
 }
 
 function sideHTML(prefix, label, ref, gap, model, withThreads = true) {
@@ -499,6 +668,10 @@ async function mountDetail(host, spec) {
     roundQuestion: true,
     // 版本对比的详情栏用更紧凑的折叠：轨迹可收起、中间链路默认收起、最终答案可收起。
     compareFolds: spec.compareFolds === true,
+    // 版本对比把标题行、chip 组和轮次标签换成一屏事实核验区（标题已在左栏列表里）。
+    compareHead: spec.compareHead === true,
+    headExtra: spec.headExtra || "",
+    folds: spec.folds || null,
     // Cluster paths have no filter on this page; 具体数据 already owns that drill.
     onPattern: (path) => ctx.navigate({ ...SAMPLE_VIEW_RESET, view: "samples", product: ctx.product, pattern: path }),
   });
@@ -530,6 +703,7 @@ async function paintSides(round, pair, online) {
     : `${C.gen}|pair|${C.product}|${round.id}|${pair.id}|${sidesKey}`;
   if (C.sidesKey === key) return;
   C.sidesKey = key;
+  closeSideFull();
   destroyDetails();
   const token = ++C.token;
   const productData = C.ctx.data?.products?.[C.product];
@@ -552,12 +726,9 @@ async function paintSides(round, pair, online) {
   if (modelHost) {
     modelHost.hidden = !!online;
     if (!online) {
-      const distinct = new Set(allColumns.map((column) => column.model).filter(Boolean)).size > 1;
       modelHost.innerHTML = allColumns.map((column) => {
         const on = C.sides[column.prefix] !== false;
-        const main = distinct ? (column.model || column.label) : column.label;
-        const sub = distinct ? column.label : (column.model || "");
-        return `<button type="button" class="compare-model" data-act="side" data-side="${column.prefix}" aria-pressed="${on}" title="${esc(`${on ? "隐藏" : "显示"} ${column.label}${column.model ? ` · ${column.model}` : ""}`)}">${esc(main)}${sub ? `<small>${esc(sub)}</small>` : ""}</button>`;
+        return `<button type="button" class="compare-model" data-act="side" data-side="${column.prefix}" aria-pressed="${on}" title="${esc(`${on ? "隐藏" : "显示"} ${column.label}${column.model ? ` · ${column.model}` : ""}`)}">${esc(column.label)}</button>`;
       }).join("");
     }
   }
@@ -572,6 +743,7 @@ async function paintSides(round, pair, online) {
     <div class="compare-side-row${columns.length === 1 ? " is-single" : ""}" style="--cols:${columns.length}">${columns.map((column) => sideHTML(column.prefix, column.label, column.ref, column.gap, column.model, !folds)).join("")}</div>`;
   applyLayout();
   const jobs = [];
+  const initialFolds = folds ? { traj: false, chain: false } : null;
   if (online) {
     const ref = onlineSource;
     jobs.push(mountDetail(panes.querySelector('[data-side="o"]'), {
@@ -588,6 +760,9 @@ async function paintSides(round, pair, online) {
         focus: { focusTrace: before.trace },
         expand: true,
         compareFolds: folds,
+        compareHead: true,
+        headExtra: verifyHTML(round, pair, "b"),
+        folds: initialFolds,
         loadDetail: (ref) => getJSON(String(ref).startsWith("before-")
           ? `ab_samples/${encodeURIComponent(round.id)}/${encodeURIComponent(ref)}.json`
           : `samples/${encodeURIComponent(ref)}.json`),
@@ -598,6 +773,9 @@ async function paintSides(round, pair, online) {
         prefix: "a", session: afterSession(round, pair, after),
         focus: {},
         compareFolds: folds,
+        compareHead: true,
+        headExtra: verifyHTML(round, pair, "a"),
+        folds: initialFolds,
         loadDetail: (eq) => getJSON(`ab_samples/${encodeURIComponent(round.id)}/${encodeURIComponent(eq)}.json`),
       }));
     }
@@ -609,6 +787,7 @@ async function paintSides(round, pair, online) {
 
 /* ---------------------------------------------------------------- render */
 export async function render(root, ctx) {
+  if (fullSide) closeSideFull();
   stopPickerObserver();
   C.root = root;
   C.ctx = ctx;
@@ -630,12 +809,12 @@ export async function render(root, ctx) {
     destroyDetails();
     C.skelKey = ""; C.listKey = ""; C.sidesKey = "";
     C.round = round;
-    root.innerHTML = `<div class="compare-top">
-      <button type="button" class="compare-back" data-act="testsets">${CHEV_LEFT}<span>测试集</span></button>
+    root.innerHTML = `<div class="compare-empty-head">
+      <button type="button" class="compare-back" data-act="testsets" title="返回测试集" aria-label="返回测试集">${CHEV_LEFT}</button>
       <b class="compare-top-name">${esc(roundName(round))}</b>
-      <span class="compare-top-meta">${esc(roundMeta(round))}</span>
+      <span class="compare-top-count num">${fmt(roundCount(round))} 道题目</span>
     </div><div class="bento"><div class="card" style="--span:12"><div class="empty">暂无同题详情</div></div></div>`;
-    $(".compare-top", root).addEventListener("click", (event) => {
+    $(".compare-empty-head", root).addEventListener("click", (event) => {
       if (event.target.closest("[data-act='testsets']")) ctx.navigate({ round: null, pair: null, online: null });
     });
     return;
@@ -646,6 +825,7 @@ export async function render(root, ctx) {
     destroyDetails();
     C.query = "";
     C.page = 1;
+    C.verifyOnly = false;
     skeleton(root, round);
     C.skelKey = skelKey;
     C.listKey = "";
@@ -655,15 +835,18 @@ export async function render(root, ctx) {
   C.round = round;
   C.online = url.online;
   C.pairs = pairs;
-  C.list = filterPairs(sortPairs(pairs), C.query);
+  C.list = listPairs();
   let wanted = !url.online && url.pair ? C.list.find((pair) => String(pair.id) === String(url.pair)) : null;
-  // A link from the A/B panel can land on a question the still-active search hides. Reset the
-  // search only for that deep link, so the selected pair is never silently replaced by page one.
+  // A link from the A/B panel can land on a question the still-active search or the
+  // verify-only filter hides. Reset both for that deep link, so the selected pair is never
+  // silently replaced by page one.
   if ((url.pair && !wanted) || url.online) {
-    if (C.query) {
+    if (C.query || C.verifyOnly) {
       C.query = "";
+      C.verifyOnly = false;
       $("#cmpq", root).value = "";
-      C.list = filterPairs(sortPairs(pairs), "");
+      $(".compare-filter", root)?.setAttribute("aria-pressed", "false");
+      C.list = listPairs();
       wanted = !url.online && url.pair ? C.list.find((pair) => String(pair.id) === String(url.pair)) : null;
     }
   }

@@ -351,6 +351,7 @@ test("AB cell trends read one side at a time and the paired change across the re
     label: "v1106",
     sides: { before: { hits: 95, traces: 95 }, after: { hits: 60, traces: 60 }, online: { hits: 40, traces: 40 } },
     matrix: { before: mBefore, after: mAfter, online: mOnline },
+    common: { rows: [[row.task, "", ["S4.M1.1"], ["S4.M1.1"]]] },
     nodes: [],
     sample_refs: {
       before: [{ trace: "a", model: "expert", task: row.task, sub: "", paths: ["S4.M1.1"] }],
@@ -382,19 +383,11 @@ test("AB cell trends read one side at a time and the paired change across the re
     assert.deepEqual(mounted[1].chart.series[0].values, [95, 60], "同题变化 reads the fixed set alone");
     assert.deepEqual(mounted[1].chart.series[0].samples.map((pick) => pick.sides), [["before"], ["after"]]);
     assert.match(host.innerHTML, /同题变化 <b class="num">−35<\/b>/);
-
-    mount("before");
-    assert.deepEqual(mounted[1].chart.series[0].values, [95]);
-    assert.deepEqual(mounted[1].chart.series[0].samples.map((pick) => pick.sides), [["before"]]);
-    assert.deepEqual(mounted[1].chart.marks, null, "a single batch has no release boundary to draw");
-
-    mount("after");
-    assert.deepEqual(mounted[1].chart.series[0].values, [60]);
-    assert.match(host.innerHTML, /发版后同题测试 <b class="num">60<\/b>/);
+    assert.match(host.innerHTML, /<span class="ab-trendtraces"><b class="num">1<\/b> 条 Trace<\/span>/);
 
     mount("online");
     assert.deepEqual(mounted[1].chart.series[0].values, [40]);
-    assert.match(host.innerHTML, /发版后线上真实 <b class="num">40<\/b>/);
+    assert.match(host.innerHTML, /线上真实 <b class="num">40<\/b>/);
     assert.match(host.innerHTML, /改版前样本/);
     assert.match(host.innerHTML, /线上真实样本/);
     assert.match(host.innerHTML, /data-sides="online"/);
@@ -404,7 +397,7 @@ test("AB cell trends read one side at a time and the paired change across the re
   }
 });
 
-test("AB matrix offers the four readings and paints four numbers in every change cell", () => {
+test("AB matrix offers the paired and online readings and paints four numbers in every change cell", () => {
   const row = { name: "未接入分类体系", task: "未接入分类体系", sub: "" };
   const rowBefore = [row.task, "", [["S4.M1.1", 95]], 95];
   const rowAfter = [row.task, "", [["S4.M1.1", 60]], 60];
@@ -435,13 +428,11 @@ test("AB matrix offers the four readings and paints four numbers in every change
   try {
     post.models = ["expert"];
     mountAB(host, { rounds: [post] }, { round: 0, step: "matrix", cell: null }, {}, null, {});
-    assert.equal((host.innerHTML.match(/data-act="metric"/g) || []).length, 4, "同题变化 + three batches");
+    assert.equal((host.innerHTML.match(/data-act="metric"/g) || []).length, 2, "同题变化 + 线上真实");
     assert.match(host.innerHTML, /data-metric="paired" aria-pressed="true"/);
     assert.match(host.innerHTML, /同题变化/);
-    assert.match(host.innerHTML, /data-metric="before"/);
-    assert.match(host.innerHTML, /data-metric="after"/);
     assert.match(host.innerHTML, /data-metric="online"/);
-    assert.doesNotMatch(host.innerHTML, /data-metric="(all|delta|post)"/);
+    assert.doesNotMatch(host.innerHTML, /data-metric="(before|after|all|delta|post)"/);
     assert.doesNotMatch(host.innerHTML, /同题\+线上变化|发版后（同题回测\+线上真实）/);
     assert.doesNotMatch(host.innerHTML, /class="ab-round"/); // the records live in the card head
     assert.doesNotMatch(host.innerHTML, /ab-mxnote|ab-scope/);
@@ -469,12 +460,12 @@ test("AB matrix offers the four readings and paints four numbers in every change
   assert.equal(metricValue(cell, "after", { sides: { after: null } }), null);
 });
 
-test("AB side matrices carry the scene trace volume on the row and count + rate in the cell", () => {
+test("AB online matrix carries the scene trace volume on the row and count + rate in the cell", () => {
   const row = { name: "交易建议", task: "交易建议", sub: "" };
   const rnd = {
     label: "v1106",
-    sides: { before: { hits: 128, traces: 160 }, after: null, online: null },
-    matrix: { before: [[row.task, "", [["S4.M1.1", 128]], 160]], after: null, online: null },
+    sides: { before: null, after: null, online: { hits: 128, traces: 160 } },
+    matrix: { before: null, after: null, online: [[row.task, "", [["S4.M1.1", 128]], 160]] },
     nodes: [],
   };
   const host = { innerHTML: "", getBoundingClientRect: () => ({ width: 720 }),
@@ -483,7 +474,7 @@ test("AB side matrices carry the scene trace volume on the row and count + rate 
   globalThis.window = { addEventListener() {} };
   globalThis.requestAnimationFrame = () => 0;
   try {
-    mountAB(host, { rounds: [rnd] }, { round: 0, step: "matrix", metric: "before", cell: null }, {}, null, {});
+    mountAB(host, { rounds: [rnd] }, { round: 0, step: "matrix", metric: "online", cell: null }, {}, null, {});
     assert.match(host.innerHTML, /交易建议<em class="mx-vol">（160条）<\/em>/);
     assert.match(host.innerHTML, /<span class="cell-data"><span class="cell-main"><b>128<\/b><\/span><span class="cell-pct">80.0%<\/span><\/span>/);
     assert.doesNotMatch(host.innerHTML, /cell-den/);
@@ -515,7 +506,7 @@ test("AB cell tooltips carry the same four numbers as the change cell", () => {
   assert.equal(paired.note, "同题基线 95 → 同题复测 60");
   assert.equal(metricTip(s1, "before", released).value, "发版前 95");
   assert.equal(metricTip(s1, "after", released).value, "发版后同题测试 60");
-  assert.equal(metricTip(s1, "online", released).value, "发版后线上真实 40");
+  assert.equal(metricTip(s1, "online", released).value, "线上真实 40");
   assert.equal(metricTip({ before: 5, after: 0, online: 0 }, "paired", { sides: { before: {} } }).value, "同题变化 —");
 });
 

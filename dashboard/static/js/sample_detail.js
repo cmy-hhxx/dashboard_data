@@ -230,13 +230,16 @@ export function createSampleDetail(host, ctxArg, opts = {}) {
   const roundQuestion = opts.roundQuestion === true;
   // 版本对比页：轨道、中间链路、最终答案各自可折叠；具体数据页保持原样。
   const compareFolds = opts.compareFolds === true;
+  // 版本对比：标题、chip 组、轮次标签已经在左栏列表里；头部只留调用方给的事实核验区。
+  const compareHead = opts.compareHead === true;
+  const headExtra = opts.headExtra || "";
   const ctx = ctxArg;
   const root = host;
   const S = {
     product: opts.product, prod: opts.prod, all: opts.sessions || [],
     cache: new Map(), loadSeq: 0, D: null, sessionKey: null, session: null,
     round: 0, trace: 0, turn: 0, cturn: 0, sessionView: false, tabPage: 0, open: new Set(),
-    folds: { traj: true, chain: false }, closedAnswers: new Set(),
+    folds: { traj: true, chain: false, ...(opts.folds || {}) }, closedAnswers: new Set(),
     active: null, bandOpen: false, traceMiss: null,
   };
   let threadsBound = false;
@@ -525,8 +528,8 @@ function renderIn() {
   };
   const fullQ = questionOf(D) || "（无提问）";
   const shortQ = fullQ.length > 80 ? `${fullQ.slice(0, 80)}…` : fullQ;
-  $(`#${prefix}shead`, root).innerHTML = `<div class="sample-head">
-      <div class="headline">
+  $(`#${prefix}shead`, root).innerHTML = `<div class="sample-head${compareHead ? " is-compare" : ""}">
+      ${compareHead ? headExtra : `<div class="headline">
         <h2 title="${esc(fullQ)}">${esc(shortQ)}</h2>
         ${idlineHTML()}
       </div>
@@ -540,7 +543,7 @@ function renderIn() {
         ${group("场景", "is-scene", scene)}
         ${group("规模", "is-scale", scale)}
       </div>
-      ${hasChat(D) || rounds.length > 1 ? `<div class="trace-tabs" id="${prefix}ttabs">${traceTabsInner(rounds, D)}</div>` : ""}
+      ${hasChat(D) || rounds.length > 1 ? `<div class="trace-tabs" id="${prefix}ttabs">${traceTabsInner(rounds, D)}</div>` : ""}`}
       <div id="${prefix}ovBox" class="ov-box"></div>
       <div id="${prefix}sumBox">${summaryInner(D)}</div>
       <div id="${prefix}ov" class="ov-grid"></div>
