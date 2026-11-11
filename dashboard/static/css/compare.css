@@ -1,6 +1,6 @@
-/* 版本对比 · layout only: 同题列表 + 改版前 / 改版后两块全宽的样本详情。
-   默认上下对照（各占首屏一半，中间一条发丝线）；收起列表后改成左右并列；
-   任意一侧可折成底部一条，让另一侧占满。所有间距走 4px 网格，颜色只用现有 token。 */
+/* 版本对比 · layout only: 同题列表 + 改版前 / 改版后 / GPT 三列详情。
+   三列等宽并排，各自内部滚动；窄屏只把固定高度改成内容自适应，列结构不变。
+   所有间距走 4px 网格，颜色只用现有 token。 */
 
 html[data-view="compare"] main { max-width: none; padding-bottom: 24px; }
 
@@ -15,7 +15,7 @@ html[data-compare="1"] .compare-list { display: none; }
 html[data-compare="1"] .bench-compare { grid-template-columns: minmax(0, 1fr); }
 
 /* ---------------------------------------------------------------- shell */
-/* 期次信息收进左栏筛选区：v1106 / 题量 / 模型 / 两侧开关，省掉一条独立顶栏。 */
+/* 期次信息收进左栏筛选区：v1106 / 题量 / 模型 / 三列开关，省掉一条独立顶栏。 */
 .compare-round, .compare-empty-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .compare-empty-head { min-height: 32px; margin-bottom: 8px; }
 .compare-standalone-head { display: none; }
@@ -99,7 +99,7 @@ html[data-compare="1"] .compare-standalone-head .compare-top-count { margin-left
 .compare-icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* ---------------------------------------------------------------- panes */
-/* 默认：上下对照。两块各占一半高度，各自内部滚动，首屏都能看到。 */
+/* 三列同排，每列各自内部滚动，首屏都能看到。 */
 .compare-panes { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 8px; min-width: 0; height: calc(100vh - 128px); }
 .compare-panes.no-pred { grid-template-rows: minmax(0, 1fr); }
 .compare-pred { display: grid; gap: 4px; min-width: 0; }
@@ -115,7 +115,7 @@ html[data-compare="1"] .compare-standalone-head .compare-top-count { margin-left
    the full 具体数据 workbench: trajectory | chain | attribution, with the thread column. */
 .compare-side-row:not(.is-single) .anatomy,
 .compare-side-row:not(.is-single) .anatomy.is-session { grid-template-columns: minmax(0, 1fr); }
-/* 两列/多列对比时详情是堆叠单栏：轨迹、中间链路、回答共用一个左基线，折叠头才对得齐。 */
+/* 多列对比时详情是堆叠单栏：轨迹、中间链路、回答共用一个左基线，折叠头才对得齐。 */
 .compare-side-row:not(.is-single) .traj > .out { padding-left: calc(var(--col-pad) + 28px); }
 .compare-side-row:not(.is-single) .threads { display: none; }
 /* The single-model pane is the full 具体数据 workbench, including the thread column. */
@@ -183,7 +183,7 @@ html[data-compare-full="1"], html[data-compare-full="1"] body { overflow: hidden
 .cv-tally-item.is-part { color: var(--sev-1); }
 .cv-tally-item.is-bad { color: var(--sev-0); }
 
-/* 多列对比的归因卡：每侧只有半个屏幕宽，两列并排读，比一条长列表省一半高度。 */
+/* 多列对比的归因卡：每列都很窄，多列并排读，比一条长列表省高度。 */
 .compare-side-row:not(.is-single) .tgroup { grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr)); gap: 8px; }
 .compare-side-row:not(.is-single) .pcard { padding: 8px 10px; gap: 4px; border-radius: 10px; }
 .compare-side-row:not(.is-single) .pcard h3 { font-size: var(--fs-small); line-height: 1.45; }
@@ -233,9 +233,9 @@ html[data-compare-full="1"], html[data-compare-full="1"] body { overflow: hidden
 .gpt-searches li { overflow-wrap: anywhere; }
 
 /* ---------------------------------------------------------------- responsive */
-/* 窄一点就不并列了：两块各占 340px 没法读，回到上下；列表收起状态仍保留。 */
+/* 窄屏取消固定高度，列结构保留；列表收起状态不变。 */
 @media (max-width: 1180px) {
-  /* The model columns stay left/right by default; narrow screens scroll them instead of stacking. */
+  /* Narrow screens drop the fixed pane height; the column grid stays. */
   .compare-panes { height: auto; }
   .compare-side-row > .compare-side { height: auto; max-height: 760px; }
 }

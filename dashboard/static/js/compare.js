@@ -1,7 +1,8 @@
-/* 版本对比: one fixed question set before / after a release, the same question's two sample
-   details side by side. The left pane picks the question; the right pane mounts the shared
-   sample-detail factory twice (prefix "b" / "a"). An `online` sample has no same-question twin,
-   so it is shown alone in the same page.
+/* 版本对比: one fixed question set before / after a release, shown as three columns — the
+   before and after sample details (prefix "b" / "a") and the GPT answer (prefix "g").
+   The left pane picks the question; the right pane mounts the shared sample-detail factory
+   twice and the plain GPT answer once. An `online` sample has no same-question twin, so it
+   is shown alone in the same page.
 
    Route: ?view=compare&product=…&round=<roundId>&pair=<口径① trace>[&online=<slug>]
    Sample entries in the A/B panel land here; every other sample entry stays on 具体数据. */
@@ -19,7 +20,7 @@ const SAMPLE_VIEW_RESET = {
 const C = {
   root: null, ctx: null, product: null, round: null, pairs: [], list: [], page: 1, query: "",
   online: null, pairId: null, gen: "", skelKey: "", listKey: "", sidesKey: "", token: 0, details: [],
-  listOff: false, syncScroll: false, verifyOnly: false, sides: { b: true, a: true, g: true }, fold: { b: false, a: false },
+  listOff: false, syncScroll: false, verifyOnly: false, sides: { b: true, a: true, g: true },
 };
 
 /* ---------------------------------------------------------------- pure helpers (tested) */
@@ -803,7 +804,7 @@ async function paintSides(round, pair, online) {
       ];
   const columns = online ? allColumns : allColumns.filter((column) => C.sides[column.prefix] !== false);
   panes.classList.toggle("is-single", columns.length === 1);
-  // 两列及以上才需要折叠；单列就是具体数据页的完整工作台（含 threads）。
+  // 多列才需要折叠；单列就是具体数据页的完整工作台（含 threads）。
   const folds = columns.length > 1;
   const modelHost = $(".compare-models", C.root);
   if (modelHost) {
