@@ -1,5 +1,6 @@
 /* 具体数据: recall list → chat transcript → attribution / compact, with evidence → message links. */
 import { $, $$, esc, fmt, SEV, WORST, SEV_NAME, sevColor, getJSON } from "./core.js";
+import { patternName } from "./taxonomy.js";
 import { createSampleDetail, detailPaneHTML, flash, USER_TYPES, utOf, isLostRow } from "./sample_detail.js";
 
 const CHEV_LEFT = `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true"><path d="M10 3.5 5.5 8 10 12.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
@@ -341,7 +342,7 @@ function syncFilters() {
       <select data-k="sub" aria-label="子场景"><option value="">全部子场景</option>${subs.map((s) => opt(s, s, f.sub === s)).join("")}</select>
       <select data-k="stage" aria-label="阶段"><option value="">全部阶段</option>${stages.map((s) => opt(s.id, `${s.id} ${s.name}`, f.stage === s.id)).join("")}</select>
       <select data-k="mech" aria-label="机制"><option value="">全部机制</option>${mechs.map((m) => opt(m.id, `${m.id} ${m.name}`, f.mech === m.id)).join("")}</select>
-      <select data-k="pattern" aria-label="模式" class="wide"><option value="">全部模式</option>${pats.map((id) => opt(id, `${(tax.patterns[id] || {}).name || id} · ${id}`, f.pattern === id)).join("")}</select>
+      <select data-k="pattern" aria-label="模式" class="wide"><option value="">全部模式</option>${pats.map((id) => opt(id, `${patternName(tax, id)} · ${id}`, f.pattern === id)).join("")}</select>
     </div>`;
   }
   $("#sf", root).innerHTML = html;

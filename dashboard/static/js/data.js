@@ -13,6 +13,7 @@ import { createKlineChart, createTrendChart, KLINE_PERIODS } from "./kline_chart
 import { buildIntradayCandles } from "./kline_data.js";
 import { matrixHeatSummary } from "./matrix_heat.js";
 import { trendSampleFrame, abTrendSampleRefs, resolveABSamples, trendSampleCandidates, trendSampleProblems, traceSampleRefs } from "./trend_samples.js";
+import { patternName as patName } from "./taxonomy.js";
 
 let ctx;
 let abDocKey = null;
@@ -1233,9 +1234,8 @@ const addPair = (a, b) => [a[0] + b[0], a[1] + b[1]];
 const toSev = (pair) => ({ P0: pair[0], P1: pair[1] });
 
 /* Patterns drill one level further than L3: a four-part path such as S9.M5.4.4 is a
-   child of S9.M5.4. Build the parent tier from the ids themselves, so a branch whose
-   matched problems only sit at L4 still gets its named L3 parent. */
-const patName = (tax, id) => ((tax.patterns || {})[id] || {}).name || id;
+   child of S9.M5.4. patName() resolves it to the nearest node that still exists in the
+   current tree, so a retired L4 leaf shows its L3 name instead of a bare code. */
 const patOrder = (a, b) => {
   const pa = a.split(".").map((x) => Number(x.replace(/\D/g, "")) || 0);
   const pb = b.split(".").map((x) => Number(x.replace(/\D/g, "")) || 0);
@@ -4046,7 +4046,7 @@ function wire(bento, p, tax, u) {
         : [...cell.pats.entries()]
             .sort((a, b) => b[1] - a[1])
             .slice(0, 3)
-            .map(([pid, n]) => `<div class="t-row"><span>${esc((tax.patterns[pid] || {}).name || pid)}</span><b class="num" style="margin-left:auto">${fmt(n)}</b></div>`)
+            .map(([pid, n]) => `<div class="t-row"><span>${esc(patName(tax, pid))}</span><b class="num" style="margin-left:auto">${fmt(n)}</b></div>`)
             .join("");
       return `<div style="font-weight:var(--w-medium);margin-bottom:6px">${esc(row.name)} · ${esc(col.name)}</div>
         <div class="t-row"><span>问题</span><b class="num" style="margin-left:auto">${fmt(cell.n)}</b></div>

@@ -5,6 +5,7 @@
    面板内容、事件、证据跳转、三列对齐全部沿用 samples.js 原来的实现。 */
 import { $, $$, esc, fmt, compact, SEV, SEV_NAME, sevColor, KIND, getJSON, bindTips, REDUCED } from "./core.js";
 import { renderContent, segment } from "./render.js";
+import { patternOf } from "./taxonomy.js";
 import { threadFlow } from "./particles.js";
 
 const params = () => new URLSearchParams(location.search);
@@ -1410,7 +1411,7 @@ function attrHTML(D) {
   const tax = ctx.data.taxonomy;
 
   const card = (p, i) => {
-    const pat = p.cl && tax && tax.patterns[p.cl.path];
+    const pat = p.cl && patternOf(tax, p.cl.path);
     const evOne = (e) => {
       const ev = D.evidence[e];
       return `<button type="button" class="evbtn" data-e="${e}"${ev.m == null ? " disabled" : ""}><span class="at">${evAt(ev, multi)}</span><span class="qt">${esc(ev.q)}</span></button>`;

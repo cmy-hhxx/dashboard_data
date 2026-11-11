@@ -9,6 +9,7 @@
    orbit tree's release side.  State lives in data.js's u.ab so an in-place dashboard refresh
    returns to the same round, summary / matrix step, metric and selected cell. */
 import { compact, esc, fmt, pct, REDUCED, segmented } from "./core.js";
+import { patternOf } from "./taxonomy.js";
 import { sunburst } from "./sunburst.js";
 import { lineTrendSVG, wireLineTrendChart } from "./trend_chart.js";
 import { trendSampleFrame, abTrendSampleRefs, abLeafRefs } from "./trend_samples.js";
@@ -172,7 +173,7 @@ function clusterTree(cross, tax, names) {
     if (!node) {
       const stage = depth === 1 ? (tax.stages || []).find((x) => x.id === id) : null;
       const mech = depth === 2 ? (tax.mechanisms || []).find((x) => x.id === id) : null;
-      const pattern = depth >= 3 ? (tax.patterns || {})[key] : null;
+      const pattern = depth >= 3 ? patternOf(tax, key) : null;
       node = { name: (stage && stage.name) || (mech && mech.name) || (pattern && pattern.name) || names.get(key) || id,
         id, prefix: key, pat: key, children: [] };
       byId.set(key, node);
