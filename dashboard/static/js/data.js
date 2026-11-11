@@ -1728,6 +1728,27 @@ function wireMatrixAnalysis(panel, model, state, trend) {
   const levels = model?.levels || WORST;
   state.analysisLevels ||= ["P0", "P1"];
   state.analysisPeriod ||= "day";
+  const intradayPack = trend?.trace_severity?.intraday;
+  const intradayDays = intradayPack
+    ? (Object.keys(intradayPack.days || {}).length ? Object.keys(intradayPack.days).sort() : [intradayPack.date].filter(Boolean))
+    : [];
+  const intradayFor = (day) => {
+    if (!intradayPack) return null;
+    const days = intradayPack.days || {};
+    const date = day && days[day] ? day : intradayPack.date;
+    const entry = days[date];
+    return {
+      date,
+      bucket_minutes: Number(intradayPack.bucket_minutes) || 5,
+      prev: entry?.prev || intradayPack.prev || [0, 0, 0, 0, 0, 0],
+      buckets: entry?.buckets || (date === intradayPack.date ? intradayPack.buckets || [] : []),
+    };
+  };
+  const dayEl = panel.querySelector("#mxpDay");
+  if (dayEl) {
+    if (!intradayDays.includes(state.analysisDay)) state.analysisDay = dayEl.value || intradayPack?.date || "";
+    dayEl.onchange = () => { state.analysisDay = dayEl.value; paint(); };
+  }
   let paintToken = 0;
   let firstPaint = true;
   // The severity rows are the only filter; the ring is the same set drawn as shares.
@@ -1768,8 +1789,9 @@ function wireMatrixAnalysis(panel, model, state, trend) {
         return;
       }
       const period = state.analysisPeriod;
-      const intraday = trend?.trace_severity?.intraday;
       const isIntraday = period === "intraday";
+      if (dayEl) dayEl.hidden = !isIntraday || intradayDays.length <= 1;
+      const intraday = intradayFor(state.analysisDay);
       const candles = isIntraday ? buildIntradayCandles(intraday, state.analysisLevels, model.levels) : null;
       if (isIntraday && !candles.length) {
         chartHost.innerHTML = '<div class="empty">暂无日内行情数据</div>';
@@ -1887,6 +1909,14 @@ function matrixPerspectiveHTML(view, trend, loading = false, state = {}, cluster
     const share = shares[i] == null ? "—" : `${fmt(shares[i], 1)}%`;
     return `<button type="button" class="mxp-legend-row" data-level="${key}" aria-pressed="${on}" title="${esc(`${SEV_NAME[key]} · ${count} Trace · ${share}`)}" aria-label="${esc(`${SEV_NAME[key]}，${count} Trace，${share}，${on ? "正在" : "不在"}趋势中显示`)}"><i style="--c:${sevColor(key)}" aria-hidden="true"></i><span>${SEV_NAME[key]}</span><b class="num mxp-legend-share">${share}</b><small class="num mxp-legend-count">${count} Trace</small></button>`;
   }).join("");
+  const intraday = trend?.trace_severity?.intraday;
+  const dayList = intraday
+    ? (Object.keys(intraday.days || {}).length ? Object.keys(intraday.days).sort() : [intraday.date].filter(Boolean))
+    : [];
+  const pickedDay = state.analysisDay && dayList.includes(state.analysisDay) ? state.analysisDay : (intraday?.date || "");
+  const daySelect = dayList.length
+    ? `<select class="mxp-day" id="mxpDay" aria-label="日内行情日期"${state.analysisPeriod === "intraday" ? "" : " hidden"}>${dayList.map((day) => `<option value="${esc(day)}"${day === pickedDay ? " selected" : ""}>${esc(day)}</option>`).join("")}</select>`
+    : "";
   return `<div class="mxp">
     <section class="mxp-lens mxp-overview" aria-label="问题等级与 Trace 趋势">
       <button type="button" class="icon-btn mxp-full" data-mxp-full aria-pressed="false" aria-label="全屏查看问题分析" title="全屏">
@@ -1913,6 +1943,7 @@ function matrixPerspectiveHTML(view, trend, loading = false, state = {}, cluster
             <span class="seg-knob" aria-hidden="true"></span>
             ${KLINE_PERIODS.map(([value, label]) => `<button type="button" data-value="${value}" aria-pressed="${(state.analysisPeriod || "day") === value}">${label}</button>`).join("")}
           </div>
+          ${daySelect}
         </div>` : ""}</div>
         ${trendSampleFrame(`<div class="mpt-chart mxp-rate-chart" data-own-tip>${model?.total ? "" : `<div class="empty">${empty}</div>`}</div>`)}
       </div>

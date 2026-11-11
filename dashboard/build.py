@@ -62,7 +62,7 @@ STATIC = DASHBOARD / "static"
 RELEASES_CONFIG = DASHBOARD / "config" / "releases.json"
 PRODUCTION_DATASETS = Path("/mnt/fin_bench/code_and_clean_data/datasets")
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-11.2"
+PAYLOAD_VERSION = "2026-11-11.3"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 2
 
@@ -2094,33 +2094,46 @@ def trend_payload(product, samples, releases=(), generated=None):
     trace_days = [[0] * 6 for _ in dates]
     trace_refs = []
     unresolved = 0
-    # 日内行情只讲“最新有数据的一天”：今天还没落盘时展示上一交易日，而不是留空。
-    latest_day = dates[-1] if dates else None
-    intraday_buckets = {}
+    intraday_buckets = defaultdict(lambda: defaultdict(lambda: [0] * 6))
+    intraday_totals = defaultdict(lambda: [0] * 6)
     for slug, detail, row, _, _pair in prepared:
         trace = detail.get("trace_severity") or trace_severity(detail, include_refs=True)
         for level, count in enumerate(trace["counts"]):
             trace_days[day_idx[row["d"]]][level] += count
         unresolved += trace["unresolved"]
         trace_refs.extend([day_idx[row["d"]], slug, *ref] for ref in trace.get("refs", []))
-        if row["d"] == latest_day:
-            day_of_request, minute = local_day_minute((detail.get("meta") or {}).get("request_time"))
-            if day_of_request == latest_day and minute is not None:
-                counts = intraday_buckets.setdefault((minute // 5) * 5, [0] * 6)
-                for level, count in enumerate(trace["counts"]):
-                    counts[level] += count
+        day_of_request, minute = local_day_minute((detail.get("meta") or {}).get("request_time"))
+        if day_of_request and minute is not None:
+            bucket = (minute // 5) * 5
+            counts = intraday_buckets[day_of_request][bucket]
+            for level, count in enumerate(trace["counts"]):
+                counts[level] += count
+                intraday_totals[day_of_request][level] += count
 
+    # 每一天都落一份 00:00–23:55 的 24 小时序列，前端可以按日期倒回去看。
+    intraday_days = {}
+    previous_total = [0] * 6
+    for day in sorted(set(dates) | set(intraday_buckets)):
+        buckets = intraday_buckets.get(day) or {}
+        intraday_days[day] = {
+            "prev": list(previous_total),
+            "buckets": [[minute, *buckets.get(minute, [0] * 6)]
+                        for minute in range(0, 24 * 60, 5)],
+        }
+        previous_total = list(intraday_totals.get(day) or [0] * 6)
+    # 默认落在最近一天“真的有请求”的日期；空评测日仍留在 days 里供回看。
+    latest_day = max((day for day, pack in intraday_days.items()
+                      if any(sum(row[1:]) for row in pack["buckets"])), default=None)
+    if latest_day is None and intraday_days:
+        latest_day = max(intraday_days)
     intraday = None
     if latest_day:
-        latest_at = day_idx[latest_day]
         intraday = {
             "date": latest_day,
             "bucket_minutes": 5,
-            # 前一交易日按等级计；前端用它作为当天第一根蜡烛的开盘。
-            "prev": list(trace_days[latest_at - 1]) if latest_at > 0 else [0] * 6,
-            # 评测是 24 小时的：固定落地 00:00–23:55 的 288 个 5 分钟槽，空槽补 0。
-            "buckets": [[minute, *intraday_buckets.get(minute, [0] * 6)]
-                        for minute in range(0, 24 * 60, 5)],
+            "prev": list(intraday_days[latest_day]["prev"]),
+            "buckets": intraday_days[latest_day]["buckets"],
+            "days": intraday_days,
         }
 
     return {

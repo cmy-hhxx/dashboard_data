@@ -457,6 +457,12 @@ body.is-mxp-full { overflow: hidden; }
 .mxp-kseg { height: 24px; padding: 1px; }
 .mxp-kseg button { padding: 0 7px; font-size: 11px; }
 .mxp-kseg .seg-knob { top: 1px; bottom: 1px; }
+.mxp-day {
+  height: 24px; max-width: 116px; padding: 0 6px; border: 0; border-radius: var(--r-chip);
+  background: var(--well); color: var(--ink-2); font-size: var(--fs-meta); cursor: pointer;
+}
+.mxp-day[hidden] { display: none; }
+.mxp-day:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
 .mxp .is-up { color: var(--sev-1); }
 .mxp .is-down { color: var(--loc-ulq); }
 .mxp-overview .mxp-rate-chart { height: auto; min-height: 200px; display: block; transition: opacity 120ms cubic-bezier(0.2, 0, 0, 1); }
