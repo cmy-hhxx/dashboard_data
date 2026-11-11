@@ -451,17 +451,24 @@ body.is-mxp-full { overflow: hidden; }
 .mxp-legend-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
 .mxp-trend { display: grid; gap: 8px; min-width: 0; padding: 12px 0 0; border-top: 1px solid var(--well-2); }
 .mxp-trend-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: var(--fs-meta); }
-.mxp-trend-tools { display: flex; align-items: center; gap: 6px; }
+.mxp-trend-tools { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; }
 .mxp-trend-head b { color: var(--ink-2); font-weight: var(--w-medium); }
 /* 周期切换贴着标题右侧，尺寸压到 24px，和下方的量能图一起把左栏高度吃满。 */
 .mxp-kseg { height: 24px; padding: 1px; }
 .mxp-kseg button { padding: 0 7px; font-size: 11px; }
 .mxp-kseg .seg-knob { top: 1px; bottom: 1px; }
+.mxp-daynav { display: flex; align-items: center; gap: 2px; }
+.mxp-daynav[hidden] { display: none; }
+.mxp-daystep {
+  width: 20px; height: 24px; display: grid; place-items: center; border-radius: var(--r-chip);
+  color: var(--muted); font-size: 15px; line-height: 1;
+}
+.mxp-daystep:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
+.mxp-daystep:disabled { opacity: 0.3; cursor: default; }
 .mxp-day {
-  height: 24px; max-width: 116px; padding: 0 6px; border: 0; border-radius: var(--r-chip);
+  width: 132px; height: 24px; padding: 0 6px; border: 0; border-radius: var(--r-chip);
   background: var(--well); color: var(--ink-2); font-size: var(--fs-meta); cursor: pointer;
 }
-.mxp-day[hidden] { display: none; }
 .mxp-day:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
 .mxp .is-up { color: var(--sev-1); }
 .mxp .is-down { color: var(--loc-ulq); }

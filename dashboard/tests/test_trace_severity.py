@@ -75,11 +75,9 @@ class TraceSeverityTests(unittest.TestCase):
         self.assertEqual(intraday["date"], "2026-11-03")
         self.assertEqual(sorted(intraday["days"]), ["2026-11-01", "2026-11-02", "2026-11-03"])
         self.assertEqual(intraday["bucket_minutes"], 5)
-        self.assertEqual(len(intraday["buckets"]), 288)
-        self.assertEqual(intraday["buckets"][0][0], 0)
-        self.assertEqual(intraday["buckets"][-1][0], 1435)
-        self.assertEqual([row for row in intraday["days"]["2026-11-02"]["buckets"] if row[0] == 550],
-                         [[550, 0, 1, 0, 0, 0, 0]])
+        # 落地只保留有数据的槽，24 小时由前端补齐。
+        self.assertEqual(intraday["buckets"], [[30, 0, 0, 1, 0, 0, 0]])
+        self.assertEqual(intraday["days"]["2026-11-02"]["buckets"], [[550, 0, 1, 0, 0, 0, 0]])
         self.assertEqual([row for row in intraday["days"]["2026-11-03"]["buckets"] if row[0] == 30],
                          [[30, 0, 0, 1, 0, 0, 0]])
         self.assertEqual(intraday["days"]["2026-11-03"]["prev"], [0, 1, 0, 0, 0, 0])

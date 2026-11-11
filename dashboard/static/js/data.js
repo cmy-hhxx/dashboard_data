@@ -1735,19 +1735,46 @@ function wireMatrixAnalysis(panel, model, state, trend) {
   const intradayFor = (day) => {
     if (!intradayPack) return null;
     const days = intradayPack.days || {};
-    const date = day && days[day] ? day : intradayPack.date;
+    const hasDays = Object.keys(days).length > 0;
+    const date = day || intradayPack.date;
     const entry = days[date];
     return {
       date,
       bucket_minutes: Number(intradayPack.bucket_minutes) || 5,
       prev: entry?.prev || intradayPack.prev || [0, 0, 0, 0, 0, 0],
-      buckets: entry?.buckets || (date === intradayPack.date ? intradayPack.buckets || [] : []),
+      buckets: entry?.buckets || (!hasDays && date === intradayPack.date ? intradayPack.buckets || [] : []),
     };
   };
+  const navEl = panel.querySelector("#mxpDayNav");
   const dayEl = panel.querySelector("#mxpDay");
+  const syncDayNav = () => {
+    if (!navEl || !dayEl) return;
+    const prev = navEl.querySelector('[data-day-step="-1"]');
+    const next = navEl.querySelector('[data-day-step="1"]');
+    const value = dayEl.value;
+    if (prev) prev.disabled = !value || value <= dayEl.min;
+    if (next) next.disabled = !value || value >= dayEl.max;
+  };
+  const stepDay = (delta) => {
+    if (!dayEl?.value) return;
+    const d = new Date(`${dayEl.value}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + delta);
+    const next = d.toISOString().slice(0, 10);
+    if (!dayEl.min || !dayEl.max || next < dayEl.min || next > dayEl.max) return;
+    dayEl.value = next;
+    state.analysisDay = next;
+    syncDayNav();
+    paint();
+  };
   if (dayEl) {
-    if (!intradayDays.includes(state.analysisDay)) state.analysisDay = dayEl.value || intradayPack?.date || "";
-    dayEl.onchange = () => { state.analysisDay = dayEl.value; paint(); };
+    if (!state.analysisDay || state.analysisDay < dayEl.min || state.analysisDay > dayEl.max) {
+      state.analysisDay = dayEl.value || intradayPack?.date || "";
+    }
+    dayEl.onchange = () => { state.analysisDay = dayEl.value; syncDayNav(); paint(); };
+    panel.querySelectorAll("[data-day-step]").forEach((btn) => {
+      btn.onclick = () => stepDay(Number(btn.dataset.dayStep));
+    });
+    syncDayNav();
   }
   let paintToken = 0;
   let firstPaint = true;
@@ -1790,7 +1817,8 @@ function wireMatrixAnalysis(panel, model, state, trend) {
       }
       const period = state.analysisPeriod;
       const isIntraday = period === "intraday";
-      if (dayEl) dayEl.hidden = !isIntraday || intradayDays.length <= 1;
+      if (navEl) navEl.hidden = !isIntraday || intradayDays.length <= 1;
+      syncDayNav();
       const intraday = intradayFor(state.analysisDay);
       const candles = isIntraday ? buildIntradayCandles(intraday, state.analysisLevels, model.levels) : null;
       if (isIntraday && !candles.length) {
@@ -1913,9 +1941,17 @@ function matrixPerspectiveHTML(view, trend, loading = false, state = {}, cluster
   const dayList = intraday
     ? (Object.keys(intraday.days || {}).length ? Object.keys(intraday.days).sort() : [intraday.date].filter(Boolean))
     : [];
-  const pickedDay = state.analysisDay && dayList.includes(state.analysisDay) ? state.analysisDay : (intraday?.date || "");
-  const daySelect = dayList.length
-    ? `<select class="mxp-day" id="mxpDay" aria-label="日内行情日期"${state.analysisPeriod === "intraday" ? "" : " hidden"}>${dayList.map((day) => `<option value="${esc(day)}"${day === pickedDay ? " selected" : ""}>${esc(day)}</option>`).join("")}</select>`
+  const minDay = dayList[0] || "";
+  const maxDay = dayList[dayList.length - 1] || "";
+  const pickedDay = state.analysisDay && (!dayList.length || (state.analysisDay >= minDay && state.analysisDay <= maxDay))
+    ? state.analysisDay
+    : (intraday?.date || "");
+  const dayNav = dayList.length
+    ? `<span class="mxp-daynav" id="mxpDayNav"${state.analysisPeriod === "intraday" ? "" : " hidden"}>
+        <button type="button" class="mxp-daystep" data-day-step="-1" aria-label="前一天" title="前一天">‹</button>
+        <input class="mxp-day" id="mxpDay" type="date" aria-label="日内行情日期" min="${esc(minDay)}" max="${esc(maxDay)}" value="${esc(pickedDay)}">
+        <button type="button" class="mxp-daystep" data-day-step="1" aria-label="后一天" title="后一天">›</button>
+      </span>`
     : "";
   return `<div class="mxp">
     <section class="mxp-lens mxp-overview" aria-label="问题等级与 Trace 趋势">
@@ -1943,7 +1979,7 @@ function matrixPerspectiveHTML(view, trend, loading = false, state = {}, cluster
             <span class="seg-knob" aria-hidden="true"></span>
             ${KLINE_PERIODS.map(([value, label]) => `<button type="button" data-value="${value}" aria-pressed="${(state.analysisPeriod || "day") === value}">${label}</button>`).join("")}
           </div>
-          ${daySelect}
+          ${dayNav}
         </div>` : ""}</div>
         ${trendSampleFrame(`<div class="mpt-chart mxp-rate-chart" data-own-tip>${model?.total ? "" : `<div class="empty">${empty}</div>`}</div>`)}
       </div>
