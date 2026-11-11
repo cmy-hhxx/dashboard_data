@@ -705,25 +705,6 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     });
   }
 
-  /* 变化矩阵按 Trace 数读：一道题可能命中同一格的多条问题，格子里的数字是问题数，
-   旁边的条数是命中这一格的不同 Trace。交集行自带两侧路径，旧 payload 退回 pairs。 */
-function cellTraceCount(rnd, row, colPrefix) {
-  const hit = (paths) => (paths || []).some((pid) => String(pid) === colPrefix || String(pid).startsWith(`${colPrefix}.`));
-  let n = 0;
-  const common = Array.isArray(rnd.common?.rows) ? rnd.common.rows : null;
-  if (common) {
-    common.forEach(([task, sub, beforePaths, afterPaths]) => {
-      if (sceneMatches(row, task || NO_SCENE, sub || "") && (hit(beforePaths) || hit(afterPaths))) n += 1;
-    });
-    return n;
-  }
-  (Array.isArray(rnd.pairs) ? rnd.pairs : []).forEach((pair) => {
-    if (!sceneMatches(row, pair.scene || NO_SCENE, pair.sub || "")) return;
-    if (hit(pair.before?.paths) || hit(pair.after?.paths)) n += 1;
-  });
-  return n;
-}
-
 function trend(rnd, selectedCell, metric) {
     if (!selectedCell) return "";
     const { row, col } = selectedCell;
@@ -738,7 +719,6 @@ function trend(rnd, selectedCell, metric) {
     const current = metric === "paired"
       ? (cur.before == null || cur.after == null ? null : cur.after - cur.before)
       : cur[metric];
-    const inCell = metric === "paired" ? cellTraceCount(rnd, row, col.prefix) : null;
     let cols, series;
     if (metric === "paired") {
       if (values.length === 1) {
@@ -763,19 +743,27 @@ function trend(rnd, selectedCell, metric) {
       series = [{ label, color: "var(--accent)", values: values.map((v) => v[metric]),
         samples: rounds.map((r) => ({ round: r, sides: [metric] })) }];
     }
-    // Sample recall is per side, not per metric, so every side stays recallable.
-    const sampleSides = [
-      { sides: ["before"], source: "改版前" },
-      { sides: ["after"], source: "改版后" },
-      { sides: ["online"], source: "线上真实" },
-    ];
-    const chips = sampleSides.map(({ sides, source }) => {
-      const refs = abTrendSampleRefs(rnd, sides, row, col.prefix);
-      if (!refs.length) return "";
-      return `<button type="button" class="ab-samplechip" data-act="samples" data-sides="${sides.join(",")}" data-source="${source}" title="召回「${source}」命中 ${esc(row.name)} × ${esc(col.name)} 的样本">${source}样本 <b class="num">${fmt(refs.length)}</b></button>`;
-    }).join("");
+    // 每个口径直接显示“问题数 · 涉及的 Trace 数”；Trace 数就是点击后召回的 case 数。
+    // 变化矩阵只看发版前 / 发版后，不再混入线上真实样本。
+    const refsBySide = {
+      before: abTrendSampleRefs(rnd, ["before"], row, col.prefix),
+      after: abTrendSampleRefs(rnd, ["after"], row, col.prefix),
+      online: abTrendSampleRefs(rnd, ["online"], row, col.prefix),
+    };
+    const stat = (side, name, count) => {
+      const refs = refsBySide[side];
+      const body = `<span class="ab-trendstat-k">${name}</span><b class="num">${count == null ? DASH : fmt(count)}</b><span>个问题</span><span class="ab-trendstat-sep">·</span><b class="num">${fmt(refs.length)}</b><span>条 Trace</span>`;
+      return refs.length
+        ? `<button type="button" class="ab-trendstat" data-trend-samples data-sides="${side}" data-source="${name}" title="召回${name}命中的 ${fmt(refs.length)} 条 Trace">${body}</button>`
+        : `<span class="ab-trendstat is-empty">${body}</span>`;
+    };
+    const stats = metric === "paired"
+      ? `${stat("before", "发版前", cur.before)}${stat("after", "发版后", cur.after)}`
+      : stat(metric, label, cur[metric]);
     const amount = (v) => (v == null ? "无" : fmt(v));
-    const aria = `AB 趋势：${row.name} · ${col.name}，${values.map((v) => `${v.label} 发版前 ${amount(v.before)} 发版后同题 ${amount(v.after)} 线上真实 ${amount(v.online)}`).join("；")}`;
+    const aria = metric === "paired"
+      ? `AB 趋势：${row.name} · ${col.name}，${values.map((v) => `${v.label} 发版前 ${amount(v.before)} 发版后同题 ${amount(v.after)}`).join("；")}`
+      : `AB 趋势：${row.name} · ${col.name}，${values.map((v) => `${v.label} ${label} ${amount(v[metric])}`).join("；")}`;
     const width = host.getBoundingClientRect().width || 720;
     // A single round compares the two batches across the release boundary.
     const releaseMarks = metric === "paired" && values.length === 1
@@ -785,8 +773,7 @@ function trend(rnd, selectedCell, metric) {
     return `<section class="ab-trend is-on" aria-live="polite">
       <div class="ab-trendhead">
         <span class="ab-trendname">${esc(row.name)} · ${esc(col.name)}</span>
-        <span class="ab-trendmetric">${esc(label)} <b class="num">${current == null ? DASH : metric === "paired" ? signed(current) : fmt(current)}</b>${inCell == null ? "" : `<span class="ab-trendtraces"><b class="num">${fmt(inCell)}</b> 条 Trace</span>`}</span>
-        <span class="ab-trendacts">${chips || '<small class="ab-trendhint">当前簇没有可召回样本</small>'}</span>
+        <span class="ab-trendmetric">${stats}</span>
       </div>
       ${trendSampleFrame(`<div class="mxt-plot" id="abCellTrend" data-own-tip>${lineTrendSVG({ ...chart, width }).html}</div>`)}
     </section>`;
@@ -909,7 +896,7 @@ function trend(rnd, selectedCell, metric) {
       if (actions.mountCellTrend) cellTrendDrawer = actions.mountCellTrend(chartHost, cellTrendChart);
       else wireLineTrendChart(chartHost, lineTrendSVG({ ...cellTrendChart.chart, width: chartHost.clientWidth }));
     }
-    host.querySelectorAll(".ab-samplechip").forEach((chip) => {
+    host.querySelectorAll("[data-trend-samples]").forEach((chip) => {
       chip.addEventListener("click", () => {
         if (!cellTrendDrawer || !cellTrendChart) return;
         const sides = chip.dataset.sides.split(",");

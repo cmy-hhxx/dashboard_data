@@ -382,15 +382,15 @@ test("AB cell trends read one side at a time and the paired change across the re
     assert.equal(mounted[0], chartHost);
     assert.deepEqual(mounted[1].chart.series[0].values, [95, 60], "同题变化 reads the fixed set alone");
     assert.deepEqual(mounted[1].chart.series[0].samples.map((pick) => pick.sides), [["before"], ["after"]]);
-    assert.match(host.innerHTML, /同题变化 <b class="num">−35<\/b>/);
-    assert.match(host.innerHTML, /<span class="ab-trendtraces"><b class="num">1<\/b> 条 Trace<\/span>/);
+    assert.match(host.innerHTML, /发版前<\/span><b class="num">95<\/b><span>个问题<\/span><span class="ab-trendstat-sep">·<\/span><b class="num">1<\/b><span>条 Trace<\/span>/);
+    assert.match(host.innerHTML, /发版后<\/span><b class="num">60<\/b><span>个问题<\/span><span class="ab-trendstat-sep">·<\/span><b class="num">0<\/b><span>条 Trace<\/span>/);
+    assert.match(host.innerHTML, /data-trend-samples data-sides="before"/);
+    assert.doesNotMatch(host.innerHTML, /ab-trendacts|ab-samplechip|data-sides="after"/);
 
     mount("online");
     assert.deepEqual(mounted[1].chart.series[0].values, [40]);
-    assert.match(host.innerHTML, /线上真实 <b class="num">40<\/b>/);
-    assert.match(host.innerHTML, /改版前样本/);
-    assert.match(host.innerHTML, /线上真实样本/);
-    assert.match(host.innerHTML, /data-sides="online"/);
+    assert.match(host.innerHTML, /线上真实<\/span><b class="num">40<\/b><span>个问题<\/span><span class="ab-trendstat-sep">·<\/span><b class="num">1<\/b><span>条 Trace<\/span>/);
+    assert.match(host.innerHTML, /data-trend-samples data-sides="online"/);
   } finally {
     globalThis.window = previousWindow;
     globalThis.requestAnimationFrame = previousRAF;
