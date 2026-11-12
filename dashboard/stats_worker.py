@@ -36,7 +36,7 @@ def snapshot(datasets: Path, store: bs.BuildStore, jobs: int = 0):
         metas, info = build.scan_inputs(datasets, top, product, store, jobs)
         files = [
             {key: meta.get(key) for key in
-             ("path", "size", "mtime_ns", "lines", "model", "split", "stats")}
+             ("path", "size", "mtime_ns", "prefix", "lines", "model", "split", "stats")}
             for meta in metas
         ]
         payload = build.input_payload(metas)

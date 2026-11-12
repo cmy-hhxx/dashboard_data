@@ -460,6 +460,10 @@ def scan_inputs(datasets: Path, top: Path, product: str, store: bs.BuildStore, j
     def lost_fresh(meta):
         return ((meta.get("stats") or {}).get("_lost_sig") == lost_sig)
 
+    def prefix_ok(meta, path):
+        prefix = meta.get("prefix")
+        return bool(prefix) and prefix == bs.prefix_hash(path)
+
     # A sidecar entry only carries aggregates; join keys still come from the file index.
     # A cache row written before keys existed (or by a different store) also lacks them.
     # Both would make input_session_counts() return None and silently drop the session
@@ -476,13 +480,15 @@ def scan_inputs(datasets: Path, top: Path, product: str, store: bs.BuildStore, j
         indexed_keys = indexed.get(rel)
         side = sidecar_files.get(rel)
         if (side and side.get("size") == stat.st_size and side.get("mtime_ns") == stat.st_mtime_ns
-                and (indexed_keys or not side.get("lines")) and lost_fresh(side)):
+                and (indexed_keys or not side.get("lines")) and lost_fresh(side)
+                and prefix_ok(side, path)):
             metas.append(side)
             from_sidecar += 1
             continue
         cached = store.file_meta(rel)
         if (cached and cached["size"] == stat.st_size and cached["mtime_ns"] == stat.st_mtime_ns
-                and (indexed_keys or not cached.get("lines")) and lost_fresh(cached)):
+                and (indexed_keys or not cached.get("lines")) and lost_fresh(cached)
+                and prefix_ok(cached, path)):
             metas.append(cached)
             continue
         prev = store.get_file(rel) if cached else None
@@ -1037,6 +1043,15 @@ def pairs_from_keys(root: Path, store: bs.BuildStore, product_metas=None):
         rel = path.relative_to(root).as_posix()
         if rel.split("/")[2] in SPLITS:
             compact_rels.add(rel)
+    compact_parts = []
+    for rel in sorted(compact_rels):
+        try:
+            st = (root / rel).stat()
+            compact_parts.append([rel, st.st_size, st.st_mtime_ns])
+        except OSError:
+            compact_parts.append([rel, -1, -1])
+    compact_sig = hashlib.sha1(
+        json.dumps(compact_parts, separators=(",", ":")).encode()).hexdigest()
     compact_slots = defaultdict(list)
     compact_any = defaultdict(list)
     compact_sid = defaultdict(list)
@@ -1061,7 +1076,7 @@ def pairs_from_keys(root: Path, store: bs.BuildStore, product_metas=None):
         # exists even when the pairing itself is served from cache.
         ensure_raw(store, root, item["rel"], load=False)
         model_sig = model_sigs.get(item["product"], {}).get(item["model"], "")
-        sig = "|".join((PAIRING_VERSION, item["sig"], model_sig))
+        sig = "|".join((PAIRING_VERSION, item["sig"], model_sig, compact_sig))
         cached = store.get_pairs(item["rel"])
         if cached and cached[0] == sig:
             file_pairs = cached[1]
