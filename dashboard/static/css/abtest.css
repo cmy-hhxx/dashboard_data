@@ -259,7 +259,7 @@ body.is-ab-full { overflow: hidden; }
   .ab-change-card.is-compact .ab-change-pane { grid-template-rows: auto auto auto minmax(0, 1fr); align-content: start; }
   .ab-change-card.is-compact .ab-wf { display: grid; }
   .ab-wf { max-width: 640px; margin-inline: auto; }
-  .ab-orbit-card:not(.is-deep) .ab-orbit-sunburst .sb-r { grid-template-columns: 8px minmax(0, 1fr) 30px auto 44px; }
+  .ab-orbit-card:not(.is-deep) .ab-orbit-sunburst .sb-r { grid-template-columns: 8px minmax(0, 1fr) minmax(44px, max-content) minmax(44px, max-content) 44px; }
   .ab-orbit-card:not(.is-deep) .ab-orbit-sunburst .sb-markn,
   .ab-orbit-card:not(.is-deep) .ab-orbit-sunburst .sb-r em { display: inline; }
   .ab-card-btn { display: none; }

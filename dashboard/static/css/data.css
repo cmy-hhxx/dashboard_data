@@ -130,7 +130,10 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .sb-c small:not(.sb-lostc) { max-width: 104px; font-size: var(--fs-meta); }
 .sb-list { justify-self: center; width: 100%; align-content: center; scrollbar-width: none; -ms-overflow-style: none; }
 .sb-list::-webkit-scrollbar { display: none; }
-.sb-r { width: 100%; margin: 0; min-height: 28px; padding-top: 3px; padding-bottom: 3px; grid-template-columns: 8px minmax(0, 1fr) 30px auto 44px; }
+/* 账本右侧是三个数值列：标记数（红）、节点数、占比。三列各自定宽并右对齐，列边界才不随数值长短
+   漂移——`auto` 会让更长的数字把左邻列一起推走，过窄的定宽会让数字溢出压到隔壁。44/60px 按
+   --fs-meta 12px / --fs-body 14px 的等宽数字放足 6 位加千分位；再多由 max-content 兜住，不外溢。 */
+.sb-r { width: 100%; margin: 0; min-height: 28px; padding-top: 3px; padding-bottom: 3px; grid-template-columns: 8px minmax(0, 1fr) minmax(44px, max-content) minmax(60px, max-content) 44px; }
 .sb-r span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A branch with no evaluated case behind it is data, not a door: no pointer, no press. */
 .sb-a.is-inert, .sb-r.is-inert { cursor: default; }
@@ -139,10 +142,12 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .sb-r.sub { padding-left: 20px; }
 .sb-r.hl { background: var(--hover); }
 .sb-r .sb-markn { font-size: var(--fs-meta); color: var(--sev-1); text-align: right; }
+/* 三个数值字号不同，居中对齐会让红色小字比黑色数字高半行；同一基线才算对齐。 */
+.sb-r .sb-markn, .sb-r b, .sb-r em { align-self: baseline; }
 .sb-c .sb-lostc { color: var(--sev-1); font-size: var(--fs-meta); }
 .sm .sb { width: 220px; }
 .sm .sb-c b { font-size: 28px; }
-.sm .sb-r { grid-template-columns: 8px minmax(0, 1fr) 30px auto; }
+.sm .sb-r { grid-template-columns: 8px minmax(0, 1fr) minmax(44px, max-content) minmax(60px, max-content); }
 .sm .sb-r em { display: none; }
 @container (max-width: 399px) {
   .sb-view { grid-template-columns: minmax(0, 1fr); gap: 12px; }
@@ -188,7 +193,9 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
   /* Keep the cluster list beside the sunburst instead of stacking it below. */
   .card:has(> #clu) { display: flex; flex-direction: column; }
   #clu { flex: 1 1 0; min-height: 0; }
-  #clu .sb-view { grid-template-columns: clamp(140px, 46%, 220px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 12px; height: 100%; }
+  /* 数字列定宽后要占 104px，46% 的旭日图在 1024 档只留给名字 59px（3 个字就被截断）；
+     收窄到 38%、下限 120px，桌面档仍被 220px 上限兜住。 */
+  #clu .sb-view { grid-template-columns: clamp(120px, 38%, 220px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 12px; height: 100%; }
   #clu .sb { width: 100%; max-width: 220px; max-height: 100%; }
   #clu .sb-list { max-height: 100%; overflow-y: auto; align-content: safe center; }
   #clu .sb-r { min-height: 24px; }
