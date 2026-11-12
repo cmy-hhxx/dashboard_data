@@ -66,7 +66,7 @@ INPUT_INDEX_VERSION = "2026-11-12.1"
 # Bump when pairing semantics change (cache keys are not otherwise versioned).
 PAIRING_VERSION = "2026-11-12.4"
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-12.2"
+PAYLOAD_VERSION = "2026-11-12.3"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 3
 
@@ -679,13 +679,21 @@ def daily_input_session_ids(metas, store):
 
 
 def daily_input_traces(metas):
-    """Trace volume from the same file aggregates used by the data-volume card."""
+    """Trace volume from input files, grouped by the file's model directory.
+
+    Inputs are trace-level, but a trace may carry another model in its inner
+    meta.  Group by the same model key as ``daily_inputs`` so one day cannot
+    look more than 100% evaluated.
+    """
     out = Counter()
     for meta in metas:
         match = DATE_RE.search(Path(meta["path"]).name)
-        if match:
-            for model, stats in (meta.get("stats") or {}).get("by_model", {}).items():
-                out[(match.group(1), model, meta.get("split") or "daily")] += stats["traces"]
+        if not match:
+            continue
+        model = meta.get("model") or bs.stats_model(meta.get("stats")) or Path(meta["path"]).parent.name
+        stats = meta.get("stats") or {}
+        out[(match.group(1), model, meta.get("split") or "daily")] += int(
+            stats.get("traces") or meta.get("lines") or 0)
     return out
 
 
@@ -716,7 +724,7 @@ def daily_payload(samples, inputs, input_session_ids=None, input_traces=None):
     sids = defaultdict(set)
     number = {}
     for slug, detail, row, facts in samples:
-        if not row.get("tr"):
+        if (detail.get("input") or {}).get("missing"):
             continue
         key = (row.get("idate") or row["d"], row["m"], row["sp"])
         evaluated[key] += 1
