@@ -247,6 +247,9 @@ class ItemCodes:
         self.by_turn: dict[tuple, str] = {}
         self.by_label: dict[tuple, str] = {}
         self.by_session: dict[tuple, str] = {}
+        # 4.4+ 的 item_index 不再带 file/line，改为 (trace_id, turn, problem) 定位
+        self.by_trace: dict[tuple, str] = {}
+        self.by_trace_label: dict[tuple, str] = {}
         # 每个归因文件各自的映射指纹：聚类流水线每次追加 item_index，只让涉及的文件重扫
         self.digests: dict[str, "hashlib._Hash"] = {}
 
@@ -254,7 +257,15 @@ class ItemCodes:
         digest = self.digests.get(basename)
         return digest.hexdigest() if digest else ""
 
-    def code_for(self, basename, line, turn_index, problem_index, label, session_level=False):
+    def code_for(self, trace_id, basename, line, turn_index, problem_index, label, session_level=False):
+        if trace_id:
+            code = self.by_trace.get((trace_id, int(turn_index or 0), int(problem_index)))
+            if code:
+                return code
+            if label:
+                code = self.by_trace_label.get((trace_id, label))
+                if code:
+                    return code
         if session_level:
             code = self.by_session.get((basename, line, problem_index))
             if code:
@@ -279,19 +290,29 @@ def load_item_codes(path: Path, log=None) -> tuple[ItemCodes, str]:
         code = item.get("path")
         if not code:
             continue
-        line = item.get("line")
-        if line is None:
-            continue
-        basename = str(item.get("file") or "").replace("\\", "/").rsplit("/", 1)[-1]
         label = item.get("label")
         problem_index = item.get("problem_index") or 0
         turn_index = item.get("turn_index")
         json_path = item.get("json_path") or ""
+        trace_id = _text(item.get("trace_id"))
+        line = item.get("line")
+        # 4.4+ 用 src_rel（相对路径），旧格式用 file（绝对路径）
+        basename = str(item.get("file") or item.get("src_rel") or "").replace("\\", "/").rsplit("/", 1)[-1]
+        if not basename and line is None:
+            continue
         # 按文件顺序累计（by_label 取第一条，顺序变了也算映射变了）
         digest = codes.digests.get(basename)
         if digest is None:
             digest = codes.digests[basename] = hashlib.blake2b(digest_size=12)
-        digest.update(json.dumps([line, turn_index, problem_index, json_path, code, label], ensure_ascii=False).encode("utf-8"))
+        digest.update(json.dumps([trace_id, line, turn_index, problem_index, json_path, code, label],
+                                 ensure_ascii=False).encode("utf-8"))
+        if line is None:
+            # 新格式没有行号：按 trace + 轮次 + 问题序号直接定位
+            if trace_id:
+                codes.by_trace[(trace_id, int(turn_index or 0), int(problem_index))] = code
+                if label:
+                    codes.by_trace_label.setdefault((trace_id, label), code)
+            continue
         if json_path.startswith("session_problem"):
             codes.by_session[(basename, int(line), int(problem_index))] = code
         elif turn_index is not None:
@@ -435,6 +456,7 @@ def ingest_attribution(conn, aime: Path, item_codes_by_model, intent_tree, log):
                     is_session = session_level and problem_index >= len(turn_problems)
                     local_index = problem_index - len(turn_problems) if is_session else problem_index
                     code = codes.code_for(
+                        trace_id,
                         basename,
                         line_no,
                         turn_index,

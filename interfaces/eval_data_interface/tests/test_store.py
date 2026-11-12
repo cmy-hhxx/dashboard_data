@@ -101,6 +101,33 @@ class StoreTest(unittest.TestCase):
             codes = db.execute("SELECT problem_codes FROM traces WHERE trace_id = 'trace_delta'").fetchone()[0]
         self.assertEqual(json.loads(codes), ["S9.M5.1"])
 
+    def test_trace_keyed_item_index(self):
+        """4.4+ item_index 没有 file/line，也必须能按 trace 关联出编码。"""
+        index = self.aime / "eval_output" / "cluster" / "aime_expert" / "item_index.jsonl"
+        src = f"daily/aime_expert_attribution-{fixtures.DAY}.jsonl"
+        rows = [
+            {"trace_id": "trace_gamma", "turn_index": 0, "problem_index": 0, "path": "S9.M5.1",
+             "label": "旧数据当当前值", "src_rel": src},
+            {"trace_id": "trace_gamma", "turn_index": 0, "problem_index": 1, "path": "S1.M1.1",
+             "label": "空查询参数重试", "src_rel": src},
+        ]
+        index.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
+        store.build(self.root)
+        with self._db() as db:
+            codes, problems = db.execute(
+                "SELECT problem_codes, problems FROM traces WHERE trace_id = 'trace_gamma'").fetchone()
+        self.assertEqual(json.loads(codes), ["S1.M1.1", "S9.M5.1"])
+        self.assertEqual([p["code"] for p in json.loads(problems)], ["S9.M5.1", "S1.M1.1", None])
+
+        # 追加一行新格式：只重扫这个归因文件，trace_alpha 的编码立即生效
+        _append(index, {"trace_id": "trace_alpha", "turn_index": 0, "problem_index": 0,
+                        "path": "S1.M1.1", "label": "空查询参数重试", "src_rel": src})
+        summary = store.build(self.root)
+        self.assertEqual(summary["attribution_files"], 1)
+        with self._db() as db:
+            codes = db.execute("SELECT problem_codes FROM traces WHERE trace_id = 'trace_alpha'").fetchone()[0]
+        self.assertEqual(json.loads(codes), ["S1.M1.1"])
+
     def test_rewritten_input_rescans(self):
         store.build(self.root)
         lines = self.input.read_text(encoding="utf-8").splitlines(keepends=True)
