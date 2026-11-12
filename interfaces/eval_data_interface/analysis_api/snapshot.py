@@ -915,6 +915,8 @@ def detail(snap: Snapshot, db_path, dataset: str, trace_id: str, day: str | None
         "problems": _current_problems(snap, trace),
         "analysis_id": trace.analysis_id,
         "analyzed_at": trace.analyzed_at,
+        # 来源归因文件（批次日期）：day 是北京时间，批次文件按评测日命名，两者可能跨日。
+        "file": trace.file.rsplit("/", 1)[-1],
         "taxonomy_version": snap.taxonomy_version(),
         "session": input_row,
         "trace": _find_trace_object(input_row, trace_id) if input_row else None,

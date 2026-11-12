@@ -363,9 +363,11 @@ def check_detail(client, dataset, trace_id, day):
         raise AssertionError("详情应返回 eval_input 的整行与 trace 对象")
     if data["trace"]["meta"]["trace_id"] != trace_id:
         raise AssertionError("详情返回的 trace 不是请求的那条")
-    for key in ("problems", "problem_codes", "problem_count", "is_correct", "session_id"):
+    for key in ("problems", "problem_codes", "problem_count", "is_correct", "session_id", "file"):
         if key not in data:
             raise AssertionError(f"详情缺字段 {key}")
+    if not str(data["file"]).endswith(".jsonl"):
+        raise AssertionError(f"详情 file 应为归因文件名：{data['file']}")
     if "correct_reason" in data["analysis"]:
         raise AssertionError("v2 不再返回 correct_reason")
     status, payload = client.get(f"{API}/traces/{trace_id}", dataset=dataset)
