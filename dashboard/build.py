@@ -66,7 +66,7 @@ INPUT_INDEX_VERSION = "2026-11-12.1"
 # Bump when pairing semantics change (cache keys are not otherwise versioned).
 PAIRING_VERSION = "2026-11-12.4"
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-12.4"
+PAYLOAD_VERSION = "2026-11-12.5"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 3
 
@@ -634,6 +634,12 @@ def mark_evaluated(payload, rows):
     tasks(payload["tasks"], None)
 
 
+def input_model(meta):
+    """Model key for an input file, matching the data-volume card's grouping."""
+    return (meta.get("model") or bs.stats_model(meta.get("stats"))
+            or Path(meta["path"]).parent.name)
+
+
 def daily_inputs(metas):
     """Input record counts by (date, model, split), from the same per-file index."""
     out = Counter()
@@ -643,7 +649,7 @@ def daily_inputs(metas):
             continue
         # 目录名报不出模型的文件（问财的 b_*_search 变体）用行级 trace 模型补上，
         # 这样按天的输入量和旭日图 / 输出模型用的是同一套模型 key。
-        model = meta.get("model") or bs.stats_model(meta.get("stats")) or Path(meta["path"]).parent.name
+        model = input_model(meta)
         out[(match.group(1), model, meta.get("split") or "daily")] += int(meta.get("lines") or 0)
     return out
 
@@ -690,7 +696,7 @@ def daily_input_traces(metas):
         match = DATE_RE.search(Path(meta["path"]).name)
         if not match:
             continue
-        model = meta.get("model") or bs.stats_model(meta.get("stats")) or Path(meta["path"]).parent.name
+        model = input_model(meta)
         stats = meta.get("stats") or {}
         out[(match.group(1), model, meta.get("split") or "daily")] += int(
             stats.get("traces") or meta.get("lines") or 0)
@@ -726,7 +732,7 @@ def daily_payload(samples, inputs, input_session_ids=None, input_traces=None):
     for slug, detail, row, facts in samples:
         if not row.get("inp"):
             continue
-        key = (row.get("idate") or row["d"], row["m"], row["sp"])
+        key = (row.get("idate") or row["d"], row.get("im") or row["m"], row.get("isp") or row["sp"])
         evaluated[key] += 1
         traces[key] += row["tr"]
         tokens[key] += facts["tokens"]
@@ -2824,6 +2830,7 @@ def _sample_batch(task):
             "product": pair["product"], "model": pair["model"], "date": pair["date"],
             "split": pair["split"], "output": pair["output"][0], "output_line": pair["output"][1],
             "row": row, "facts": facts, "brief": brief, "golden": golden,
+            "im": pair.get("im"), "isp": pair.get("isp"),
             "refs": {"input": pair.get("input"), "compact": pair.get("compact")},
             "detail_bytes": 0,
             "missing_input": int(pair.get("input") is not None and inp is None),
@@ -2946,6 +2953,8 @@ def build_samples(pairs, root, out_dir, store, reader, cluster_index, cluster_si
         slug = pair.get("_slug") or pair.get("slug")
         row["idate"] = sample_input_date(pair) or row.get("d")
         row["inp"] = 1 if (pair.get("input") or (pair.get("refs") or {}).get("input")) else 0
+        row["im"] = pair.get("im") or row.get("m")
+        row["isp"] = pair.get("isp") or row.get("sp")
         if golden:
             golden_pool[pair["product"]].append((golden["score"], golden["case"]))
         samples[pair["product"]].append((slug, brief, row, facts))
@@ -3026,6 +3035,7 @@ def build_samples(pairs, root, out_dir, store, reader, cluster_index, cluster_si
                     "output": item["output"], "output_line": item["output_line"],
                     "row": item["row"], "facts": item["facts"], "brief": item["brief"],
                     "golden": item["golden"], "refs": item["refs"],
+                    "im": item.get("im"), "isp": item.get("isp"),
                 }
                 store.put_sample(entry)
                 cached[item["slug"]] = entry
@@ -3258,6 +3268,16 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
         timers["pair"] = round(time.time() - t0, 1)
         if not pairs:
             return empty_payloads("no-pairs"), {}
+        input_keys = {}
+        for metas in product_metas.values():
+            for meta in metas:
+                if meta.get("path"):
+                    input_keys[meta["path"]] = (input_model(meta), meta.get("split") or "daily")
+        for pair in pairs:
+            ref = pair.get("input")
+            if ref:
+                pair["im"], pair["isp"] = input_keys.get(
+                    ref[0], (pair["model"], pair["split"]))
         debug(f"paired {len(pairs)} rows")
 
         t0 = time.time()

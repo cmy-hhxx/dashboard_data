@@ -120,6 +120,10 @@ class ProductSplitTests(unittest.TestCase):
             build(datasets, static, EVAL_PRODUCTS="aime")
             index = json.loads((static / "samples-aime.json").read_text())["products"]["aime"]
             self.assertEqual(index["rows"][0]["tr"], 1)
+            data = json.loads((static / "data-aime.json").read_text())["products"]["aime"]
+            daily = {(r["m"], r["sp"]): r for r in data["daily"]}
+            self.assertEqual((daily[("aime_expert", "daily")]["inputs"],
+                              daily[("aime_expert", "daily")]["evaluated"]), (1, 1))
 
     def test_input_session_counts_dedupe_snapshots(self):
         """同一 session 的多次输入快照记 1 个 Session，但每一行仍计入记录/轨迹体积。"""
