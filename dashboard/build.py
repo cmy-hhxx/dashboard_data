@@ -66,7 +66,7 @@ INPUT_INDEX_VERSION = "2026-11-12.1"
 # Bump when pairing semantics change (cache keys are not otherwise versioned).
 PAIRING_VERSION = "2026-11-12.3"
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-11.4"
+PAYLOAD_VERSION = "2026-11-12.1"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 3
 
@@ -689,6 +689,17 @@ def daily_input_traces(metas):
     return out
 
 
+def sample_input_date(src):
+    """Date of the paired input file, so per-day completion follows input days."""
+    ref = src.get("input") if isinstance(src, dict) else None
+    if not ref and isinstance(src, dict):
+        ref = (src.get("refs") or {}).get("input")
+    if not ref:
+        return None
+    match = DATE_RE.search(str(ref[0]))
+    return match.group(1) if match else None
+
+
 def daily_payload(samples, inputs, input_session_ids=None, input_traces=None):
     """Per-day input volume plus the evaluated session/trace/token totals.
 
@@ -705,7 +716,7 @@ def daily_payload(samples, inputs, input_session_ids=None, input_traces=None):
     sids = defaultdict(set)
     number = {}
     for slug, detail, row, facts in samples:
-        key = (row["d"], row["m"], row["sp"])
+        key = (row.get("idate") or row["d"], row["m"], row["sp"])
         evaluated[key] += 1
         traces[key] += row["tr"]
         tokens[key] += facts["tokens"]
@@ -2921,6 +2932,7 @@ def build_samples(pairs, root, out_dir, store, reader, cluster_index, cluster_si
     def add_sample(pair, brief, row, facts, golden):
         nonlocal detail_bytes
         slug = pair.get("_slug") or pair.get("slug")
+        row["idate"] = sample_input_date(pair) or row.get("d")
         if golden:
             golden_pool[pair["product"]].append((golden["score"], golden["case"]))
         samples[pair["product"]].append((slug, brief, row, facts))

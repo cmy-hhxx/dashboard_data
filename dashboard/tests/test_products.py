@@ -84,6 +84,10 @@ class ProductSplitTests(unittest.TestCase):
             data = json.loads((static / "data-wencai.json").read_text())["products"]["wencai"]
             self.assertEqual(data["kpi"]["traces"], 1)
             self.assertEqual(data["input"]["traces"], 1)
+            daily = {(r["d"], r["m"]): r for r in data["daily"]}
+            moved = daily[("2026-11-02", "a_fast")]
+            self.assertEqual((moved["inputs"], moved["evaluated"]), (1, 1))
+            self.assertNotIn(("2026-11-01", "a_fast"), daily)
 
     def test_attribution_pairs_input_from_other_model_dir(self):
         """A trace may be routed to the other model input dir; pairing is product-wide."""
