@@ -64,9 +64,9 @@ PRODUCTION_DATASETS = Path("/mnt/fin_bench/code_and_clean_data/datasets")
 # Bump when input index semantics change; also invalidates cached input stats.
 INPUT_INDEX_VERSION = "2026-11-12.1"
 # Bump when pairing semantics change (cache keys are not otherwise versioned).
-PAIRING_VERSION = "2026-11-12.3"
+PAIRING_VERSION = "2026-11-12.4"
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-12.1"
+PAYLOAD_VERSION = "2026-11-12.2"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 3
 
@@ -716,6 +716,8 @@ def daily_payload(samples, inputs, input_session_ids=None, input_traces=None):
     sids = defaultdict(set)
     number = {}
     for slug, detail, row, facts in samples:
+        if not row.get("tr"):
+            continue
         key = (row.get("idate") or row["d"], row["m"], row["sp"])
         evaluated[key] += 1
         traces[key] += row["tr"]
@@ -785,8 +787,10 @@ def choose_input(cands, turn_tids):
     no longer re-reads a multi-MB input line per attribution row.
     """
     need = {t for t in turn_tids if t}
-    if len(cands) < 2 or not need:
-        return cands[0] if cands else None
+    if not cands:
+        return None
+    if not need or not any(cand[2] for cand in cands):
+        return cands[0]
     best = None
     for cand in cands:
         ids = set(cand[2])
@@ -795,7 +799,7 @@ def choose_input(cands, turn_tids):
         score = (cover == len(need), cover, -len(ids) if cover == len(need) else len(ids))
         if best is None or score > best[0]:
             best = (score, cand)
-    return best[1] if best else cands[0]
+    return best[1] if best and best[0][1] > 0 else None
 
 
 def pairs_from_csv(root: Path, store: bs.BuildStore, reader: LineReader):
@@ -965,7 +969,7 @@ def pair_output(root: Path, item: dict, store: bs.BuildStore, lost_ids=(), lost_
             pool = merged
         if used is not None:
             avail = [c for c in pool if (c[0], c[1]) not in used]
-            pool = avail or pool
+            pool = avail
         cands = pool
         inp = choose_input(cands, turn_tids)
         if inp:

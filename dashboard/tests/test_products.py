@@ -89,6 +89,25 @@ class ProductSplitTests(unittest.TestCase):
             self.assertEqual((moved["inputs"], moved["evaluated"]), (1, 1))
             self.assertNotIn(("2026-11-01", "a_fast"), daily)
 
+    def test_duplicate_outputs_do_not_double_complete_same_input(self):
+        """One input trace can back at most one completed record in the daily card."""
+        with tempfile.TemporaryDirectory() as folder:
+            datasets, static = Path(folder) / "datasets", Path(folder) / "static"
+            seed(datasets)
+            out = datasets / "0_wencai/eval_output/0_daily_eval/a_fast/a_fast_attribution-2026-11-01.jsonl"
+            first = json.loads(out.read_text(encoding="utf-8"))
+            first["turns"][0]["meta"]["trace_id"] = "t1"
+            first["session_summary"] = "duplicate"
+            with open(out, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(first, ensure_ascii=False) + "\n")
+            build(datasets, static)
+            data = json.loads((static / "data-wencai.json").read_text())["products"]["wencai"]
+            daily = {(r["d"], r["m"]): r for r in data["daily"]}
+            self.assertEqual((daily[("2026-11-01", "a_fast")]["inputs"],
+                              daily[("2026-11-01", "a_fast")]["evaluated"]), (1, 1))
+            self.assertEqual(len(json.loads((static / "samples-wencai.json").read_text())
+                                 ["products"]["wencai"]["rows"]), 2)
+
     def test_attribution_pairs_input_from_other_model_dir(self):
         """A trace may be routed to the other model input dir; pairing is product-wide."""
         with tempfile.TemporaryDirectory() as folder:
