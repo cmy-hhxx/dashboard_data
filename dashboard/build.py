@@ -1067,10 +1067,12 @@ def pairs_from_keys(root: Path, store: bs.BuildStore, product_metas=None):
     compact_rels = {item["compact"] for item in items if item.get("compact")}
     # A compact file can exist under a different date than its attribution row;
     # include every published split's compact files, not only the paths predicted
-    # from output dates.
+    # from output dates.  Filtered by ENABLED like every other discovery path: a
+    # wencai-only build used to index the other product's compacts (3.7 GB read
+    # for nothing on 乌兰).
     for path in root.glob("*/eval_output/*/*/compact/*.jsonl"):
         rel = path.relative_to(root).as_posix()
-        if rel.split("/")[2] in SPLITS:
+        if rel.split("/")[2] in SPLITS and product_of(rel.split("/")[0]):
             compact_rels.add(rel)
     compact_parts = []
     for rel in sorted(compact_rels):
