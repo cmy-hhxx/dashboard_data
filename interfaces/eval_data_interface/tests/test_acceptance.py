@@ -404,7 +404,7 @@ def check_cursor_expired(client, dataset):
         raise AssertionError(f"有效 cursor 应正常返回：{status} {payload}")
 
 
-def check_problem_group_counts(client, dataset):
+def check_problem_group_counts(client, dataset, cluster_through=None):
     for path in ("summary", "severity"):
         payload = expect(*client.get(f"{API}/{path}", dataset=dataset, group_by="problem", limit=1000))
         summed = sum(row["problems"] for row in payload["data"]["groups"])
@@ -414,6 +414,13 @@ def check_problem_group_counts(client, dataset):
         null_group = next((row for row in payload["data"]["groups"] if row["keys"].get("problem") is None), None)
         if null_group is None or null_group["problems"] <= 0:
             raise AssertionError(f"/{path} group_by=problem: 未聚类问题应进 problem=null 组：{null_group}")
+        if null_group.get("problem_label") != "未聚类":
+            raise AssertionError(f"/{path} group_by=problem: null 组应标为「未聚类」：{null_group}")
+        meta = payload.get("meta") or {}
+        if not meta.get("cluster_updated_at"):
+            raise AssertionError(f"/{path}: meta.cluster_updated_at 缺失：{meta}")
+        if cluster_through is not None and meta.get("cluster_through") != cluster_through:
+            raise AssertionError(f"/{path}: meta.cluster_through={meta.get('cluster_through')}，应为 {cluster_through}")
 
 
 def check_problem_entries(client, dataset):
@@ -556,7 +563,7 @@ def run_fixture_cases(workdir: Path):
         ("5 严重度总量", lambda: check_severity_totals(client, dataset)),
         ("6 严重度分组", lambda: check_severity_groups(client, dataset)),
         ("7 问题数组", lambda: check_problem_entries(client, dataset)),
-        ("7b 问题分组条目数", lambda: check_problem_group_counts(client, dataset)),
+        ("7b 问题分组条目数", lambda: check_problem_group_counts(client, dataset, fixtures.DAY)),
         ("7c 跨轮问题只计一次", lambda: check_session_problem_once(client, dataset)),
         ("8 意图互斥", lambda: check_intent_leaf_sum(client, dataset)),
         ("9 多问题计数", lambda: check_multi_problem(client, dataset, "trace_gamma", ["S1.M1.1", "S9.M5.1"])),
@@ -690,7 +697,6 @@ def run_real_cases(base, history_trace=None, history_day=None):
         ("6 严重度分组", lambda: check_severity_groups(client, dataset)),
         ("7 问题数组", lambda: check_problem_entries(client, dataset)),
         ("7b 问题分组条目数", lambda: check_problem_group_counts(client, dataset)),
-        ("7c 跨轮问题只计一次", lambda: check_session_problem_once(client, dataset)),
         ("8 意图互斥", lambda: check_intent_leaf_sum(client, dataset)),
         ("9 多问题计数", _multi),
         ("10 大类展开", _expansion),

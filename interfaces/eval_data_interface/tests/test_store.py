@@ -107,12 +107,13 @@ class StoreTest(unittest.TestCase):
         src = f"daily/aime_expert_attribution-{fixtures.DAY}.jsonl"
         rows = [
             {"trace_id": "trace_gamma", "turn_index": 0, "problem_index": 0, "path": "S9.M5.1",
-             "label": "旧数据当当前值", "src_rel": src},
+             "label": "旧数据当当前值", "src_rel": src, "date": fixtures.DAY},
             {"trace_id": "trace_gamma", "turn_index": 0, "problem_index": 1, "path": "S1.M1.1",
-             "label": "空查询参数重试", "src_rel": src},
+             "label": "空查询参数重试", "src_rel": src, "date": fixtures.DAY},
         ]
         index.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
-        store.build(self.root)
+        summary = store.build(self.root)
+        self.assertEqual(summary["cluster_through"], fixtures.DAY)
         with self._db() as db:
             codes, problems = db.execute(
                 "SELECT problem_codes, problems FROM traces WHERE trace_id = 'trace_gamma'").fetchone()

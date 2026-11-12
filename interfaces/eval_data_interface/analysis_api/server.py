@@ -214,11 +214,20 @@ class Handler(BaseHTTPRequestHandler):
 
     def _envelope(self, data, filters=None, snapshot_obj=None, extra_meta=None):
         snap = snapshot_obj or APP.current()
+        cluster_updated_at = None
+        if snap and snap.problem_trees:
+            cluster_updated_at = max(
+                (tree.released_at for tree in snap.problem_trees.values() if tree.released_at),
+                default=None,
+            )
         meta = {
             "taxonomy_version": snap.taxonomy_version() if snap else None,
             "taxonomy_versions": snap.taxonomy_versions() if snap else None,
             "data_updated_at": snap.data_updated_at if snap else None,
             "built_at": snap.built_at if snap else None,
+            # 聚类产物的生成时间与批次覆盖上限：最新一天通常还没被聚类覆盖。
+            "cluster_updated_at": cluster_updated_at,
+            "cluster_through": (snap.build_summary or {}).get("cluster_through") if snap else None,
             "filters": filters or {},
         }
         if extra_meta:

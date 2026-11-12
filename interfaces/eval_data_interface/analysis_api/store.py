@@ -250,6 +250,8 @@ class ItemCodes:
         # 4.4+ 的 item_index 不再带 file/line，改为 (trace_id, turn, problem) 定位
         self.by_trace: dict[tuple, str] = {}
         self.by_trace_label: dict[tuple, str] = {}
+        # item_index 里出现过的最大批次日期，作为"聚类覆盖到哪天"的对外信号
+        self.max_date: str | None = None
         # 每个归因文件各自的映射指纹：聚类流水线每次追加 item_index，只让涉及的文件重扫
         self.digests: dict[str, "hashlib._Hash"] = {}
 
@@ -296,6 +298,9 @@ def load_item_codes(path: Path, log=None) -> tuple[ItemCodes, str]:
         json_path = item.get("json_path") or ""
         trace_id = _text(item.get("trace_id"))
         line = item.get("line")
+        item_date = _text(item.get("date"))
+        if item_date and (codes.max_date is None or item_date > codes.max_date):
+            codes.max_date = item_date
         # 4.4+ 用 src_rel（相对路径），旧格式用 file（绝对路径）
         basename = str(item.get("file") or item.get("src_rel") or "").replace("\\", "/").rsplit("/", 1)[-1]
         if not basename and line is None:
@@ -699,6 +704,7 @@ def build(root: Path | None = None, log=None) -> dict:
                 if level in severity:
                     severity[level] += int(count or 0)
         clustered = conn.execute("SELECT COUNT(*) FROM problem_codes").fetchone()[0]
+        cluster_dates = [codes.max_date for codes, _ in item_codes.values() if codes.max_date]
         return {
             "ok": True,
             "seconds": round(time.time() - started, 1),
@@ -713,6 +719,7 @@ def build(root: Path | None = None, log=None) -> dict:
             "skipped_input": inputs["skipped"],
             "problems": problems_total,
             "unclustered": max(0, problems_total - clustered),
+            "cluster_through": max(cluster_dates) if cluster_dates else None,
             "severity": severity,
             "pruned": removed,
             "data_updated_at": newest,

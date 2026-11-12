@@ -590,6 +590,8 @@ def summary(snap: Snapshot, filters: Filters, group_by, level="top", sort=None, 
         analyzed = analyzed_map.get(analyzed_key, 0)
         keys = dict(combo)
         label = _problem_label(snap, keys.get("problem")) if "problem" in keys else None
+        if label is None and keys.get("problem") is None and "problem" in keys:
+            label = config.UNCLUSTERED_LABEL
         rows.append(
             _group_row(
                 combo,
@@ -687,6 +689,8 @@ def severity(snap: Snapshot, filters: Filters, group_by=(), level="top", sort=No
         }
         if "problem" in keys:
             label = _problem_label(snap, keys.get("problem"))
+            if label is None and keys.get("problem") is None:
+                label = config.UNCLUSTERED_LABEL
             if label is not None:
                 row["problem_label"] = label
         rows.append(row)

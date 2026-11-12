@@ -296,15 +296,15 @@ def build(root: Path) -> Path:
 
     basename = attr_path.name
     items = [
-        {"file": f"/remote/src/{basename}", "line": 1, "turn_index": 0, "problem_index": 0,
+        {"file": f"/remote/src/{basename}", "line": 1, "turn_index": 0, "problem_index": 0, "date": DAY,
          "json_path": "turns[0].problem[0]", "path": "S1.M1.1", "label": "空查询参数重试"},
-        {"file": f"/remote/src/{basename}", "line": 1, "turn_index": 0, "problem_index": 1,
+        {"file": f"/remote/src/{basename}", "line": 1, "turn_index": 0, "problem_index": 1, "date": DAY,
          "json_path": "turns[0].problem[1]", "path": "S9.M5.1", "label": "旧数据当当前值"},
-        {"file": f"/remote/src/{basename}", "line": 3, "turn_index": 0, "problem_index": 0,
+        {"file": f"/remote/src/{basename}", "line": 3, "turn_index": 0, "problem_index": 0, "date": DAY,
          "json_path": "turns[0].problem[0]", "path": "S9.M5.1", "label": "旧数据当当前值"},
-        {"file": f"/remote/src/{basename}", "line": 3, "turn_index": 0, "problem_index": 1,
+        {"file": f"/remote/src/{basename}", "line": 3, "turn_index": 0, "problem_index": 1, "date": DAY,
          "json_path": "turns[0].problem[1]", "path": "S1.M1.1", "label": "空查询参数重试"},
-        {"file": f"/remote/src/{basename}", "line": 4, "turn_index": 0, "problem_index": 0,
+        {"file": f"/remote/src/{basename}", "line": 4, "turn_index": 0, "problem_index": 0, "date": DAY,
          "json_path": "turns[0].problem[0]", "path": "S1.M1.1", "label": "空查询参数重试"},
     ]
     _write_jsonl(out / "cluster" / "aime_expert" / "item_index.jsonl", items)
@@ -312,7 +312,7 @@ def build(root: Path) -> Path:
     lost_basename = f"aime_fast_attribution-{LOST_DAY}.jsonl"
     _write_jsonl(
         out / "cluster" / "aime_fast" / "item_index.jsonl",
-        [{"file": f"/remote/src/{lost_basename}", "line": 1, "turn_index": 0, "problem_index": 0,
+        [{"file": f"/remote/src/{lost_basename}", "line": 1, "turn_index": 0, "problem_index": 0, "date": LOST_DAY,
           "json_path": "turns[0].problem[0]", "path": "S3.M2.1", "label": "召回为空"}],
     )
 
