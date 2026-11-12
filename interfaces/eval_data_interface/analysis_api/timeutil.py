@@ -1,8 +1,9 @@
-"""时间处理：输入是数据里各种 ISO8601 变体，输出统一为 UTC RFC3339；day 按 Asia/Shanghai。"""
+"""时间处理：输入是数据里各种 ISO8601 变体，输出统一为 UTC RFC3339；day 按美东时间。"""
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
-CN = timezone(timedelta(hours=8))  # 中国无夏令时，固定 +08:00
+EASTERN = ZoneInfo("America/New_York")  # 美东，自动处理 EST/EDT
 UTC = timezone.utc
 
 
@@ -34,15 +35,15 @@ def utc_rfc3339(dt):
     return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def cn_day(dt):
-    """UTC 时间 → Asia/Shanghai 的 YYYY-MM-DD。"""
+def local_day(dt):
+    """UTC 时间 → America/New_York 的 YYYY-MM-DD（含夏令时）。"""
     if dt is None:
         return None
-    return dt.astimezone(CN).strftime("%Y-%m-%d")
+    return dt.astimezone(EASTERN).strftime("%Y-%m-%d")
 
 
 def day_of(value):
-    return cn_day(parse_iso(value))
+    return local_day(parse_iso(value))
 
 
 def seconds_ago(iso_value, now=None):

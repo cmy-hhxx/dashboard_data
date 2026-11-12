@@ -182,7 +182,7 @@ class StoreTest(unittest.TestCase):
         with self._db() as db:
             version = db.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0]
             count = db.execute("SELECT COUNT(*) FROM traces").fetchone()[0]
-        self.assertEqual(version, "2")
+        self.assertEqual(version, "3")
         self.assertEqual(count, 8)
 
     def _locate(self, trace_id):

@@ -40,13 +40,14 @@ import sys
 import time
 from collections import Counter, OrderedDict, defaultdict
 from concurrent.futures import ProcessPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote
 
 import ab_test
 import build_store as bs
 import user_rules
+from daytime import iso_now, local_day, local_day_minute
 from filelist import TreeCache
 
 try:  # optional: ~25% smaller JSON payloads than gzip at low quality
@@ -66,7 +67,7 @@ INPUT_INDEX_VERSION = "2026-11-12.1"
 # Bump when pairing semantics change (cache keys are not otherwise versioned).
 PAIRING_VERSION = "2026-11-12.4"
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-12.5"
+PAYLOAD_VERSION = "2026-11-12.6"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 3
 
@@ -158,12 +159,6 @@ def product_of(top: str) -> str | None:
     name = re.sub(r"^\d+_", "", top)
     return name if name in ENABLED else None
 
-
-TZ = timezone(timedelta(hours=8), "CST")
-
-
-def iso_now() -> str:
-    return datetime.now(TZ).isoformat(timespec="seconds")
 
 
 def decode_question(text) -> str:
@@ -640,78 +635,47 @@ def input_model(meta):
             or Path(meta["path"]).parent.name)
 
 
-def daily_inputs(metas):
-    """Input record counts by (date, model, split), from the same per-file index."""
-    out = Counter()
-    for meta in metas:
-        match = DATE_RE.search(Path(meta["path"]).name)
-        if not match:
-            continue
-        # 目录名报不出模型的文件（问财的 b_*_search 变体）用行级 trace 模型补上，
-        # 这样按天的输入量和旭日图 / 输出模型用的是同一套模型 key。
-        model = input_model(meta)
-        out[(match.group(1), model, meta.get("split") or "daily")] += int(meta.get("lines") or 0)
-    return out
+def daily_input_stats(metas, store):
+    """输入量/Session/Trace 按每条输入记录的 request_time 落到美东日期。
 
-
-def daily_input_session_ids(metas, store):
-    """Compact session IDs per day, allowing union across a selected window.
-
-    IDs are product-local integers; the browser namespaces them by model/split,
-    exactly like evaluated sessions. Missing indexes remain unknown, not zero.
+    文件按批次命名，但一个批次可能包含很多天的记录（重跑/滚动追加），
+    所以不能再用文件名里的日期分组。
     """
-    if store is None:
-        return None
-    paths = [m.get("path") for m in metas if m.get("path")]
-    if not paths:
-        return {}
-    keys = store.file_keys(paths)
-    if len(keys) < len(set(paths)):
-        return None
-    seen = defaultdict(set)
+    records = Counter()
+    traces = Counter()
+    sessions = defaultdict(set)
     number = {}
     for meta in metas:
         rel = meta.get("path")
-        match = DATE_RE.search(Path(rel).name) if rel else None
-        if not match:
-            continue
-        model = meta.get("model") or bs.stats_model(meta.get("stats")) or Path(rel).parent.name
-        split = meta.get("split") or "daily"
-        for key in keys.get(rel) or ():
-            sid = key.split("\x1f", 1)[0]
-            if sid:
-                seen[(match.group(1), model, split)].add(number.setdefault(sid, len(number)))
-    return {k: sorted(v) for k, v in seen.items()}
-
-
-def daily_input_traces(metas):
-    """Trace volume from input files, grouped by the file's model directory.
-
-    Inputs are trace-level, but a trace may carry another model in its inner
-    meta.  Group by the same model key as ``daily_inputs`` so one day cannot
-    look more than 100% evaluated.
-    """
-    out = Counter()
-    for meta in metas:
-        match = DATE_RE.search(Path(meta["path"]).name)
-        if not match:
+        if not rel:
             continue
         model = input_model(meta)
-        stats = meta.get("stats") or {}
-        out[(match.group(1), model, meta.get("split") or "daily")] += int(
-            stats.get("traces") or meta.get("lines") or 0)
-    return out
-
-
-def sample_input_date(src):
-    """Date of the paired input file, so per-day completion follows input days."""
-    ref = src.get("input") if isinstance(src, dict) else None
-    if not ref and isinstance(src, dict):
-        ref = (src.get("refs") or {}).get("input")
-    if not ref:
-        return None
-    match = DATE_RE.search(str(ref[0]))
-    return match.group(1) if match else None
+        split = meta.get("split") or "daily"
+        match = DATE_RE.search(Path(rel).name)
+        fallback = match.group(1) if match else None
+        index = store.get_file(rel) if store is not None else None
+        keys = (index or {}).get("keys") or []
+        tids = (index or {}).get("tids") or []
+        if not keys:
+            if fallback:
+                records[(fallback, model, split)] += int(meta.get("lines") or 0)
+                stats = meta.get("stats") or {}
+                traces[(fallback, model, split)] += int(stats.get("traces") or meta.get("lines") or 0)
+            continue
+        for i, key in enumerate(keys):
+            sid, sep, raw_time = key.partition("\x1f") if key else ("", "", "")
+            day = local_day(raw_time) or fallback
+            if not day:
+                continue
+            records[(day, model, split)] += 1
+            line_tids = tids[i] if i < len(tids) else []
+            if line_tids:
+                traces[(day, model, split)] += len(line_tids)
+            elif sep:
+                traces[(day, model, split)] += 1
+            if sid:
+                sessions[(day, model, split)].add(number.setdefault(sid, len(number)))
+    return records, {k: sorted(v) for k, v in sessions.items()}, traces
 
 
 def daily_payload(samples, inputs, input_session_ids=None, input_traces=None):
@@ -776,7 +740,10 @@ def ensure_file(store: bs.BuildStore, root: Path, rel: str, kind: str = "input",
     path = root / rel
     stat = path.stat()
     if store.has_file_stat(rel, stat):
-        return store.get_file(rel) if load else None
+        cached = store.get_file(rel) if load else None
+        # 旧索引可能缺 per-line trace 占位；长度对不上时重扫一次，自动升级。
+        if not load or (cached and len(cached.get("tids") or []) >= int(cached.get("lines") or 0)):
+            return cached
     prev = store.get_file(rel)
     data = bs.scan_file(root, rel, kind, prev, need_stats, product or product_of(rel.split("/")[0]) or "",
                         bs.split_from_rel(rel), bs.model_from_rel(rel), lost_ids, lost_sig)
@@ -1747,8 +1714,15 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
     if uid in (None, ""):
         uid = smeta.get("user_id")
     uid = str(uid) if uid not in (None, "") else None
+    # 统一按美东时间给样本定日；request_time 缺失时才退回批次文件日期。
+    sample_day = (
+        local_day(imeta.get("request_time"))
+        or local_day(smeta.get("request_time"))
+        or local_day(first_meta.get("timestamp"))
+        or pair["date"]
+    )
     detail = {
-        "product": product, "split": pair["split"], "model": model, "date": pair["date"],
+        "product": product, "split": pair["split"], "model": model, "date": sample_day,
         "question": question, "question_zh": first_meta.get("question_zh"),
         "lang": lang_of(question),
         "ids": {"session": sid, "trace": tid, "case": case},
@@ -1779,7 +1753,7 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
 
     counts = Counter(p["sev"] for p in problems if p["sev"])
     row = {
-        "q": clip(question, 160), "m": model, "sp": pair["split"], "d": pair["date"],
+        "q": clip(question, 160), "m": model, "sp": pair["split"], "d": sample_day,
         "sid": sid or None, "tid": tid or None,
         "w": worst_of([{"severity": p["sev"]} for p in problems]),
         "n": len(problems), "sv": [counts.get(s, 0) for s in SEVERITIES],
@@ -2211,26 +2185,6 @@ def trace_severity(detail, include_refs=False):
     if include_refs:
         result["refs"] = refs
     return result
-
-
-def local_day_minute(raw):
-    """request_time (UTC ISO) → (Asia/Shanghai date, minute of day), or (None, None).
-
-    The intraday chart is keyed to one local day.  The evaluation date (`row[`d`]`) and the
-    request timestamp can land on different days when a run crosses midnight, so the caller
-    must compare the local date as well as the minute-of-day.
-    """
-    text = str(raw or "").strip()
-    if not text:
-        return None, None
-    try:
-        stamp = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        return None, None
-    if stamp.tzinfo is None:
-        stamp = stamp.replace(tzinfo=timezone.utc)
-    local = stamp.astimezone(TZ)
-    return local.date().isoformat(), local.hour * 60 + local.minute
 
 
 def trend_payload(product, samples, releases=(), generated=None):
@@ -2829,7 +2783,7 @@ def _sample_batch(task):
             return {"error": f"build: {exc}", "pair": pair["output"]}
         return {
             "slug": slug, "fp": fp, "oh": pair.get("oh"), "ih": pair.get("ih"), "ch": pair.get("ch"),
-            "product": pair["product"], "model": pair["model"], "date": pair["date"],
+            "product": pair["product"], "model": pair["model"], "date": detail["date"],
             "split": pair["split"], "output": pair["output"][0], "output_line": pair["output"][1],
             "row": row, "facts": facts, "brief": brief, "golden": golden,
             "im": pair.get("im"), "isp": pair.get("isp"),
@@ -2953,7 +2907,7 @@ def build_samples(pairs, root, out_dir, store, reader, cluster_index, cluster_si
     def add_sample(pair, brief, row, facts, golden):
         nonlocal detail_bytes
         slug = pair.get("_slug") or pair.get("slug")
-        row["idate"] = sample_input_date(pair) or row.get("d")
+        row["idate"] = row.get("d")
         row["inp"] = 1 if (pair.get("input") or (pair.get("refs") or {}).get("input")) else 0
         row["im"] = pair.get("im") or row.get("m")
         row["isp"] = pair.get("isp") or row.get("sp")
@@ -3374,9 +3328,9 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
             products[product]["input"] = payload
             products[product]["kpi"]["inputs"] = payload["records"]
             products[product]["kpi"]["lost"] = payload["lost"]
+            input_records, input_sessions, input_traces = daily_input_stats(metas, store)
             products[product]["daily"] = daily_payload(
-                samples[product], daily_inputs(metas), daily_input_session_ids(metas, store),
-                daily_input_traces(metas))
+                samples[product], input_records, input_sessions, input_traces)
             feed = prediction_feed_path(datasets, product)
             if feed:
                 try:

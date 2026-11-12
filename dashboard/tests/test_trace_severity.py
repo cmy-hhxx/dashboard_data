@@ -62,12 +62,12 @@ class TraceSeverityTests(unittest.TestCase):
 
     def test_payload_reports_latest_day_five_minute_market(self):
         first = self.detail(["a"], [(0, "P0", [])])
-        first["meta"]["request_time"] = "2026-11-01T01:05:00Z"   # 09:05 北京时间
+        first["meta"]["request_time"] = "2026-11-01T15:05:00Z"   # 10:05 美东
         second = self.detail(["b"], [(0, "P1", [])])
-        second["meta"]["request_time"] = "2026-11-02T01:12:00Z"  # 09:12 → 09:10 槽
-        # 评测日仍是 11-02，但请求时间已经是北京时间 11-03 00:30：不能混进 11-02 的日内。
+        second["meta"]["request_time"] = "2026-11-02T14:12:00Z"  # 09:12 → 09:10 槽（美东）
+        # 评测日仍是 11-02，但请求时间已经是美东 11-03 00:30：不能混进 11-02 的日内。
         late = self.detail(["c"], [(0, "P2", [])])
-        late["meta"]["request_time"] = "2026-11-02T16:30:00Z"
+        late["meta"]["request_time"] = "2026-11-03T05:30:00Z"
         samples = [("s1", build.slim_detail(first), {"d": "2026-11-01", "m": "a_fast"}, {}),
                    ("s2", build.slim_detail(second), {"d": "2026-11-02", "m": "a_fast"}, {}),
                    ("s3", build.slim_detail(late), {"d": "2026-11-02", "m": "a_fast"}, {})]

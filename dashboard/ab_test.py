@@ -34,6 +34,7 @@ the legacy layout always did.
 from __future__ import annotations
 
 import csv
+import daytime
 import hashlib
 import json_compat as json
 import re
@@ -48,7 +49,7 @@ GPT_QUESTIONS_REL = f"{GPT_DIR}/questions.jsonl"
 GPT_RAW_REL = f"{GPT_DIR}/raw"
 # Bump when the payload's meaning changes (model scoping, leaf/matrix assembly, verify shape) so
 # an unchanged dataset still rebuilds its abtests-*.json instead of serving a stale payload.
-AB_PAYLOAD_VERSION = 8
+AB_PAYLOAD_VERSION = 9
 ROUND_RE = re.compile(r"^(\d+)_version(?P<version>[0-9A-Za-z.]+?)(?:_test)?$")
 # 重测归因的 session_meta.case_id 结尾是 ``_eq_00013``：只有它的 eq 能生成改版后详情。
 ATTRIBUTION_EQ_RE = re.compile(r"_eq_(\d+)$")
@@ -298,7 +299,7 @@ def _legacy_round_meta(round_dir: Path, order: int, version: str):
         status = (row.get("status") or "").split("_")[0]
         if status:
             counts[status] += 1
-    dates = sorted({(row.get("question_time") or "")[:10] for row in rows if row.get("question_time")})
+    dates = sorted({daytime.local_day(row.get("question_time")) for row in rows if daytime.local_day(row.get("question_time"))})
     declared = read_json(round_dir / "round.json") or {}
     release = None
     if isinstance(declared.get("released_at"), str) and DECLARED_VERSION.match(declared["released_at"]):
@@ -361,7 +362,7 @@ def _scope_round_meta(round_dir: Path, order: int, version: str):
     if not reasons:
         for key, value in (summary.get("b_reason") or {}).items():
             reasons[key.split("_")[0]] += int(value or 0)
-    dates = sorted({(row.get("question_time") or "")[:10] for row in rows if row.get("question_time")})
+    dates = sorted({daytime.local_day(row.get("question_time")) for row in rows if daytime.local_day(row.get("question_time"))})
     sources = summary.get("eval_category") or {}
     if not sources:
         sources = Counter(row.get("eval_category") for row in rows if row.get("eval_category"))
@@ -640,7 +641,7 @@ def _scope_rows(round_dir: Path):
                 "session": str(row.get("session_id") or row.get("retest_session_id") or ""),
                 "model": row_model(row, default_model),
                 "source": (row.get("eval_category") or "").strip(),
-                "date": (row.get("question_time") or "")[:10],
+                "date": daytime.local_day(row.get("question_time")) or "",
                 "paths": _split_paths(row.get("cls_paths")),
                 "task": (row.get("task") or row.get("scene") or "").strip(),
                 "sub": (row.get("subtask") or row.get("sub") or "").strip(),

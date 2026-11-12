@@ -25,7 +25,7 @@ from pathlib import Path
 
 SCHEMA_VERSION = 1
 # Bump when the detail / payload shape changes so cached samples are rebuilt.
-BUILD_VERSION = "2026-11-10.2"
+BUILD_VERSION = "2026-11-12.3"
 
 PRODUCT_MODELS = {
     "wencai": ("a_fast", "a_expert", "b_fast", "b_expert"),
@@ -259,12 +259,15 @@ def scan_file(root: Path | str, rel: str, kind: str = "input", prev: dict | None
                     ids = [(t.get("meta") or {}).get("trace_id")
                            for t in payload.get("traces") or [] if isinstance(t, dict)]
                     if not any(ids):
-                        ids = [payload.get("trace_id") or (payload.get("meta") or {}).get("trace_id")]
+                        fallback = payload.get("trace_id") or (payload.get("meta") or {}).get("trace_id")
+                        # 保留每个 trace 的占位，日统计才能按记录内的 trace 数计数。
+                        ids = [fallback] if fallback else [""] * len(payload.get("traces") or [])
                 else:
                     # Attribution turns: pairing picks the input snapshot covering them.
                     ids = [(t.get("meta") or {}).get("trace_id")
                            for t in payload.get("turns") or [] if isinstance(t, dict)]
-                tids.append([str(x) for x in ids if x])
+                # 没有 trace_id 的记录也保留占位，日统计才能按记录内的 trace 数计数。
+                tids.append([str(x) for x in ids if x] if any(ids) else [""] * len(ids))
                 keys.append(key or raw_key(body))
                 if need_stats and kind == "input":
                     _aggregate_line(stats, payload, product, split, default_model, lost_ids)

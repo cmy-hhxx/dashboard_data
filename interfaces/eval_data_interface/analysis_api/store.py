@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS meta(
 """
 
 # 结构版本：落库字段的语义变了就 +1；旧库直接清掉归因派生行重扫，input_index 保留
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # 旧库没有的列：input 续扫需要上次提交到的字节、行数和文件头指纹
 FILE_COLUMNS = {"committed": "INTEGER", "lines": "INTEGER", "prefix": "TEXT"}
@@ -439,7 +439,7 @@ def ingest_attribution(conn, aime: Path, item_codes_by_model, intent_tree, log):
                 # session 是外层 meta；session_meta 缺失时用每轮 trace meta 的 session_id 兜底。
                 turn_session_id = session_id or _text(meta.get("session_id"))
                 stamp = timeutil.parse_iso(meta.get("timestamp")) or timeutil.parse_iso(smeta.get("request_time"))
-                day = timeutil.cn_day(stamp) or default_day
+                day = timeutil.local_day(stamp) or default_day
                 task = _clean(meta.get("task"))
                 subtask = _clean(meta.get("subtask"))
                 intent_code = lookup.get((2, subtask)) if subtask else None

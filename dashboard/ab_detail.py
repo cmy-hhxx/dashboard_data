@@ -45,7 +45,6 @@ ROUND_ID_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*$")
 EQ_RE = re.compile(r"_eq_(\d+)$")
 ITEM_RE = re.compile(rb'"item_id"\s*:\s*"([^"]+)"')
 CASE_RE = re.compile(rb'"case_id"\s*:\s*"([^"]+)"')
-DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 
 
 def _slim_meta_ids(raw):
@@ -96,15 +95,14 @@ def _model_from_path(path: Path, base: Path) -> str:
 def _retest_date(inp, smeta) -> str:
     meta = (inp or {}).get("meta") or {}
     for value in (meta.get("request_time"), smeta.get("request_time")):
-        match = DATE_RE.match(str(value or ""))
-        if match:
-            return match.group(1)
+        day = build.local_day(value)
+        if day:
+            return day
     return ""
 
 
 def _retest_date_from(value) -> str:
-    match = DATE_RE.match(str(value or ""))
-    return match.group(1) if match else ""
+    return build.local_day(value) or ""
 
 
 def _fill_clusters(detail, trace, index, fallback_trace=""):

@@ -153,7 +153,7 @@ class ABDetailTests(unittest.TestCase):
             self.assertEqual((detail["ab"]["eq"], detail["ab"]["trace"]), (1, "T1"))
             self.assertEqual(detail["ab"]["retest_trace"], "tr1")
             self.assertEqual(detail["model"], "expert")
-            self.assertEqual(detail["date"], "2026-11-07")
+            self.assertEqual(detail["date"], "2026-11-06")
             self.assertIsNotNone(detail["compact"])
             # 落点按 (目标 trace, json_path) 从 item_index 回填，不按 coverage 的 labels 顺序。
             problems = detail["attribution"]["problems"]

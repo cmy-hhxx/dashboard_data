@@ -235,17 +235,17 @@ def build(root: Path) -> Path:
 
     daily = [
         _session(
-            "thread_a", "trace_alpha", "2026-10-20T02:00:00.000Z", "事件解读", "行情事件解读", "u1", "AIME-Atlas",
+            "thread_a", "trace_alpha", "2026-10-20T12:00:00.000Z", "事件解读", "行情事件解读", "u1", "AIME-Atlas",
             [_problem("空查询参数重试", "P2"), _problem("旧数据当当前值", "P4")],
             question="英伟达今天为什么跌",
         ),
         _session(
-            "thread_b", "trace_beta", "2026-10-20T03:00:00.000Z", "数据查询类", "时点行情查询", "u2", "AIME-Atlas",
+            "thread_b", "trace_beta", "2026-10-20T13:00:00.000Z", "数据查询类", "时点行情查询", "u2", "AIME-Atlas",
             [],
             question="AAPL 最新价", is_correct=True,
         ),
         _session(
-            "thread_c", "trace_gamma", "2026-10-20T04:00:00.000Z", "交易建议", "入场与加仓时机建议", "u1", "AIME-Atlas",
+            "thread_c", "trace_gamma", "2026-10-20T14:00:00.000Z", "交易建议", "入场与加仓时机建议", "u1", "AIME-Atlas",
             [
                 _problem("旧数据当当前值", "P1"),
                 _problem("空查询参数重试", "P3"),
@@ -256,13 +256,13 @@ def build(root: Path) -> Path:
         ),
         # 同一 trace 的重跑：行号更大的一行生效，前一行进 history
         _session(
-            "thread_a", "trace_alpha", "2026-10-20T02:00:00.000Z", "事件解读", "行情事件解读", "u1", "AIME-Atlas",
+            "thread_a", "trace_alpha", "2026-10-20T12:00:00.000Z", "事件解读", "行情事件解读", "u1", "AIME-Atlas",
             [_problem("空查询参数重试", "P3")],
             question="英伟达今天为什么跌",
         ),
         # 未聚类问题：有严重度、计入 problems，只是没有聚类编码
         _session(
-            "thread_d", "trace_delta", "2026-10-20T05:00:00.000Z", "投教问答", "金融术语与指标释义", "u3", "AIME-Atlas",
+            "thread_d", "trace_delta", "2026-10-20T15:00:00.000Z", "投教问答", "金融术语与指标释义", "u3", "AIME-Atlas",
             [_problem("自由文本问题", "P2"), _problem("提示级问题", "P4")],
             question="什么是市盈率",
         ),
@@ -270,13 +270,13 @@ def build(root: Path) -> Path:
         _turns_session(
             "thread_multi",
             [("trace_multi_1", [_problem("空查询参数重试", "P2")]), ("trace_multi_2", [])],
-            "2026-10-20T06:00:00.000Z", "事件解读", "行情事件解读", "u6", "AIME-Atlas",
+            "2026-10-20T16:00:00.000Z", "事件解读", "行情事件解读", "u6", "AIME-Atlas",
             question="多轮会话问句",
             session_problems=[_problem("跨轮遗漏标的", "P1")],
         ),
         # 测试账号：供数接口不能返回它的问句 / trace。
         _session(
-            "thread_test", "trace_test", "2026-10-20T07:00:00.000Z", "投教问答", "金融术语与指标释义", "test_user", "AIME-Atlas",
+            "thread_test", "trace_test", "2026-10-20T17:00:00.000Z", "投教问答", "金融术语与指标释义", "test_user", "AIME-Atlas",
             [],
             question="内部测试问句",
         ),
@@ -286,7 +286,7 @@ def build(root: Path) -> Path:
 
     lost = [
         _session(
-            "thread_lost", "trace_lost", "2026-09-18T02:00:00.000Z", "投教问答", "金融术语与指标释义", "u9", "aime-fast-new",
+            "thread_lost", "trace_lost", "2026-09-18T12:00:00.000Z", "投教问答", "金融术语与指标释义", "u9", "aime-fast-new",
             [_problem("召回为空", "P2")],
             question="lost user question",
             session_problems=[_problem("会话级问题", "P2")],
@@ -317,18 +317,18 @@ def build(root: Path) -> Path:
     )
 
     inputs = [
-        _input_record("thread_a", "trace_alpha", "2026-10-20T02:00:00.000Z", "u1", "AIME-Atlas", "英伟达今天为什么跌"),
-        _input_record("thread_b", "trace_beta", "2026-10-20T03:00:00.000Z", "u2", "AIME-Atlas", "AAPL 最新价"),
-        _input_record("thread_c", "trace_gamma", "2026-10-20T04:00:00.000Z", "u1", "AIME-Atlas", "现在适合加仓吗"),
-        _input_record("thread_d", "trace_delta", "2026-10-20T05:00:00.000Z", "u3", "AIME-Atlas", "什么是市盈率"),
-        _input_record("thread_multi", "trace_multi_1", "2026-10-20T06:00:00.000Z", "u6", "AIME-Atlas",
+        _input_record("thread_a", "trace_alpha", "2026-10-20T12:00:00.000Z", "u1", "AIME-Atlas", "英伟达今天为什么跌"),
+        _input_record("thread_b", "trace_beta", "2026-10-20T13:00:00.000Z", "u2", "AIME-Atlas", "AAPL 最新价"),
+        _input_record("thread_c", "trace_gamma", "2026-10-20T14:00:00.000Z", "u1", "AIME-Atlas", "现在适合加仓吗"),
+        _input_record("thread_d", "trace_delta", "2026-10-20T15:00:00.000Z", "u3", "AIME-Atlas", "什么是市盈率"),
+        _input_record("thread_multi", "trace_multi_1", "2026-10-20T16:00:00.000Z", "u6", "AIME-Atlas",
                       "多轮会话问句", extra_traces=("trace_multi_2",)),
-        _input_record("thread_test", "trace_test", "2026-10-20T07:00:00.000Z", "test_user", "AIME-Atlas", "内部测试问句"),
+        _input_record("thread_test", "trace_test", "2026-10-20T17:00:00.000Z", "test_user", "AIME-Atlas", "内部测试问句"),
     ]
     _write_jsonl(aime / "eval_input" / "0_daily_eval_input" / "aime_expert" / f"{DAY}.jsonl", inputs)
     _write_jsonl(
         aime / ".archive" / "1_lost_user_input" / "aime_fast" / f"aime_fast-{LOST_DAY}_input.jsonl",
-        [_input_record("thread_lost", "trace_lost", "2026-09-18T02:00:00.000Z", "u9", "aime-fast-new", "lost user question")],
+        [_input_record("thread_lost", "trace_lost", "2026-09-18T12:00:00.000Z", "u9", "aime-fast-new", "lost user question")],
     )
     _write_json(root / "user_rules.json", {"test": {"ids": ["test_user"]}})
     return aime
