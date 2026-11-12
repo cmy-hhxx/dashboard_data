@@ -66,7 +66,7 @@ INPUT_INDEX_VERSION = "2026-11-12.1"
 # Bump when pairing semantics change (cache keys are not otherwise versioned).
 PAIRING_VERSION = "2026-11-12.4"
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-12.3"
+PAYLOAD_VERSION = "2026-11-12.4"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 3
 
@@ -724,7 +724,7 @@ def daily_payload(samples, inputs, input_session_ids=None, input_traces=None):
     sids = defaultdict(set)
     number = {}
     for slug, detail, row, facts in samples:
-        if (detail.get("input") or {}).get("missing"):
+        if not row.get("inp"):
             continue
         key = (row.get("idate") or row["d"], row["m"], row["sp"])
         evaluated[key] += 1
@@ -2945,6 +2945,7 @@ def build_samples(pairs, root, out_dir, store, reader, cluster_index, cluster_si
         nonlocal detail_bytes
         slug = pair.get("_slug") or pair.get("slug")
         row["idate"] = sample_input_date(pair) or row.get("d")
+        row["inp"] = 1 if (pair.get("input") or (pair.get("refs") or {}).get("input")) else 0
         if golden:
             golden_pool[pair["product"]].append((golden["score"], golden["case"]))
         samples[pair["product"]].append((slug, brief, row, facts))
