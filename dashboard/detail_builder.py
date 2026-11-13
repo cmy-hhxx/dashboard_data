@@ -18,6 +18,8 @@ import build
 import build_store as bs
 
 SLUG = re.compile(r"^[0-9a-f]{10}$")
+# 详情文件单独失效：配对修正后要给旧样本补输入，但不能连带让 116k 样本缓存全量重建。
+DETAIL_VERSION = "2026-11-13.1"
 
 
 class DetailBuilder:
@@ -38,6 +40,12 @@ class DetailBuilder:
         self._cluster_lock = threading.Lock()
         self._cluster_index = None
         self._cluster_loaded = None
+        # A duplicate attribution row can lose the pairing race (one input backs one
+        # completion), but its transcript is still in an input file.  Fall back to the
+        # trace index so opening that sample does not show "no eval input".
+        self._trace_inputs = None
+        self._trace_inputs_at = 0.0
+        self._trace_inputs_lock = threading.Lock()
         self._slug_guard = threading.Lock()
         self._slug_locks = {}
 
@@ -46,9 +54,9 @@ class DetailBuilder:
             current = self.version_file.read_text(encoding="utf-8").strip()
         except OSError:
             current = ""
-        if current != bs.BUILD_VERSION:
+        if current != DETAIL_VERSION:
             try:
-                self.version_file.write_text(bs.BUILD_VERSION, encoding="utf-8")
+                self.version_file.write_text(DETAIL_VERSION, encoding="utf-8")
             except OSError:
                 pass
             return time.time()
@@ -81,6 +89,49 @@ class DetailBuilder:
                 lock = threading.Lock()
                 self._slug_locks[slug] = lock
             return lock
+
+    def _input_locations(self):
+        """trace_id -> (input file, byte offset); refreshed so new files are reachable."""
+        with self._trace_inputs_lock:
+            if self._trace_inputs is not None and time.time() - self._trace_inputs_at < 600:
+                return self._trace_inputs
+            try:
+                self._trace_inputs = self._open().input_locations()
+            except Exception as exc:  # noqa: BLE001 - fallback only; the pair ref still wins
+                build.debug(f"detail trace input index: {exc}")
+                self._trace_inputs = {}
+            self._trace_inputs_at = time.time()
+            return self._trace_inputs
+
+    def _input_by_trace(self, attr):
+        """Read the input line by attribution trace id when the pair has no ref.
+
+        A duplicate output row can legitimately own no input (one input backs one
+        completion), but the same trace's transcript is still published.  The detail
+        is read-only, so reuse it instead of showing the missing-input empty state.
+        """
+        traces = []
+        for turn in attr.get("turns") or []:
+            tid = str((turn.get("meta") or {}).get("trace_id") or "")
+            if tid and tid not in traces:
+                traces.append(tid)
+        smeta = attr.get("session_meta") or {}
+        tid = str(smeta.get("trace_id") or "")
+        if tid and tid not in traces:
+            traces.append(tid)
+        locations = self._input_locations()
+        for tid in traces:
+            ref = locations.get(tid)
+            if not ref:
+                continue
+            rel, offset = ref
+            try:
+                with open(self.datasets / rel, "rb") as fh:
+                    fh.seek(offset)
+                    return json.loads(fh.readline())
+            except (OSError, ValueError) as exc:
+                build.debug(f"detail trace input {tid}: {exc}")
+        return None
 
     @staticmethod
     def _read(reader, ref):
@@ -153,6 +204,8 @@ class DetailBuilder:
                         inp = json.loads(self._read(reader, pair["input"]))
                     except (OSError, IndexError, ValueError) as exc:
                         build.debug(f"detail {slug}: bad input: {exc}")
+                if inp is None:
+                    inp = self._input_by_trace(attr)
                 comp = None
                 if pair["compact"]:
                     try:

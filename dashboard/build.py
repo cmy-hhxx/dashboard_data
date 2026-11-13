@@ -65,9 +65,9 @@ PRODUCTION_DATASETS = Path("/mnt/fin_bench/code_and_clean_data/datasets")
 # Bump when input index semantics change; also invalidates cached input stats.
 INPUT_INDEX_VERSION = "2026-11-12.1"
 # Bump when pairing semantics change (cache keys are not otherwise versioned).
-PAIRING_VERSION = "2026-11-12.4"
+PAIRING_VERSION = "2026-11-13.1"
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-12.6"
+PAYLOAD_VERSION = "2026-11-13.1"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 3
 
@@ -892,7 +892,7 @@ def input_slots(root: Path, store: bs.BuildStore, metas, product: str,
 def pair_output(root: Path, item: dict, store: bs.BuildStore, lost_ids=(), lost_sig: str = "",
                 slots=None, trace_slots=None, slots_any=None, trace_slots_any=None,
                 compact_slots=None, compact_any=None, compact_sid=None, compact_sid_any=None,
-                used=None, used_compact=None):
+                used=None, used_compact=None, reserved=None):
     global_slots = slots is not None
     slots_local, traces_local, compacts = defaultdict(list), defaultdict(list), defaultdict(list)
     if slots is None:
@@ -939,26 +939,33 @@ def pair_output(root: Path, item: dict, store: bs.BuildStore, lost_ids=(), lost_
         else:
             pool = slots.get(key) or []
             trace_pools = [trace_slots.get(tid) for tid in turn_tids] if trace_slots else []
-        if not pool and trace_pools:
+        if used is not None:
+            pool = [c for c in pool if (c[0], c[1]) not in used]
+        inp = choose_input(pool, turn_tids)
+        if inp is None and trace_pools:
+            # The exact key had no usable row (wrong trace, or already taken), so fall
+            # back to the same trace.  Never take a row that exactly matches another
+            # output line: a duplicate attribution with a drifted request_time used to
+            # consume the only input of the row whose key really matched it.
             merged, seen_refs = [], set()
             for part in trace_pools:
                 for cand in part or ():
                     ref = (cand[0], cand[1])
-                    if ref not in seen_refs:
-                        seen_refs.add(ref)
-                        merged.append(cand)
-            pool = merged
-        if used is not None:
-            avail = [c for c in pool if (c[0], c[1]) not in used]
-            pool = avail
-        cands = pool
-        inp = choose_input(cands, turn_tids)
+                    if ref in seen_refs:
+                        continue
+                    if used is not None and ref in used:
+                        continue
+                    if reserved and ref in reserved:
+                        continue
+                    seen_refs.add(ref)
+                    merged.append(cand)
+            inp = choose_input(merged, turn_tids)
         if inp:
             if used is not None:
                 used.add((inp[0], inp[1]))
             if not global_slots:
                 try:
-                    cands.remove(inp)
+                    pool.remove(inp)
                 except ValueError:
                     pass
         if compact_slots is not None:
@@ -1031,6 +1038,25 @@ def pairs_from_keys(root: Path, store: bs.BuildStore, product_metas=None):
         return slots_cache[product]
 
     items = discover_outputs(root)
+    # Which input rows are an exact (session + request_time) match for some output
+    # line.  Pairing is per file and a file is paired in path order, so without this
+    # reservation a duplicate attribution in an earlier file, whose key drifted but
+    # whose trace is identical, could take the row that exactly matches a later file.
+    reserved = defaultdict(set)
+    if product_metas is not None:
+        for item in items:
+            slots, _trace_slots, slots_any, _trace_slots_any = slots_for(item["product"])
+            if not slots and not slots_any:
+                continue
+            index = ensure_raw(store, root, item["rel"])
+            for key in index.get("keys") or ():
+                if not key:
+                    continue
+                pool = (slots.get((item["model"], key))
+                        or (slots_any or {}).get(key)
+                        or slots.get(("", key)) or [])
+                for cand in pool:
+                    reserved[item["product"]].add((cand[0], cand[1]))
     compact_rels = {item["compact"] for item in items if item.get("compact")}
     # A compact file can exist under a different date than its attribution row;
     # include every published split's compact files, not only the paths predicted
@@ -1099,7 +1125,8 @@ def pairs_from_keys(root: Path, store: bs.BuildStore, product_metas=None):
                 compact_slots=compact_slots, compact_any=compact_any,
                 compact_sid=compact_sid, compact_sid_any=compact_sid_any,
                 used=used_by_product[item["product"]] if slots is not None else None,
-                used_compact=used_compact[item["product"]])
+                used_compact=used_compact[item["product"]],
+                reserved=reserved.get(item["product"]))
             file_misses = {key: value for key, value in unmatched.items() if value}
             store.put_pairs(item["rel"], sig, file_pairs, file_misses)
             info["pair_misses"] += 1

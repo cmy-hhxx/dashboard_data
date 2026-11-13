@@ -174,6 +174,38 @@ class ABDetailTests(unittest.TestCase):
             self.assertEqual(builder.ensure(ROUND, 1), path)
             self.assertEqual(path.stat().st_mtime_ns, before)
 
+    def test_reads_inputs_from_retest_scope_dir(self):
+        """v1112+ publishes raw retest inputs under 03_after_release_retest/inputs."""
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            datasets = root / "datasets"
+            base = seed_round(datasets)
+            slim = base / "99_provenance" / "retest_input" / "batch1.slim.jsonl"
+            inputs = base / "03_after_release_retest" / "inputs"
+            inputs.mkdir(parents=True, exist_ok=True)
+            slim.rename(inputs / "batch1.jsonl")
+            builder = ab_detail.ABDetailBuilder(datasets, root / "cache", root / "static" / "ab_samples")
+            path = builder.ensure(ROUND, 1)
+            self.assertIsNotNone(path)
+            detail = json.loads(path.read_text(encoding="utf-8"))
+            self.assertFalse(detail["input"]["missing"])
+            self.assertEqual(detail["question"], "真实问题一")
+
+    def test_partial_tail_in_active_input_is_not_indexed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            datasets = root / "datasets"
+            base = seed_round(datasets)
+            inputs = base / "03_after_release_retest" / "inputs"
+            inputs.mkdir(parents=True, exist_ok=True)
+            (inputs / "batch2.jsonl").write_bytes(b'{"meta":{"item_id":"half')
+            builder = ab_detail.ABDetailBuilder(datasets, root / "cache", root / "static" / "ab_samples")
+            path = builder.ensure(ROUND, 1)
+            self.assertIsNotNone(path)
+            index = json.loads((root / "cache" / "ab-details" / f"{ROUND}.json").read_text(encoding="utf-8"))
+            # The half-written line must not join to any input id.
+            self.assertNotIn("half", index["input_by_item"])
+
     def test_unknown_round_and_eq_are_none(self):
         with tempfile.TemporaryDirectory() as folder:
             builder, _ = self.build(folder)
@@ -183,11 +215,15 @@ class ABDetailTests(unittest.TestCase):
             self.assertIsNone(builder.ensure("../" + ROUND, 1))
             self.assertIsNone(builder.ensure(ROUND, "not-a-number"))
 
-    def test_only_attribution_plus_input_can_generate(self):
+    def test_attribution_without_input_renders_missing_state(self):
         with tempfile.TemporaryDirectory() as folder:
             builder, _ = self.build(folder)
-            # eq2 有归因 + coverage，但没有 slim 输入行。
-            self.assertIsNone(builder.ensure(ROUND, 2))
+            # eq2 有归因 + coverage，但没有输入行：仍能出详情（输入空态），不是 404。
+            path = builder.ensure(ROUND, 2)
+            self.assertIsNotNone(path)
+            detail = json.loads(path.read_text(encoding="utf-8"))
+            self.assertTrue(detail["input"]["missing"])
+            self.assertEqual(len(detail["attribution"]["problems"]), 1)
             # eq3 有归因和输入、没有 compact：仍可出详情。
             path = builder.ensure(ROUND, 3)
             self.assertIsNotNone(path)

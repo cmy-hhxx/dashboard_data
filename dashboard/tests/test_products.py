@@ -2,6 +2,7 @@
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -9,9 +10,9 @@ import unittest
 from pathlib import Path
 
 try:
-    from dashboard.tests.test_empty_data import DASHBOARD, seed, write_jsonl
+    from dashboard.tests.test_empty_data import DASHBOARD, REQ, seed, write_jsonl
 except ImportError:  # `cd dashboard && python3 -m unittest discover -s tests`
-    from test_empty_data import DASHBOARD, seed, write_jsonl
+    from test_empty_data import DASHBOARD, REQ, seed, write_jsonl
 
 
 def as_aime(datasets):
@@ -107,6 +108,60 @@ class ProductSplitTests(unittest.TestCase):
                               daily[("2026-11-01", "a_fast")]["evaluated"]), (1, 1))
             self.assertEqual(len(json.loads((static / "samples-wencai.json").read_text())
                                  ["products"]["wencai"]["rows"]), 2)
+            # One completion owns the pair ref, but both details can still read the
+            # same trace's transcript from the input file.
+            from detail_builder import DetailBuilder
+            builder = DetailBuilder(datasets, static.parent / "cache" / "build.sqlite3",
+                                    static / "samples", static.parent / "cache")
+            for row in json.loads((static / "samples-wencai.json").read_text())["products"]["wencai"]["rows"]:
+                path = builder.ensure(row["s"])
+                self.assertIsNotNone(path)
+                detail = json.loads(Path(path).read_text(encoding="utf-8"))
+                self.assertFalse(detail["input"]["missing"])
+            builder.close()
+
+    def test_exact_key_input_wins_over_trace_fallback(self):
+        """A drifted duplicate must not take the input that exactly matches another row."""
+        with tempfile.TemporaryDirectory() as folder:
+            datasets, static = Path(folder) / "datasets", Path(folder) / "static"
+            seed(datasets)
+            out = datasets / "0_wencai/eval_output/0_daily_eval/a_fast"
+            # The earlier file's session key drifted, but its trace still names t1.
+            drifted = json.loads((out / "a_fast_attribution-2026-11-01.jsonl").read_text(encoding="utf-8"))
+            drifted["session_meta"]["request_time"] = "2026-11-01 09:00:00"
+            drifted["turns"][0]["meta"]["trace_id"] = "t1"
+            drifted["session_summary"] = "drifted"
+            write_jsonl(out / "a_fast_attribution-2026-11-01.jsonl", drifted)
+            # The later file's key is the input's key; it must own the one input line.
+            exact = json.loads(json.dumps(drifted))
+            exact["session_meta"]["request_time"] = REQ
+            exact["session_summary"] = "exact"
+            write_jsonl(out / "a_fast_attribution-2026-11-02.jsonl", exact)
+            build(datasets, static)
+            from detail_builder import DetailBuilder
+            builder = DetailBuilder(datasets, static.parent / "cache" / "build.sqlite3",
+                                    static / "samples", static.parent / "cache")
+            rows = json.loads((static / "samples-wencai.json").read_text())["products"]["wencai"]["rows"]
+            details = {}
+            for row in rows:
+                path = builder.ensure(row["s"])
+                self.assertIsNotNone(path)
+                details[row["s"]] = json.loads(Path(path).read_text(encoding="utf-8"))
+            builder.close()
+            exact_detail = next(d for d in details.values()
+                                if d["attribution"]["summary"] == "exact")
+            drifted_detail = next(d for d in details.values()
+                                  if d["attribution"]["summary"] == "drifted")
+            # The pair ref goes to the exact-key row; the drifted duplicate gets none,
+            # even though both details can still read the transcript by trace id.
+            db = sqlite3.connect(static.parent / "cache" / "build.sqlite3")
+            refs = {slug: json.loads(value) if value else {}
+                    for slug, value in db.execute("SELECT slug,refs FROM samples")}
+            db.close()
+            self.assertIsNotNone(refs[exact_detail["slug"]].get("input"))
+            self.assertIsNone(refs[drifted_detail["slug"]].get("input"))
+            self.assertFalse(exact_detail["input"]["missing"])
+            self.assertFalse(drifted_detail["input"]["missing"])
 
     def test_attribution_pairs_input_from_other_model_dir(self):
         """A trace may be routed to the other model input dir; pairing is product-wide."""

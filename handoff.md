@@ -286,7 +286,9 @@ uid 用户 ID（输入 meta.user_id）· ut 用户类型 real/test/internal/unkn
   `online` 是线上真实用户样本；`pair/eq/q/detail` 只用于从 A/B 面板跳到版本对比。
 - `schema` 2 → 3 只因新增 `pairs` 与 refs 字段；旧 payload 会自动重建。
 - 改版后详情：主 samples 索引里没有重测样本，`ab_detail.py` 在第一次打开
-  `/ab_samples/<round>/<eq>.json` 时从轮次里的 attribution + compact + `99_provenance/retest_input` 懒生成；
+  `/ab_samples/<round>/<eq>.json` 时从轮次里的 attribution + compact + 重测输入懒生成
+  （`99_provenance/retest_input/*.jsonl` 和 `03_after_release_retest/inputs/*.jsonl` 都读；
+  输入暂时没发布时仍出详情，页面显示「没有评测输入」空态，不是 404）；
   问题落点用 `03_after_release_retest/cluster_tree/<model>/item_index.slice.jsonl` 的
   `(trace_id, json_path)` → `path/edge` 精确回填（不依赖 `cls_paths/cls_labels` 的平行关系）。
 

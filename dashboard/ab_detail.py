@@ -5,10 +5,11 @@ after the release and their sources live inside the round::
 
     03_after_release_retest/attribution/<model>/<batch>/<model>_attribution-<batch>.jsonl
     99_provenance/retest_eval_run/compact/<model>_compact-<batch>.jsonl
-    99_provenance/retest_input/<batch>.slim.jsonl
+    99_provenance/retest_input/<batch>.slim.jsonl  (or 03_after_release_retest/inputs/<batch>.jsonl)
 
-The three are joined by ``meta.item_id`` (``case_id`` fallback).  Only a question that has an
-attribution row and an input row can be rendered; compact is optional.  The input file is
+The three are joined by ``meta.item_id`` (``case_id`` fallback).  An attribution row is
+required; the input row is preferred but optional (the page then shows the same
+missing-input state as the main samples).  Compact is optional.  The input file is
 GB-sized, so the first request builds a (size, mtime) checked line-offset index cached at
 ``cache/ab-details/<roundId>.json`` and later reads use ``pread`` instead of loading the file.
 
@@ -33,13 +34,16 @@ import ab_test
 import build
 import build_store as bs
 
-INDEX_VERSION = 2
+INDEX_VERSION = 3
 
 ATTRIBUTION_DIR = ab_test.SCOPE_AFTER + "/attribution"
 BEFORE_ATTRIBUTION_DIR = ab_test.SCOPE_BEFORE + "/attribution"
 ITEM_INDEX_DIR = ab_test.SCOPE_AFTER + "/cluster_tree"
 COMPACT_DIR = "99_provenance/retest_eval_run/compact"
 INPUT_DIR = "99_provenance/retest_input"
+# The retest runner publishes its raw inputs here before the slim copy exists (v1112+);
+# the coverage script already reads both, so the dashboard must too.
+RETEST_INPUT_DIR = f"{ab_test.SCOPE_AFTER}/inputs"
 
 ROUND_ID_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*$")
 EQ_RE = re.compile(r"_eq_(\d+)$")
@@ -205,8 +209,11 @@ class ABDetailBuilder:
                  if tree_base.is_dir() else [])
         comp_base = round_dir / COMPACT_DIR
         comp = sorted(p for p in comp_base.glob("*.jsonl") if p.is_file()) if comp_base.is_dir() else []
-        input_base = round_dir / INPUT_DIR
-        inp = sorted(p for p in input_base.glob("*.slim.jsonl") if p.is_file()) if input_base.is_dir() else []
+        inp = []
+        for input_base in (round_dir / INPUT_DIR, round_dir / RETEST_INPUT_DIR):
+            if input_base.is_dir():
+                inp.extend(p for p in input_base.glob("*.jsonl") if p.is_file())
+        inp.sort()
         return attr, items, comp, inp
 
     @staticmethod
@@ -288,6 +295,8 @@ class ABDetailBuilder:
             pos = 0
             with open(path, "rb") as fh:
                 for line_no, raw in enumerate(fh):
+                    if not raw.endswith(b"\n"):
+                        break
                     entry["offsets"].append(pos)
                     pos += len(raw)
                     try:
@@ -298,6 +307,7 @@ class ABDetailBuilder:
                         trace = str((turn.get("meta") or {}).get("trace_id") or "")
                         if trace:
                             traces.setdefault(trace, (file_idx, line_no, model))
+            entry["committed"] = pos
         index = {"sig": sig, "built_at_ns": time.time_ns(), "sources": sources, "traces": traces}
         self._before_indexes[round_id] = index
         return index
@@ -324,6 +334,8 @@ class ABDetailBuilder:
             pos = 0
             with open(path, "rb") as fh:
                 for line_no, raw in enumerate(fh):
+                    if not raw.endswith(b"\n"):
+                        break
                     entry["offsets"].append(pos)
                     pos += len(raw)
                     try:
@@ -339,12 +351,15 @@ class ABDetailBuilder:
                         "file": file_idx, "line": line_no, "model": model,
                         "item_id": str(smeta.get("item_id") or ""),
                     }
+            entry["committed"] = pos
 
         for path in items:
             file_idx, entry = add_source("item_index", path)
             pos = 0
             with open(path, "rb") as fh:
                 for raw in fh:
+                    if not raw.endswith(b"\n"):
+                        break
                     entry["offsets"].append(pos)
                     pos += len(raw)
                     try:
@@ -369,12 +384,15 @@ class ABDetailBuilder:
                             problem_dupes += 1
                             continue
                         problems[lookup] = record
+            entry["committed"] = pos
 
         for path in comp:
             file_idx, entry = add_source("compact", path)
             pos = 0
             with open(path, "rb") as fh:
                 for line_no, raw in enumerate(fh):
+                    if not raw.endswith(b"\n"):
+                        break
                     entry["offsets"].append(pos)
                     pos += len(raw)
                     try:
@@ -388,12 +406,15 @@ class ABDetailBuilder:
                         compact_by_item.setdefault(item, [file_idx, line_no])
                     if case:
                         compact_by_case.setdefault(case, [file_idx, line_no])
+            entry["committed"] = pos
 
         for path in inp:
             file_idx, entry = add_source("input", path)
             pos = 0
             with open(path, "rb") as fh:
                 for line_no, raw in enumerate(fh):
+                    if not raw.endswith(b"\n"):
+                        break
                     entry["offsets"].append(pos)
                     pos += len(raw)
                     item, case = _slim_meta_ids(raw)
@@ -401,6 +422,7 @@ class ABDetailBuilder:
                         input_by_item.setdefault(item, [file_idx, line_no])
                     if case:
                         input_by_case.setdefault(case, [file_idx, line_no])
+            entry["committed"] = pos
 
         rows = {}
         if coverage and coverage.is_file():
@@ -443,7 +465,7 @@ class ABDetailBuilder:
     def _read_line(round_dir: Path, entry, line_no: int) -> bytes:
         offsets = entry["offsets"]
         start = offsets[line_no]
-        end = offsets[line_no + 1] if line_no + 1 < len(offsets) else entry["size"]
+        end = offsets[line_no + 1] if line_no + 1 < len(offsets) else entry.get("committed", entry["size"])
         fd = os.open(round_dir / entry["rel"], os.O_RDONLY)
         try:
             raw = os.pread(fd, end - start, start)
@@ -599,11 +621,12 @@ class ABDetailBuilder:
         input_ref = index["input_by_item"].get(item) if item else None
         if input_ref is None and case:
             input_ref = index["input_by_case"].get(case)
-        if input_ref is None:
-            return None
-        inp = self._load(index, round_dir, input_ref)
+        inp = self._load(index, round_dir, input_ref) if input_ref else None
         if not isinstance(inp, dict):
-            return None
+            # Attribution without a published input (the retest runner may drop its
+            # staging inputs after mapping) still renders: the pane shows the
+            # "no eval input" state with output + attribution instead of a 404.
+            inp = None
 
         compact_ref = index["compact_by_item"].get(item) if item else None
         if compact_ref is None and case:
