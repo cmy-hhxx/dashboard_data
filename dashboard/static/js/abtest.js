@@ -352,8 +352,8 @@ function matrixTableAb(view, rnd, metric, selected) {
   let rowLabels = "", gridCells = "", tots = "";
   rows.forEach((r, ri) => {
     const fixed = change ? fixedCount(r) : null;
-    const volume = `${fmt(fixed == null ? (change ? (traces?.before?.[ri] || 0) : rowDen(ri)) : fixed)}条`;
-    const label = `<span class="mx-lab">${esc(r.name)}<em class="mx-vol">（${volume}）</em></span>`;
+    const volume = `${fmt(fixed == null ? (change ? (traces?.before?.[ri] || 0) : rowDen(ri)) : fixed)}`;
+    const label = `<span class="mx-lab">${esc(r.name)}<em class="mx-vol num">${volume}</em></span>`;
     rowLabels += r.children?.length
       ? `<button type="button" class="rh" data-act="abrow" data-ri="${ri}" title="${esc(r.name)}" aria-label="下钻 ${esc(r.name)}">${label}<i class="mx-caret" aria-hidden="true"></i></button>`
       : `<span class="rh" title="${esc(r.name)}">${label}</span>`;
@@ -382,7 +382,7 @@ function matrixTableAb(view, rnd, metric, selected) {
     }
   });
   const totalFixed = (sharedRows || Array.isArray(rnd.pairs)) ? sumOf(rows.map((r) => fixedCount(r))) : null;
-  // 场景合计后的（N条）与各行口径一致：变化矩阵是固定题集条数，其余是当前侧 Trace 数。
+  // 场景合计后的数与各行口径一致：变化矩阵是固定题集条数，其余是当前侧 Trace 数。
   const totalVolume = change
     ? (totalFixed == null ? sumOf(traces?.before || []) : totalFixed)
     : grandDen;
@@ -415,7 +415,7 @@ function matrixTableAb(view, rnd, metric, selected) {
     footTotal = `<span class="rowtot rowtot-foot num" style="--v:0.08">${fmt(sumOf(rowCount))}</span>`;
   }
   return `<div class="matrix abmatrix${change ? " is-change" : ""}" style="--cols:${cols.length};--rows:${rows.length}">
-    <div class="mx-rows"><span class="mx-corner" aria-hidden="true"></span>${rowLabels}<span class="rh"><span class="mx-lab mx-total-lab" title="${esc(totalTitle)}">场景合计<em class="mx-vol">（${fmt(totalVolume)}条）</em></span></span></div>
+    <div class="mx-rows"><span class="mx-corner" aria-hidden="true"></span>${rowLabels}<span class="rh"><span class="mx-lab mx-total-lab" title="${esc(totalTitle)}">场景合计<em class="mx-vol num">${fmt(totalVolume)}</em></span></span></div>
     <div class="mx-scroll"><div class="mx-grid">${heads}${gridCells}${foot}</div></div>
     <div class="mx-tots"><span class="rowtot-head" title="该场景在当前口径下的问题数合计"><span class="mx-lab mx-total-lab">${change ? "变化合计" : "问题合计"}</span></span>${tots}${footTotal}</div>
   </div>`;

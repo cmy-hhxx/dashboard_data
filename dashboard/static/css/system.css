@@ -68,8 +68,6 @@
 .fx-out.is-on { background: color-mix(in oklab, var(--c) 7%, var(--lift)); box-shadow: 0 0 0 1.5px var(--c), var(--shadow-pop); transform: translateX(-2px); }
 
 .fx-hubwrap { display: grid; justify-items: center; gap: 12px; padding-top: 6px; }
-.fx-ask { display: inline-flex; align-items: center; gap: 8px; height: 26px; padding: 0 4px 0 10px; border-radius: 8px; background: var(--well); font-size: var(--fs-meta); font-family: var(--mono); color: var(--muted); }
-.fx-ask b { padding: 2px 7px; border-radius: 5px; background: var(--lift); color: var(--ink); font-weight: var(--w-medium); }
 .fx-hub {
   position: relative; width: 176px; height: 176px; border-radius: 50%; display: grid; place-items: center;
   background: radial-gradient(circle, color-mix(in oklab, var(--ink) 5%, transparent) 0 52%, transparent 71%);
@@ -85,8 +83,6 @@
 .fx-core > span { display: grid; grid-template-columns: repeat(3, 12px); gap: 4px; }
 .fx-core i { width: 12px; height: 12px; border-radius: 3px; background: var(--c); animation: fx-blink 2.6s ease-in-out infinite; }
 .fx-hub.is-on .fx-core { transform: scale(1.07) rotate(-4deg); }
-.fx-cap { text-align: center; font-size: var(--fs-small); line-height: 1.6; color: var(--muted); }
-.fx-cap em { font-style: normal; color: var(--accent); }
 .fx-steps { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 10px; max-width: 240px; font-size: var(--fs-meta); color: var(--ink-2); }
 .fx-steps span { display: inline-flex; align-items: center; gap: 5px; }
 .fx-steps i { width: 6px; height: 6px; border-radius: 2px; background: var(--c); }
@@ -115,12 +111,6 @@
 .fx-mech code { font-size: var(--fs-meta); font-family: var(--mono); color: var(--faint); }
 .fx-mech b { font-weight: var(--w-medium); color: var(--ink); white-space: nowrap; }
 .fx-mech small { font-size: var(--fs-meta); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fx-code { display: flex; align-items: flex-end; gap: 4px; margin-bottom: 10px; }
-.fx-code span { display: grid; justify-items: center; gap: 2px; min-width: 44px; padding: 6px 8px; border-radius: 8px; background: var(--well); }
-.fx-code b { font: var(--w-medium) 15px var(--mono); color: var(--ink); }
-.fx-code span:first-child b { color: var(--accent); }
-.fx-code small { font-size: var(--fs-meta); color: var(--muted); }
-.fx-code > i { font-style: normal; color: var(--faint); padding-bottom: 16px; }
 .fx-def { font-size: var(--fs-small); line-height: 1.6; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .fx-def b { margin-right: 6px; color: var(--ink); font-weight: var(--w-medium); }
 .fx-pat { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; align-items: baseline; font-size: var(--fs-small); color: var(--ink-2); }
@@ -173,7 +163,7 @@
 .fx-k > span { margin-left: 10px; letter-spacing: 0.02em; }
 .fx-phs { display: grid; align-content: space-between; gap: 6px; }
 .fx-ph { padding: 0; }
-.fx-stg .n { font: 10px var(--mono); color: var(--faint); margin-left: 1px; }
+.fx-stg .n { font: var(--fs-micro) var(--mono); color: var(--faint); margin-left: 1px; }
 .fx-stg[aria-pressed="true"] .n { color: color-mix(in oklab, var(--card) 65%, transparent); }
 .fx-mechs { align-content: space-between; gap: 2px; }
 .fx-mech { padding: 0 8px; margin: 0 -8px; border-radius: 6px; transition: opacity var(--snap), background var(--snap); }
@@ -183,7 +173,6 @@
 .fx-pm { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--py-lg); align-items: start; }
 .fx-pm-side { display: grid; grid-template-columns: 160px minmax(0, 1fr) auto; column-gap: var(--py-lg); align-items: center; }
 .fx-pm-side .fx-k { grid-column: 1; }
-.fx-pm-side .fx-code { grid-column: 1; margin-bottom: 0; }
 .fx-pm .fx-def { grid-column: 2; grid-row: 1 / 3; display: block; -webkit-line-clamp: unset; overflow: visible; margin: 0; }
 .fx-pm-n { grid-column: 3; grid-row: 1 / 3; font-size: var(--fs-meta); color: var(--muted); }
 /* Stack mechanism groups; let their patterns share the available width. */
@@ -193,7 +182,7 @@
 .fx-pm-col.is-dim { opacity: 0.28; }
 .fx-pm-h { display: grid; grid-template-columns: 8px 20px minmax(0, 1fr) auto; gap: 7px; align-items: baseline; font-size: var(--fs-meta); line-height: 1.5; }
 .fx-pm-h i { width: 8px; height: 8px; border-radius: 2px; background: var(--c); }
-.fx-pm-h code { font: 11px/1.5 var(--mono); color: var(--muted); }
+.fx-pm-h code { font: var(--fs-micro)/1.5 var(--mono); color: var(--muted); }
 .fx-pm-h b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--w-medium); color: var(--ink); }
 .fx-pm-h .num { font-size: var(--fs-meta); color: var(--muted); }
 .fx-pm .fx-pat { grid-template-columns: 72px minmax(0, 1fr); line-height: 1.5; animation: fx-in 420ms cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: calc(var(--d) * 18ms); }

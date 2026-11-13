@@ -94,12 +94,14 @@ function flowCard(tax, p) {
   }).join("");
   const tiles = [2, 9, 0, 9, 2, 9, 9, 4, 9].map((v) => `<i style="--c:${v < 5 ? `var(--sev-${v})` : "var(--sev-none)"}"></i>`).join("");
   const ins = FX_IN.map(([k, t, sub, tag]) =>
-    `<div class="fx-box fx-in k-${k}"><i class="fx-dot"></i><span class="fx-txt"><b>${t}</b><small>${sub}</small></span><span class="fx-end">${tag}</span></div>`).join("");
+    `<div class="fx-box fx-in k-${k}" title="${sub}"><i class="fx-dot"></i><span class="fx-txt"><b>${t}</b></span><span class="fx-end">${tag}</span></div>`).join("");
   const outs = FX_OUT.map(([t, sub, rule, c], i) => {
+    // 定级's scale is a label; the other boxes keep their gloss in the title.
+    const label = i === 1 ? `<small>${sub}</small>` : "";
     const ico = i === 1
       ? `<span class="fx-ico is-sev">${SEV.map((_, k) => `<i style="--c:${sevColor(k)};--k:${k}"></i>`).join("")}</span>`
       : `<span class="fx-ico"><i></i></span>`;
-    return `<div class="fx-box fx-out" style="--c:${c}">${ico}<span class="fx-txt"><b>${t}</b><small>${sub}</small><em>${rule}</em></span><span class="fx-end num">0${i + 1}</span></div>`;
+    return `<div class="fx-box fx-out" style="--c:${c}" title="${sub} · ${rule}">${ico}<span class="fx-txt"><b>${t}</b>${label}</span><span class="fx-end num">0${i + 1}</span></div>`;
   }).join("");
   let taxHTML = "";
   if (tax) {
@@ -115,7 +117,7 @@ function flowCard(tax, p) {
         `<button type="button" class="fx-stg" data-stage="${st.id}" aria-pressed="${st === first}" title="${esc(st.def || "")}"><code>${st.id}</code>${esc(st.name)}<span class="n num">${count(st.id)}</span></button>`).join("")}</span></div>`;
     }).join("");
     const mechRows = mechs.map((m, i) =>
-      `<span class="fx-mech" data-m="${m.id}" title="${esc(m.def || "")}"><i style="--c:${mechTint(i, mechs.length)}"></i><code>${m.id}</code><b>${esc(m.name)}</b><small>${esc(m.def || "")}</small></span>`).join("");
+      `<span class="fx-mech" data-m="${m.id}" title="${esc(m.def || "")}"><i style="--c:${mechTint(i, mechs.length)}"></i><code>${m.id}</code><b>${esc(m.name)}</b></span>`).join("");
     taxHTML = `<div class="fx-tax" id="fxTax">
       <div class="fx-label"><span class="num">04</span>聚类${fig(k && p.patterns && `${fmt(p.patterns.length)} 个模式 · 覆盖 ${pct(k.clustered, k.problems)} 问题`)}</div>
       <div class="fx-tax-grid">
@@ -125,14 +127,12 @@ function flowCard(tax, p) {
       </div></div>`;
   }
   return `<article class="card" style="--span:12">
-    <header class="card-head"><h2>评测体系</h2><span class="meta end">会话 → 压缩 → 归因 → 聚类</span></header>
+    <header class="card-head"><h2>评测体系</h2></header>
     <div class="fx" id="fx"><svg class="fx-wires" aria-hidden="true"></svg>
       <div class="fx-col"><div class="fx-label"><span class="num">01</span>会话输入${fig(k && `${fmt(k.unique_sessions)} 个会话 · ${fmt(k.messages)} 条消息`)}</div>${ins}</div>
       <div class="fx-col fx-mid"><div class="fx-label"><span class="num">02</span>Compact 压缩${fig(k && `${fmt(k.compacted)} 条轨迹`)}</div>
         <div class="fx-hubwrap">
-          <div class="fx-ask">轨迹顺序<b>不变</b></div>
           <div class="fx-hub"><span class="fx-orbit"><i></i></span><svg class="fx-ring" viewBox="-80 -80 160 160" aria-hidden="true">${ticks}</svg><span class="fx-core"><span>${tiles}</span></span></div>
-          <p class="fx-cap"><em>每一步都带原文位置</em></p>
           <div class="fx-steps">${FX_STEPS.map(([n, c]) => `<span style="--c:${c}"><i></i>${n}</span>`).join("")}</div>
         </div></div>
       <div class="fx-col"><div class="fx-label"><span class="num">03</span>归因${fig(k && `${fmt(k.problems)} 个问题 · ${pct(k.located, k.evidence)} 证据可定位`)}</div>${outs}</div>
@@ -158,12 +158,9 @@ function patternMatrix(tax, sid) {
     return `<div class="fx-pm-col" data-m="${mid}"><div class="fx-pm-h"><i style="--c:${c}"></i><code>${mid || "—"}</code><b>${esc(name)}</b><span class="num">${list.length}</span></div><div class="fx-pm-items">${
       list.map(([id, pt]) => `<div class="fx-pat" style="--d:${d++}" title="${esc(pt.plain || "")}"><code>${id}</code><span>${esc(pt.name || id)}</span></div>`).join("")}</div></div>`;
   }).join("");
-  const ex = pats[0] ? pats[0][0].split(".") : [sid, "M1", "1"];
   const used = new Set(pats.map(([id]) => id.split(".")[1]));
   return `<div class="fx-pm-side">
-      <span class="fx-k">模式编号</span>
-      <div class="fx-code"><span><b>${ex[0]}</b><small>环节</small></span><i>.</i><span><b>${ex[1]}</b><small>机制</small></span><i>.</i><span><b>${ex[2]}</b><small>序号</small></span></div>
-      <p class="fx-def"><b>${esc(st.name)}</b>${esc(st.def || "")}</p>
+      <p class="fx-def" title="${esc(st.def || "")}"><b>${esc(st.name)}</b></p>
       <span class="fx-pm-n num">${pats.length} 个模式 · ${used.size} 种机制</span>
     </div>
     <div class="fx-pm-grid">${cols || '<span class="dim">该环节暂无模式</span>'}</div>`;
@@ -206,7 +203,7 @@ function anatomyBody(a) {
     .map(
       (p) => `<div class="aprob" data-p="${p.id}" style="--c:${sevColor(p.sev)}">
         <div class="aprob-top"><span class="sev-badge">${p.sev}</span><span>${esc(roleName(p.role))}</span>${p.path ? `<span class="mono faint">${esc(p.path)}</span>` : ""}</div>
-        <div class="t">${esc(p.label)}</div><div class="s">${esc(p.comp || "")} · 证据落在消息 ${(p.msgs || []).join("、") || "—"}</div></div>`,
+        <div class="t">${esc(p.label)}</div><div class="s">${esc(p.comp || "")}${(p.msgs || []).length ? ` · ${p.msgs.map((m) => `#${m}`).join(" ")}` : ""}</div></div>`,
     )
     .join("");
   return `<div class="anatomy${a.messages.length >= 12 ? " is-fill" : ""}">

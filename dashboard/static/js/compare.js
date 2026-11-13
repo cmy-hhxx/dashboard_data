@@ -657,7 +657,7 @@ async function mountGpt(host, round, pair, ref) {
     const data = await getJSON(`gpt_samples/${encodeURIComponent(round.id)}/${encodeURIComponent(ref.key)}.json`);
     if (body) body.innerHTML = gptBodyHTML(data, verifyHTML(round, pair, "g"));
   } catch (err) {
-    if (body) body.innerHTML = `<div class="empty">GPT 回答读取失败，稍后刷新重试</div>`;
+    if (body) body.innerHTML = `<div class="empty">GPT 回答读取失败</div>`;
   }
 }
 
@@ -887,7 +887,7 @@ export async function render(root, ctx) {
   const round = url.round ? rounds.find((item) => String(item.id) === String(url.round)) : null;
   if (!round) {
     if (document.documentElement.dataset.compare === "1") {
-      root.innerHTML = `<div class="bento"><div class="card" style="--span:12"><div class="empty">缺少版本对比参数：需要 round + pair（或 online）。</div></div></div>`;
+      root.innerHTML = `<div class="bento"><div class="card" style="--span:12"><div class="empty">缺少对比参数</div></div></div>`;
       return;
     }
     testsetPicker(root, ctx, rounds);

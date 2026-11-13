@@ -52,7 +52,23 @@
 .filters .frow.sev { gap: 3px; width: 100%; }
 .filters .frow.sev button { flex: 1 1 auto; justify-content: center; padding: 0 4px; gap: 4px; font-size: var(--fs-meta); }
 .filters .frow.sev button i { width: 6px; height: 6px; }
-.filters .cascade { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; width: 100%; }
+.filters .frow.models { width: 100%; }
+.filters .fmore {
+  margin-left: auto; gap: var(--sp-1); color: var(--ink-2);
+}
+.filters .fmore b {
+  min-width: 16px; height: 16px; padding: 0 var(--sp-1); border-radius: 8px; background: var(--accent); color: var(--card);
+  font-size: var(--fs-micro); font-weight: var(--w-medium); line-height: 16px; text-align: center;
+}
+.filters .fmore::after {
+  content: ""; width: 6px; height: 6px; margin-left: 2px; border: solid currentColor; border-width: 0 1.5px 1.5px 0;
+  transform: translateY(-2px) rotate(45deg); transition: transform var(--snap);
+}
+.filters .fmore[aria-expanded="true"]::after { transform: translateY(1px) rotate(-135deg); }
+.filters .fmore[aria-expanded="true"] { background: var(--well); }
+.filters .cascade { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-2); width: 100%; }
+.filters .cascade[hidden] { display: none; }
+.filters .cascade > button { height: 30px; }
 .filters .cascade select {
   height: 30px; min-width: 0; border: 0; border-radius: var(--r-chip); background: var(--well);
   color: var(--ink-2); font-size: var(--fs-small); padding: 0 8px; cursor: pointer; outline: none;
@@ -517,3 +533,5 @@
   html[data-view="samples"] main { max-width: 2100px; }
   .msg.k-user .msg-body, .msg.k-answer .msg-body { max-width: none; }
 }
+/* While the full index is on its way the list stays readable but visibly waiting. */
+#slist[aria-busy="true"] { opacity: 0.5; pointer-events: none; transition: opacity var(--snap); }

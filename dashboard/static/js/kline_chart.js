@@ -73,7 +73,7 @@ function releaseLinePrimitive(chart, items, color, fontFamily, backdrop) {
       context.strokeStyle = stroke;
       context.fillStyle = stroke;
       context.lineWidth = Math.max(1, Math.round(1.4 * hr));
-      context.font = `${Math.round(10 * vr)}px ${fontFamily}`;
+      context.font = `${Math.round(11 * vr)}px ${fontFamily}`;
       context.textBaseline = "top";
       let lastLabel = -Infinity;
       items.forEach(({ time, label }) => {
@@ -191,7 +191,6 @@ export function createKlineChart(host, spec = {}) {
   const legend = compact ? "" : `<div class="kl-legend">
       ${maDefs.map(([name, , key]) => `<span><i style="--c:${colors[key]}"></i>${name}</span>`).join("")}
       <span class="kl-vol-key"><i class="is-vol"></i>量能 · ${esc(spec.volumeName || "Trace")}</span>
-      ${spec.legendNote ? `<span class="kl-note">${esc(spec.legendNote)}</span>` : ""}
     </div>`;
   if (compact) host.classList.add("is-compact");
   host.innerHTML = `${legend}<div class="kl-canvas"></div><div class="kl-tip" hidden></div>`;
@@ -204,7 +203,7 @@ export function createKlineChart(host, spec = {}) {
     layout: {
       background: { type: ColorType.Solid, color: "transparent" },
       textColor: colors.text,
-      fontSize: 10,
+      fontSize: 11,
       fontFamily: getComputedStyle(document.body).fontFamily,
       attributionLogo: false,
     },
@@ -424,7 +423,7 @@ export function createTrendChart(host, spec = {}) {
     layout: {
       background: { type: ColorType.Solid, color: "transparent" },
       textColor: colors.text,
-      fontSize: 10,
+      fontSize: 11,
       fontFamily: getComputedStyle(document.body).fontFamily,
       attributionLogo: false,
     },

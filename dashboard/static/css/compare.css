@@ -340,7 +340,7 @@ html[data-compare-full="1"], html[data-compare-full="1"] body { overflow: hidden
 .compare-tl.is-single .compare-tl-body {
   padding: 14px 20px; background: var(--lift); box-shadow: var(--shadow);
 }
-.compare-tl.is-single .compare-tl-name { font-size: 22px; font-weight: var(--w-light); letter-spacing: -0.02em; }
+.compare-tl.is-single .compare-tl-name { font-size: var(--fs-num-s); font-weight: var(--w-light); letter-spacing: -0.02em; }
 .compare-tl.is-single .compare-tl-dot { width: 11px; height: 11px; }
 .compare-tl-stem {
   width: 1px; height: 30px; background: color-mix(in oklab, var(--release) 22%, var(--t4));

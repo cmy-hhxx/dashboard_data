@@ -344,7 +344,7 @@ async function loadSession(session, focusSlug, focusTrace, sev) {
     parts = await Promise.all(session.rows.map(async (row) => ({ slug: row.s, detail: await fetchDetail(row.s) })));
   } catch (e) {
     if (token !== S.loadSeq) return;   // 失败的旧请求不该覆盖新样本
-    $(`#${prefix}shead`, root).innerHTML = `<div class="empty">会话详情读取失败（${esc(e.message)}）。运行 local_dev/refresh.sh 重新生成。</div>`;
+    $(`#${prefix}shead`, root).innerHTML = `<div class="empty">会话详情读取失败（${esc(e.message)}）</div>`;
     $(`#${prefix}stl`, root).innerHTML = "";
     $(`#${prefix}sout`, root).innerHTML = "";
     $(`#${prefix}sattr`, root).innerHTML = "";
@@ -563,7 +563,7 @@ const bandToggleHTML = () => `<button type="button" class="band-more band-toggle
 /* 没有评测输入（这一组只评测过、输入没落盘）时中间列的空态。
    换轮 / 从 session 总评切回来都要回到它，不能把上一屏的内容留在那儿。 */
 function renderMissingState() {
-  $(`#${prefix}stl`, root).innerHTML = `<div class="empty">这一组没有找到对应的评测输入，仅能查看评测输出与归因。</div>${bandToggleHTML()}`;
+  $(`#${prefix}stl`, root).innerHTML = `<div class="empty">无评测输入</div>${bandToggleHTML()}`;
   $(`#${prefix}ov`, root).innerHTML = "";
   $(`#${prefix}ovBox`, root).innerHTML = "";
   enter();
@@ -1625,7 +1625,7 @@ function onOutClick(e) {
   bindTips($(`#${prefix}shead`, root), (t) => {
     if ((!t.closest(".cmap") && !t.closest(".sp")) || !t.dataset.tip) return null;
     const i = t.dataset.tip.indexOf("|");
-    return `<div style="font-weight:var(--w-medium);margin-bottom:4px">${esc(t.dataset.tip.slice(0, i))}</div><div style="max-width:300px;white-space:normal;line-height:1.6">${esc(t.dataset.tip.slice(i + 1))}</div>`;
+    return `<div class="t-head">${esc(t.dataset.tip.slice(0, i))}</div><div style="max-width:300px;white-space:normal;line-height:1.6">${esc(t.dataset.tip.slice(i + 1))}</div>`;
   });
   wireThreads();
 

@@ -11,11 +11,29 @@
     "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", sans-serif;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 
-  /* Type scale: four steps instead of the old 7.5/9/10/10.5/11/11.5/12/12.5/13.5px drift. */
+  /* Type scale: five steps instead of the old 7.5/9/10/10.5/11/11.5/12/12.5/13.5px drift. */
+  --fs-micro: 11px;   /* dense numbers only: matrix cells, chart legends, ring centres */
   --fs-meta: 12px;    /* labels, ids, counts */
   --fs-small: 13px;   /* secondary text */
   --fs-body: 14px;    /* message and card text */
   --fs-title: 15px;   /* card and section heads */
+  /* Display numbers (light weight): three sizes for every KPI, ring centre and hero figure. */
+  --fs-num-s: 20px;
+  --fs-num-m: 28px;
+  --fs-num-l: 40px;
+
+  /* Spacing scale: every gap and padding comes from these six steps. */
+  --sp-1: 4px;
+  --sp-2: 6px;
+  --sp-3: 8px;
+  --sp-4: 12px;
+  --sp-5: 16px;
+  --sp-6: 24px;
+  /* Stacking: content < sticky chrome < overlays < hover tips. */
+  --z-raise: 4;
+  --z-sticky: 20;
+  --z-overlay: 50;
+  --z-tip: 60;
 
   --gutter: 24px;
   --gap: 16px;
@@ -29,6 +47,7 @@
   --r-chip: 6px;
   --r-ctl: 7px;   /* 36px control × 0.18 */
   --r-knob: 4px;  /* 7 − 3px inset */
+  --r-tip: 10px;
 
   --snap: 120ms cubic-bezier(0.2, 0, 0, 1);
   --spring: 520ms linear(0, 0.009, 0.035 2.1%, 0.141 4.4%, 0.723 15.5%, 0.938 20.7%, 1.017 24.3%, 1.061 28.5%,

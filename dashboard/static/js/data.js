@@ -34,7 +34,7 @@ const ui = (product) =>
   });
 const SPLIT_SHORT = { daily: "日常", lost: "流失" };
 // A 数据量 branch with inputs but no evaluated case: the ring keeps it shut and says where to look.
-const NO_CASE = "暂无已评测的 case，请去评测详情页面查看";
+const NO_CASE = "暂无已评测 case";
 const dot = (c) => `<i style="--c:${c}"></i>`;
 
 export async function render(root, c) {
@@ -54,7 +54,7 @@ export async function render(root, c) {
   if (!p) {
     root.innerHTML = `<div class="bento"><article class="card" style="--span:12"><div class="empty">${
       c.product === "wencai" ? "问财" : "AIME"
-    } 暂无评测数据。把数据放入 datasets/ 后运行 local_dev/refresh.sh。</div></article></div>`;
+    } 暂无评测数据</div></article></div>`;
     return;
   }
   if (detail) {
@@ -450,7 +450,7 @@ function evalBuckets(days) {
     b.inputs += m.inputs;
     b.evaluated += m.evaluated;
   });
-  return [...years.keys()].sort().map((y) => ({ ...years.get(y), label: y, tip: `${y} · 点击看月份` }));
+  return [...years.keys()].sort().map((y) => ({ ...years.get(y), label: y, tip: y }));
 }
 
 function evalChart(p) {
@@ -759,8 +759,8 @@ function renderInputTable() {
   const covered = inputAll.reduce((n, r) => n + (r.ev ? 1 : 0), 0);
   if (note) {
     const filtering = inputF.q || inputF.cat || inputF.state || inputF.dist;
-    note.innerHTML = `共 <b class="num">${fmt(inputAll.length)}</b> 条评测输入，已有评测输出 <b class="num">${fmt(covered)}</b> 条`
-      + (filtering ? ` · 命中 <b class="num">${fmt(rows.length)}</b> 条` : "");
+    note.innerHTML = `输入 <b class="num">${fmt(inputAll.length)}</b> · 已输出 <b class="num">${fmt(covered)}</b>`
+      + (filtering ? ` · 命中 <b class="num">${fmt(rows.length)}</b>` : "");
   }
   if (!rows.length) {
     table.innerHTML = `<div class="empty">${inputAll.length ? "没有匹配的输入。" : "该分组当天没有评测输入。"}</div>`;
@@ -1131,7 +1131,7 @@ function roundSection(trace, i, total) {
 
 function renderModalBody(D) {
   const traces = (D.input && D.input.traces) || [];
-  if (!traces.length) return `<div class="ed-expand-empty">该样本没有评测输入（流失侧样本未带输入）。</div>`;
+  if (!traces.length) return `<div class="ed-expand-empty">该样本没有评测输入</div>`;
   return `<div class="ed-rounds">${traces.map((t, i) => roundSection(t, i, traces.length)).join("")}</div>`;
 }
 
@@ -1536,7 +1536,7 @@ function matrixTable(view) {
   let rowLabels = "", gridCells = "", tots = "";
   rows.forEach((r, ri) => {
     const drill = r.children.length;
-    const label = `<span class="mx-lab">${esc(r.name)}<em class="mx-vol">（${fmt(traces[ri])}条）</em></span>${drill ? `<i class="mx-caret" aria-hidden="true"></i>` : ""}`;
+    const label = `<span class="mx-lab">${esc(r.name)}<em class="mx-vol num">${fmt(traces[ri])}</em></span>${drill ? `<i class="mx-caret" aria-hidden="true"></i>` : ""}`;
     rowLabels += drill
       ? `<button type="button" class="rh" data-row="${ri}" title="${esc(r.name)}" aria-label="下钻 ${esc(r.name)}">${label}</button>`
       : `<span class="rh" title="${esc(r.name)}">${label}</span>`;
@@ -1551,7 +1551,7 @@ function matrixTable(view) {
   });
   const foot = cols.map((c, ci) => `<button type="button" class="cell coltot" style="--v:0.08" data-mx="${rows.length}:${ci}" title="全部场景 · ${esc(c.name)}：${fmt(colTotals[ci])} 个问题 / ${fmt(grandTraces)} 条 Trace · ${pct(colTotals[ci], grandTraces, 1)}">${cellData(colTotals[ci], grandTraces)}</button>`).join("");
   return `<div class="matrix mx-swap-panel" style="--cols:${cols.length};--rows:${rows.length}">
-    <div class="mx-rows"><span class="mx-corner" aria-hidden="true"></span>${rowLabels}<span class="rh"><span class="mx-lab mx-total-lab">场景合计<em class="mx-vol">（${fmt(grandTraces)}条）</em></span></span></div>
+    <div class="mx-rows"><span class="mx-corner" aria-hidden="true"></span>${rowLabels}<span class="rh"><span class="mx-lab mx-total-lab">场景合计<em class="mx-vol num">${fmt(grandTraces)}</em></span></span></div>
     <div class="mx-scroll"><div class="mx-grid">${heads}${gridCells}${foot}</div></div>
     <div class="mx-tots"><span class="rowtot-head" title="该场景在各问题聚类上的问题数合计"><span class="mx-lab mx-total-lab">问题合计</span></span>${tots}<span class="rowtot rowtot-foot">${fmt(grand)}</span></div>
   </div>`;
@@ -1618,7 +1618,7 @@ function mxPerspectiveTimeline(summary, loading) {
       const sessions = i == null ? 0 : daily[i].sessions;
       const rate = day?.observed && sessions > 0 ? 100 * Math.min(day.hits, sessions) / sessions : null;
       const hits = rate == null ? 0 : Number(day.hits) || 0;
-      const tip = `${group.name}|${d} · ${mxRateText(rate)}|${day && rate != null ? `${fmt(day.hits)} 命中会话 / ${fmt(sessions)} 会话` : "无观测数据"}${hits ? " · 点击查看当天样本" : ""}`;
+      const tip = `${group.name}|${d} · ${mxRateText(rate)}|${day && rate != null ? `${fmt(day.hits)} 命中会话 / ${fmt(sessions)} 会话` : "无观测数据"}`;
       const color = rate == null ? "var(--sev-none)" : `color-mix(in oklab, var(--accent) ${Number(heat(rate)) * 100}%, var(--well))`;
       if (!hits) return `<span class="${rate == null ? "is-missing" : ""}" style="--c:${color}" data-tip="${esc(tip)}"></span>`;
       return `<button type="button" class="mxp-cell" style="--c:${color}" data-tip="${esc(tip)}" data-heat-date="${d}" data-heat-node="${esc(group.node.prefix)}" aria-label="${esc(`${d} ${group.name} ${mxRateText(rate)}，查看当天具体数据`)}"></button>`;
@@ -1839,7 +1839,6 @@ function wireMatrixAnalysis(panel, model, state, trend) {
         tickText: isIntraday ? (time) => clockOf(time) : undefined,
         tipTime: isIntraday ? (candle) => `${intraday.date} ${candle.label}` : undefined,
         tipPeriod: isIntraday ? () => "日内行情" : undefined,
-        legendNote: isIntraday ? `${intraday.date} · 00:00–23:59` : "",
         onPick: (candle) => drawer.open(isIntraday
           ? mxIntradayPick(intraday, model, candle, state.analysisLevels)
           : mxRatePick(model, candle, state.analysisLevels, period)),
@@ -2405,7 +2404,7 @@ function paintTrendPlot(box, spec, trend, onOpenChange = null, wheelZoom = null)
   plot._trend?.destroy();
   plot._trend = null;
   if (!spec.lines.length) {
-    plot.innerHTML = `<div class="empty">暂无折线，添加一条折线后显示趋势</div>`;
+    plot.innerHTML = `<div class="empty">暂无折线</div>`;
     return;
   }
   const view = trendSeries(trend, spec);
@@ -3066,9 +3065,9 @@ function pushPull(bento, p, tax, u) {
     return [];
   }
 
-  const caseTip = (it) => `<div style="font-weight:var(--w-medium);margin-bottom:6px;max-width:300px;white-space:normal;line-height:1.5">${esc(it.q || "（无提问）")}</div>
-    <div class="t-row"><span class="sev" style="--c:${sevColor(it.w)}"><i></i>${SEV_NAME[WORST[it.w]]}</span><span>${esc(modelName(p, it.m))} · ${esc((it.d || "").slice(5))}</span><b class="num" style="margin-left:auto">${it.n ? `${fmt(it.n)} 个问题` : "无问题"}</b></div>`;
-  const predTip = (it) => `<div style="font-weight:var(--w-medium);margin-bottom:6px;max-width:300px;white-space:normal;line-height:1.5">${esc(it.q || "")}</div>
+  const caseTip = (it) => `<div class="t-head">${esc(it.q || "（无提问）")}</div>
+    <div class="t-row"><span class="sev" style="--c:${sevColor(it.w)}"><i></i>${SEV_NAME[WORST[it.w]]}</span><span>${esc(modelName(p, it.m))} · ${esc((it.d || "").slice(5))}</span><b class="num">${it.n ? `${fmt(it.n)} 个问题` : "无问题"}</b></div>`;
+  const predTip = (it) => `<div class="t-head">${esc(it.q || "")}</div>
     <div class="t-row"><span>${esc(modelName(p, it.v))}</span><span>${esc(RESULT[it.r] || it.r || "")}</span>${it.e ? `<span class="dim">${esc(it.e)}</span>` : ""}</div>`;
   const predColor = (it, c) => (it.r === "correct" ? c.accent : it.r === "wrong" ? c.sev[1] : it.r === "pending" ? c.muted : c.faint);
 
@@ -4033,19 +4032,19 @@ function wire(bento, p, tax, u) {
         : [...cell.pats.entries()]
             .sort((a, b) => b[1] - a[1])
             .slice(0, 3)
-            .map(([pid, n]) => `<div class="t-row"><span>${esc(patName(tax, pid))}</span><b class="num" style="margin-left:auto">${fmt(n)}</b></div>`)
+            .map(([pid, n]) => `<div class="t-row"><span>${esc(patName(tax, pid))}</span><b class="num">${fmt(n)}</b></div>`)
             .join("");
-      return `<div style="font-weight:var(--w-medium);margin-bottom:6px">${esc(row.name)} · ${esc(col.name)}</div>
-        <div class="t-row"><span>问题</span><b class="num" style="margin-left:auto">${fmt(cell.n)}</b></div>
-        <div class="t-row"><span>会话</span><b class="num" style="margin-left:auto">${fmt(cell.sessions)}</b></div>
+      return `<div class="t-head">${esc(row.name)} · ${esc(col.name)}</div>
+        <div class="t-row"><span>问题</span><b class="num">${fmt(cell.n)}</b></div>
+        <div class="t-row"><span>会话</span><b class="num">${fmt(cell.sessions)}</b></div>
         ${top ? `<div class="mx-tip-pats">${top}</div>` : ""}`;
     }
     if (!t.dataset.cell) return null;
     const [g, i] = t.dataset.cell.split(":").map(Number);
     const c = p.field[g].cells[i];
-    return `<div style="font-weight:var(--w-medium);margin-bottom:4px">${esc(c[3])}</div>
+    return `<div class="t-head">${esc(c[3])}</div>
       <div class="t-row"><span class="sev" style="--c:${sevColor(c[1])}"><i></i>${SEV_NAME[WORST[c[1]]]}</span>
-      <span>${esc(groupName(p, p.field[g]))}</span>${c[4] ? `<span class="dim">流失用户</span>` : ""}<b class="num" style="margin-left:auto">${c[2]} 个问题</b></div>`;
+      <span>${esc(groupName(p, p.field[g]))}</span>${c[4] ? `<span class="dim">流失用户</span>` : ""}<b class="num">${c[2]} 个问题</b></div>`;
   });
 
   /* A/B Test: 聚类矩阵卡原位翻转成背面的对比面板，返回时再翻回矩阵。

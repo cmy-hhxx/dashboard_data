@@ -313,7 +313,7 @@ test("AB matrix offers the paired and online readings and paints four numbers in
     assert.doesNotMatch(host.innerHTML, /ab-mxnote|ab-scope/);
     // The change matrix compares one fixed set: the scene volume is that set's count, and it
     // must not swing with the two batches.
-    assert.match(host.innerHTML, /未接入分类体系<em class="mx-vol">（120条）<\/em>/);
+    assert.match(host.innerHTML, /未接入分类体系<em class="mx-vol num">120<\/em>/);
     assert.doesNotMatch(host.innerHTML, /（95→60条）|（95→199条）/);
     // Each change cell carries 发版前 → 发版后, the net move and that move's rate.
     assert.match(host.innerHTML, /<span class="cell-pair"><b class="is-from">95<\/b><i class="cell-arrow"[^>]*>→<\/i><b class="is-to">60<\/b><\/span><span class="cell-delta"><b class="cell-delta-num"><span class="cell-sign">−<\/span>35<\/b><i class="cell-dot"[^>]*>·<\/i><span class="cell-ratio">37%<\/span><\/span>/);
@@ -350,7 +350,7 @@ test("AB online matrix carries the scene trace volume on the row and count + rat
   globalThis.requestAnimationFrame = () => 0;
   try {
     mountAB(host, { rounds: [rnd] }, { round: 0, step: "matrix", metric: "online", cell: null }, {}, null, {});
-    assert.match(host.innerHTML, /交易建议<em class="mx-vol">（160条）<\/em>/);
+    assert.match(host.innerHTML, /交易建议<em class="mx-vol num">160<\/em>/);
     assert.match(host.innerHTML, /<span class="cell-data"><span class="cell-main"><b>128<\/b><\/span><span class="cell-pct">80.0%<\/span><\/span>/);
     assert.doesNotMatch(host.innerHTML, /cell-den/);
     assert.doesNotMatch(host.innerHTML, /cell-pair/);

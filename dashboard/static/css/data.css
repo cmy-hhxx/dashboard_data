@@ -24,13 +24,13 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--gap); margin-top: var(--py-lg); }
 .stats.stats-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .stats div { display: grid; gap: 4px; min-width: 0; }
-.stats b { font-size: 22px; line-height: 1.1; font-weight: var(--w-light); letter-spacing: -0.01em; }
+.stats b { font-size: var(--fs-num-s); line-height: 1.1; font-weight: var(--w-light); letter-spacing: -0.01em; }
 .stats b, .stats small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stats small, .hero small { font-size: var(--fs-small); color: var(--muted); }
 .stat-of { font-size: var(--fs-small); color: var(--faint); font-weight: var(--w-body); margin-left: 2px; letter-spacing: 0; }
 .stat-pending { color: var(--faint); font-weight: var(--w-light); }
 .hero { display: flex; align-items: baseline; gap: 8px; margin-bottom: var(--py); }
-.hero .big { font-size: 40px; }
+.hero .big { font-size: var(--fs-num-l); }
 .comp { display: flex; gap: 2px; height: 8px; margin-top: var(--py-lg); }
 .comp span { background: var(--c); border-radius: 2px; transition: opacity var(--snap); }
 .comp:hover span:not(:hover) { opacity: 0.45; }
@@ -124,7 +124,7 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .sb-c:not(:disabled):hover { background: var(--hover); }
 .sb-c:not(:disabled):active { transform: scale(0.96); }
 .sb-c i { font-style: normal; font-size: var(--fs-meta); color: var(--accent); max-width: 92px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sb-c b { font-size: 28px; line-height: 1; font-weight: var(--w-light); letter-spacing: -0.02em; }
+.sb-c b { font-size: var(--fs-num-m); line-height: 1; font-weight: var(--w-light); letter-spacing: -0.02em; }
 .sb-c small { font-size: var(--fs-meta); color: var(--muted); max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Names stay on one line, in the hole and in the ledger alike; the full name lives in the title. */
 .sb-c small:not(.sb-lostc) { max-width: 104px; font-size: var(--fs-meta); }
@@ -146,7 +146,7 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .sb-r .sb-markn, .sb-r b, .sb-r em { align-self: baseline; }
 .sb-c .sb-lostc { color: var(--sev-1); font-size: var(--fs-meta); }
 .sm .sb { width: 220px; }
-.sm .sb-c b { font-size: 28px; }
+.sm .sb-c b { font-size: var(--fs-num-m); }
 .sm .sb-r { grid-template-columns: 8px minmax(0, 1fr) minmax(44px, max-content) minmax(60px, max-content); }
 .sm .sb-r em { display: none; }
 @container (max-width: 399px) {
@@ -284,9 +284,8 @@ body.is-mx-full { overflow: hidden; }
 /* The same surface step as the data-volume ledger: the table stays still and fully legible. */
 .matrix .rh.is-hl, .matrix .mh.is-hl { color: var(--ink); }
 .matrix .rh.is-hl .mx-caret, .matrix .mh.is-hl .mx-caret { color: var(--accent); }
-.matrix .coltot.is-hl, .matrix .rowtot.is-hl { background: color-mix(in oklab, var(--accent) 16%, transparent); }
+.matrix .coltot.is-hl, .matrix .rowtot.is-hl { background: var(--well-2); }
 .matrix .cell.is-cur { box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--ink) 42%, transparent); }
-.matrix .cell.is-cur.hot { box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--card) 74%, transparent); }
 .matrix .mh {
   display: flex; align-items: flex-end; justify-content: center; gap: 4px; min-width: 0;
   padding-bottom: 6px; font-size: var(--fs-meta); line-height: 1.35; color: var(--muted); white-space: nowrap;
@@ -299,7 +298,7 @@ body.is-mx-full { overflow: hidden; }
 }
 /* Safety only; the panes are sized so labels always fit. */
 .matrix .mx-lab { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.matrix .mx-vol { color: var(--faint); font-style: normal; font-weight: var(--w-body); }
+.matrix .mx-vol { margin-left: var(--sp-2); color: var(--faint); font-style: normal; font-weight: var(--w-body); font-size: var(--fs-micro); }
 .matrix .mx-total-lab { color: var(--accent); font-weight: var(--w-medium); }
 .matrix .mx-caret {
   flex: none; width: 5px; height: 5px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor;
@@ -313,16 +312,17 @@ body.is-mx-full { overflow: hidden; }
 .matrix .rh:hover .mx-caret, .matrix .mh:hover .mx-caret { color: var(--accent); }
 .matrix .cell {
   display: grid; place-items: center; height: var(--mx-rowh); border-radius: 6px; font-size: var(--fs-small); color: var(--ink-2);
-  background: color-mix(in oklab, var(--ink) calc(var(--v) * 100%), transparent);
+  /* Heat is a light accent tint, never a near-black fill: dark text stays readable in every
+     cell and a full matrix reads as one calm field instead of a checkerboard. */
+  background: color-mix(in oklab, var(--accent) calc(var(--v) * 34%), transparent);
   transition: background var(--snap), box-shadow var(--snap), transform var(--spring);
 }
 .matrix .cell:not(.is-empty) { cursor: pointer; }
 .matrix .cell:not(.is-empty):active { transform: scale(0.98); transition-duration: 110ms; }
 .matrix .cell.is-empty { background: none; }
-.matrix .cell.hot { color: var(--card); }
-.matrix .rowtot, .matrix .rowtot-foot {
-  background: color-mix(in oklab, var(--accent) 10%, transparent); border-radius: 6px;
-}
+.matrix .cell.hot .cell-main b { font-weight: var(--w-title); }
+/* Totals sit on the neutral well: the accent belongs to the heat, the margins only frame it. */
+.matrix .rowtot, .matrix .rowtot-foot { background: var(--well); border-radius: 6px; }
 .matrix .rowtot {
   display: flex; align-items: center; justify-content: flex-end; gap: 8px; height: var(--mx-rowh);
   padding: 0 8px; font-size: var(--fs-small); color: var(--ink);
@@ -330,16 +330,14 @@ body.is-mx-full { overflow: hidden; }
 }
 .matrix .rowtot-head { display: flex; align-items: flex-end; justify-content: center; padding: 0 8px 6px; font-size: var(--fs-meta); line-height: 1.35; color: var(--muted); white-space: nowrap; }
 .matrix .coltot, .matrix .rowtot-foot { height: var(--mx-rowh); border-top: 1px solid var(--well-2); }
-.matrix .coltot { display: grid; place-items: center; color: var(--ink); cursor: pointer; border: 0; appearance: none; font: inherit; font-size: var(--fs-small); background: color-mix(in oklab, var(--accent) 10%, transparent); transition: background var(--snap), color var(--snap); }
-.matrix .coltot:hover, .matrix .coltot.is-hl, .matrix .rowtot.is-hl { background: color-mix(in oklab, var(--accent) 16%, transparent); }
+.matrix .coltot { display: grid; place-items: center; color: var(--ink); cursor: pointer; border: 0; appearance: none; font: inherit; font-size: var(--fs-small); background: var(--well); transition: background var(--snap), color var(--snap); }
+.matrix .coltot:hover, .matrix .coltot.is-hl, .matrix .rowtot.is-hl { background: var(--well-2); }
 /* 场景合计那一行只换底色，不做 hover / active 微放大。 */
 .matrix .coltot:hover, .matrix .coltot:active { transform: none; box-shadow: none; }
 .matrix .cell-data { display: grid; place-items: center; gap: 1px; line-height: 1.08; }
 .matrix .cell-main { display: inline-flex; align-items: baseline; gap: 2px; font-size: var(--fs-small); white-space: nowrap; }
 .matrix .cell-main b { color: var(--ink); font-weight: var(--w-medium); }
-.matrix .cell-pct { min-width: 40px; color: var(--muted); font-size: 10px; text-align: center; font-variant-numeric: tabular-nums; }
-.matrix .cell.hot .cell-main b { color: var(--card); }
-.matrix .cell.hot .cell-pct { color: color-mix(in oklab, var(--card) 76%, transparent); }
+.matrix .cell-pct { min-width: 40px; color: var(--muted); font-size: var(--fs-micro); text-align: center; font-variant-numeric: tabular-nums; }
 /* 变化矩阵: 每个格子两行四数。上一行「前 → 后」，下一行「增减 · 比例」。
    两行共用同一套三列网格（1fr / 14px / 1fr）：四个数字各自居于自己的半列中心，
    箭头与中间点共用中间列，因此上下两行的数字中心、箭头、中点全部对齐。 */
@@ -350,19 +348,19 @@ body.is-mx-full { overflow: hidden; }
   align-items: baseline; column-gap: 1px; width: 100%; padding-inline: 1px;
   white-space: nowrap; font-variant-numeric: tabular-nums;
 }
-.matrix .cell-pair { font-size: 10px; }
+.matrix .cell-pair { font-size: var(--fs-micro); }
 .matrix .cell-pair b { font-weight: var(--w-medium); }
 .matrix .cell-pair b.is-from { justify-self: center; color: var(--ink-2); }
 .matrix .cell-pair b.is-to { justify-self: center; color: var(--ink); }
 .matrix .cell-arrow,
-.matrix .cell-dot { justify-self: center; color: var(--faint); font-style: normal; font-size: 9px; line-height: 1; }
-.matrix .cell-delta { font-size: 10px; line-height: 1.15; }
+.matrix .cell-dot { justify-self: center; color: var(--faint); font-style: normal; font-size: var(--fs-micro); line-height: 1; }
+.matrix .cell-delta { font-size: var(--fs-micro); line-height: 1.15; }
 .matrix .cell-delta > b { position: relative; justify-self: center; font-weight: var(--w-medium); }
 /* 正负号与百分号绝对定位在数字外侧：不改变数字盒宽度，数字中心才对得上。 */
 .matrix .cell-sign { position: absolute; right: 100%; }
-.matrix .cell-delta .cell-ratio { position: relative; justify-self: center; color: var(--muted); font-size: 10px; }
+.matrix .cell-delta .cell-ratio { position: relative; justify-self: center; color: var(--muted); font-size: var(--fs-micro); }
 .matrix .rowtot .cell-data, .matrix .rowtot-foot .cell-data { place-items: center; }
-.matrix .rowtot-foot { display: flex; align-items: center; justify-content: flex-end; padding: 0 8px; color: var(--ink); font-size: var(--fs-small); font-weight: var(--w-medium); background: color-mix(in oklab, var(--accent) 12%, transparent); }
+.matrix .rowtot-foot { display: flex; align-items: center; justify-content: flex-end; padding: 0 8px; color: var(--ink); font-size: var(--fs-small); font-weight: var(--w-medium); background: var(--well-2); }
 
 /* Matrix disclosures share the sunburst motion. Only surfaces and transforms move. */
 .mx-perspective[hidden], .mx-issue-trends-shell[hidden] { display: none; }
@@ -410,7 +408,7 @@ body.is-mx-full { overflow: hidden; }
 .mxp-lens.is-full .mxp-dist { padding-right: 40px; align-self: center; gap: 28px; }
 .mxp-lens.is-full .mxp-ring-wrap, .mxp-lens.is-full .mxp-ring { width: 112px; height: 112px; }
 .mxp-lens.is-full .mxp-ring-center b { font-size: 16px; }
-.mxp-lens.is-full .mxp-ring-center small { font-size: 10px; }
+.mxp-lens.is-full .mxp-ring-center small { font-size: var(--fs-micro); }
 .mxp-lens.is-full .mxp-legend { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 2px 16px; }
 .mxp-lens.is-full .mxp-trend { padding-top: 0; border-top: 0; }
 .mxp-lens.is-full .mxp-full { position: fixed; top: 16px; right: 16px; }
@@ -438,14 +436,14 @@ body.is-mxp-full { overflow: hidden; }
 @keyframes mxp-ring-draw { from { stroke-dasharray: 0 100; } }
 .mxp-ring-center { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 1px; text-align: center; }
 .mxp-ring-center b { color: var(--ink); font-size: var(--fs-meta); font-weight: var(--w-light); line-height: 1.1; }
-.mxp-ring-center small { color: var(--muted); font-size: 9px; }
+.mxp-ring-center small { color: var(--muted); font-size: var(--fs-micro); }
 .mxp-legend { flex: 1 1 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-content: center; gap: 2px 12px; min-width: 0; }
 .mx-panels.is-perspective .mxp-legend { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 2px 8px; }
 .mxp-legend-row {
   display: grid; grid-template-columns: 7px minmax(0, 1fr) auto;
   grid-template-areas: "dot name share" ". count count";
   align-items: center; gap: 0 6px; min-height: 28px; margin: 0 -4px; padding: 2px 4px;
-  border-radius: 5px; text-align: left; font-size: 11px; color: var(--muted);
+  border-radius: 5px; text-align: left; font-size: var(--fs-micro); color: var(--muted);
   transition: background var(--snap), color var(--snap);
 }
 .mxp-legend-row:hover { background: var(--hover); }
@@ -453,7 +451,7 @@ body.is-mxp-full { overflow: hidden; }
 .mxp-legend-row > i { grid-area: dot; width: 7px; height: 7px; border-radius: 50%; background: var(--c, var(--accent)); }
 .mxp-legend-row > span { grid-area: name; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; transition: color var(--snap); }
 .mxp-legend-row[aria-pressed="true"] > span { color: var(--ink); }
-.mxp-legend-count { grid-area: count; overflow: hidden; color: var(--faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.mxp-legend-count { grid-area: count; overflow: hidden; color: var(--faint); font-size: var(--fs-micro); text-overflow: ellipsis; white-space: nowrap; }
 .mxp-legend-share { grid-area: share; color: var(--ink-2); font-weight: var(--w-medium); text-align: right; }
 .mxp-legend-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
 .mxp-trend { display: grid; gap: 8px; min-width: 0; padding: 12px 0 0; border-top: 1px solid var(--well-2); }
@@ -462,7 +460,7 @@ body.is-mxp-full { overflow: hidden; }
 .mxp-trend-head b { color: var(--ink-2); font-weight: var(--w-medium); }
 /* 周期切换贴着标题右侧，尺寸压到 24px，和下方的量能图一起把左栏高度吃满。 */
 .mxp-kseg { height: 24px; padding: 1px; }
-.mxp-kseg button { padding: 0 7px; font-size: 11px; }
+.mxp-kseg button { padding: 0 7px; font-size: var(--fs-micro); }
 .mxp-kseg .seg-knob { top: 1px; bottom: 1px; }
 .mxp-daynav { display: flex; align-items: center; gap: 2px; }
 .mxp-daynav[hidden] { display: none; }
@@ -486,29 +484,22 @@ body.is-mxp-full { overflow: hidden; }
 .kl-host { position: relative; display: flex; flex-direction: column; gap: 6px; min-width: 0; min-height: 0; }
 .mxp-overview .mxp-rate-chart.kl-host { display: flex; }
 .kl-canvas { flex: 1 1 auto; min-height: 0; min-width: 0; }
-.kl-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; color: var(--faint); font-size: 10px; line-height: 1.2; }
+.kl-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; color: var(--faint); font-size: var(--fs-micro); line-height: 1.2; }
 .kl-legend span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
-.kl-legend .kl-note { margin-left: auto; color: var(--muted); }
 .kl-legend i { width: 8px; height: 2px; border-radius: 1px; background: var(--c, var(--muted)); }
 .kl-legend i.is-vol { width: 5px; height: 8px; border-radius: 1px; background: var(--t3); }
-.kl-tip {
-  position: absolute; z-index: 4; min-width: 158px; padding: 8px 10px; border-radius: 8px;
-  background: var(--card); box-shadow: var(--shadow); color: var(--ink-2); font-size: 11px;
-  pointer-events: none; transition: opacity var(--snap);
-}
+.kl-tip { position: absolute; z-index: 4; min-width: 168px; pointer-events: none; }
 .kl-tip[hidden] { display: none; }
-.kl-tip-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 6px; white-space: nowrap; }
-.kl-tip-head b { color: var(--ink); font-weight: var(--w-medium); font-variant-numeric: tabular-nums; }
-.kl-tip-head span { color: var(--muted); font-size: 10px; }
-.kl-tip-row { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; line-height: 1.55; color: var(--muted); white-space: nowrap; }
-.kl-tip-row b { color: var(--ink); font-size: 12px; font-weight: var(--w-medium); font-variant-numeric: tabular-nums; }
+.kl-tip-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-3); white-space: nowrap; }
+.kl-tip-head b { font-weight: var(--w-medium); font-variant-numeric: tabular-nums; }
+.kl-tip-head span { color: var(--muted); font-size: var(--fs-meta); font-weight: normal; }
 .mxp-heat-wrap { position: relative; min-width: 0; }
 .mxp-chart-panel { min-width: 0; padding: 10px 12px; border: 1px solid var(--well-2); border-radius: 10px; overflow-x: auto; overflow-y: hidden; }
 /* 问题发生率：30 天 × 聚类。格子只靠颜色读数，所以行高固定、宽度吃满，不跟着卡片无限长高；
    有命中的格子是按钮，点开就是「当天 × 当前场景 × 该聚类」的具体数据查询。 */
 .mxp-heat { display: grid; gap: 8px; min-width: 0; }
 .mxp-heat-head, .mxp-heat-row { display: grid; grid-template-columns: minmax(88px, 120px) minmax(0, 1fr) 60px 48px; gap: 12px; align-items: center; }
-.mxp-heat-head { min-height: 24px; color: var(--muted); font-size: 11px; }
+.mxp-heat-head { min-height: 24px; color: var(--muted); font-size: var(--fs-micro); }
 .mxp-heat-label { display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mxp-heat-head > span:nth-last-child(-n+2) { text-align: right; }
 .mxp-heat-dates, .mxp-heat-days.tiles { display: grid; grid-template-columns: repeat(14, minmax(0, 1fr)); gap: 4px; }
@@ -526,7 +517,7 @@ body.is-mxp-full { overflow: hidden; }
 .mx-panels.is-issue .mxp-heat-row + .mxp-heat-row, .mx-panels.is-perspective .mxp-heat-row + .mxp-heat-row { border-top: 1px solid var(--well-2); }
 .mx-panels.is-issue .mxp-heat-head, .mx-panels.is-perspective .mxp-heat-head { font-size: 12px; }
 
-.mxp-heat-dates { font-size: 11px; white-space: nowrap; }
+.mxp-heat-dates { font-size: var(--fs-micro); white-space: nowrap; }
 .mxp-heat-dates > span { overflow: visible; }
 .mxp-heat-row { min-height: 0; font-size: 12px; line-height: 1; }
 .mxp-heat-row > b { text-align: right; color: var(--ink-2); font-weight: var(--w-medium); }
@@ -599,7 +590,7 @@ body.is-mxp-full { overflow: hidden; }
 .mpt-chart { min-width: 0; height: 112px; }
 .mpt-chart.mpt-chart-detail { height: auto; min-height: 320px; }
 /* 三个读数各占一列：总数左、发生率右、子类数右，四行卡片之间形成三条对齐的列。 */
-.mpt-card > footer { display: grid; grid-template-columns: minmax(0, 1fr) 44px 64px; min-height: 24px; align-items: baseline; gap: 8px; color: var(--faint); font-size: 11px; }
+.mpt-card > footer { display: grid; grid-template-columns: minmax(0, 1fr) 44px 64px; min-height: 24px; align-items: baseline; gap: 8px; color: var(--faint); font-size: var(--fs-micro); }
 .mpt-card > footer b { color: var(--ink-2); font-weight: var(--w-medium); text-align: right; }
 .mpt-children { text-align: right; }
 .mpt-empty { grid-column: 1 / -1; display: grid; place-items: center; min-height: 180px; color: var(--faint); font-size: var(--fs-meta); }
@@ -668,7 +659,7 @@ body.is-mxp-full { overflow: hidden; }
 }
 /* The check slot always occupies the same width; selection changes colour and weight, never layout. */
 .mxt-chip::after {
-  content: "✓"; width: 11px; margin-left: 4px; overflow: hidden; color: var(--accent); font-size: 10px;
+  content: "✓"; width: 11px; margin-left: 4px; overflow: hidden; color: var(--accent); font-size: var(--fs-micro);
   opacity: 0; transform: scale(0.65); transition: opacity var(--snap), transform var(--snap);
 }
 .mxt-chip:hover { background: var(--active); color: var(--ink); transform: translateY(-0.5px); }
@@ -770,7 +761,7 @@ body.is-mxp-full { overflow: hidden; }
   position: relative; font-size: var(--fs-meta); font-weight: var(--w-medium);
   color: var(--ink-2); font-variant-numeric: tabular-nums; letter-spacing: -0.02em;
 }
-.ed-ring b small { font-size: 9px; color: var(--muted); margin-left: 1px; }
+.ed-ring b small { font-size: var(--fs-micro); color: var(--muted); margin-left: 1px; }
 
 /* 会话列表：问题完整换行，不截断；列宽固定，表头与单元格同一套对齐 */
 .ed-table.is-session td { height: auto; padding-top: 6px; padding-bottom: 6px; white-space: normal; }
@@ -924,7 +915,7 @@ body.is-modal { overflow: hidden; }
   .gx-side { display: none; }
 }
 .gl-sum { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
-.gl-sum b { font-size: 20px; line-height: 1.1; font-weight: var(--w-light); letter-spacing: -0.01em; }
+.gl-sum b { font-size: var(--fs-num-s); line-height: 1.1; font-weight: var(--w-light); letter-spacing: -0.01em; }
 .gl-sum small { font-size: var(--fs-meta); color: var(--muted); }
 .gl-strip { flex-basis: 100%; display: flex; gap: 2px; height: 4px; margin-top: 4px; border-radius: 2px; overflow: hidden; }
 .gl-strip i { border-radius: 2px; transform-origin: left; animation: grow-x 900ms cubic-bezier(0.16, 1, 0.3, 1) 260ms both; }
@@ -1062,8 +1053,8 @@ body.is-modal { overflow: hidden; }
   content: ""; display: block; width: var(--w); height: 100%; border-radius: inherit; background: var(--c, var(--accent));
   transform-origin: left; animation: grow-x 900ms cubic-bezier(0.16, 1, 0.3, 1) calc(260ms + var(--i) * 55ms) both;
 }
-.compact b { font-size: 20px; line-height: 1.1; font-weight: var(--w-light); letter-spacing: -0.01em; white-space: nowrap; }
-.compact .lead b { font-size: 30px; letter-spacing: -0.02em; }
+.compact b { font-size: var(--fs-num-s); line-height: 1.1; font-weight: var(--w-light); letter-spacing: -0.01em; white-space: nowrap; }
+.compact .lead b { font-size: var(--fs-num-m); letter-spacing: -0.02em; }
 .compact small { font-size: var(--fs-meta); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .compact .cxhint { font-size: var(--fs-meta); color: var(--faint); }
 .cxr { width: 52px; height: 52px; }

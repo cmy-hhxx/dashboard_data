@@ -277,7 +277,7 @@ export function galaxy(host, groups, { onPick = null, tip = null, focus = null, 
     if (hover) {
       showTip(tip ? tip(hover.it, hover.gal.g) : `<div class="t-row">${esc(hover.it.q || "")}</div>`, e.clientX, e.clientY);
     } else if (hoverGal) {
-      showTip(`<div class="t-row">${esc(hoverGal.g.name)}<b class="num" style="margin-left:auto">${hoverGal.g.items.length}</b></div>`, e.clientX, e.clientY);
+      showTip(`<div class="t-row">${esc(hoverGal.g.name)}<b class="num">${hoverGal.g.items.length}</b></div>`, e.clientX, e.clientY);
     } else hideTip();
     if (changed) {
       if (onHover) onHover(hover ? hover.it : null);

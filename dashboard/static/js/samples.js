@@ -274,6 +274,12 @@ function skeleton() {
     setFilter({ q: "", w: "", split: "", model: "", ut: "", date: "", scene: "", sub: "", stage: "", mech: "", pattern: "", sort: "sev" }),
   );
   $("#sf", root).addEventListener("click", (e) => {
+    const toggle = e.target.closest("[data-more]");
+    if (toggle) {
+      S.moreOpen = toggle.getAttribute("aria-expanded") !== "true";
+      syncFilters();
+      return;
+    }
     const b = e.target.closest("button[data-k]");
     if (!b) return;
     const cur = F()[b.dataset.k];
@@ -283,6 +289,17 @@ function skeleton() {
     const s = e.target.closest("select[data-k]");
     if (!s) return;
     const k = s.dataset.k;
+    if (k === "scenepath") {
+      const [scene = "", sub = ""] = s.value.split("\u0001");
+      setFilter({ scene, sub, stage: "", mech: "", pattern: "" });
+      return;
+    }
+    if (k === "cluster") {
+      const parts = s.value.split(".");
+      const stage = parts[0] === "*" ? "" : parts[0] || "";
+      setFilter({ stage, mech: parts[1] || "", pattern: parts.length > 2 ? s.value : "" });
+      return;
+    }
     const patch = { [k]: s.value };
     if (k === "scene") Object.assign(patch, { sub: "", stage: "", mech: "", pattern: "" });
     if (k === "sub") Object.assign(patch, { stage: "", mech: "", pattern: "" });
@@ -349,40 +366,60 @@ function syncFilters() {
   const row = (cls, items) => `<div class="frow${cls ? ` ${cls}` : ""}">${items}</div>`;
   let html = f.date ? row("", btn("date", f.date, `日期 ${f.date.slice(5)} ×`)) : "";
   html += row("sev", WORST.map((w, i) => btn("w", w, SEV_NAME[w], sevColor(i))).join(""));
-  if (p.splits.some((s) => s.id === "lost")) html += row("", btn("split", "lost", "仅看流失用户"));
-  html += row("", p.models.map((m) => btn("model", m.id, m.label)).join(""));
+  // Everything past severity and model sits behind one toggle that counts what is active.
+  const more = ["ut", "split", "scene", "sub", "stage", "mech", "pattern"].filter((k) => f[k]).length;
+  const open = S.moreOpen ?? more > 0;
+  html += row("models", `${p.models.map((m) => btn("model", m.id, m.label)).join("")}<button type="button" class="fmore" data-more aria-expanded="${open}" aria-controls="sfmore">筛选${more ? `<b class="num">${more}</b>` : ""}</button>`);
 
   const tax = ctx.data.taxonomy;
+  const opt = (v, label, on) => `<option value="${esc(v)}"${on ? " selected" : ""}>${esc(label)}</option>`;
+  // 场景 › 子场景 in one list: picking a sub-scene also pins its scene.
+  const sceneRows = S.all.filter((r) => listHit(r, f, "scene,sub,stage,mech,pattern"));
+  const subsOf = new Map();
+  sceneRows.forEach((r) => {
+    const sc = sceneOf(r);
+    if (!subsOf.has(sc)) subsOf.set(sc, new Set());
+    if (subOf(r)) subsOf.get(sc).add(subOf(r));
+  });
+  if (f.scene && !subsOf.has(f.scene)) subsOf.set(f.scene, new Set(f.sub ? [f.sub] : []));
+  const sceneValue = f.sub ? `${f.scene}\u0001${f.sub}` : f.scene;
+  const sceneOpts = [...subsOf.keys()].sort((a, b) => a.localeCompare(b, "zh")).map((sc) =>
+    opt(sc, sc, sceneValue === sc) + [...subsOf.get(sc)].sort((a, b) => a.localeCompare(b, "zh"))
+      .map((sb) => opt(`${sc}\u0001${sb}`, `\u3000${sb}`, sceneValue === `${sc}\u0001${sb}`)).join("")).join("");
+  let clusterSelect = "";
   if (tax) {
-    const byNum = (a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1));
-    const scenes = [...new Set([...S.all.filter((r) => listHit(r, f, "scene,sub,stage,mech,pattern")).map(sceneOf), f.scene].filter(Boolean))]
-      .sort((a, b) => a.localeCompare(b, "zh"));
-    const subs = [...new Set([...S.all.filter((r) => listHit(r, f, "sub,stage,mech,pattern")).map(subOf), f.sub].filter(Boolean))]
-      .sort((a, b) => a.localeCompare(b, "zh"));
-    const stages = tax.stages.filter((s) => S.all.some((r) => listHit(r, f, "stage,mech,pattern") && (r.st || []).includes(s.id))).sort(byNum);
-    const mechs = tax.mechanisms.filter((m) => S.all.some((r) => listHit(r, f, "mech,pattern") && (r.pt || []).some((x) => x.split(".")[1] === m.id && (!f.stage || x.startsWith(`${f.stage}.`))))).sort(byNum);
-    const pats = Object.keys(tax.patterns)
-      .filter((id) => {
-        return S.all.some((r) => listHit(r, f, "pattern") && (r.pt || []).some((x) => x === id || x.startsWith(id + ".")));
-      })
-      .sort((a, b) => {
-        const pa = a.split(".").map((x) => Number(x.replace(/\D/g, "")) || 0);
-        const pb = b.split(".").map((x) => Number(x.replace(/\D/g, "")) || 0);
-        for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
-          if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
-        }
-        return 0;
-      });
-    const opt = (v, label, on) => `<option value="${esc(v)}"${on ? " selected" : ""}>${esc(label)}</option>`;
-    html += `<div class="cascade">
-      <select data-k="ut" aria-label="用户类型" class="wide"><option value="">全部用户类型</option>${USER_TYPES.map(([id, label]) => opt(id, label, f.ut === id)).join("")}</select>
-      <select data-k="scene" aria-label="场景"><option value="">全部场景</option>${scenes.map((s) => opt(s, s, f.scene === s)).join("")}</select>
-      <select data-k="sub" aria-label="子场景"><option value="">全部子场景</option>${subs.map((s) => opt(s, s, f.sub === s)).join("")}</select>
-      <select data-k="stage" aria-label="阶段"><option value="">全部阶段</option>${stages.map((s) => opt(s.id, `${s.id} ${s.name}`, f.stage === s.id)).join("")}</select>
-      <select data-k="mech" aria-label="机制"><option value="">全部机制</option>${mechs.map((m) => opt(m.id, `${m.id} ${m.name}`, f.mech === m.id)).join("")}</select>
-      <select data-k="pattern" aria-label="模式" class="wide"><option value="">全部模式</option>${pats.map((id) => opt(id, `${patternName(tax, id)} · ${id}`, f.pattern === id)).join("")}</select>
-    </div>`;
+    // 阶段 › 机制 › 模式 in one list, built from the sessions the other filters leave.
+    const pool = S.all.filter((r) => listHit(r, f, "stage,mech,pattern"));
+    const stagesOn = new Set(), mechsOn = new Set(), paths = new Set();
+    pool.forEach((r) => {
+      (r.st || []).forEach((x) => stagesOn.add(x));
+      (r.pt || []).forEach((x) => { const [st, me] = x.split("."); if (me) mechsOn.add(`${st}.${me}`); paths.add(x); });
+    });
+    const num = (x) => Number(String(x).replace(/\D/g, "")) || 0;
+    const byPath = (a, b) => {
+      const pa = a.split("."), pb = b.split(".");
+      for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) if (num(pa[i]) !== num(pb[i])) return num(pa[i]) - num(pb[i]);
+      return 0;
+    };
+    const patIds = Object.keys(tax.patterns).filter((id) => [...paths].some((x) => x === id || x.startsWith(`${id}.`))).sort(byPath);
+    const mechName = new Map(tax.mechanisms.map((m) => [m.id, m.name]));
+    const clusterValue = f.pattern || (f.stage && f.mech ? `${f.stage}.${f.mech}` : f.stage || (f.mech ? `*.${f.mech}` : ""));
+    const stageOpts = tax.stages.filter((st) => stagesOn.has(st.id)).sort((a, b) => num(a.id) - num(b.id)).map((st) => {
+      const mechs = [...mechsOn].filter((x) => x.startsWith(`${st.id}.`)).sort(byPath);
+      return opt(st.id, `${st.id} ${st.name}`, clusterValue === st.id) + mechs.map((sm) =>
+        opt(sm, `\u3000${sm} ${mechName.get(sm.split(".")[1]) || ""}`, clusterValue === sm)
+        + patIds.filter((id) => id.startsWith(`${sm}.`))
+          .map((id) => opt(id, `\u3000\u3000${patternName(tax, id)}`, clusterValue === id)).join("")).join("");
+    }).join("");
+    const crossStage = f.mech && !f.stage && !f.pattern ? opt(`*.${f.mech}`, `${f.mech} ${mechName.get(f.mech) || ""}`, true) : "";
+    clusterSelect = `<select data-k="cluster" aria-label="聚类"><option value="">全部聚类</option>${crossStage}${stageOpts}</select>`;
   }
+  html += `<div class="cascade" id="sfmore"${open ? "" : " hidden"}>
+      <select data-k="ut" aria-label="用户类型"><option value="">全部用户</option>${USER_TYPES.map(([id, label]) => opt(id, label, f.ut === id)).join("")}</select>
+      ${p.splits.some((s) => s.id === "lost") ? btn("split", "lost", "流失用户") : ""}
+      <select data-k="scenepath" aria-label="场景" class="wide"><option value="">全部场景</option>${sceneOpts}</select>
+      ${clusterSelect.replace('<select data-k="cluster"', '<select data-k="cluster" class="wide"')}
+    </div>`;
   $("#sf", root).innerHTML = html;
 }
 
