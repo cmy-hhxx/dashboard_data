@@ -5,7 +5,7 @@
 ## 接入
 
 `build.py` 按产品读取 `datasets/4_forecast/<产品>/prediction.json`（例如 `4_forecast/wencai/prediction.json`，
-由预测核验流水线每天导出，说明见 `4_forecast/README.md`）；没有时再找旧位置 `datasets/<n>_<产品>/prediction.json`。
+由预测核验流水线每天导出，说明见 `4_forecast/README.md`）；没有该文件时预测卡显示「暂无预测数据」。
 文件按下文字段裁剪后写入 `data-<产品>.json` 的 `products.<产品>.prediction`，文件变化会让下一轮构建重新聚合。
 
 没有文件的产品（目前是 AIME），三张页签都显示「暂无预测数据」，不再生成示例数据。

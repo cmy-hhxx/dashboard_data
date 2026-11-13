@@ -1,8 +1,7 @@
 """AB 测试记录: the fixed question set re-evaluated before and after a release.
 
-A round lives in ``<datasets>/<n>_<product>/ab_test/<round>/``.  Two layouts are read:
-
-**Current "three scopes" layout** (AIME 2026-11, every scope = attribution + cluster)::
+A round lives in ``<datasets>/<n>_<product>/ab_test/<round>/`` in the "three scopes" layout
+(every scope = attribution + cluster)::
 
     00_manifest/summary.json                      totals, A/B/C, eval sources
     00_manifest/scope_summary.json                per-scope totals (optional)
@@ -16,20 +15,13 @@ A round lives in ``<datasets>/<n>_<product>/ab_test/<round>/``.  Two layouts are
     04_after_release_online_real/cluster_tree/    online: empty until landed
     round.json                                    optional {"released_at","label","title"}
 
-**Legacy layout** (used by the older extraction scripts and the tests)::
-
-    00_manifest/coverage.csv      one row per target: status, eval source, cluster leaf paths
-    03_cluster_<ver>/<model>/     snapshot of the tree before the release (leaf names)
-    04_retest_after/<model>/      **after** the release: item_index.slice.jsonl of the same traces
-
-Both layouts count the same thing — targets that hit a leaf — so the sides union on the leaf
+Every side counts the same thing — targets that hit a leaf — so the sides union on the leaf
 path itself.  A round with no after / online data is still shown: it is the baseline the next
 release is measured against, and pretending otherwise hides why the comparison is empty.
 
 The online batch is a different population from the fixed set.  When the round exposes an
 explicit online scope it is read from there; otherwise it is derived from the build's samples
-(real users, after the release, before the next release, fixed traces excluded), which is what
-the legacy layout always did.
+(real users, after the release, before the next release, fixed traces excluded).
 """
 from __future__ import annotations
 
@@ -53,7 +45,6 @@ AB_PAYLOAD_VERSION = 9
 ROUND_RE = re.compile(r"^(\d+)_version(?P<version>[0-9A-Za-z.]+?)(?:_test)?$")
 # 重测归因的 session_meta.case_id 结尾是 ``_eq_00013``：只有它的 eq 能生成改版后详情。
 ATTRIBUTION_EQ_RE = re.compile(r"_eq_(\d+)$")
-DECLARED_VERSION = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 # A/B/C with the names the extraction README uses; the payload ships labels so the browser
 # never invents its own vocabulary for a data-quality state.
@@ -87,17 +78,15 @@ SCOPE_BEFORE = "02_before_release"
 SCOPE_AFTER = "03_after_release_retest"
 SCOPE_ONLINE = "04_after_release_online_real"
 SCOPE_TREES = {
-    "before": (f"{SCOPE_BEFORE}/cluster_tree", "03_cluster_1106_all", "03_cluster_1106"),
-    "after": (f"{SCOPE_AFTER}/cluster_tree", "03_after_retest/cluster_tree", "04_retest_after"),
-    "online": (f"{SCOPE_ONLINE}/cluster_tree", "04_online_after", "06_online_after"),
+    "before": (f"{SCOPE_BEFORE}/cluster_tree",),
+    "after": (f"{SCOPE_AFTER}/cluster_tree",),
+    "online": (f"{SCOPE_ONLINE}/cluster_tree",),
 }
-# Coverage file names, newest layout first.  ``coverage.csv`` is the legacy eval-level file.
+# Coverage file per side; the before side prefers the cluster-level file.
 COVERAGE_FILES = {
-    "before": ("coverage_before_release_cluster.csv", "coverage_cluster_all.csv",
-               "coverage_before_release.csv", "coverage.csv"),
-    "after": ("coverage_after_release_retest.csv", "coverage_after_retest.csv",
-              "coverage_after_release.csv"),
-    "online": ("coverage_after_release_online_real.csv", "coverage_online_after.csv"),
+    "before": ("coverage_before_release_cluster.csv", "coverage_before_release.csv"),
+    "after": ("coverage_after_release_retest.csv",),
+    "online": ("coverage_after_release_online_real.csv",),
 }
 STATUS_CODE = {"已评测_有落点": "A", "已评测_无落点": "B", "无评测记录": "C"}
 B_REASON_CODE = {"B1_评测无问题": "B1", "B2_有问题未进树": "B2",
@@ -123,9 +112,9 @@ def ab_round_dirs(datasets: Path, product: str):
         for path in sorted(root.iterdir()):
             if not path.is_dir() or path.name.startswith("."):
                 continue
-            # A round always carries a manifest; anything else under ab_test/ (a backup,
-            # a scratch dir, a half-copied export) is not a round and must not render.
-            if not (path / "00_manifest").is_dir() and not is_scope_layout(path):
+            # A round carries its scope folders; anything else under ab_test/ (a backup,
+            # a scratch dir, a half-copied export, cluster_tree/) is not a round and must not render.
+            if not is_scope_layout(path):
                 continue
             m = ROUND_RE.match(path.name)
             order = int(m.group(1)) if m else 10**6
@@ -167,19 +156,10 @@ def _round_signature_files(round_dir: Path):
             add(path)
         for name in ("summary.json", "scope_summary.json", "trace_scenes.csv"):
             add(manifest / name)
-    for rel in ("02_before_release/cluster_tree", "03_after_release_retest/cluster_tree",
-                "03_after_retest/cluster_tree", "04_after_release_online_real/cluster_tree",
-                "04_online_after", "04_retest_after"):
-        base = round_dir / rel
-        if base.is_dir():
-            for name in ("item_index.slice.jsonl", "leaves.tsv", "cluster_tree.json"):
-                for path in base.rglob(name):
-                    add(path)
-    for base in sorted(round_dir.glob("03_cluster_*")):
-        if base.is_dir():
-            for name in ("item_index.slice.jsonl", "leaves.tsv", "cluster_tree.json"):
-                for path in base.rglob(name):
-                    add(path)
+    for base in _tree_roots(round_dir):
+        for name in ("item_index.slice.jsonl", "leaves.tsv", "cluster_tree.json"):
+            for path in base.rglob(name):
+                add(path)
     # The payload's after.detail comes from the retest attribution's eq set, so a new or
     # rewritten attribution file must invalidate the payload too (stat only: the files are
     # 18 MB, never read here; provenance stays unscanned).
@@ -223,21 +203,14 @@ def read_rows(path: Path):
         return []
 
 
-def eval_model(store: str) -> str:
-    """``daily_expert`` / ``raw_lost_fast`` -> ``expert`` / ``fast``."""
-    tail = (store or "").rsplit("_", 1)[-1]
-    return tail if tail in ("fast", "expert") else ""
-
-
 def _tree_roots(round_dir: Path):
-    """Directories that hold cluster tree snapshots for any layout."""
+    """Directories that hold the round's cluster tree snapshots."""
     roots = []
     for rels in SCOPE_TREES.values():
         for rel in rels:
             base = round_dir / rel
             if base.is_dir():
                 roots.append(base)
-    roots.extend(sorted(base for base in round_dir.glob("03_cluster_*") if base.is_dir()))
     return roots
 
 
@@ -264,66 +237,6 @@ def read_leaf_names(round_dir: Path):
                     names[nid] = node.get("name") or nid
                 stack.extend(node.get("children") or [])
     return names
-
-
-def read_after(round_dir: Path):
-    """After-release leaf paths per trace id.
-
-    ``04_retest_after/<model>/item_index.slice.jsonl`` uses the same item schema as the
-    pre-release snapshot, so a trace's new leaves are just its ``path`` values.
-    """
-    after = {}
-    for path in sorted(round_dir.glob(f"04_retest_after/*/item_index.slice.jsonl")):
-        try:
-            with open(path, encoding="utf-8") as fh:
-                for line in fh:
-                    try:
-                        item = json.loads(line)
-                    except ValueError:
-                        continue
-                    trace = str(item.get("trace_id") or "")
-                    leaf = item.get("path")
-                    if trace and leaf:
-                        after.setdefault(trace, set()).add(leaf)
-        except OSError:
-            continue
-    return {trace: sorted(paths) for trace, paths in after.items()}
-
-
-def _legacy_round_meta(round_dir: Path, order: int, version: str):
-    """Header figures for one legacy round, from summary.json and coverage.csv."""
-    summary = read_json(round_dir / "00_manifest" / "summary.json") or {}
-    rows = read_rows(round_dir / "00_manifest" / "coverage.csv")
-    counts = Counter()
-    for row in rows:
-        status = (row.get("status") or "").split("_")[0]
-        if status:
-            counts[status] += 1
-    dates = sorted({daytime.local_day(row.get("question_time")) for row in rows if daytime.local_day(row.get("question_time"))})
-    declared = read_json(round_dir / "round.json") or {}
-    release = None
-    if isinstance(declared.get("released_at"), str) and DECLARED_VERSION.match(declared["released_at"]):
-        release = {"date": declared["released_at"]}
-        if isinstance(declared.get("label"), str):
-            release["label"] = declared["label"]
-    elif isinstance(declared.get("released_at"), str):
-        release = {"date": declared["released_at"]}
-    sources = summary.get("eval_category") or {}
-    return {
-        "id": round_dir.name,
-        "order": order,
-        "version": version,
-        "label": f"v{version}",
-        "title": (declared.get("title") if isinstance(declared.get("title"), str) else "") or "",
-        "released_at": release["date"] if release else None,
-        "release_label": release.get("label") if release else None,
-        "generated_at": summary.get("generated_at"),
-        "targets": int(summary.get("target_traces") or len(rows)),
-        "status": dict(sorted(counts.items())),
-        "b_reason": {k.split("_")[0]: v for k, v in (summary.get("b_reason") or {}).items()},
-        "sources": [[k, v] for k, v in sorted(sources.items(), key=lambda kv: -kv[1])],
-        "dates": [dates[0], dates[-1]] if dates else [],
-    }
 
 
 def _release_from_declared(declared):
@@ -389,10 +302,8 @@ def _scope_round_meta(round_dir: Path, order: int, version: str):
 
 
 def round_meta(round_dir: Path, order: int, version: str):
-    """Header figures for one round, whichever layout it uses."""
-    if is_scope_layout(round_dir):
-        return _scope_round_meta(round_dir, order, version)
-    return _legacy_round_meta(round_dir, order, version)
+    """Header figures for one round."""
+    return _scope_round_meta(round_dir, order, version)
 
 
 def tree_nodes(before, after, online, names, after_available, online_available):
@@ -441,24 +352,6 @@ def scene_pair(detail, row):
     return task, sub
 
 
-def sample_scene_map(samples):
-    found = {}
-    for _slug, detail, row, _facts in samples or []:
-        trace = str(row.get("tid") or "")
-        if trace:
-            found[trace] = scene_pair(detail, row)
-    return found
-
-
-def coverage_scene(row, scenes):
-    trace = str(row.get("trace_id") or "")
-    task = (row.get("task") or row.get("scene") or "").strip()
-    sub = (row.get("subtask") or row.get("sub") or "").strip()
-    if not task and trace in scenes:
-        task, sub = scenes[trace]
-    return task or NO_SCENE, sub
-
-
 def matrix_rows(counter, scene_traces=None):
     """``[(task, sub)] → [[path, n], …]`` plus that scene's trace total.
 
@@ -479,7 +372,7 @@ def matrix_rows(counter, scene_traces=None):
 # ---- current "three scopes" layout helpers ------------------------------------------------
 
 def is_scope_layout(round_dir: Path) -> bool:
-    """True when the round uses the ``02_before_release / 03_after_release_retest`` layout."""
+    """True for a round folder (``02_before_release / 03_after_release_retest`` …)."""
     return ((round_dir / "00_manifest" / "coverage_before_release_cluster.csv").is_file()
             or (round_dir / SCOPE_BEFORE).is_dir()
             or (round_dir / SCOPE_AFTER).is_dir()
@@ -1114,150 +1007,6 @@ def _build_round_scoped(round_dir: Path, order: int, version: str, samples=None,
     return meta
 
 
-def _build_round_legacy(round_dir: Path, order: int, version: str, samples=None,
-                        next_release: str | None = None, meta=None):
-    """One legacy round: fixed-set before/after plus post-release real-user online validation."""
-    meta = meta or round_meta(round_dir, order, version)
-    rows = read_rows(round_dir / "00_manifest" / "coverage.csv")
-    scenes = sample_scene_map(samples)
-    sample_by_trace = defaultdict(set)
-    for slug, detail, sample_row, _facts in samples or []:
-        model = str(sample_row.get("m") or "").rsplit("_", 1)[-1]
-        traces = {turn.get("trace_id") for turn in (detail.get("attribution") or {}).get("turns", [])}
-        traces.add(sample_row.get("tid"))
-        for trace in traces - {None, ""}:
-            sample_by_trace[(str(trace), model)].add(slug)
-    before, before_model, before_source = Counter(), defaultdict(Counter), defaultdict(Counter)
-    before_matrix = Counter()
-    before_scene_traces = Counter()
-    sample_refs = {side: [] for side in ("before", "after", "online")}
-    for row in rows:
-        paths = [p for p in (row.get("cls_paths") or "").split(";") if p]
-        if not paths:
-            continue
-        model = eval_model(str(row.get("eval_store") or ""))
-        source = row.get("eval_category") or ""
-        scene = coverage_scene(row, scenes)
-        before_scene_traces[scene] += 1
-        sample_refs["before"].append({"trace": str(row.get("trace_id") or ""), "model": model,
-                                      "task": scene[0], "sub": scene[1], "paths": paths})
-        slugs = sample_by_trace[(str(row.get("trace_id") or ""), model)]
-        if len(slugs) == 1:
-            sample_refs["before"][-1]["slug"] = next(iter(slugs))
-        for path in paths:
-            before[path] += 1
-            before_matrix[(*scene, path)] += 1
-            if model:
-                before_model[path][model] += 1
-            if source:
-                before_source[path][source] += 1
-
-    after_paths = read_after(round_dir)
-    after = Counter()
-    after_model = defaultdict(Counter)
-    after_source = defaultdict(Counter)
-    after_matrix = Counter()
-    after_scene_traces = Counter()
-    by_trace = {}
-    if after_paths:
-        for row in rows:
-            trace = str(row.get("trace_id") or "")
-            paths = after_paths.get(trace)
-            if not paths:
-                continue
-            model = eval_model(str(row.get("eval_store") or ""))
-            source = row.get("eval_category") or ""
-            scene = coverage_scene(row, scenes)
-            after_scene_traces[scene] += 1
-            by_trace[trace] = paths
-            sample_refs["after"].append({"trace": trace, "model": model, "task": scene[0], "sub": scene[1], "paths": paths})
-            for path in paths:
-                after[path] += 1
-                after_matrix[(*scene, path)] += 1
-                if model:
-                    after_model[path][model] += 1
-                if source:
-                    after_source[path][source] += 1
-
-    # The third batch is not the same population as the fixed set: only real users, only
-    # after this release (and before the next one when another round exists), and never one
-    # of the fixed traces. Counts are therefore shown as online validation, not subtracted.
-    online = Counter()
-    online_model = defaultdict(Counter)
-    online_source = defaultdict(Counter)
-    online_matrix = Counter()
-    online_scene_traces = Counter()
-    online_dates = set()
-    online_traces = 0
-    online_start = meta.get("released_at")
-    online_available = bool(samples is not None and online_start)
-    if samples is not None and online_start:
-        fixed_traces = {str(row.get("trace_id") or "") for row in rows if row.get("trace_id")}
-        for _slug, detail, row, _facts in samples:
-            day = str(row.get("d") or "")
-            if row.get("ut") != "real" or not day or day < online_start:
-                continue
-            if next_release and day >= next_release:
-                continue
-            trace = str(row.get("tid") or "")
-            if trace and trace in fixed_traces:
-                continue
-            paths = sorted({p["cl"]["path"] for p in (detail.get("attribution") or {}).get("problems", [])
-                            if p.get("cl") and p["cl"].get("path")})
-            online_traces += 1
-            online_dates.add(day)
-            scene = scene_pair(detail, row)
-            online_scene_traces[scene] += 1
-            if paths:
-                sample_refs["online"].append({"slug": _slug, "trace": trace, "model": row.get("m") or "",
-                                               "task": scene[0], "sub": scene[1], "paths": paths})
-            for path in paths:
-                online[path] += 1
-                online_matrix[(*scene, path)] += 1
-                model = row.get("m") or ""
-                if model:
-                    online_model[path][model] += 1
-                online_source[path]["online_real"] += 1
-
-    names = read_leaf_names(round_dir)
-    leaves = []
-    for path in sorted(set(before) | set(after) | set(online), key=node_order):
-        leaves.append({
-            "id": path,
-            "name": names.get(path) or path,
-            "before": before.get(path, 0),
-            "after": after.get(path, 0) if after_paths else None,
-            "online": online.get(path, 0) if online_available else None,
-            "model_before": dict(before_model.get(path) or {}),
-            "model_after": dict(after_model.get(path) or {}) if after_paths else None,
-            "model_online": dict(online_model.get(path) or {}) if online_available else None,
-            "source_before": dict(before_source.get(path) or {}),
-            "source_after": dict(after_source.get(path) or {}) if after_paths else None,
-            "source_online": dict(online_source.get(path) or {}) if online_available else None,
-        })
-
-    meta["sides"] = {
-        "before": {"traces": sum(1 for row in rows if (row.get("cls_paths") or "").strip()),
-                   "hits": sum(before.values())},
-        "after": ({"traces": len(by_trace), "hits": sum(after.values())} if after_paths else None),
-        "online": ({
-            "traces": online_traces, "hits": sum(online.values()),
-            "from": online_start,
-            "to": max(online_dates) if online_dates else None,
-            "user_type": "real",
-        } if online_available else None),
-    }
-    meta["leaves"] = leaves
-    meta["sample_refs"] = sample_refs
-    meta["matrix"] = {
-        "before": matrix_rows(before_matrix, before_scene_traces),
-        "after": matrix_rows(after_matrix, after_scene_traces) if after_paths else None,
-        "online": matrix_rows(online_matrix, online_scene_traces) if online_available else None,
-    }
-    meta["nodes"] = tree_nodes(before, after, online, names, bool(after_paths), online_available)
-    return meta
-
-
 def _fact_groups(item):
     """``(kind, facts)`` pairs for one model, in either verify.jsonl layout.
 
@@ -1527,18 +1276,14 @@ def _attach_gpt(meta, round_dir: Path):
 
 def build_round(round_dir: Path, order: int, version: str, samples=None,
                 next_release: str | None = None, meta=None, input_traces=None):
-    """One round, in either layout, always with the same payload shape."""
+    """One round's payload."""
     meta = meta or round_meta(round_dir, order, version)
     # The compare page reads this by pair id; keeping it off the 1k-pair list avoids repeating
     # the same verification batch in every pair.
     meta["verify"] = read_verify(round_dir)
-    if is_scope_layout(round_dir):
-        built = _build_round_scoped(round_dir, order, version, samples=samples,
-                                    next_release=next_release, meta=meta,
-                                    input_traces=input_traces)
-    else:
-        built = _build_round_legacy(round_dir, order, version, samples=samples,
-                                    next_release=next_release, meta=meta)
+    built = _build_round_scoped(round_dir, order, version, samples=samples,
+                                next_release=next_release, meta=meta,
+                                input_traces=input_traces)
     _attach_gpt(built, round_dir)
     return built
 

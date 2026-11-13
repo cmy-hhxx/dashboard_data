@@ -17,7 +17,7 @@ except ImportError:
 def run_build(datasets, static):
     proc = subprocess.run(
         [sys.executable, str(DASHBOARD / "build.py"), "--datasets", str(datasets),
-         "--out", str(static), "--pairing", "key"],
+         "--out", str(static)],
         check=True, capture_output=True, text=True,
     )
     return json.loads(proc.stdout.strip().splitlines()[-1])
@@ -84,7 +84,7 @@ class SidecarTests(unittest.TestCase):
             )
             proc = subprocess.run(
                 [sys.executable, str(DASHBOARD / "build.py"), "--datasets", str(datasets),
-                 "--out", str(static), "--pairing", "key"],
+                 "--out", str(static)],
                 check=True, capture_output=True, text=True,
             )
             summary = json.loads(proc.stdout.strip().splitlines()[-1])

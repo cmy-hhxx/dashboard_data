@@ -352,13 +352,6 @@ class BuildStore:
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(files)")}
         if "digests" not in columns:
             self.db.execute("ALTER TABLE files ADD COLUMN digests BLOB")
-        # Pairing misses became part of the reuse marker in 2026-11-10.  Older rows
-        # only cached the pairs, so drop them once to record which outputs stay
-        # unpaired; otherwise a permanently-missing input would rebuild forever.
-        columns = {row[1] for row in self.db.execute("PRAGMA table_info(pairs)")}
-        if "misses" not in columns:
-            self.db.execute("ALTER TABLE pairs ADD COLUMN misses TEXT NOT NULL DEFAULT '{}'")
-            self.db.execute("DELETE FROM pairs")
         row = self.db.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
         if row and int(row[0]) != SCHEMA_VERSION:
             # A format change invalidates byte offsets and cached payloads.

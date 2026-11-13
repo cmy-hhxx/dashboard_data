@@ -11,7 +11,7 @@
 #   VERIFY=0 ./pack_aime_io.sh                         # 跳过解压对账（省 ~20s）
 #   OUT_FILE=/tmp/x.tar.zst ./pack_aime_io.sh          # 演练
 #
-# 为什么不是一条 tar | zstd 管道（老 pack_aime_input.sh 的做法）:
+# 为什么不是一条 tar | zstd 管道:
 #   源在 ceph-fuse 上，单流顺序读实测只有 ~20MB/s，13GB 会卡在读取上约 11 分钟。
 #   这里先用 PAR 路并行把文件读到本地快盘（ceph 多流聚合实测 ~130MB/s），
 #   再用单流 tar + 多线程 zstd 压（实测 ~320MB/s）。产物仍是标准单流 tar.zst，

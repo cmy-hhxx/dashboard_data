@@ -77,12 +77,13 @@ class PredictionFeedTests(unittest.TestCase):
                 self.assertNotIn(dropped, pred)
             self.assertEqual(run_build(datasets, static).get("reused"), 1)
 
-    def test_legacy_product_folder_and_explicit_bank(self):
+    def test_feed_lives_only_under_forecast_and_explicit_bank(self):
         with tempfile.TemporaryDirectory() as folder:
             datasets = Path(folder)
+            # The pre-4_forecast location is no longer read.
             (datasets / "0_wencai").mkdir()
             (datasets / "0_wencai" / "prediction.json").write_text("{}", encoding="utf-8")
-            self.assertEqual(build.prediction_feed_path(datasets, "wencai"), datasets / "0_wencai" / "prediction.json")
+            self.assertIsNone(build.prediction_feed_path(datasets, "wencai"))
             self.assertIsNone(build.prediction_feed_path(datasets, "aime"))
             explicit = build.prediction_payload({**FEED, "bank": 7, "unverifiable": 0, "dates": ["2026-10-01"]})
             self.assertEqual((explicit["bank"], explicit["unverifiable"], explicit["dates"]), (7, 0, ["2026-10-01"]))

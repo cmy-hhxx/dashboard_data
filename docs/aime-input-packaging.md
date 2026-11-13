@@ -85,9 +85,3 @@ zstd -dc aime_input_output_<日期>.tar.zst | tar -xf - -C /mnt/fin_bench/aime_d
 | `TAG` / `--tag` | 日期 | 产物文件名标签 |
 | `OUT_FILE` | `$DST_DIR/aime_input_output_<日期>.tar.zst` | 产物路径 |
 | `SRC_BASE` / `DST_DIR` | 见脚本头 | 源根目录 / 产物目录 |
-
-## 旧的 pack_aime_input.sh
-
-`scripts/pack_aime_input.sh` 是早期的**单流** `tar | zstd` 版本（口径为 `2_eval_input` 的窄包，
-其默认路径 `…/1_aime/2_eval_input` 也已随目录改名失效）。在 ceph-fuse 单流限速下它要慢
-一个数量级，仅作历史参考；常规打包一律用 `pack_aime_io.sh`。

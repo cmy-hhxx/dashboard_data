@@ -64,7 +64,7 @@ server.py（标准库 HTTP，:5001，定时 build）──> app.js
                                                    core.js / sunburst.js / css/*.css
 ```
 
-- `build.py` 增量扫描输入、归因、compact，按 `对应关系.csv` 或 session key 配对；只生成变化的
+- `build.py` 增量扫描输入、归因、compact，按 session key 配对；只生成变化的
   样本摘要，**不再全量写逐样本详情**。`cache/build.sqlite3` 保存文件索引、配对、样本摘要和
   详情生成所需的行号/引用。输出版本、KPI、会话场、聚类矩阵、预测、体系说明和样本索引；
   生成物不要手改，重新构建。
@@ -301,7 +301,7 @@ uid 用户 ID（输入 meta.user_id）· ut 用户类型 real/test/internal/unkn
   `02_before_release/cluster_tree/<model>/`、`03_after_release_retest/cluster_tree/<model>/`、
   `04_after_release_online_real/cluster_tree/<model>/` 各放 `item_index.slice.jsonl` + `leaves.tsv` +
   `cluster_tree.json`。叶子名取自 `leaves.tsv`（L3）和 `cluster_tree.json`（L4）。
-- 旧布局（`00_manifest/coverage.csv` + `03_cluster_<ver>/` + `04_retest_after/`）仍然兼容；轮次目录名
+- 只支持上面这一种布局（旧的 `coverage.csv` + `03_cluster_<ver>/` + `04_retest_after/` 已不再读取）；轮次目录名
   `0_version1106_test` → 期次 0、版本 v1106。发版日用 `round.json` 的
   `{"released_at","label","title"}` 钉住（v1106 = `2026-11-06`）。
 - 口径：`before` / `after` 都数**命中该叶子的 trace 数**（同一批题），前缀节点包含其下所有叶子；

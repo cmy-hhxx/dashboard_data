@@ -10,7 +10,6 @@ AIME 评测数据在远端服务器上的**搬运、打包与看板**工程。
 ```
 servers.conf                    # 本地部署配置（已 gitignore，不入库）
 scripts/pack_aime_io.sh         # 常规打包：AIME 输入 + 输出 → 单个 tar.zst（约 2.5-3 分钟）
-scripts/pack_aime_input.sh      # 旧版单流口径（ceph 单流限速后已不推荐）
 scripts/eval_supervisor.sh      # 容器内守护：按 /opt/eval_services.conf 拉起看板 / 页面 / 供数
 scripts/eval_boot.sh            # 容器启动时调用 eval_supervisor
 scripts/run_tests.sh            # 全部测试套件（在服务器上跑，不在笔记本上跑）
@@ -156,7 +155,7 @@ tokens / task-subtask / lost 统计写到 `<datasets>/stats.json`；`build.py` �
 
 | 文件 | 作用 |
 |---|---|
-| `build.py` | 增量扫描 `datasets/`：输入、归因、compact 按 `对应关系.csv` 或 session key 配对 → `static/data.json` + `data-<product>.json`、`static/samples.json`（产品清单）+ `samples-<product>.json`、`labels-<product>.json`、`trends-<product>.json`、`abtests-<product>.json`（均带 `.gz` / `.br`）；`cache/build.sqlite3` 保存文件索引、配对与样本摘要；`--jobs` 控制样本构建/输入扫描并发；`--keep-on-empty` 在数据源为空时保留上一份 |
+| `build.py` | 增量扫描 `datasets/`：输入、归因、compact 按 session key 配对 → `static/data.json` + `data-<product>.json`、`static/samples.json`（产品清单）+ `samples-<product>.json`、`labels-<product>.json`、`trends-<product>.json`、`abtests-<product>.json`（均带 `.gz` / `.br`）；`cache/build.sqlite3` 保存文件索引、配对与样本摘要；`--jobs` 控制样本构建/输入扫描并发；`--keep-on-empty` 在数据源为空时保留上一份 |
 | `stats_worker.py` | 独立进程，默认每 10 分钟刷新 `<datasets>/stats.json` 输入统计旁路 |
 | `detail_builder.py` | 样本页首次请求时按 SQLite 行号生成 `samples/<slug>.json(.gz)` |
 | `server.py` | `ThreadingHTTPServer` + 定时执行 `build.py --keep-on-empty`；`/samples/<slug>.json` 按需生成详情；`/healthz` 返回最近一次构建摘要 |

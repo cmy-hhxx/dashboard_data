@@ -95,7 +95,7 @@ round.json                         {"released_at", "label", "title"}
 99_provenance/                     重测输入与运行记录
 ```
 
-看板的 `abtests-aime.json` 与版本对比页都从这里构建；旧布局（`coverage.csv`、`03_cluster_*`、`04_retest_after`）仍兼容读取。
+看板的 `abtests-aime.json` 与版本对比页都从这里构建；只认这一种布局（缺 `02_before_release` 等 scope 目录的文件夹不算轮次）。
 
 ## 5. 看板构建与刷新
 

@@ -3,7 +3,6 @@
 
 Layout read under the datasets root (repo ``datasets/`` locally, ``EVAL_DATASETS`` otherwise)::
 
-    对应关系.csv                                   one row per input / attribution / compact triple
     <n>_<product>/eval_input/[<split dir>/]<model>/<date>.jsonl
     <n>_<product>/eval_output/<split>/<model>/<model>_attribution-<date>.jsonl
     <n>_<product>/eval_output/<split>/<model>/compact/<model>_compact-<date>.jsonl
@@ -28,7 +27,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import csv
 import fcntl
 import gzip
 import hashlib
@@ -783,49 +781,6 @@ def choose_input(cands, turn_tids):
         if best is None or score > best[0]:
             best = (score, cand)
     return best[1] if best and best[0][1] > 0 else None
-
-
-def pairs_from_csv(root: Path, store: bs.BuildStore, reader: LineReader):
-    path = root / "对应关系.csv"
-    with open(path, encoding="utf-8-sig", newline="") as fh:
-        rows = list(csv.DictReader(fh))
-    pairs, mismatched = [], 0
-    indexed = set()
-    for row in rows:
-        m = OUTPUT_FILE.match(row["output_file"])
-        if not m:
-            continue
-        product = product_of(m["product"])
-        split = SPLITS.get(m["split"])
-        if not product or not split:
-            continue
-        pair = {
-            "product": product, "split": split, "model": m["model"], "date": m["date"],
-            "run": row.get("run_id") or "",
-            "input": (row["input_file"], int(row["export_input_line"])),
-            "output": (row["output_file"], int(row["export_output_line"])),
-            "compact": (row["compact_file"], int(row["export_compact_line"]))
-            if row.get("compact_file") else None,
-        }
-        checks = [("input", "input_sha256"), ("output", "output_sha256"), ("compact", "compact_sha256")]
-        for key, sha_col in checks:
-            ref = pair[key]
-            if not ref or not row.get(sha_col):
-                continue
-            try:
-                # Stat each file once per build; the line itself comes from its offsets.
-                if ref[0] not in indexed:
-                    ensure_raw(store, root, ref[0], load=False)
-                    indexed.add(ref[0])
-                raw = reader.raw_line(ref[0], ref[1])
-            except (OSError, IndexError):
-                pair[key] = None
-                mismatched += 1
-                continue
-            if hashlib.sha256(raw + b"\n").hexdigest() != row[sha_col]:
-                mismatched += 1
-        pairs.append(pair)
-    return pairs, {"mode": "csv", "rows": len(rows), "sha_mismatch": mismatched}
 
 
 def discover_outputs(root: Path):
@@ -3121,13 +3076,9 @@ FORECAST_DIR = "4_forecast"
 
 
 def prediction_feed_path(datasets: Path, product: str):
-    """``4_forecast/<product>/prediction.json``, else the older ``<n>_<product>/prediction.json``."""
+    """``4_forecast/<product>/prediction.json`` when the forecast pipeline published one."""
     path = datasets / FORECAST_DIR / product / "prediction.json"
-    if path.is_file():
-        return path
-    top = next((p for p in datasets.glob("*") if product_of(p.name) == product), None)
-    legacy = top / "prediction.json" if top else None
-    return legacy if legacy and legacy.is_file() else None
+    return path if path.is_file() else None
 
 
 def prediction_payload(feed: dict, items=None) -> dict:
@@ -3199,7 +3150,7 @@ def prediction_items(path: Path):
 def feed_signature(datasets: Path):
     """Cheap fingerprint of optional prediction feeds, part of the reuse marker."""
     parts = []
-    feeds = list(datasets.glob("*/prediction.json")) + list(datasets.glob(f"{FORECAST_DIR}/*/prediction*.json*"))
+    feeds = list(datasets.glob(f"{FORECAST_DIR}/*/prediction*.json*"))
     for path in sorted(feeds):
         try:
             stat = path.stat()
@@ -3236,7 +3187,7 @@ def input_signature(product_metas):
     return hashlib.sha1(json.dumps(parts, separators=(",", ":")).encode()).hexdigest()
 
 
-def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs: int = 0):
+def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
     started = time.time()
     rules = user_rules.load(datasets)
     rules_sig = rules.signature()
@@ -3269,10 +3220,7 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
         input_sig = input_signature(product_metas)
 
         t0 = time.time()
-        if pairing in ("auto", "csv") and (datasets / "对应关系.csv").exists():
-            pairs, pairing_info = pairs_from_csv(datasets, store, reader)
-        else:
-            pairs, pairing_info = pairs_from_keys(datasets, store, product_metas)
+        pairs, pairing_info = pairs_from_keys(datasets, store, product_metas)
         timers["pair"] = round(time.time() - t0, 1)
         if not pairs:
             return empty_payloads("no-pairs"), {}
@@ -3806,7 +3754,6 @@ def main(argv=None):
     ap.add_argument("--datasets", type=Path,
                     default=None, help="datasets root (default: EVAL_DATASETS, the production mount, or <repo>/datasets)")
     ap.add_argument("--out", type=Path, default=STATIC, help="static directory receiving the payloads")
-    ap.add_argument("--pairing", choices=("auto", "csv", "key"), default="auto")
     ap.add_argument("--keep-on-empty", action="store_true",
                     help="leave the previous payloads in place when the source yields no pairs "
                          "(used by the server's scheduled refresh so a briefly empty mount cannot wipe the board)")
@@ -3836,7 +3783,7 @@ def build_lock(cache_dir: Path):
 
 
 def run(args):
-    (data, index), stats = build(args.datasets.resolve(), args.out, args.pairing, jobs=args.jobs)
+    (data, index), stats = build(args.datasets.resolve(), args.out, jobs=args.jobs)
     try:
         for product in sorted(ENABLED):
             write_data_absence(args.datasets.resolve(), product, args.out)
