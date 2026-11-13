@@ -206,6 +206,15 @@ class ABDetailTests(unittest.TestCase):
             # The half-written line must not join to any input id.
             self.assertNotIn("half", index["input_by_item"])
 
+    def test_removed_eq_drops_cached_detail(self):
+        with tempfile.TemporaryDirectory() as folder:
+            builder, root = self.build(folder)
+            stale = root / "static" / "ab_samples" / ROUND / "99.json"
+            stale.parent.mkdir(parents=True, exist_ok=True)
+            stale.write_text("{}", encoding="utf-8")
+            self.assertIsNone(builder.ensure(ROUND, 99))
+            self.assertFalse(stale.exists())
+
     def test_unknown_round_and_eq_are_none(self):
         with tempfile.TemporaryDirectory() as folder:
             builder, _ = self.build(folder)

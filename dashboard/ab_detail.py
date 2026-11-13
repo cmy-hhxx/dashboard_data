@@ -534,6 +534,19 @@ class ABDetailBuilder:
             self._gpt_cache[cache_key] = ((stat.st_size, stat.st_mtime_ns), answer)
         return answer
 
+    @staticmethod
+    def _drop(path: Path):
+        """Remove a cached detail that no longer has a source row.
+
+        Coverage can shrink after a retest rerun; leaving the old JSON in
+        ``static/ab_samples`` would make the server serve a deleted eq forever.
+        """
+        for target in (path, Path(str(path) + ".gz")):
+            try:
+                target.unlink()
+            except OSError:
+                pass
+
     def ensure(self, round_id, ref):
         """Generate (or reuse) one after / before detail; ``None`` when it cannot be built."""
         before_trace = None
@@ -556,10 +569,14 @@ class ABDetailBuilder:
             with self._index_lock:
                 index = self._before_index(round_id, round_dir)
             with self._eq_lock(round_id, "before-" + before_trace):
+                if before_trace not in index["traces"]:
+                    self._drop(path)
+                    return None
                 if self._fresh(path, index.get("built_at_ns") or 0):
                     return path
                 detail = self._build_before_detail(product, round_dir, round_id, before_trace, index)
                 if detail is None:
+                    self._drop(path)
                     return None
                 build.write_json(path, detail)
                 build.ensure_detail_gz(path)
@@ -568,10 +585,14 @@ class ABDetailBuilder:
         with self._index_lock:
             index = self._index(round_id, round_dir)
         with self._eq_lock(round_id, eq):
+            if str(eq) not in index["attribution"]:
+                self._drop(path)
+                return None
             if self._fresh(path, index.get("built_at_ns") or 0):
                 return path
             detail = self._build_detail(product, round_dir, round_id, eq, index)
             if detail is None:
+                self._drop(path)
                 return None
             build.write_json(path, detail)
             build.ensure_detail_gz(path)
