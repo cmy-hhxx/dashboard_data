@@ -384,9 +384,15 @@ class Handler(SimpleHTTPRequestHandler):
         sys.stderr.write("%s %s\n" % (time.strftime("%H:%M:%S"), fmt % args))
 
 
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+    # A page opens ~10 css/js requests at once; the stdlib backlog of 5 refused some of them.
+    request_queue_size = 128
+
+
 def main():
     ThreadingHTTPServer.allow_reuse_address = True
-    server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    server = Server(("0.0.0.0", PORT), Handler)
     server.daemon_threads = True
     print("[serve] http://0.0.0.0:%d upstream=%s static=%s" % (PORT, UPSTREAM, STATIC), flush=True)
     try:
