@@ -218,3 +218,5 @@ nohup /opt/eval_supervisor.sh >> /opt/eval_supervisor.log 2>&1 &   # 幂等，fl
 | `kept_previous` | 数据源为空，确认挂载；恢复后下一轮自动重建 |
 | 页面没更新 | `./stop.sh && ./start.sh`；确认远端 `.gz` 已重新生成 |
 | 数据停在旧日期 | 看 `healthz.last_refresh`；确认 `datasets` 挂载可读 |
+| `ZoneInfoNotFoundError: America/New_York` | 容器重建后 `/usr/share/zoneinfo` 可能为空。从另一台容器复制 TZif 即可：`ssh aime_rsi_data 'cat /usr/share/zoneinfo/America/New_York' \| ssh eval_data 'mkdir -p /usr/share/zoneinfo/America && cat > /usr/share/zoneinfo/America/New_York'`，然后重启服务 |
+| 部署卡在 `pip install brotli/orjson` | 容器无外网时 pip 会反复超时（两者都是可选项）。中断后手动执行 `./precompress.sh && ./stop.sh && ./start.sh` 即可 |
