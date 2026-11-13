@@ -1,8 +1,8 @@
 /* Standalone entry for one sample's pane.
  *
- * dashboard/static/js/* is a frozen snapshot (see README.md); this file is the
- * only new frontend code.  It asks the backend for a mini recall index of the
- * session, then lets the snapshot's samples.js render the pane exactly as the
+ * js/ and css/ are the dashboard's own files, forwarded by server.py; this file is
+ * the only page-specific code.  It asks the backend for a mini recall index of the
+ * session, then lets the dashboard's samples.js render the pane exactly as the
  * dashboard does, left list and top nav left out by detail.css.
  */
 import { render } from "./js/samples.js";
@@ -60,7 +60,7 @@ async function boot() {
   const ctx = {
     product: payload.product,
     data: { taxonomy: payload.taxonomy },
-    // 单样本页只渲染一个会话，索引是子集（行号对不上全量 labels）：快照别去拉 labels。
+    // 单样本页只渲染一个会话，索引是子集（行号对不上全量 labels）：别去拉 labels。
     oneSession: true,
     loadIndex: async () => payload.index,
     navigate: (patch, { replace = false } = {}) => {

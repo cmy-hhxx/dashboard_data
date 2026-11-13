@@ -72,6 +72,13 @@ class Upstream(BaseHTTPRequestHandler):
             return self._json(200, HEALTH)
         if path in INDEX:
             return self._json(200, INDEX[path])
+        if path.startswith(("/js/", "/css/", "/vendor/")):
+            body = f"/* dashboard {path} */".encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/css" if path.endswith(".css") else "application/javascript")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            return self.wfile.write(body)
         self.send_error(404, "nope")
 
     def _json(self, status, payload):
@@ -226,10 +233,14 @@ class SampleDetailsTest(unittest.TestCase):
         self.assertEqual(json.loads(body)["product"], "aime")
 
     def test_static_assets(self):
-        for path in ("/js/samples.js", "/js/core.js", "/css/samples.css", "/detail.css", "/entry.js"):
+        for path in ("/detail.css", "/entry.js"):
             status, _, body = fetch(self.base + path)
             self.assertEqual(status, 200, path)
             self.assertTrue(body)
+        # The pane's code is the dashboard's own, forwarded untouched — there is no local copy.
+        for path in ("/js/samples.js", "/js/sample_detail.js", "/css/samples.css"):
+            status, _, body = fetch(self.base + path)
+            self.assertEqual((status, body), (200, f"/* dashboard {path} */".encode()), path)
         # 单样本页要显式告诉快照「索引是子集」，否则它会去拉全量 labels 并错位
         _, _, entry = fetch(self.base + "/entry.js")
         self.assertIn(b"oneSession", entry)

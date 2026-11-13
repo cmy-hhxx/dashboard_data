@@ -4,8 +4,10 @@ One read-only page that renders the dashboard's sample pane (评测输入与输�
 for a single sample, plus a thin JSON gateway over the same data.
 
 Everything is read through the internal dashboard over HTTP; this module never
-imports dashboard code and never touches its files.  The frontend under
-``static/`` is a frozen snapshot of ``dashboard/static`` (see README.md).
+imports dashboard code and never touches its files.  The page's own files are
+``static/index.html``, ``entry.js`` and ``detail.css``; every ``/js/``, ``/css/``
+and ``/vendor/`` asset is the dashboard's, forwarded as-is, so the pane here is
+always the one the dashboard ships.
 
 Routes
     GET /                              page (usage text when no sample given)
@@ -15,6 +17,7 @@ Routes
     GET /samples/<slug>.json           raw detail, dashboard-compatible path
     GET /samples-<product>.json        raw recall index, dashboard-compatible path
     GET /labels-<product>.json         raw problem labels (index-aligned with the recall index)
+    GET /js/… /css/… /vendor/…         the dashboard's frontend, forwarded
     GET /healthz                       liveness + upstream probe
 """
 from __future__ import annotations
@@ -46,6 +49,10 @@ try:
     from compare_details.proxy import handle as handle_compare_page
 except ImportError:  # same for the standalone version-compare page
     handle_compare_page = None
+import page_proxy  # noqa: E402  (shared forwarder; page_service/ is on sys.path above)
+
+# The pane's code and styles live only in dashboard/static; this page borrows them.
+ASSET_PREFIXES = ("/js/", "/css/", "/vendor/")
 
 PORT = int(os.environ.get("PORT", "5002"))
 UPSTREAM = os.environ.get("UPSTREAM", "http://127.0.0.1:5001").rstrip("/")
@@ -263,6 +270,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             if handle_compare_page and handle_compare_page(self):
                 return
+            if path.startswith(ASSET_PREFIXES):
+                return page_proxy._forward(self, "", path, parsed.query)
             if path == "/healthz":
                 return self._health()
             if path == "/api/context":
@@ -296,6 +305,9 @@ class Handler(SimpleHTTPRequestHandler):
         if handle_matrix_page and handle_matrix_page(self):
             return
         if handle_compare_page and handle_compare_page(self):
+            return
+        if urlparse(self.path).path.startswith(ASSET_PREFIXES):
+            page_proxy._forward(self, "", urlparse(self.path).path, urlparse(self.path).query)
             return
         super().do_HEAD()
 

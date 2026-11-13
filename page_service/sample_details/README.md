@@ -35,16 +35,11 @@ http://<看板主机>:2833/?product=&case=  ──> /api/context（迷你索引�
 （`view` 参数会被忽略）；也可以直接用 `slug`。要定位到某一轮，再带上 `&trace=<trace_id>`
 （5003 `/traces` 的 trace_id）；找不到时页面会明确报错，不会静默换轮。
 
-## 前端快照
+## 前端
 
-`static/` 下的 `css/base.css`、`css/layout.css`、`css/content.css`、`css/samples.css`、`js/core.js`、`js/render.js`、`js/particles.js`、`js/samples.js`
-是**看板前端的一份快照**（拷贝自 `dashboard/static/`），目的就是让页面和看板 pane 100% 一致；
-`static/entry.js` 与 `static/detail.css` 是本模块唯一的新前端代码（约 100 行）：
-入口取迷你索引后调用快照里的 `render()`，覆盖 CSS 把左侧样本列表和顶部导航去掉。
-
-**注意**：这份快照已冻结，且与看板分叉——看板后来把 `samples.js` 拆成了 `samples.js` + `sample_detail.js` + `taxonomy.js`，
-`base.css` / `layout.css` / `samples.css` 也已改动。**不要再按文件名逐个 `cp` 覆盖**：只拷部分文件会让 `samples.js`
-引用不存在的模块，页面直接打不开。要同步看板的修复，需整体迁移到看板现在的模块结构（单独排期）。
+页面只有三个自己的文件：`static/index.html`、`static/entry.js`（取迷你索引后调用看板的 `render()`）、
+`static/detail.css`（把左侧样本列表和顶部导航去掉）。`/js/…`、`/css/…`、`/vendor/…` 全部由 `server.py`
+原样转发到看板（`UPSTREAM`，默认 5001）：样本 pane 永远就是看板当前发布的那一份，不再维护拷贝。
 
 ## 本地跑
 

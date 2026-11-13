@@ -1,6 +1,6 @@
 /* Standalone shell: keep only the right-hand pane of the dashboard sample page.
-   css/*.css is a snapshot of dashboard/static/css (base, layout, content, samples) and
-   carries every style inside the pane; this file only reshapes the page around it. */
+   css/*.css are the dashboard's own stylesheets (forwarded) and carry every style inside
+   the pane; this file only reshapes the page around it. */
 html, body { min-height: 100%; }
 
 main#main { max-width: 1480px; padding: 8px var(--gutter) 12px; }
