@@ -17,7 +17,7 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "tests"))
 
 import fixtures  # noqa: E402
-from analysis_api import config, store  # noqa: E402
+from analysis_api import config, snapshot, store  # noqa: E402
 
 
 def _append(path: Path, row, newline=True):
@@ -34,10 +34,16 @@ class StoreTest(unittest.TestCase):
         # config 在 import 时读环境变量；用例直接改模块级路径
         self._state = config.STATE_DIR
         config.STATE_DIR = base / "state"
+        self._datasets = os.environ.get("EVAL_DATASETS")
+        os.environ["EVAL_DATASETS"] = str(self.root)
         self.input = self.aime / "eval_input" / "0_daily_eval_input" / "aime_expert" / f"{fixtures.DAY}.jsonl"
 
     def tearDown(self):
         config.STATE_DIR = self._state
+        if self._datasets is None:
+            os.environ.pop("EVAL_DATASETS", None)
+        else:
+            os.environ["EVAL_DATASETS"] = self._datasets
         self.tmp.cleanup()
 
     def _db(self):
@@ -170,6 +176,121 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(json.loads(session_row[1]), {"P2": 2})
         self.assertEqual(survey_row[0], 0)
         self.assertEqual(json.loads(survey_row[1]), {})
+
+    def test_change_feed(self):
+        """变更流：首次全量、内容未变不出变更、新增/重跑/删除各一条。"""
+        os.environ["EVAL_DATASETS"] = str(self.root)
+        attr = self.aime / "eval_output" / "0_daily_eval" / "aime_expert" / f"aime_expert_attribution-{fixtures.DAY}.jsonl"
+
+        store.build(self.root)
+        snap = self._snapshot()
+        self.assertEqual(snap.latest_seq, 8)
+        first = snapshot.changes(snap, config.db_path(), "aime_eval", None, page_size=100)
+        ids = [item["trace_id"] for item in first["items"]]
+        self.assertEqual(len(ids), 7)  # 8 条 trace 里测试账号的不供数
+        self.assertNotIn("trace_test", ids)
+        self.assertEqual(first["deleted"], [])
+        self.assertFalse(first["has_more"])
+        since = first["next_since"]
+        self.assertTrue(since)
+        for item in first["items"]:
+            self.assertEqual(item["change"]["op"], "upsert")
+
+        # 没有新内容：不产生变更
+        summary = store.build(self.root)
+        self.assertEqual(summary["changes_emitted"], 0)
+        again = snapshot.changes(self._snapshot(), config.db_path(), "aime_eval", since)
+        self.assertEqual((again["items"], again["deleted"]), ([], []))
+        self.assertEqual(again["latest_seq"], snap.latest_seq)
+
+        # 新增一条 trace：只发这一条
+        _append(attr, fixtures._session(
+            "thread_new", "trace_new", "2026-10-21T02:00:00.000Z", "投教问答",
+            "金融术语与指标释义", "u7", "AIME-Atlas", [], question="新增问句",
+        ))
+        summary = store.build(self.root)
+        self.assertEqual(summary["changes_emitted"], 1)
+        snap = self._snapshot()
+        delta = snapshot.changes(snap, config.db_path(), "aime_eval", since)
+        self.assertEqual([item["trace_id"] for item in delta["items"]], ["trace_new"])
+        self.assertEqual(delta["items"][0]["change"]["op"], "upsert")
+        self.assertGreater(delta["items"][0]["change"]["seq"], first["head_seq"])
+        since = delta["next_since"]
+
+        # 重跑改内容：同一个 key 再来一条 upsert
+        _append(attr, fixtures._session(
+            "thread_a", "trace_alpha", "2026-10-20T12:00:00.000Z", "事件解读", "行情事件解读", "u1",
+            "AIME-Atlas", [fixtures._problem("空查询参数重试", "P0")], question="英伟达今天为什么跌",
+        ))
+        self.assertEqual(store.build(self.root)["changes_emitted"], 1)
+        delta = snapshot.changes(self._snapshot(), config.db_path(), "aime_eval", since)
+        self.assertEqual([item["trace_id"] for item in delta["items"]], ["trace_alpha"])
+        self.assertEqual([p["severity"] for p in delta["items"][0]["problems"]], ["P0"])
+        since = delta["next_since"]
+
+        # 归因文件消失：发 delete 墓碑
+        lost = (self.aime / "eval_output" / "1_lost_user_eval" / "aime_fast"
+                / f"aime_fast_attribution-{fixtures.LOST_DAY}.jsonl")
+        lost.unlink()
+        summary = store.build(self.root)
+        self.assertEqual(summary["changes_emitted"], 1)
+        delta = snapshot.changes(self._snapshot(), config.db_path(), "aime_eval", since)
+        self.assertEqual(delta["items"], [])
+        self.assertEqual([(row["trace_id"], row["op"]) for row in delta["deleted"]], [("trace_lost", "delete")])
+
+    def test_change_feed_ignores_mtime(self):
+        """整份重写但业务内容没变（只有 mtime 变）：不产生变更。"""
+        store.build(self.root)
+        attr = self.aime / "eval_output" / "0_daily_eval" / "aime_expert" / f"aime_expert_attribution-{fixtures.DAY}.jsonl"
+        text = attr.read_text(encoding="utf-8")
+        mtime = attr.stat().st_mtime
+        attr.write_text(text, encoding="utf-8")
+        os.utime(attr, (mtime + 5, mtime + 5))
+        summary = store.build(self.root)
+        self.assertEqual(summary["attribution_files"], 1)
+        self.assertEqual(summary["changes_emitted"], 0)
+
+    def test_change_feed_seeds_existing_index(self):
+        """老索引升级：没有变更记录时，下一轮构建补齐全量位点。"""
+        store.build(self.root)
+        with self._db() as db:
+            db.execute("DELETE FROM changes")
+            db.execute("DELETE FROM meta WHERE key = 'changes_seeded'")
+            db.commit()
+        summary = store.build(self.root)
+        self.assertEqual(summary["changes_emitted"], 0)
+        self.assertEqual(summary["changes_seeded"], 8)
+        data = snapshot.changes(self._snapshot(), config.db_path(), "aime_eval", None, page_size=100)
+        self.assertEqual(len(data["items"]), 7)
+        self.assertFalse(data["has_more"])
+
+    def test_change_feed_paginates(self):
+        os.environ["EVAL_DATASETS"] = str(self.root)
+        store.build(self.root)
+        snap = self._snapshot()
+        seen, cursor, pages = [], None, 0
+        while True:
+            data = snapshot.changes(snap, config.db_path(), "aime_eval", None, page_size=3, cursor=cursor)
+            seen.extend(item["trace_id"] for item in data["items"])
+            seen.extend(row["trace_id"] for row in data["deleted"])
+            pages += 1
+            if not data["has_more"]:
+                since = data["next_since"]
+                break
+            cursor = data["next_cursor"]
+        self.assertEqual(len(seen), 7)
+        self.assertEqual(len(set(seen)), 7)
+        self.assertEqual(pages, 3)
+        # 位点可重放：同一 since 再同步一次什么也没有
+        replay = snapshot.changes(snap, config.db_path(), "aime_eval", since, page_size=3)
+        self.assertEqual((replay["items"], replay["deleted"]), ([], []))
+
+    def _snapshot(self):
+        conn = store.connect(config.db_path())
+        try:
+            return snapshot.load(conn, None, {})
+        finally:
+            conn.close()
 
     def test_schema_upgrade_rescans_attribution(self):
         store.build(self.root)

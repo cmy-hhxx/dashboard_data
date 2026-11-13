@@ -45,6 +45,7 @@ def command_status(args):
         payload = {
             "traces": len(snap.traces),
             "data_updated_at": snap.data_updated_at,
+            "latest_seq": snap.latest_seq,
             "intent_version": snap.intent.version if snap.intent else None,
             "problem_trees": {app: tree.version for app, tree in snap.problem_trees.items()},
             "app_versions": sorted({t.app_version for t in snap.traces}),

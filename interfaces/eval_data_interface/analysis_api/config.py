@@ -35,11 +35,15 @@ CURSOR_TTL = int(os.environ.get("CURSOR_TTL", "1800"))
 
 MAX_USER_IDS = 5000
 MAX_TRACE_IDS = 1000
+MAX_CHANGES_PAGE = 1000
 MAX_Q_CHARS = 200
 QUERY_PREVIEW_CHARS = 160
 
 API_PREFIX = "/api/v1/analysis"
 SCHEMA_VERSION = "2.0"
+
+# 接口文档：GET /api/v1/analysis/docs 按文件名直接下发这里的 Markdown
+DOCS_DIR = REPO / "docs"
 
 # 问题严重度：P0 最重 → P4 最轻；定义见 taxonomy.severity_tree
 SEVERITIES = ("P0", "P1", "P2", "P3", "P4")

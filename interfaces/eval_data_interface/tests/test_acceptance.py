@@ -478,6 +478,93 @@ def check_session_problem_once(client, dataset):
         raise AssertionError(f"逐条 problems 之和 {problems_total} != /severity total {severity_total}")
 
 
+def check_changes(client, dataset):
+    """增量接口：首次全量、位点幂等、越界/非法位点的错误。"""
+    seen, deleted, cursor, pages = [], [], None, 0
+    while True:
+        status, payload = client.get(f"{API}/changes", dataset=dataset, page_size=3, cursor=cursor)
+        data = expect(status, payload)["data"]
+        seen.extend((item["trace_id"], item["day"], item["app_version"]) for item in data["items"])
+        deleted.extend(data["deleted"])
+        pages += 1
+        for item in data["items"]:
+            change = item.get("change") or {}
+            if change.get("op") != "upsert" or not isinstance(change.get("seq"), int):
+                raise AssertionError(f"变更条目缺 change 或字段不对：{item}")
+        if not data["has_more"]:
+            since = data["next_since"]
+            head = data["head_seq"]
+            break
+        cursor = data["next_cursor"]
+
+    if deleted:
+        raise AssertionError(f"fixture 不应有删除墓碑：{deleted}")
+    if pages < 2:
+        raise AssertionError("page_size=3 时 fixture 应需要翻页")
+
+    listing, _cursor = [], None
+    while True:
+        payload = expect(*client.get(f"{API}/traces", dataset=dataset, page_size=100, cursor=_cursor))
+        listing.extend(
+            (item["trace_id"], item["day"], item["app_version"]) for item in payload["data"]["items"]
+        )
+        _cursor = payload["data"]["next_cursor"]
+        if not _cursor:
+            break
+    if sorted(seen) != sorted(listing):
+        raise AssertionError(f"首次同步的 key 集合与 /traces 不一致：{len(seen)} vs {len(listing)}")
+    if not since or head <= 0:
+        raise AssertionError(f"缺少 next_since / head_seq：since={since} head={head}")
+
+    status, payload = client.get(f"{API}/changes", dataset=dataset, since=since)
+    data = expect(status, payload)["data"]
+    if data["items"] or data["deleted"] or data["has_more"]:
+        raise AssertionError(f"位点重放应为空：{data}")
+    if data["latest_seq"] != head:
+        raise AssertionError(f"latest_seq={data['latest_seq']} 与 head_seq={head} 不等")
+    if payload["meta"].get("latest_seq") is None:
+        raise AssertionError(f"/changes 响应 meta 缺 latest_seq：{payload['meta']}")
+
+    status, payload = client.get(f"{API}/changes", dataset=dataset, since="not-a-token")
+    if status != 400 or payload["error"]["code"] != "INVALID_ARGUMENT":
+        raise AssertionError(f"非法 since 应返回 400：{status} {payload}")
+    status, payload = client.get(f"{API}/changes", dataset=dataset, since=10 ** 9)
+    if status != 409 or payload["error"]["code"] != "SYNC_RESET":
+        raise AssertionError(f"越界位点应返回 409 SYNC_RESET：{status} {payload}")
+    status, payload = client.get(f"{API}/changes")
+    if status != 400:
+        raise AssertionError(f"缺 dataset 应返回 400：{status} {payload}")
+
+
+def check_docs(client):
+    """文档接口：索引 + 增量文档原文，业务方不拿到仓库也能读。"""
+    payload = expect(*client.get(f"{API}/docs"))
+    docs = payload["data"]["docs"]
+    names = {doc["name"] for doc in docs}
+    if "incremental" not in names:
+        raise AssertionError(f"/docs 索引缺 incremental：{sorted(names)}")
+    entry = next(doc for doc in docs if doc["name"] == "incremental")
+    if not entry["title"] or not entry["url"].endswith("/docs/incremental"):
+        raise AssertionError(f"文档索引字段不对：{entry}")
+
+    payload = expect(*client.get(f"{API}/docs/incremental"))
+    data = payload["data"]
+    if data["format"] != "markdown" or "next_since" not in data["content"]:
+        raise AssertionError(f"/docs/incremental 内容不对：{str(data)[:200]}")
+    if not data["updated_at"]:
+        raise AssertionError("文档缺 updated_at")
+
+    status, _payload = client.get(f"{API}/docs/not-exist")
+    if status != 404:
+        raise AssertionError(f"不存在的文档应返回 404：{status}")
+
+    guide = next((doc for doc in docs if doc["name"] == "接入说明"), None)
+    if guide is not None:
+        payload = expect(*client.get(guide["url"]))
+        if "增量同步" not in payload["data"]["content"]:
+            raise AssertionError("中文文档名未正确下发")
+
+
 # --------------------------------------------------------------------------- 运行
 
 def start_fixture_server(workdir: Path):
@@ -589,6 +676,8 @@ def run_fixture_cases(workdir: Path):
         ("15b 测试用户不供数", lambda: check_test_user_hidden(client, dataset, fixtures.DAY)),
         ("16 详情", lambda: check_detail(client, dataset, "trace_alpha", fixtures.DAY)),
         ("17 cursor 过期", lambda: check_cursor_expired(client, dataset)),
+        ("18 增量同步", lambda: check_changes(client, dataset)),
+        ("19 接口文档", lambda: check_docs(client)),
     ]
     return _run_cases(cases, process, log)
 

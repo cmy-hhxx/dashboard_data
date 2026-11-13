@@ -48,6 +48,8 @@ ssh "$HOST_ALIAS" "set -e
   curl -fsS 'http://127.0.0.1:${PORT}/api/v1/analysis/summary?dataset=aime_eval&group_by=intent' | python3 -c 'import json,sys; d=json.load(sys.stdin); print(\"summary total\", d[\"data\"][\"total\"])'
   curl -fsS 'http://127.0.0.1:${PORT}/api/v1/analysis/traces?dataset=aime_eval&page_size=1' | python3 -c 'import json,sys; d=json.load(sys.stdin); print(\"traces total\", d[\"data\"][\"total\"])'
   curl -fsS 'http://127.0.0.1:${PORT}/api/v1/analysis/severity?dataset=aime_eval' | python3 -c 'import json,sys; d=json.load(sys.stdin); print(\"severity total\", d[\"data\"][\"total\"])'
+  curl -fsS 'http://127.0.0.1:${PORT}/api/v1/analysis/changes?dataset=aime_eval&page_size=1' | python3 -c 'import json,sys; d=json.load(sys.stdin); print(\"changes latest_seq\", d[\"data\"][\"latest_seq\"], \"items\", len(d[\"data\"][\"items\"]))'
+  curl -fsS 'http://127.0.0.1:${PORT}/api/v1/analysis/docs' | python3 -c 'import json,sys; d=json.load(sys.stdin); print(\"docs\", [x[\"name\"] for x in d[\"data\"][\"docs\"]])'
   curl -fsS 'http://127.0.0.1:${PORT}/api/v1/analysis/taxonomy?kind=severity' | python3 -c 'import json,sys; d=json.load(sys.stdin); print(\"severity nodes\", [n[\"code\"] for n in d[\"data\"][\"nodes\"]])'
 "
 

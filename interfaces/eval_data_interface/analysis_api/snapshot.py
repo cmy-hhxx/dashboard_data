@@ -45,18 +45,25 @@ def _trace_order(trace):
 
 
 class Snapshot:
-    def __init__(self, traces, intent_tree, problem_trees, data_updated_at, build_summary=None):
+    def __init__(self, traces, intent_tree, problem_trees, data_updated_at, build_summary=None, latest_seq=0):
         self.traces: list[Trace] = traces
         self.intent: Tree | None = intent_tree
         self.problem_trees: dict[str, Tree] = problem_trees
         self.data_updated_at = data_updated_at
         self.build_summary = build_summary or {}
         self.built_at = timeutil.utc_rfc3339(datetime.now(timezone.utc))
+        # 变更流的最新 seq：/changes 只发这个位点之前的变化，避免快照和变更表不同步
+        self.latest_seq = int(latest_seq or 0)
         # /traces 的固定顺序 (asked_at DESC, trace_id DESC)，排一次，筛选后保持
         traces.sort(key=_trace_order, reverse=True)
         self.by_id: dict[str, list[Trace]] = {}
+        # 供数主键：trace_id 不唯一（跨模型/重跑），(trace_id, day, app_version) 才唯一
+        self.by_key: dict[tuple, Trace] = {}
         for trace in traces:
             self.by_id.setdefault(trace.trace_id, []).append(trace)
+            self.by_key[(trace.trace_id, trace.day, trace.app_version)] = trace
+        # 测试用户：变更流里也不能出现
+        self.hidden: set[tuple] = set()
 
     # -- 版本 ---------------------------------------------------------
     def taxonomy_version(self) -> str:
@@ -84,6 +91,9 @@ def _json_value(raw, fallback):
 
 
 def load(conn, intent_tree, problem_trees, build_summary=None) -> Snapshot:
+    # 先取变更位点再读 trace：变更行与 trace 行同一事务提交，
+    # 这样 latest_seq 以内的变更一定能在本次快照里找到对应 trace。
+    latest_seq = conn.execute("SELECT COALESCE(MAX(seq), 0) FROM changes").fetchone()[0]
     rows = conn.execute(
         "SELECT trace_id, day, app_version, asked_at, source, user_id, question, session_id, intent_code, "
         "task, subtask, problem_codes, problem_count, problems, severity, is_correct, "
@@ -121,10 +131,12 @@ def load(conn, intent_tree, problem_trees, build_summary=None) -> Snapshot:
     rules = users.load(config.datasets_root())
     stats = rules.question_stats((trace.user_id, trace.question) for trace in traces)
     kept = []
+    hidden = set()
     excluded = 0
     for trace in traces:
         if rules.is_test(trace.user_id, stats):
             excluded += 1
+            hidden.add((trace.trace_id, trace.day, trace.app_version))
         else:
             kept.append(trace)
     if excluded:
@@ -132,7 +144,9 @@ def load(conn, intent_tree, problem_trees, build_summary=None) -> Snapshot:
     if build_summary is not None:
         build_summary["test_excluded"] = excluded
     newest = max((t.analyzed_at for t in traces if t.analyzed_at), default=None)
-    return Snapshot(traces, intent_tree, problem_trees, newest, build_summary)
+    snap = Snapshot(traces, intent_tree, problem_trees, newest, build_summary, latest_seq=latest_seq)
+    snap.hidden = hidden
+    return snap
 
 
 # --------------------------------------------------------------------------- 筛选
@@ -804,6 +818,114 @@ def batch(snap: Snapshot, trace_ids, filters: Filters):
         item["status"] = "analyzed"
         items.append(item)
     return {"items": items}
+
+
+# --------------------------------------------------------------------------- /changes
+
+def _changes_rows(conn, since_seq, head_seq, after_seq):
+    """窗口内的「每个 key 只取最新一条变更」，按 seq 升序。"""
+    return conn.execute(
+        "SELECT c.trace_id, c.day, c.app_version, c.seq, c.op, c.changed_at FROM changes c "
+        "WHERE c.seq > ? AND c.seq <= ? AND c.seq > ? AND c.seq = ("
+        "  SELECT MAX(d.seq) FROM changes d WHERE d.trace_id = c.trace_id AND d.day = c.day "
+        "  AND d.app_version = c.app_version AND d.seq <= ?"
+        ") ORDER BY c.seq",
+        (since_seq, head_seq, after_seq, head_seq),
+    ).fetchall()
+
+
+def changes(snap: Snapshot, db_path, dataset: str, since, page_size=100, cursor=None):
+    """增量同步：按服务端变更序号发放新增/变更/删除，不依赖时间戳。"""
+    if dataset not in config.DATASET_ALIASES:
+        raise errors.unknown_value("dataset", dataset, sorted(config.DATASET_ALIASES))
+    if page_size < 1 or page_size > config.MAX_CHANGES_PAGE:
+        raise errors.invalid(f"page_size 必须在 1..{config.MAX_CHANGES_PAGE} 之间", "page_size")
+
+    since_seq = 0
+    if since not in (None, ""):
+        try:
+            since_seq = cursors.decode_since(since, dataset)
+        except cursors.CursorError as exc:
+            raise errors.invalid(f"since 不合法：{exc}", "since") from exc
+    if since_seq < 0:
+        raise errors.invalid("since 不能为负数", "since")
+
+    latest = snap.latest_seq
+    head, after = latest, since_seq
+    filter_key = cursors.filter_hash({"dataset": dataset, "since": since_seq})
+    if cursor:
+        try:
+            body = cursors.decode(cursor, "changes", filter_key)
+        except cursors.CursorError as exc:
+            raise errors.cursor_expired(str(exc)) if exc.expired else errors.invalid(str(exc), "cursor")
+        stored = body.get("c") or []
+        if len(stored) != 2:
+            raise errors.invalid("cursor 内容损坏", "cursor")
+        head, after = int(stored[0]), int(stored[1])
+
+    # 索引被重建（seq 从头开始）时旧位点不可用，必须让客户端重新全量同步一次
+    if since_seq > latest or head > latest or after > head:
+        raise errors.ApiError(
+            409,
+            "SYNC_RESET",
+            "同步位点已失效：服务端索引重建过，请从 since 留空重新全量同步",
+            {"since_seq": since_seq, "latest_seq": latest},
+        )
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error as exc:
+        raise errors.unavailable("索引不可用，请稍后重试", error=str(exc)) from exc
+    try:
+        rows = _changes_rows(conn, since_seq, head, after)
+    except sqlite3.Error as exc:
+        raise errors.unavailable("变更流不可用，请稍后重试", error=str(exc)) from exc
+    finally:
+        conn.close()
+
+    items, deleted = [], []
+    last_seq = after
+    has_more = False
+    for trace_id, day, app_version, seq, op, changed_at in rows:
+        key = (trace_id, day, app_version)
+        if key in snap.hidden:
+            continue
+        if op == "delete":
+            entry = {
+                "trace_id": trace_id,
+                "day": day,
+                "app_version": app_version,
+                "seq": seq,
+                "op": "delete",
+                "changed_at": changed_at,
+            }
+        else:
+            trace = snap.by_key.get(key)
+            # 变更行存在但当前快照没有（例如文件在两次构建之间被删）：不对外提供半状态
+            if trace is None:
+                continue
+            entry = _item(snap, trace)
+            entry["change"] = {"seq": seq, "op": "upsert", "changed_at": changed_at}
+        if len(items) + len(deleted) == page_size:
+            has_more = True
+            break
+        (deleted if op == "delete" else items).append(entry)
+        last_seq = seq
+
+    next_cursor = None
+    if has_more:
+        next_cursor = cursors.encode("changes", filter_key, page_size, [head, last_seq])
+    return {
+        "items": items,
+        "deleted": deleted,
+        "page_size": page_size,
+        "has_more": has_more,
+        "next_cursor": next_cursor,
+        "next_since": None if has_more else cursors.encode_since(dataset, head),
+        "since_seq": since_seq,
+        "head_seq": head,
+        "latest_seq": latest,
+    }
 
 
 # --------------------------------------------------------------------------- /traces/{id}

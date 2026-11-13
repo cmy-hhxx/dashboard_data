@@ -7,7 +7,7 @@ import time
 import traceback
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from . import config, cursors, errors, snapshot, store, timeutil
 from .taxonomy import load_cluster, load_intent, severity_tree
@@ -36,6 +36,7 @@ KNOWN_PARAMS = {
     "day",
     "kind",
     "version",
+    "since",
 }
 
 
@@ -228,6 +229,8 @@ class Handler(BaseHTTPRequestHandler):
             # 聚类产物的生成时间与批次覆盖上限：最新一天通常还没被聚类覆盖。
             "cluster_updated_at": cluster_updated_at,
             "cluster_through": (snap.build_summary or {}).get("cluster_through") if snap else None,
+            # 增量同步的最新位点：客户端可与自己保存的 since 对比判断是否落后
+            "latest_seq": snap.latest_seq if snap else None,
             "filters": filters or {},
         }
         if extra_meta:
@@ -322,6 +325,10 @@ class Handler(BaseHTTPRequestHandler):
             self._traces(params)
         elif tail == "/traces/batch":
             self._batch(params)
+        elif tail == "/changes":
+            self._changes(params)
+        elif tail == "/docs" or tail.startswith("/docs/"):
+            self._docs(unquote(tail[len("/docs"):]).strip("/") or None)
         elif tail.startswith("/traces/"):
             self._detail(unquote(tail[len("/traces/"):]), params)
         else:
@@ -341,6 +348,7 @@ class Handler(BaseHTTPRequestHandler):
                 "data_updated_at": snap.data_updated_at if snap else None,
                 "traces": len(snap.traces) if snap else 0,
                 "problems": sum(t.problem_count for t in snap.traces) if snap else 0,
+                "latest_seq": snap.latest_seq if snap else 0,
                 "building": APP.building,
                 "build": build,
                 "state_dir": str(config.STATE_DIR),
@@ -452,6 +460,65 @@ class Handler(BaseHTTPRequestHandler):
         data = snapshot.batch(snap, trace_ids, None)
         _json_response(self, 200, self._envelope(data, {"dataset": dataset}, snap))
 
+    def _changes(self, params):
+        snap = self._snapshot()
+        dataset = params.get("dataset") or ""
+        if not dataset:
+            raise errors.invalid("缺少必填参数 dataset", "dataset")
+        page_size = _int_param(params, "page_size", 100)
+        since = params.get("since") or None
+        data = snapshot.changes(
+            snap,
+            APP.db_path,
+            dataset,
+            since,
+            page_size=page_size,
+            cursor=(params.get("cursor") or None),
+        )
+        _json_response(
+            self,
+            200,
+            self._envelope(
+                data,
+                {"dataset": dataset, "since_seq": data["since_seq"], "head_seq": data["head_seq"]},
+                snap,
+            ),
+        )
+
+    def _docs(self, name):
+        if name:
+            slug = name
+            path = (config.DOCS_DIR / f"{slug}.md").resolve()
+            if path.parent != config.DOCS_DIR.resolve() or not path.is_file():
+                raise errors.not_found("文档不存在", name=slug)
+            content = path.read_text(encoding="utf-8", errors="replace")
+            data = {
+                "name": slug,
+                "title": _doc_title(content, slug),
+                "format": "markdown",
+                "content": content,
+                "updated_at": timeutil.utc_rfc3339(
+                    datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+                ),
+            }
+        else:
+            docs = []
+            for path in sorted(config.DOCS_DIR.glob("*.md")):
+                slug = path.stem
+                content = path.read_text(encoding="utf-8", errors="replace")
+                docs.append(
+                    {
+                        "name": slug,
+                        "title": _doc_title(content, slug),
+                        "url": f"{config.API_PREFIX}/docs/{quote(slug)}",
+                        "updated_at": timeutil.utc_rfc3339(
+                            datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+                        ),
+                    }
+                )
+            data = {"docs": docs}
+        _json_response(self, 200, self._envelope(data, {"name": name}))
+
     def _detail(self, trace_id, params):
         snap = self._snapshot()
         dataset = params.get("dataset") or ""
@@ -474,6 +541,13 @@ class Handler(BaseHTTPRequestHandler):
                 snap,
             ),
         )
+
+
+def _doc_title(content, fallback):
+    for line in content.splitlines():
+        if line.startswith("# "):
+            return line[2:].strip()
+    return fallback
 
 
 def _int_param(params, name, default):

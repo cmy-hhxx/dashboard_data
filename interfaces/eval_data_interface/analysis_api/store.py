@@ -93,6 +93,15 @@ CREATE TABLE IF NOT EXISTS meta(
     key TEXT PRIMARY KEY,
     value TEXT
 );
+CREATE TABLE IF NOT EXISTS changes(
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    trace_id TEXT NOT NULL,
+    day TEXT NOT NULL,
+    app_version TEXT NOT NULL,
+    op TEXT NOT NULL,
+    changed_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS changes_key ON changes(trace_id, day, app_version, seq);
 """
 
 # 结构版本：落库字段的语义变了就 +1；旧库直接清掉归因派生行重扫，input_index 保留
@@ -238,6 +247,113 @@ def _tri_state(value):
         if text in ("false", "0", "no"):
             return 0
     return None
+
+
+# 索引里用于判重/回放的内容字段；file/line/offset 不进状态，
+# 否则归因文件重排、行号漂移都会被误判成更新。
+STATE_FIELDS = (
+    "asked_at",
+    "source",
+    "user_id",
+    "question",
+    "session_id",
+    "intent_code",
+    "task",
+    "subtask",
+    "problem_codes",
+    "problem_count",
+    "problems",
+    "severity",
+    "is_correct",
+    "analysis_id",
+    "analyzed_at",
+)
+JSON_STATE_FIELDS = {"problem_codes", "problems", "severity"}
+# 只用于诊断的字段不参与判重：文件被重写/尾部追加导致 mtime、行号偏移时，
+# 内容没变就不该让业务方重拉。
+FINGERPRINT_FIELDS = tuple(f for f in STATE_FIELDS if f not in ("analyzed_at", "analysis_id"))
+
+
+def _entry_state(entry) -> tuple:
+    return tuple(entry[field] for field in STATE_FIELDS)
+
+
+def _row_state(row) -> tuple:
+    state = dict(zip(STATE_FIELDS, row))
+    for field in JSON_STATE_FIELDS:
+        try:
+            state[field] = json.loads(state[field]) if state[field] else (
+                {} if field == "severity" else []
+            )
+        except (TypeError, ValueError):
+            state[field] = {} if field == "severity" else []
+    return tuple(state[field] for field in STATE_FIELDS)
+
+
+def _fingerprint(state: tuple) -> str:
+    values = dict(zip(STATE_FIELDS, state))
+    payload = [values.get(field) for field in FINGERPRINT_FIELDS]
+    return hashlib.sha1(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+
+
+def _content_changed(previous, state) -> bool:
+    return previous is None or _fingerprint(previous) != _fingerprint(state)
+
+
+def _trace_states(conn, where="", params=()):
+    """按 (trace_id, day, app_version) 取库里现有内容的状态元组。"""
+    sql = "SELECT trace_id, day, app_version, " + ", ".join(STATE_FIELDS) + " FROM traces " + where
+    return {
+        (row[0], row[1], row[2]): _row_state(row[3:])
+        for row in conn.execute(sql, params)
+    }
+
+
+def _trace_state(conn, key):
+    row = conn.execute(
+        "SELECT " + ", ".join(STATE_FIELDS) + " FROM traces "
+        "WHERE trace_id = ? AND day = ? AND app_version = ?",
+        key,
+    ).fetchone()
+    return _row_state(row) if row else None
+
+
+def _emit_changes(conn, upserts, deletes, changed_at) -> int:
+    """写入变更流：upserts/deletes 都是 (trace_id, day, app_version) 序列。"""
+    rows = [(trace_id, day, app, "upsert", changed_at) for trace_id, day, app in upserts]
+    rows += [(trace_id, day, app, "delete", changed_at) for trace_id, day, app in deletes]
+    if rows:
+        conn.executemany(
+            "INSERT INTO changes(trace_id, day, app_version, op, changed_at) VALUES (?, ?, ?, ?, ?)",
+            rows,
+        )
+    return len(rows)
+
+
+def _seed_changes(conn, log) -> int:
+    """老索引升级：给还没有变更记录的 trace 补一条 upsert，让 since 留空的首次同步能拿全量。"""
+    seeded = conn.execute("SELECT value FROM meta WHERE key = 'changes_seeded'").fetchone()
+    if seeded:
+        return 0
+    changed_at = timeutil.utc_rfc3339(datetime.now(timezone.utc))
+    cursor = conn.execute(
+        "INSERT INTO changes(trace_id, day, app_version, op, changed_at) "
+        "SELECT t.trace_id, t.day, t.app_version, 'upsert', ? FROM traces t WHERE NOT EXISTS ("
+        "  SELECT 1 FROM changes c WHERE c.trace_id = t.trace_id AND c.day = t.day "
+        "  AND c.app_version = t.app_version)",
+        (changed_at,),
+    )
+    count = cursor.rowcount or 0
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES ('changes_seeded', '1') "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+    )
+    conn.commit()
+    if count:
+        log(f"[index] 变更流初始化：{count} 条 trace")
+    return count
 
 
 class ItemCodes:
@@ -393,7 +509,7 @@ def _intent_lookup(intent_tree):
 def ingest_attribution(conn, aime: Path, item_codes_by_model, intent_tree, log):
     """把一个 attribution 文件读进 traces / history；同一 trace 保留行号最大的一行。"""
     lookup = _intent_lookup(intent_tree)
-    stats = {"files": 0, "skipped": 0, "traces": 0, "history": 0, "problems": 0, "unclustered": 0}
+    stats = {"files": 0, "skipped": 0, "traces": 0, "history": 0, "problems": 0, "unclustered": 0, "changes": 0}
     codes_by_model = {k: c for k, (c, _) in item_codes_by_model.items()}
 
     for path, split, model_dir in _attribution_files(aime):
@@ -411,9 +527,8 @@ def ingest_attribution(conn, aime: Path, item_codes_by_model, intent_tree, log):
         default_day = ATTR_RE.match(basename)
         default_day = default_day.group("day") if default_day else None
 
-        conn.execute("DELETE FROM traces WHERE file = ?", (str(path),))
+        # history 在扫描过程中逐条写入，旧记录必须在扫描前清掉
         conn.execute("DELETE FROM history WHERE file = ?", (str(path),))
-        conn.execute("DELETE FROM problem_codes WHERE file = ?", (str(path),))
 
         kept: dict[str, dict] = {}
         order: list[str] = []
@@ -535,6 +650,23 @@ def ingest_attribution(conn, aime: Path, item_codes_by_model, intent_tree, log):
                 else:
                     order.append(trace_id)
                 kept[trace_id] = entry
+
+        # 新旧内容对比要在删除前取：PK 是 (trace_id, day, app_version)，
+        # 同一个 key 可能被别的归因文件写过，只看本文件会漏判。
+        old_states = _trace_states(conn, "WHERE file = ?", (str(path),))
+        new_states = {
+            (tid, kept[tid]["day"], kept[tid]["app_version"]): _entry_state(kept[tid])
+            for tid in order
+        }
+        carry = {
+            key: _trace_state(conn, key)
+            for key in new_states
+            if key not in old_states
+        }
+
+        conn.execute("DELETE FROM traces WHERE file = ?", (str(path),))
+        conn.execute("DELETE FROM problem_codes WHERE file = ?", (str(path),))
+
         conn.executemany(
             "INSERT OR REPLACE INTO traces(trace_id, day, app_version, asked_at, source, user_id, question, session_id, "
             "intent_code, task, subtask, problem_codes, problem_count, problems, severity, is_correct, "
@@ -561,10 +693,20 @@ def ingest_attribution(conn, aime: Path, item_codes_by_model, intent_tree, log):
             "INSERT INTO problem_codes(trace_id, day, app_version, scope, idx, code, file) VALUES (?, ?, ?, ?, ?, ?, ?)",
             code_rows,
         )
+        changed = _emit_changes(
+            conn,
+            [
+                key for key, state in new_states.items()
+                if _content_changed(old_states.get(key) or carry.get(key), state)
+            ],
+            [key for key in old_states if key not in new_states],
+            timeutil.utc_rfc3339(datetime.now(timezone.utc)),
+        )
         _store_sig(conn, path, sig, "attribution")
         conn.commit()
         stats["files"] += 1
         stats["traces"] += len(order)
+        stats["changes"] += changed
     return stats
 
 
@@ -620,24 +762,29 @@ def ingest_inputs(conn, aime: Path, log):
 
 
 def _prune(conn, aime: Path):
-    """清理已经消失的文件对应的行。"""
+    """清理已经消失的文件对应的行；删掉的 trace 写一条 delete 变更。"""
     alive = {str(p) for p, _, _ in _attribution_files(aime)} | {str(p) for p, _, _ in _input_files(aime)}
     rows = conn.execute("SELECT path, kind FROM files").fetchall()
     removed = 0
+    changed = 0
     for path, kind in rows:
         if path in alive:
             continue
         if kind == "attribution":
+            vanished = list(_trace_states(conn, "WHERE file = ?", (path,)))
             conn.execute("DELETE FROM traces WHERE file = ?", (path,))
             conn.execute("DELETE FROM history WHERE file = ?", (path,))
             conn.execute("DELETE FROM problem_codes WHERE file = ?", (path,))
+            changed += _emit_changes(
+                conn, [], vanished, timeutil.utc_rfc3339(datetime.now(timezone.utc))
+            )
         elif kind == "input":
             conn.execute("DELETE FROM input_index WHERE path = ?", (path,))
         conn.execute("DELETE FROM files WHERE path = ?", (path,))
         removed += 1
-    if removed:
+    if removed or changed:
         conn.commit()
-    return removed
+    return removed, changed
 
 
 def cluster_files(aime: Path):
@@ -686,10 +833,13 @@ def build(root: Path | None = None, log=None) -> dict:
 
         attribution = ingest_attribution(conn, aime, item_codes, intent_tree, log)
         inputs = ingest_inputs(conn, aime, log)
-        removed = _prune(conn, aime)
+        seeded = _seed_changes(conn, log)
+        removed, pruned_changes = _prune(conn, aime)
         counts = conn.execute("SELECT COUNT(*) FROM traces").fetchone()[0]
         history = conn.execute("SELECT COUNT(*) FROM history").fetchone()[0]
         inputs_total = conn.execute("SELECT COUNT(*) FROM input_index").fetchone()[0]
+        changes_total = conn.execute("SELECT COUNT(*) FROM changes").fetchone()[0]
+        latest_seq = conn.execute("SELECT COALESCE(MAX(seq), 0) FROM changes").fetchone()[0]
         newest = conn.execute("SELECT MAX(analyzed_at) FROM traces").fetchone()[0]
         # 汇总以库里全量为准（增量构建时 stats 只覆盖本轮重扫的文件）
         severity = {level: 0 for level in config.SEVERITIES}
@@ -722,6 +872,10 @@ def build(root: Path | None = None, log=None) -> dict:
             "cluster_through": max(cluster_dates) if cluster_dates else None,
             "severity": severity,
             "pruned": removed,
+            "changes": changes_total,
+            "changes_emitted": attribution["changes"] + pruned_changes,
+            "changes_seeded": seeded,
+            "latest_seq": latest_seq,
             "data_updated_at": newest,
             "state_dir": str(config.STATE_DIR),
         }

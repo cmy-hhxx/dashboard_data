@@ -95,10 +95,13 @@ trace 的 `problems` 问题数组与 P0–P4 严重度，并新增 `GET /severit
 | `GET\|POST /severity` | P0–P4 统计：问题条目数 + trace 数，可分组；`group_by` 可省略 |
 | `GET\|POST /traces` | trace 列表，固定 `(asked_at DESC, trace_id DESC)`，cursor 翻页；`severity` 筛选 |
 | `POST /traces/batch` | 按一批 trace_id 取摘要（≤1000） |
+| `GET\|POST /changes?dataset=…[&since=…]` | **增量同步**：按服务端变更序号发新增/变更/删除；不传 `since` 即全量。见 `docs/incremental.md` |
 | `GET /traces/{trace_id}?dataset=…&day=…` | 单条 trace：`eval_input` 整行 + trace 对象 + 完整问题条目 + 历史版本 |
+| `GET /docs` `/docs/{name}` | 接口文档索引与 Markdown 原文（业务方无需仓库即可读取） |
 
 所有 200 响应统一为 `{request_id, schema_version, data, meta}`；错误为
-`{request_id, error:{code, message, details}}`，错误码见协议 §10。
+`{request_id, error:{code, message, details}}`，错误码见协议 §10。`meta` 另含
+`data_updated_at`（数据产物时间）、`built_at`（快照构建时间）、`latest_seq`（变更流最新位点）。
 
 `cursor` 是无状态签名串（HMAC-SHA256），绑定筛选条件与页大小，30 分钟过期返回 410；
 密钥落盘在 `state/cursor.key`，重启不失效。
@@ -163,10 +166,11 @@ analysis_api/
   taxonomy.py   分类树（意图 JSON / 聚类树 / P0–P4 定义）
   store.py      SQLite 增量索引（attribution、问题条目与严重度、input 偏移、历史版本）
   users.py      测试用户判定（与看板 user_rules.json 同口径）
-  snapshot.py   内存快照、筛选、/summary、/severity 与 /traces 语义、详情拼装
-  cursors.py    无状态签名 cursor
-  server.py     HTTP 路由与后台重建
+  snapshot.py   内存快照、筛选、/summary、/severity、/traces、/changes 与详情拼装
+  cursors.py    无状态签名 cursor 与同步位点 token
+  server.py     HTTP 路由、文档下发与后台重建
 run.py          CLI：build / serve / status
 taxonomy/       意图分类体系（版本化 JSON）
+docs/           接口文档；`/api/v1/analysis/docs` 直接下发这里的 Markdown
 tests/          fixture + 验收用例
 ```
