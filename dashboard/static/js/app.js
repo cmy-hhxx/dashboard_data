@@ -213,6 +213,7 @@ async function poll() {
       if (staleIndex && state.view === "samples") {
         state.indexes = {};
         state.indexP = {};
+        Object.keys(recallP).forEach((p) => delete recallP[p]);
         await render({ refresh: true });
       }
       return;
@@ -222,6 +223,7 @@ async function poll() {
     state.productP = {};
     state.indexes = {};
     state.indexP = {};
+    Object.keys(recallP).forEach((p) => delete recallP[p]);
     await render({ refresh: true });
     stamp(true);
   } catch (err) {

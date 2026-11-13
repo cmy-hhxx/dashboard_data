@@ -2972,8 +2972,8 @@ def build_samples(pairs, root, out_dir, store, reader, cluster_index, cluster_si
         # A changed sample must not keep serving the previous transcript.
         for pair in misses:
             stale = sample_dir / f"{pair['_slug']}.json"
-            stale.unlink(missing_ok=True)
-            Path(str(stale) + ".gz").unlink(missing_ok=True)
+            for suffix in ("", ".gz", ".br"):
+                Path(str(stale) + suffix).unlink(missing_ok=True)
         by_input = defaultdict(list)
         no_input = []
         for pair in misses:

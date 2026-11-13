@@ -88,8 +88,8 @@ export function bindTips(root, resolve) {
     raf = 0;
     const e = queued;
     if (!e) return;
-    // Canvases (星图) hit-test and place their own tooltip.
-    if (e.target.closest && e.target.closest("[data-own-tip]")) return;
+    // Canvases (星图, K 线) hit-test and place their own tooltip; only one tip may be on screen.
+    if (e.target.closest && e.target.closest("[data-own-tip], .kl-host")) return hideTip();
     const t = e.target.closest ? e.target.closest("[data-tip],[data-cell],[data-mx]") : null;
     if (!t || !root.contains(t)) return hideTip();
     const html = resolve ? resolve(t) : null;

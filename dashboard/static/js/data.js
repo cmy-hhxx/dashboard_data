@@ -1832,6 +1832,7 @@ function wireMatrixAnalysis(panel, model, state, trend) {
         period,
         height: analysisChartHeight(panel, chartHost),
         volumeName: "Trace",
+        releases: isIntraday ? [] : trend.releases,
         wheelZoom: () => !!state.analysisZoom,
         emptyText: "暂无已评测 Trace",
         openLabel: labels.open,
@@ -2129,8 +2130,13 @@ const TREND_READY = new Map();
 /* One payload per (product, build); a rebuild invalidates it through generated_at. */
 const trendKey = (c) => `${c.product}|${c.data.generated_at}`;
 const trendReady = (c) => TREND_READY.get(trendKey(c));
+/* Only the current build's payload is kept: a page left open across many rebuilds must not
+   hold every earlier ~10 MB trends payload in memory. */
+const keepOnly = (map, key) => [...map.keys()].forEach((k) => { if (k !== key) map.delete(k); });
 function loadTrend(c) {
   const key = trendKey(c);
+  keepOnly(TREND_READY, key);
+  keepOnly(TREND_CACHE, key);
   if (TREND_READY.has(key)) return Promise.resolve(TREND_READY.get(key));
   if (!TREND_CACHE.has(key)) {
     TREND_CACHE.set(key, getJSON(`trends-${c.product}.json`)
@@ -2144,6 +2150,7 @@ function loadTrend(c) {
 const AB_CACHE = new Map();
 function loadAB(c, url) {
   const key = `${c.product}|${c.data.generated_at}`;
+  keepOnly(AB_CACHE, key);
   if (!AB_CACHE.has(key)) AB_CACHE.set(key, getJSON(url).catch(() => null));
   return AB_CACHE.get(key);
 }

@@ -114,7 +114,10 @@ function groupSessions(rows) {
    page, a session outside it — waits for the full index instead. */
 const sessionKey = (row) => `${row.sp}|${row.m}|${row.sid || row.s}`;
 async function indexFor(c) {
-  if (c.peekIndex?.(c.product) || !c.loadRecallHead || dirty() || F().sort !== "sev") return c.loadIndex(c.product);
+  // An in-place refresh never steps back to the head: the reader may be filtering or paging.
+  if (c.refresh || c.peekIndex?.(c.product) || !c.loadRecallHead || dirty() || F().sort !== "sev") {
+    return c.loadIndex(c.product);
+  }
   const head = await c.loadRecallHead(c.product);
   const rows = head?.products?.[c.product]?.rows;
   const wanted = params().get("case");

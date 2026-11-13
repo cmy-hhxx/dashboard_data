@@ -4,7 +4,7 @@
    基于 TradingView 的 lightweight-charts（Apache-2.0，vendor 在 static/vendor）；不自绘 Canvas。
    数据口径由调用方给全量 rows；这里只负责聚合和绘制，不做任何筛选。 */
 import { createChart, CandlestickSeries, HistogramSeries, LineSeries, AreaSeries, ColorType } from "../vendor/lightweight-charts.production.js";
-import { esc, fmt } from "./core.js";
+import { esc, fmt, hideTip } from "./core.js";
 import { KLINE_PERIODS, PERIOD_NAME, buildCandles, movingAverage } from "./kline_data.js";
 
 export { KLINE_PERIODS } from "./kline_data.js";
@@ -76,10 +76,12 @@ function releaseLinePrimitive(chart, items, color, fontFamily, backdrop) {
       context.font = `${Math.round(11 * vr)}px ${fontFamily}`;
       context.textBaseline = "top";
       let lastLabel = -Infinity;
-      items.forEach(({ time, label }) => {
-        const x = timeScale.timeToCoordinate(time);
+      const xs = items.map(({ time }) => timeScale.timeToCoordinate(time));
+      items.forEach(({ time, label }, i) => {
+        const x = xs[i];
         if (x == null) return;
         const px = Math.round(x * hr) + 0.5;
+        const nextX = xs.slice(i + 1).find((v) => v != null);
         context.strokeStyle = stroke;
         context.lineWidth = Math.max(1, Math.round(1.4 * hr));
         context.beginPath();
@@ -87,11 +89,13 @@ function releaseLinePrimitive(chart, items, color, fontFamily, backdrop) {
         context.lineTo(px, bitmapSize.height);
         context.stroke();
         // 版本名只在有空间时写，挤在一起的两根线不叠字；靠近右边缘时改为左对齐。
-        if (px - lastLabel >= 52 * hr) {
+        if (label && px - lastLabel >= 12 * hr) {
           const gap = 6 * hr;
           const y = 4 * vr;
           const textW = context.measureText(label).width;
-          const right = px + gap + textW > bitmapSize.width;
+          // Flip to the left when the right edge or the next release line would cut the label.
+          const crowded = nextX != null && Math.round(nextX * hr) - px < gap * 2 + textW;
+          const right = crowded || px + gap + textW > bitmapSize.width;
           context.textAlign = right ? "right" : "left";
           const tx = right ? px - gap : px + gap;
           context.lineJoin = "round";
@@ -135,6 +139,50 @@ function wireWheelZoom(host, chart, enabled) {
 }
 
 const MA_DEFS = [["MA5", 5, "ma5"], ["MA10", 10, "ma10"], ["MA20", 20, "ma20"]];
+
+const LOCK_ICON = `<svg class="i-zoom-lock" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="4" y="7" width="8" height="6" rx="1.2" stroke="currentColor" stroke-width="1.3"/><path d="M6 7V5.3a2 2 0 0 1 4 0V7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg><svg class="i-zoom-unlock" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="4" y="7" width="8" height="6" rx="1.2" stroke="currentColor" stroke-width="1.3"/><path d="M6 7V5.3a2 2 0 0 1 3.8-.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>`;
+
+/* Wheel zoom is locked until the reader unlocks it, so scrolling the page over a chart never
+   zooms it by accident. A caller with its own lock passes spec.wheelZoom as a function. */
+function zoomLock(spec, compact) {
+  if (typeof spec.wheelZoom === "function") return { html: "", allowed: spec.wheelZoom, wire: () => {} };
+  let unlocked = spec.wheelZoom === true;
+  const label = () => (unlocked ? "滚轮缩放已解锁" : "滚轮缩放已锁定");
+  return {
+    html: compact ? "" : `<button type="button" class="mxt-zoom kl-lock" aria-pressed="${unlocked}" aria-label="${label()}" title="${label()}">${LOCK_ICON}</button>`,
+    allowed: () => unlocked,
+    wire(host) {
+      const btn = host.querySelector(".kl-lock");
+      btn?.addEventListener("click", (event) => {
+        event.stopPropagation();
+        unlocked = !unlocked;
+        btn.setAttribute("aria-pressed", String(unlocked));
+        btn.setAttribute("aria-label", label());
+        btn.title = label();
+      });
+    },
+  };
+}
+
+/* The reading sits at the top of the price pane on the side away from the pointer, so it never
+   covers the candle being read. */
+function placeTip(tip, host, canvas, pointX, rightInset = 0) {
+  const pad = 8;
+  const width = tip.offsetWidth;
+  const left = pointX > host.clientWidth / 2 ? pad : Math.max(pad, host.clientWidth - rightInset - width - pad);
+  tip.style.left = `${left}px`;
+  tip.style.top = `${canvas.offsetTop + pad}px`;
+}
+
+/* Release dates outside the data still get their line: they become empty slots on the time axis. */
+function releasePads(times, releases) {
+  if (!times.length || typeof times[0] !== "string") return [];
+  const first = times[0];
+  const last = times[times.length - 1];
+  const dates = (Array.isArray(releases) ? releases : []).map((r) => String(r?.date || ""))
+    .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && (d < first || d > last));
+  return [...new Set(dates)].sort();
+}
 
 /* 发版日落到图上已有的时间点：取发版当天或之后的第一个点，超出数据范围的不画，同一点只画一次。 */
 function releaseItems(times, releases) {
@@ -188,9 +236,11 @@ export function createKlineChart(host, spec = {}) {
   const maSeries = [];
   // A moving average needs at least its span of candles; listing one that cannot draw is noise.
   const maDefs = compact ? [] : MA_DEFS.filter(([, span]) => span <= candles.length);
+  const lock = zoomLock(spec, compact);
   const legend = compact ? "" : `<div class="kl-legend">
       ${maDefs.map(([name, , key]) => `<span><i style="--c:${colors[key]}"></i>${name}</span>`).join("")}
       <span class="kl-vol-key"><i class="is-vol"></i>量能 · ${esc(spec.volumeName || "Trace")}</span>
+      ${lock.html}
     </div>`;
   if (compact) host.classList.add("is-compact");
   host.innerHTML = `${legend}<div class="kl-canvas"></div><div class="kl-tip" hidden></div>`;
@@ -225,8 +275,8 @@ export function createKlineChart(host, spec = {}) {
     },
     localization: { timeFormatter: (time) => tick(time) },
   });
-  const wheelAllowed = typeof spec.wheelZoom === "function" ? spec.wheelZoom : () => spec.wheelZoom === true;
-  const offWheel = wireWheelZoom(host, chart, wheelAllowed);
+  lock.wire(host);
+  const offWheel = compact ? () => {} : wireWheelZoom(host, chart, lock.allowed);
 
   const candleSeries = chart.addSeries(CandlestickSeries, {
     upColor: colors.up, downColor: colors.down,
@@ -236,9 +286,14 @@ export function createKlineChart(host, spec = {}) {
     priceLineVisible: false,
     lastValueVisible: !compact,
   }, 0);
-  candleSeries.setData(candles.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })));
+  const pads = releasePads(candles.map((c) => c.time), spec.releases);
+  candleSeries.setData([
+    ...candles.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })),
+    ...pads.map((time) => ({ time })),
+  ].sort((a, b) => (String(a.time) < String(b.time) ? -1 : 1)));
 
-  const releases = typeof candles[0]?.time === "string" ? releaseItems(candles.map((c) => c.time), spec.releases) : [];
+  const releases = typeof candles[0]?.time === "string"
+    ? releaseItems([...candles.map((c) => c.time), ...pads], spec.releases) : [];
   const releaseLines = releases.length
     ? releaseLinePrimitive(chart, compact ? releases.map((r) => ({ ...r, label: "" })) : releases,
       colors.release, getComputedStyle(document.body).fontFamily, colors.card)
@@ -267,10 +322,11 @@ export function createKlineChart(host, spec = {}) {
   // A handful of candles (e.g. one per release round) would each stretch across the plot;
   // keep them candle-sized and centred instead.
   const SPARSE = 12;
-  if (candles.length < SPARSE) {
-    const pad = (SPARSE - candles.length) / 2;
+  const points = candles.length + pads.length;
+  if (points < SPARSE) {
+    const pad = (SPARSE - points) / 2;
     chart.timeScale().applyOptions({ fixLeftEdge: false, fixRightEdge: false });
-    chart.timeScale().setVisibleLogicalRange({ from: -pad, to: candles.length - 1 + pad });
+    chart.timeScale().setVisibleLogicalRange({ from: -pad, to: points - 1 + pad });
   } else chart.timeScale().fitContent();
   let disposed = false;
   const sizeObserver = new ResizeObserver(() => {
@@ -305,12 +361,8 @@ export function createKlineChart(host, spec = {}) {
       ${spec.volumeLabel ? `<div class="kl-tip-row"><span>${esc(spec.volumeLabel)}</span><b class="num">${fmt(candle.volume)}</b></div>` : ""}
       ${typeof spec.tipExtra === "function" ? spec.tipExtra(candle) : ""}`;
     tip.hidden = false;
-    const pad = 8;
-    const width = tip.offsetWidth;
-    const left = Math.min(Math.max(pad, param.point.x + 14), host.clientWidth - width - pad);
-    const top = Math.max(pad, Math.min(param.point.y + 12, host.clientHeight - tip.offsetHeight - pad));
-    tip.style.left = `${left}px`;
-    tip.style.top = `${top}px`;
+    hideTip();
+    placeTip(tip, host, canvas, param.point.x, compact ? 0 : chart.priceScale("right").width());
   });
 
   if (typeof spec.onPick === "function") {
@@ -412,8 +464,9 @@ export function createTrendChart(host, spec = {}) {
   const priceFormat = measure === "ratio"
     ? { type: "custom", formatter: valueText, minMove: 0.01 }
     : { type: "price", precision: 0, minMove: 1 };
-  // 折线身份由上方折线卡承担，图内不再重复一排 legend。
-  host.innerHTML = `<div class="kl-canvas"></div><div class="kl-tip" hidden></div>`;
+  // 折线身份由上方折线卡承担，图内不再重复一排 legend；只留锁定键。
+  const lock = zoomLock(spec, false);
+  host.innerHTML = `${lock.html ? `<div class="kl-legend">${lock.html}</div>` : ""}<div class="kl-canvas"></div><div class="kl-tip" hidden></div>`;
   const canvas = host.querySelector(".kl-canvas");
   const tip = host.querySelector(".kl-tip");
 
@@ -444,8 +497,8 @@ export function createTrendChart(host, spec = {}) {
     },
     localization: { timeFormatter: (time) => timeTextOf(time) },
   });
-  const wheelAllowed = typeof spec.wheelZoom === "function" ? spec.wheelZoom : () => spec.wheelZoom === true;
-  const offWheel = wireWheelZoom(host, chart, wheelAllowed);
+  lock.wire(host);
+  const offWheel = wireWheelZoom(host, chart, lock.allowed);
 
   const byApi = new Map();
   const lineSeries = input.map((s) => {
@@ -487,7 +540,13 @@ export function createTrendChart(host, spec = {}) {
 
   const lookup = new Map(input.map((s) => [s, new Map(s.data.map((d) => [d.time, d.value]))]));
   const dates = [...new Set(input.flatMap((s) => s.data.map((d) => d.time)))].sort();
-  const releaseMarks = releaseItems(dates, spec.releases);
+  const trendPads = releasePads(dates, spec.releases);
+  if (trendPads.length) {
+    lineSeries[0].setData([...input[0].data, ...trendPads.map((time) => ({ time }))]
+      .sort((a, b) => (a.time < b.time ? -1 : 1)));
+    chart.timeScale().fitContent();
+  }
+  const releaseMarks = releaseItems([...dates, ...trendPads].sort(), spec.releases);
   const releaseLines = releaseMarks.length
     ? releaseLinePrimitive(chart, releaseMarks, colors.release, getComputedStyle(document.body).fontFamily, colors.card)
     : null;
@@ -510,11 +569,8 @@ export function createTrendChart(host, spec = {}) {
       .map(({ s, v }) => `<div class="kl-tip-row"><span class="kl-tip-name"><i style="--c:${cssColor(s.color, colors.ma5)}"></i>${esc(s.name || "")}</span><b class="num">${esc(valueText(v))}</b></div>`)
       .join("")}`;
     tip.hidden = false;
-    const pad = 8;
-    const left = Math.min(Math.max(pad, param.point.x + 14), host.clientWidth - tip.offsetWidth - pad);
-    const top = Math.max(pad, canvas.offsetTop + Math.min(param.point.y + 12, canvas.clientHeight - tip.offsetHeight - pad));
-    tip.style.left = `${left}px`;
-    tip.style.top = `${top}px`;
+    hideTip();
+    placeTip(tip, host, canvas, param.point.x, chart.priceScale("right").width());
   });
 
   if (typeof spec.onPick === "function") {

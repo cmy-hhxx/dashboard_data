@@ -372,12 +372,13 @@ body.is-mx-full { overflow: hidden; }
 }
 .mx-panels[hidden] { display: none; }
 .mx-panels.is-both { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); align-items: stretch; }
-/* 全屏 / 独立矩阵页：左右两栏共用一个高度。左栏问题卡片按行铺开，最后一行贴着右栏热力的底边，
-   不再在左栏底部留下比右栏高一截的空白。 */
-.mx-card.is-mx-full .mx-panels.is-both .mx-issue-trends-shell,
-.mx-card.is-page .mx-panels.is-both .mx-issue-trends-shell { display: flex; flex-direction: column; }
-.mx-card.is-mx-full .mx-panels.is-both .mpt, .mx-card.is-page .mx-panels.is-both .mpt { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
-.mx-card.is-mx-full .mx-panels.is-both .mpt-grid, .mx-card.is-page .mx-panels.is-both .mpt-grid { flex: 1 1 auto; align-content: space-between; }
+/* 左右两栏共用一个高度：左栏问题卡片的行等高铺满，最后一行的底边与右栏热力的底边对齐，
+   两栏顶边同一条线，卡片之间、两栏之间都是同一个间距。 */
+.mx-panels.is-both .mx-issue-trends-shell { display: flex; flex-direction: column; }
+.mx-panels.is-both .mpt { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.mx-panels.is-both .mpt-grid { flex: 1 1 auto; grid-auto-rows: 1fr; align-content: stretch; gap: var(--sp-4); }
+.mx-panels.is-both .mpt-card { grid-template-rows: auto minmax(0, 1fr) auto; align-content: stretch; }
+.mx-panels.is-both .mpt-card > .mpt-chart { align-self: center; }
 /* 右侧热力图铺到左栏 mpt 的底边，全屏内外都对齐。 */
 .mx-panels.is-both .mx-perspective:not([hidden]) { display: flex; flex-direction: column; }
 .mx-panels.is-both .mx-perspective-inner { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
@@ -387,7 +388,7 @@ body.is-mx-full { overflow: hidden; }
 .mx-panels.is-issue, .mx-panels.is-perspective { grid-template-columns: minmax(0, 1fr); }
 .mx-panels .mx-perspective-inner, .mx-panels .mx-issue-trends-shell > .mpt { margin-top: 0; padding-top: 0; border-top: 0; }
 .mx-issue-loading .empty { min-height: 180px; display: grid; place-items: center; padding: 0; }
-.mxp { display: grid; gap: 12px; min-width: 0; }
+.mxp { display: grid; gap: var(--sp-4); min-width: 0; }
 /* The left issue grid starts under its range bar; the lens top must meet that same line. */
 .mxp-lens { position: relative; min-width: 0; padding: 16px; border-radius: 12px; background: var(--well); }
 /* 小小的全屏键：常驻左上卡片的右上角，进入后铺满视口，Esc 或同一枚键退出。 */
@@ -488,13 +489,15 @@ body.is-mxp-full { overflow: hidden; }
 .kl-legend span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .kl-legend i { width: 8px; height: 2px; border-radius: 1px; background: var(--c, var(--muted)); }
 .kl-legend i.is-vol { width: 5px; height: 8px; border-radius: 1px; background: var(--t3); }
+.kl-legend .kl-lock { margin-left: auto; }
 .kl-tip { position: absolute; z-index: 4; min-width: 168px; pointer-events: none; }
 .kl-tip[hidden] { display: none; }
 .kl-tip-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-3); white-space: nowrap; }
 .kl-tip-head b { font-weight: var(--w-medium); font-variant-numeric: tabular-nums; }
 .kl-tip-head span { color: var(--muted); font-size: var(--fs-meta); font-weight: normal; }
 .mxp-heat-wrap { position: relative; min-width: 0; }
-.mxp-chart-panel { min-width: 0; padding: 10px 12px; border: 1px solid var(--well-2); border-radius: 10px; overflow-x: auto; overflow-y: hidden; }
+/* Same surface as the trend cards and the lens beside it: well background, no hard border. */
+.mxp-chart-panel { min-width: 0; padding: var(--sp-4) var(--sp-5); border-radius: 12px; background: var(--well); overflow-x: auto; overflow-y: hidden; }
 /* 问题发生率：30 天 × 聚类。格子只靠颜色读数，所以行高固定、宽度吃满，不跟着卡片无限长高；
    有命中的格子是按钮，点开就是「当天 × 当前场景 × 该聚类」的具体数据查询。 */
 .mxp-heat { display: grid; gap: 8px; min-width: 0; }
