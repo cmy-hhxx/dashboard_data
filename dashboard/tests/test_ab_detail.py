@@ -212,8 +212,10 @@ class ABDetailTests(unittest.TestCase):
             stale = root / "static" / "ab_samples" / ROUND / "99.json"
             stale.parent.mkdir(parents=True, exist_ok=True)
             stale.write_text("{}", encoding="utf-8")
+            (Path(str(stale) + ".br")).write_bytes(b"stale")
             self.assertIsNone(builder.ensure(ROUND, 99))
             self.assertFalse(stale.exists())
+            self.assertFalse(Path(str(stale) + ".br").exists())
 
     def test_unknown_round_and_eq_are_none(self):
         with tempfile.TemporaryDirectory() as folder:

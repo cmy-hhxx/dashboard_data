@@ -541,7 +541,7 @@ class ABDetailBuilder:
         Coverage can shrink after a retest rerun; leaving the old JSON in
         ``static/ab_samples`` would make the server serve a deleted eq forever.
         """
-        for target in (path, Path(str(path) + ".gz")):
+        for target in (path, Path(str(path) + ".gz"), Path(str(path) + ".br")):
             try:
                 target.unlink()
             except OSError:
