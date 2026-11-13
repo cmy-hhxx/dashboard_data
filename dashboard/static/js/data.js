@@ -6,7 +6,6 @@ import { sunburst } from "./sunburst.js";
 import { sunburstTween } from "./motion.js";
 import { galaxy } from "./galaxy.js";
 import { mountAB } from "./abtest.js";
-import { lineTrendSVG, wireLineTrendChart } from "./trend_chart.js";
 import { mountProblemTrends } from "./problem_trends.js";
 import { traceSeverityModel, traceShares } from "./trace_analysis.js";
 import { createKlineChart, createTrendChart, KLINE_PERIODS } from "./kline_chart.js";
@@ -2833,18 +2832,13 @@ async function loadABTrendSamplePage(spec, pick) {
   };
 }
 
-function mountSampleTrend(plot, renderChart, load, interaction = {}) {
-  let dispose = () => {};
-  const draw = () => {
-    dispose();
-    const chart = renderChart(plot.clientWidth);
-    plot.innerHTML = chart.html;
-    dispose = wireLineTrendChart(plot, chart, "", (pick) => drawer.open(pick), interaction);
-  };
-  const drawer = trendSampleDrawer(plot, load, draw, interaction);
-  draw();
+/* A K-line whose candles open the shared sample drawer. The chart follows its host's width on its
+   own (ResizeObserver), so opening or closing the drawer needs no redraw. */
+function mountSampleTrend(plot, makeChart, load, interaction = {}) {
+  const drawer = trendSampleDrawer(plot, load, () => {}, interaction);
+  const chart = makeChart(plot, (pick) => drawer.open(pick));
   return {
-    destroy: () => { dispose(); drawer.destroy(); },
+    destroy: () => { chart.destroy(); drawer.destroy(); },
     // Recall a source the chart may not draw as its own point (e.g. online samples while the
     // matrix shows the paired change). The pick's series carries the sides to load.
     openPick: (pick) => drawer.open(pick),
@@ -2852,7 +2846,14 @@ function mountSampleTrend(plot, renderChart, load, interaction = {}) {
 }
 
 function mountABCellTrend(plot, spec) {
-  return mountSampleTrend(plot, (width) => lineTrendSVG({ ...spec.chart, width }), (pick) => loadABTrendSamplePage(spec, pick), {
+  const makeChart = (host, onPick) => createKlineChart(host, {
+    ...spec.kline,
+    onPick: (candle) => {
+      const sample = spec.picks.get(String(candle.time));
+      if (sample) onPick({ date: String(candle.time), series: { samples: [sample] }, index: 0 });
+    },
+  });
+  return mountSampleTrend(plot, makeChart, (pick) => loadABTrendSamplePage(spec, pick), {
     openItem: (item) => {
       if (item.ref?.side === "online") openCompare({ online: item.ref.slug, round: item.round });
       else openCompare({ pair: item.pair, round: item.round });

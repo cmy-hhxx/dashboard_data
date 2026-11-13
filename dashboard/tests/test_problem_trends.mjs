@@ -4,9 +4,8 @@ import test from "node:test";
 // These modules share the dashboard's formatting helpers; no DOM is needed by the data seam.
 globalThis.location = { search: "" };
 globalThis.window = {};
-const { buildProblemTrendModel, problemRateValues, problemTrendChart, mountProblemTrends } = await import("../static/js/problem_trends.js");
+const { buildProblemTrendModel, problemRateValues, problemKlineRows, problemKlineSpec, mountProblemTrends } = await import("../static/js/problem_trends.js");
 const { traceSeverityModel, traceShares } = await import("../static/js/trace_analysis.js");
-const { lineTrendSVG, nearestTrendPoint, wireTrendPointPick, wireLineTrendChart, nebulaCluster } = await import("../static/js/trend_chart.js");
 const { abComparisonHTML, abRoundsHTML, mountAB, metricValue, metricTip } = await import("../static/js/abtest.js");
 const { matrixHeatSummary } = await import("../static/js/matrix_heat.js");
 const { trendSampleCandidates, trendSampleProblems, traceSampleRefs, abTrendSampleRefs, abLeafRefs, resolveABSamples } = await import("../static/js/trend_samples.js");
@@ -38,84 +37,6 @@ test("missing union counts do not invent a parent probability from overlapping c
   assert.deepEqual(problemRateValues(model.byId.get("S9"), model.base, [0, 1, 2]), [null, null, null]);
 });
 
-test("calendar spacing preserves missing days and date labels face inward", () => {
-  const chart = lineTrendSVG({
-    width: 240, height: 76, compact: true,
-    xLabels: ["10-01", "10-02", "10-10"], xDates: trend.dates,
-    series: [{ label: "答案合成", color: "blue", values: [80, 60, 40] }],
-  });
-  assert.equal((chart.geo.xOf(1) - chart.geo.xOf(0)) / (chart.geo.xOf(2) - chart.geo.xOf(0)), 1 / 9);
-  assert.match(chart.html, /text-anchor:start[^>]*>10-01/);
-  assert.match(chart.html, /text-anchor:end[^>]*>10-10/);
-  assert.doesNotMatch(chart.html, /<title>/); // Custom chart hover owns the tooltip; no second native popup.
-});
-
-test("drillable chart hover waits briefly and clears on press, touch and navigation", (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
-  const events = new Map();
-  const tipClasses = new Set(), cursorClasses = new Set();
-  const classList = (set) => ({ add: (key) => set.add(key), remove: (key) => set.delete(key) });
-  const mark = () => ({ setAttribute() {}, style: {} });
-  const line = mark(), dot = mark();
-  const cursor = { classList: classList(cursorClasses), querySelectorAll: (selector) => selector === "line" ? [line] : [dot] };
-  const svg = {
-    querySelector: () => cursor, getBoundingClientRect: () => ({ left: 0, top: 0, width: 320, height: 170 }),
-    addEventListener: (type, handler) => events.set(type, handler),
-    removeEventListener: (type) => events.delete(type),
-  };
-  const tip = { classList: classList(tipClasses), style: {}, offsetWidth: 200, offsetHeight: 60 };
-  const previousDocument = globalThis.document, previousWindow = globalThis.window;
-  globalThis.document = { getElementById: () => tip };
-  globalThis.window = { innerWidth: 845, innerHeight: 880 };
-  let enabled = true;
-  try {
-    const chart = lineTrendSVG({ width: 320, xLabels: ["10-01"], series: [{ label: "计算错误", values: [10] }] });
-    const dispose = wireLineTrendChart({ querySelector: () => svg }, chart, "", null, { hoverDelay: 160, canHover: () => enabled });
-    const move = { clientX: 100, clientY: 200, pointerType: "mouse", buttons: 0 };
-    events.get("pointermove")(move);
-    assert.equal(cursorClasses.has("is-on"), true);
-    assert.equal(tipClasses.has("is-on"), false, "fast travel over a drill target should not flash a tooltip");
-    t.mock.timers.tick(160);
-    assert.equal(tipClasses.has("is-on"), true);
-    events.get("pointerdown")({ pointerType: "mouse" });
-    assert.equal(tipClasses.has("is-on"), false, "pressing the drill target must clear its hover");
-    events.get("pointermove")(move);
-    t.mock.timers.tick(80);
-    events.get("pointerdown")({ pointerType: "mouse" });
-    t.mock.timers.tick(160);
-    assert.equal(tipClasses.has("is-on"), false, "pressing before the dwell finishes must cancel the pending tooltip");
-    events.get("pointermove")(move);
-    enabled = false;
-    t.mock.timers.tick(160);
-    assert.equal(tipClasses.has("is-on"), false, "a pending hover must not reopen over incoming charts");
-    enabled = true;
-    events.get("pointermove")({ ...move, pointerType: "touch" });
-    t.mock.timers.tick(160);
-    assert.equal(tipClasses.has("is-on"), false);
-    events.get("pointermove")(move);
-    dispose();
-    t.mock.timers.tick(160);
-    assert.equal(tipClasses.has("is-on"), false, "replaced charts must release pending hover work");
-    assert.equal(events.size, 0);
-  } finally {
-    globalThis.document = previousDocument;
-    globalThis.window = previousWindow;
-  }
-});
-
-test("expanded charts preserve the curve and encode problem volume independently of probability", () => {
-  const model = buildProblemTrendModel(trend, new Map([["S9", "答案合成"]]));
-  const node = model.byId.get("S9");
-  const small = problemTrendChart(model, node, [0, 1, 2], 240);
-  const large = problemTrendChart(model, node, [0, 1, 2], 760, true);
-  assert.deepEqual(large.geo.series[0].values, small.geo.series[0].values);
-  assert.deepEqual(large.geo.series[0].volumes, [165, 1]);
-  assert.equal(large.geo.H, 320);
-  assert.match(large.html, /class="mxt-ylab"/);
-  assert.match(large.geo.series[0].details[0], /165 个问题 · 80 \/ 100 会话/);
-  assert.ok((large.html.match(/class="mxt-nebula-dot"/g) || []).length <= 32);
-});
-
 test("each category uses only its dated observations, without empty leading or trailing days", () => {
   const source = {
     dates: ["2026-10-01", "2026-10-02", "", "2026-10-10", "2026-10-11"], nodes: ["S9"],
@@ -123,14 +44,31 @@ test("each category uses only its dated observations, without empty leading or t
     cells: [cell(1, 0, 10, 8), cell(2, 0, 50, 40), cell(3, 0, 20, 15)],
   };
   const model = buildProblemTrendModel(source);
-  const chart = problemTrendChart(model, model.byId.get("S9"), [0, 1, 2, 3, 4], 720, true);
-  assert.deepEqual(chart.geo.xDates, ["2026-10-02", "2026-10-10"]);
-  assert.deepEqual(chart.geo.series[0].values, [8, 15]);
-  assert.deepEqual(chart.geo.series[0].volumes, [10, 20]);
-  assert.deepEqual(chart.geo.xLabels, ["10-02", "10-10"]);
-  const single = problemTrendChart(model, model.byId.get("S9"), [3, 4], 240);
-  assert.deepEqual(single.geo.xDates, ["2026-10-10"]);
-  assert.deepEqual(single.geo.series[0].values, [15]);
+  const rows = problemKlineRows(model, model.byId.get("S9"), [0, 1, 2, 3, 4]);
+  assert.deepEqual(rows.map((row) => row.date), ["2026-10-02", "2026-10-10"]);
+  assert.deepEqual(rows.map((row) => row.value), [8, 15]);
+  // Volume is the evaluated sessions of that day; the problem count rides along for the tooltip.
+  assert.deepEqual(rows.map((row) => row.volume), [100, 100]);
+  assert.deepEqual(rows.map((row) => row.problems), [10, 20]);
+  const single = problemKlineRows(model, model.byId.get("S9"), [3, 4]);
+  assert.deepEqual(single.map((row) => [row.date, row.value]), [["2026-10-10", 15]]);
+});
+
+test("card charts are compact day K-lines with release lines; the expanded chart opens samples", () => {
+  const model = buildProblemTrendModel({ ...trend, releases: [{ date: "2026-10-02", label: "v1002" }] });
+  const node = model.byId.get("S9");
+  const card = problemKlineSpec(model, node, [0, 1, 2]);
+  assert.equal(card.compact, true);
+  assert.equal(card.period, "day");
+  assert.deepEqual(card.releases, [{ date: "2026-10-02", label: "v1002" }]);
+  assert.equal(card.valueFormat(80), "80.0%");
+  assert.equal(card.onPick, null);
+  const picks = [];
+  const detail = problemKlineSpec(model, node, [0, 1, 2], true, (pick) => picks.push(pick));
+  assert.equal(detail.compact, false);
+  assert.ok(detail.height > card.height);
+  detail.onPick({ time: "2026-10-10" });
+  assert.deepEqual(picks.map((pick) => [pick.date, pick.index, pick.series.levelIdxs]), [["2026-10-10", 1, [0, 1, 2, 3, 4]]]);
 });
 
 test("expanded category charts mount the shared sample drawer instead of a drill button", () => {
@@ -156,12 +94,10 @@ test("expanded category charts mount the shared sample drawer instead of a drill
     assert.match(grid.innerHTML, /gx mxt-samples/);
     assert.doesNotMatch(grid.innerHTML, /data-trend-node=/, "sample clicks cannot also drill the expanded chart");
     assert.ok(mounted, "expanded trends must mount the shared recall component");
-    const [element, node, renderChart, interaction] = mounted;
+    const [element, node, makeChart] = mounted;
     assert.equal(element, plot);
     assert.equal(node, "S9");
-    assert.deepEqual(renderChart(480).geo.xDates, ["2026-10-01", "2026-10-10"]);
-    assert.deepEqual(renderChart(480).geo.series[0].levelIdxs, [0, 1, 2, 3, 4]);
-    assert.equal(interaction.canHover(), true);
+    assert.equal(typeof makeChart, "function", "the drawer builds the K-line itself, with its pick handler");
     mountProblemTrends(host, { ...trend, cells: trend.cells.map((raw) => raw.slice(0, 15)) }, { range: "all" });
     assert.equal(destroyed, 1, "replacing the view disposes the old sample drawer");
     assert.doesNotMatch(grid.innerHTML, /data-trend-card=/, "unobservable categories must not create empty cards");
@@ -277,67 +213,6 @@ test("AB overview keeps three cards but no waterfall while the release side has 
   }
 });
 
-test("trend release marks land on the date axis and span the whole plot from top to bottom", () => {
-  const chart = lineTrendSVG({
-    width: 720, height: 260,
-    xLabels: ["10-28", "10-30", "11-02", "11-06", "11-08"],
-    xDates: ["2026-10-28", "2026-10-30", "2026-11-02", "2026-11-06", "2026-11-08"],
-    series: [{ label: "问题", color: "var(--accent)", values: [1, 2, 3, 4, 5] }],
-    releases: [{ date: "2026-10-30", label: "v1030" }, { date: "2026-11-06", label: "v1106" }, { date: "2026-12-01", label: "窗外" }],
-  });
-  assert.equal((chart.html.match(/class="mxt-release-line"/g) || []).length, 2, "only releases inside the window are drawn");
-  assert.match(chart.html, />v1030</);
-  assert.match(chart.html, />v1106</);
-  assert.doesNotMatch(chart.html, /窗外/);
-  assert.equal(chart.geo.releases.length, 2);
-  assert.ok(Math.abs(chart.geo.releases[0].x - chart.geo.xOf(1)) < 0.01, "a release on a sample date uses that date's x");
-  const line = chart.html.match(/class="mxt-release-line" x1="([\d.]+)" x2="([\d.]+)" y1="([\d.]+)" y2="([\d.]+)"/);
-  assert.equal(Number(line[3]), chart.geo.PAD.t, "the release line starts on the top axis");
-  assert.equal(Number(line[4]), chart.geo.PAD.t + chart.geo.innerH, "and ends on the bottom axis");
-  assert.match(chart.html, /class="mxt-release-band"/);
-  assert.match(chart.html, /class="mxt-release-dot"/);
-});
-
-test("compact trend cards keep release marks to a quiet hairline without labels", () => {
-  const chart = lineTrendSVG({
-    compact: true, width: 220, height: 76,
-    xLabels: ["10-28", "11-06"], xDates: ["2026-10-28", "2026-11-06"],
-    series: [{ label: "问题", color: "var(--accent)", values: [1, 2] }],
-    releases: [{ date: "2026-11-06", label: "v1106" }],
-  });
-  assert.match(chart.html, /class="mxt-release-line is-compact"/);
-  assert.doesNotMatch(chart.html, /mxt-release-band|mxt-release-dot|mxt-release-label/);
-});
-
-test("index-based release marks cover a categorical before/after axis", () => {
-  const chart = lineTrendSVG({
-    width: 720, height: 260, xLabels: ["改版前", "改版后"], xDates: ["改版前", "改版后"],
-    series: [{ label: "问题", color: "var(--accent)", values: [3, 5] }],
-    marks: [{ at: 0.5, label: "v1106" }],
-  });
-  assert.equal(chart.geo.releases.length, 1);
-  assert.ok(Math.abs(chart.geo.releases[0].x - (chart.geo.PAD.l + chart.geo.innerW / 2)) < 0.01);
-  assert.match(chart.html, />v1106</);
-});
-
-test("problem cluster dots are a deterministic, regular rosette instead of random scatter", () => {
-  const args = { x: 100, y: 60, value: 1, max: 10, ratio: 0.4, color: "var(--accent)", maxDots: 10, spread: 9 };
-  const one = nebulaCluster(args);
-  const two = nebulaCluster(args);
-  assert.equal(one, two, "the same point always draws the same mark");
-  const dots = [...one.matchAll(/<circle class="mxt-nebula-dot" cx="([\d.-]+)" cy="([\d.-]+)" r="([\d.]+)"/g)];
-  assert.ok(dots.length >= 3);
-  const radii = dots.map(([, x, y]) => Math.hypot(Number(x) - 100, Number(y) - 60));
-  assert.ok(Math.max(...radii) - Math.min(...radii) < 0.25, "a light point is one evenly spaced ring");
-  dots.forEach(([, x, y, r]) => {
-    assert.ok(Math.abs(Number(x) - 100) + Number(r) < 14, "never wider than the plot padding");
-    assert.ok(Math.abs(Number(y) - 60) + Number(r) < 14);
-  });
-  const heavy = [...nebulaCluster({ ...args, value: 10 }).matchAll(/cx="([\d.-]+)" cy="([\d.-]+)"/g)];
-  const heavyRadii = heavy.map(([, x, y]) => Math.hypot(Number(x) - 100, Number(y) - 60));
-  assert.ok(Math.max(...heavyRadii) - Math.min(...heavyRadii) > 3, "a heavy point fills an outer ring around the inner one");
-});
-
 test("AB cell trends read one side at a time and the paired change across the release", () => {
   const row = { name: "未接入分类体系", task: "未接入分类体系", sub: "" };
   const col = { name: "本地计算", prefix: "S4" };
@@ -348,7 +223,7 @@ test("AB cell trends read one side at a time and the paired change across the re
   ];
   const [mBefore, mAfter, mOnline] = matrix(95, 60, 40);
   const released = {
-    label: "v1106",
+    label: "v1106", released_at: "2026-11-06", targets: 120,
     sides: { before: { hits: 95, traces: 95 }, after: { hits: 60, traces: 60 }, online: { hits: 40, traces: 40 } },
     matrix: { before: mBefore, after: mAfter, online: mOnline },
     common: { rows: [[row.task, "", ["S4.M1.1"], ["S4.M1.1"]]] },
@@ -374,21 +249,21 @@ test("AB cell trends read one side at a time and the paired change across the re
   try {
     mount("paired");
     assert.doesNotMatch(host.innerHTML, /ab-trendpath|ab-trendlegend|ab-trendvals/);
-    assert.match(host.innerHTML, /class="mxt-ylab"/);
-    assert.match(host.innerHTML, /viewBox="0 0 720 260"/);
-    assert.deepEqual(mounted[1].chart.marks, [{ at: 0.5, label: "v1106" }], "the release sits between 发版前 and 发版后");
-    assert.match(host.innerHTML, /class="mxt-release-label"[^>]*>v1106</);
     assert.ok(mounted, "the AB chart must use the shared sample drawer mount");
     assert.equal(mounted[0], chartHost);
-    assert.deepEqual(mounted[1].chart.series[0].values, [95, 60], "同题变化 reads the fixed set alone");
-    assert.deepEqual(mounted[1].chart.series[0].samples.map((pick) => pick.sides), [["before"], ["after"]]);
+    const { kline, picks } = mounted[1];
+    // One candle per round on its release date: 同题变化 opens before the release, closes after it.
+    assert.deepEqual(kline.candles.map((c) => [c.time, c.open, c.close, c.volume]), [["2026-11-06", 95, 60, 120]]);
+    assert.deepEqual(kline.releases, [{ date: "2026-11-06", label: "v1106" }]);
+    assert.deepEqual(picks.get("2026-11-06").sides, ["before", "after"]);
     assert.match(host.innerHTML, /发版前<\/span><b class="num">95<\/b><span>个问题<\/span><span class="ab-trendstat-sep">·<\/span><b class="num">1<\/b><span>条 Trace<\/span>/);
     assert.match(host.innerHTML, /发版后<\/span><b class="num">60<\/b><span>个问题<\/span><span class="ab-trendstat-sep">·<\/span><b class="num">0<\/b><span>条 Trace<\/span>/);
     assert.match(host.innerHTML, /data-trend-samples data-sides="before"/);
     assert.doesNotMatch(host.innerHTML, /ab-trendacts|ab-samplechip|data-sides="after"/);
 
     mount("online");
-    assert.deepEqual(mounted[1].chart.series[0].values, [40]);
+    assert.deepEqual(mounted[1].kline.candles.map((c) => [c.open, c.close]), [[40, 40]]);
+    assert.deepEqual(mounted[1].picks.get("2026-11-06").sides, ["online"]);
     assert.match(host.innerHTML, /线上真实<\/span><b class="num">40<\/b><span>个问题<\/span><span class="ab-trendstat-sep">·<\/span><b class="num">1<\/b><span>条 Trace<\/span>/);
     assert.match(host.innerHTML, /data-trend-samples data-sides="online"/);
   } finally {
@@ -586,45 +461,6 @@ test("heatmap preserves missing union data instead of summing overlapping severi
   assert.equal(day.n, 165);
   assert.equal(day.observed, false);
   assert.equal(day.hits, 0);
-});
-
-test("point picking chooses the closest observed date and series, excluding missing and ghost points", () => {
-  const { geo } = lineTrendSVG({
-    width: 720, xLabels: ["01", "02", "10"], xDates: trend.dates,
-    series: [{ values: [20, null, 80] }, { values: [50, 60, 40] }, { ghost: true, values: [90, 90, 90] }],
-  });
-  assert.deepEqual(nearestTrendPoint(geo, geo.xOf(2) + 2, geo.yOf(40) + 2), { series: 1, index: 2 });
-  assert.deepEqual(nearestTrendPoint(geo, geo.xOf(0), geo.yOf(20)), { series: 0, index: 0 });
-  assert.equal(nearestTrendPoint(geo, geo.xOf(1), geo.yOf(20), 1), null);
-  assert.equal(nearestTrendPoint(geo, geo.xOf(1), geo.yOf(90), 1), null);
-  assert.equal(nearestTrendPoint(geo, -100, -100), null);
-});
-
-test("overlapping point clicks and keyboard activation open the exact series with a return target", () => {
-  const listeners = {}, attributes = {};
-  const point = {
-    dataset: { trendPoint: "1:0" }, closest: () => point,
-    setAttribute: (key, value) => { attributes[key] = value; },
-    addEventListener: (key, handler) => { listeners[`point:${key}`] = handler; },
-  };
-  const svg = {
-    classList: { add() {} }, querySelectorAll: () => [point],
-    addEventListener: (key, handler) => { listeners[key] = handler; },
-  };
-  const { geo } = lineTrendSVG({ xLabels: ["01"], xDates: [trend.dates[0]], series: [
-    { label: "P0", values: [10] }, { label: "P1", values: [10] },
-  ] });
-  const selections = [];
-  globalThis.document = { getElementById: () => ({ classList: { remove() {} } }) };
-  try {
-    wireTrendPointPick({ querySelector: () => svg }, geo, (pick) => selections.push(pick));
-    listeners.click({ target: point });
-    listeners["point:keydown"]({ key: "Enter", preventDefault() {} });
-    assert.deepEqual(selections.map((pick) => [pick.date, pick.series.label, pick.seriesIndex, pick.index]), [
-      [trend.dates[0], "P1", 1, 0], [trend.dates[0], "P1", 1, 0],
-    ]);
-    assert.equal(attributes.role, "button");
-  } finally { delete globalThis.document; }
 });
 
 test("sample recall filters the selected day, series, scene and taxonomy boundary", () => {

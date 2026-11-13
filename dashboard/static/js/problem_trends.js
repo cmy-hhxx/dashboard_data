@@ -1,12 +1,15 @@
 /* Hierarchical problem-type trends. The first view is the stage level; each branch opens only its
-   children. Curves contain only dates where that branch actually has a problem hit, never filled
-   zeroes. Every scene is aggregated into the same series. */
-import { esc, fmt, hideTip } from "./core.js";
-import { lineTrendSVG, wireLineTrendChart } from "./trend_chart.js";
+   children. Every card is a daily K-line of the occurrence rate with the evaluated sessions as
+   volume underneath and the configured releases as vertical lines. A day only appears where that
+   branch has an observation, never a filled zero. Every scene is aggregated into the same series. */
+import { esc, fmt, hideTip, sum } from "./core.js";
+import { createKlineChart, mountKlineWhenVisible } from "./kline_chart.js";
 import { sunburstTween } from "./motion.js";
 import { trendSampleFrame } from "./trend_samples.js";
 
-const sum = (list) => list.reduce((a, b) => a + b, 0);
+const CARD_CHART_H = 112;
+const DETAIL_CHART_H = 320;
+const rateText = (v) => `${fmt(v, v < 1 ? 2 : 1)}%`;
 export function buildProblemTrendModel(trend, names = new Map()) {
   const dates = Array.isArray(trend.dates) ? trend.dates : [];
   const ids = Array.isArray(trend.nodes) ? trend.nodes : [];
@@ -68,20 +71,34 @@ function observationIndexes(model, node, idx) {
   return idx.filter((i, at) => values[at] != null && Number.isFinite(Date.parse(`${model.dates[i]}T00:00:00Z`)));
 }
 
-export function problemTrendChart(model, node, idx, width, expanded = false) {
+/* One row per observed day: the rate is the candle, the evaluated sessions are the volume. */
+export function problemKlineRows(model, node, idx) {
   idx = observationIndexes(model, node, idx);
   const values = problemRateValues(node, model.base, idx);
-  return lineTrendSVG({
-    width, height: expanded ? 320 : 76, compact: !expanded, yAxis: expanded, endLabels: false,
-    xLabels: idx.map((i) => model.dates[i].slice(5)), xDates: idx.map((i) => model.dates[i]),
-    series: [{
-      label: node.name, color: "var(--accent)", values, levelIdxs: [0, 1, 2, 3, 4],
-      volumes: idx.map((i) => node.counts[i]), ratios: values.map((v) => (v || 0) / 100),
-      details: idx.map((i) => `${fmt(node.counts[i])} 个问题 · ${fmt(node.hits[i])} / ${fmt(model.base[i])} 会话`),
-    }],
-    aria: `${node.name} 的问题发生率与问题数量`, formatValue: (v) => `${fmt(v, v < 1 ? 2 : 1)}%`,
-    nebulaDots: expanded ? 16 : 6, connectGaps: true, releases: model.releases,
-  });
+  return idx.map((i, at) => ({
+    date: model.dates[i], value: values[at], volume: model.base[i],
+    problems: node.counts[i], hits: node.hits[i],
+  }));
+}
+
+/* Chart spec shared by the card and the expanded view; onPick opens the sample drawer. */
+export function problemKlineSpec(model, node, idx, expanded = false, onPick = null) {
+  const rows = problemKlineRows(model, node, idx);
+  const byDate = new Map(rows.map((row) => [row.date, row]));
+  return {
+    rows, period: "day", compact: !expanded, height: expanded ? DETAIL_CHART_H : CARD_CHART_H,
+    releases: model.releases, valueFormat: rateText, volumeName: "评测会话",
+    openLabel: "前一观测日", closeLabel: "发生率", volumeLabel: "评测会话",
+    tipExtra: (candle) => {
+      const row = byDate.get(String(candle.time));
+      return row ? `<div class="kl-tip-row"><span>问题</span><b class="num">${fmt(row.problems)}</b></div>` : "";
+    },
+    emptyText: "当前分类暂无时间趋势",
+    onPick: onPick && ((candle) => onPick({
+      date: String(candle.time), seriesIndex: 0, index: rows.findIndex((row) => row.date === String(candle.time)),
+      series: { label: node.name, levelIdxs: [0, 1, 2, 3, 4] },
+    })),
+  };
 }
 
 function resolvePath(model, path) {
@@ -119,25 +136,21 @@ export function mountProblemTrends(host, trend, state = {}, names = new Map(), l
       .filter(hasObservations)
       .map((node) => ({ node, total: sum(observationIndexes(model, node, idx).map((i) => node.counts[i])) }))
       .sort((a, b) => b.total - a.total || a.node.id.localeCompare(b.node.id));
-    const columns = Math.max(1, Math.floor((host.clientWidth + 8) / 213));
-    const chartWidth = Math.max(180, (host.clientWidth - (columns - 1) * 8) / columns - 24);
     const focused = children.find(({ node }) => node.id === state.issueZoom);
     if (!focused) state.issueZoom = null;
     const expanded = Boolean(focused);
-    const charts = [];
-    const cards = (focused ? [focused] : children).map(({ node, total }) => {
+    const shown = focused ? [focused] : children;
+    const cards = shown.map(({ node, total }) => {
       const values = problemRateValues(node, model.base, idx);
       const latest = [...values].reverse().find((v) => v != null);
       const branch = node.children.some(hasObservations);
-      const chart = problemTrendChart(model, node, idx, expanded ? host.clientWidth - 32 : chartWidth, expanded);
-      charts.push({ node, chart });
       const tag = `${node.children.filter(hasObservations).length} 个子类`;
       // 分支卡片本身也是下钻入口；放大镜只负责把单条曲线展开看细节。
-      const plot = `<div class="mpt-chart${expanded ? " mpt-chart-detail" : ""}" data-own-tip>${chart.html}</div>`;
+      const plot = `<div class="mpt-chart${expanded ? " mpt-chart-detail" : ""}" role="img" aria-label="${esc(`${node.name} 的问题发生率日 K 线与评测会话量能`)}"></div>`;
       return `<article class="mpt-card${branch ? " is-branch" : ""}${expanded ? " is-expanded" : ""}" data-trend-card="${esc(node.id)}">
         <header><h4 title="${esc(node.name)}">${esc(node.name)}</h4><button type="button" class="icon-btn mpt-action" data-trend-zoom="${esc(node.id)}" aria-expanded="${expanded}" aria-label="${expanded ? "还原" : "放大"} ${esc(node.name)}" title="${expanded ? "还原" : "放大"}"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="${expanded ? "M6 3v3H3m7-3v3h3m0 4h-3v3m-4 0v-3H3" : "M3 6V3h3M10 3h3v3M13 10v3h-3M6 13H3v-3"}" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button></header>
         ${expanded ? trendSampleFrame(plot) : plot}
-        <footer><span class="num">${fmt(total)} 个问题</span><b class="num" title="最近观测日的问题发生率">${latest == null ? "—" : `${fmt(latest, latest < 1 ? 2 : 1)}%`}</b>${branch ? `<span class="mpt-children">${tag}</span>` : ""}</footer>
+        <footer><span class="num">${fmt(total)} 个问题</span><b class="num" title="最近观测日的问题发生率">${latest == null ? "—" : rateText(latest)}</b>${branch ? `<span class="mpt-children">${tag}</span>` : ""}</footer>
       </article>`;
     }).join("");
     if (host._mptCancel) host._mptCancel();
@@ -151,16 +164,21 @@ export function mountProblemTrends(host, trend, state = {}, names = new Map(), l
     }
     const swap = () => {
       grid.innerHTML = cards || `<div class="mpt-empty">当前分类暂无时间趋势</div>`;
-      charts.forEach(({ node, chart }) => {
+      shown.forEach(({ node }) => {
         const card = [...grid.children].find((el) => el.dataset.trendCard === node.id);
         if (!card) return;
-        const interaction = { hoverDelay: 160, canHover: () => !transitioning };
         const plot = card.querySelector(".mpt-chart");
         if (expanded && actions.mountDetailChart) {
           const drawer = actions.mountDetailChart(plot, node.id,
-            (width) => problemTrendChart(model, node, idx, width, true), interaction);
+            (chartHost, onPick) => createKlineChart(chartHost, problemKlineSpec(model, node, idx, true, onPick)));
           disposeCharts.push(() => drawer.destroy());
-        } else disposeCharts.push(wireLineTrendChart(plot, chart, "", null, interaction));
+        } else if (expanded) {
+          const chart = createKlineChart(plot, problemKlineSpec(model, node, idx, true));
+          disposeCharts.push(() => chart.destroy());
+        } else {
+          const chart = mountKlineWhenVisible(plot, problemKlineSpec(model, node, idx));
+          disposeCharts.push(() => chart.destroy());
+        }
       });
     };
     const sourceBox = source && source.getBoundingClientRect();

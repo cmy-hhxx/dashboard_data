@@ -1,4 +1,6 @@
-/* K 线图：把按天采样的计数序列聚合成日/周/月/年蜡烛，叠加 MA5 / MA10 / MA20 和成交式量能。
+/* K 线图：看板里所有趋势都画成它——日期横轴、蜡烛、底部评测量能、发版竖线。
+   按天采样的序列聚合成日/周/月/年蜡烛，叠加 MA5 / MA10 / MA20；compact 模式给卡片里的小图用
+   （无图例、无均线、无坐标轴、不响应拖拽缩放）。
    基于 TradingView 的 lightweight-charts（Apache-2.0，vendor 在 static/vendor）；不自绘 Canvas。
    数据口径由调用方给全量 rows；这里只负责聚合和绘制，不做任何筛选。 */
 import { createChart, CandlestickSeries, HistogramSeries, LineSeries, AreaSeries, ColorType } from "../vendor/lightweight-charts.production.js";
@@ -134,6 +136,21 @@ function wireWheelZoom(host, chart, enabled) {
 
 const MA_DEFS = [["MA5", 5, "ma5"], ["MA10", 10, "ma10"], ["MA20", 20, "ma20"]];
 
+/* 发版日落到图上已有的时间点：取发版当天或之后的第一个点，超出数据范围的不画，同一点只画一次。 */
+function releaseItems(times, releases) {
+  const dates = [...times].map(String).sort();
+  const seen = new Set();
+  return (Array.isArray(releases) ? releases : []).map((r) => {
+    if (!r || !r.date) return null;
+    const date = String(r.date);
+    if (!dates.length || date < dates[0] || date > dates[dates.length - 1]) return null;
+    const time = dates.find((t) => t >= date);
+    if (!time || seen.has(time)) return null;
+    seen.add(time);
+    return { time, label: r.label || "发版" };
+  }).filter(Boolean);
+}
+
 const timeText = (time) => (typeof time === "string" ? time : time?.year ? `${time.year}-${String(time.month).padStart(2, "0")}-${String(time.day).padStart(2, "0")}` : String(time || ""));
 
 function tickText(date, period) {
@@ -147,7 +164,9 @@ function tickText(date, period) {
 export function createKlineChart(host, spec = {}) {
   const rows = Array.isArray(spec.rows) ? spec.rows : [];
   const period = PERIOD_NAME[spec.period] ? spec.period : "day";
-  const height = Math.max(120, Number(spec.height) || host.clientHeight || 240);
+  const compact = spec.compact === true;
+  const height = Math.max(compact ? 64 : 120, Number(spec.height) || host.clientHeight || 240);
+  const valueText = typeof spec.valueFormat === "function" ? spec.valueFormat : null;
   const empty = spec.emptyText || "暂无趋势数据";
   host.className = `${host.className.replace(/\s*kl-host/g, "")} kl-host`;
   host.innerHTML = "";
@@ -167,11 +186,15 @@ export function createKlineChart(host, spec = {}) {
 
   const colors = palette();
   const maSeries = [];
-  host.innerHTML = `<div class="kl-legend">
-      ${MA_DEFS.map(([name, , key]) => `<span><i style="--c:${colors[key]}"></i>${name}</span>`).join("")}
+  // A moving average needs at least its span of candles; listing one that cannot draw is noise.
+  const maDefs = compact ? [] : MA_DEFS.filter(([, span]) => span <= candles.length);
+  const legend = compact ? "" : `<div class="kl-legend">
+      ${maDefs.map(([name, , key]) => `<span><i style="--c:${colors[key]}"></i>${name}</span>`).join("")}
       <span class="kl-vol-key"><i class="is-vol"></i>量能 · ${esc(spec.volumeName || "Trace")}</span>
       ${spec.legendNote ? `<span class="kl-note">${esc(spec.legendNote)}</span>` : ""}
-    </div><div class="kl-canvas"></div><div class="kl-tip" hidden></div>`;
+    </div>`;
+  if (compact) host.classList.add("is-compact");
+  host.innerHTML = `${legend}<div class="kl-canvas"></div><div class="kl-tip" hidden></div>`;
   const canvas = host.querySelector(".kl-canvas");
   const tip = host.querySelector(".kl-tip");
 
@@ -186,17 +209,18 @@ export function createKlineChart(host, spec = {}) {
       attributionLogo: false,
     },
     grid: { vertLines: { color: colors.grid }, horzLines: { color: colors.grid } },
-    rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.14, bottom: 0.02 } },
+    rightPriceScale: { visible: !compact, borderVisible: false, scaleMargins: { top: 0.14, bottom: 0.02 } },
     timeScale: {
-      borderVisible: false, fixLeftEdge: true, fixRightEdge: true,
+      visible: !compact, borderVisible: false, fixLeftEdge: true, fixRightEdge: true,
       tickMarkFormatter: (time) => tick(time),
     },
     crosshair: {
       vertLine: { color: colors.border, width: 1, style: 3 },
-      horzLine: { color: colors.border, width: 1, style: 3 },
+      horzLine: { color: colors.border, width: 1, style: 3, visible: !compact, labelVisible: !compact },
     },
-    handleScroll: { mouseWheel: false, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
-    handleScale: {
+    // A card's small chart is part of a clickable card: no drag-pan or pinch inside it.
+    handleScroll: compact ? false : { mouseWheel: false, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
+    handleScale: compact ? false : {
       mouseWheel: false, pinch: true, axisDoubleClickReset: true,
       axisPressedMouseMove: { time: true, price: false },
     },
@@ -209,12 +233,20 @@ export function createKlineChart(host, spec = {}) {
     upColor: colors.up, downColor: colors.down,
     borderUpColor: colors.up, borderDownColor: colors.down,
     wickUpColor: colors.up, wickDownColor: colors.down,
-    priceFormat: { type: "price", precision: 0, minMove: 1 },
+    priceFormat: valueText ? { type: "custom", formatter: valueText, minMove: 0.01 } : { type: "price", precision: 0, minMove: 1 },
     priceLineVisible: false,
+    lastValueVisible: !compact,
   }, 0);
   candleSeries.setData(candles.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })));
 
-  for (const [name, span, key] of MA_DEFS) {
+  const releases = typeof candles[0]?.time === "string" ? releaseItems(candles.map((c) => c.time), spec.releases) : [];
+  const releaseLines = releases.length
+    ? releaseLinePrimitive(chart, compact ? releases.map((r) => ({ ...r, label: "" })) : releases,
+      colors.release, getComputedStyle(document.body).fontFamily, colors.card)
+    : null;
+  if (releaseLines) candleSeries.attachPrimitive(releaseLines);
+
+  for (const [name, span, key] of maDefs) {
     const series = chart.addSeries(LineSeries, {
       color: colors[key], lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
       crosshairMarkerVisible: false, priceFormat: { type: "price", precision: 1, minMove: 0.1 },
@@ -233,7 +265,14 @@ export function createKlineChart(host, spec = {}) {
   const panes = chart.panes();
   if (panes[0]) panes[0].setStretchFactor(3);
   volumePane.setStretchFactor(1);
-  chart.timeScale().fitContent();
+  // A handful of candles (e.g. one per release round) would each stretch across the plot;
+  // keep them candle-sized and centred instead.
+  const SPARSE = 12;
+  if (candles.length < SPARSE) {
+    const pad = (SPARSE - candles.length) / 2;
+    chart.timeScale().applyOptions({ fixLeftEdge: false, fixRightEdge: false });
+    chart.timeScale().setVisibleLogicalRange({ from: -pad, to: candles.length - 1 + pad });
+  } else chart.timeScale().fitContent();
   let disposed = false;
   const sizeObserver = new ResizeObserver(() => {
     if (disposed || !canvas.isConnected) return;
@@ -244,7 +283,7 @@ export function createKlineChart(host, spec = {}) {
   sizeObserver.observe(canvas);
 
   const byTime = new Map(candles.map((candle) => [String(candle.time), candle]));
-  const number = (value) => fmt(value, Number.isInteger(value) ? 0 : 1);
+  const number = valueText || ((value) => fmt(value, Number.isInteger(value) ? 0 : 1));
   chart.subscribeCrosshairMove((param) => {
     if (!param?.point || param.time == null) {
       tip.hidden = true;
@@ -263,7 +302,9 @@ export function createKlineChart(host, spec = {}) {
       : (typeof spec.openValue === "function" ? spec.openValue(candle) : spec.openValue);
     tip.innerHTML = `<div class="kl-tip-head"><b class="num">${esc(when)}</b><span>${esc(unit)}</span></div>
       <div class="kl-tip-row"><span>${esc(spec.openLabel || "开盘")}</span><b class="num">${number(openValue)}</b></div>
-      <div class="kl-tip-row"><span>${esc(spec.closeLabel || "收盘")}</span><b class="num">${number(candle.close)}</b></div>`;
+      <div class="kl-tip-row"><span>${esc(spec.closeLabel || "收盘")}</span><b class="num">${number(candle.close)}</b></div>
+      ${spec.volumeLabel ? `<div class="kl-tip-row"><span>${esc(spec.volumeLabel)}</span><b class="num">${fmt(candle.volume)}</b></div>` : ""}
+      ${typeof spec.tipExtra === "function" ? spec.tipExtra(candle) : ""}`;
     tip.hidden = false;
     const pad = 8;
     const width = tip.offsetWidth;
@@ -294,8 +335,9 @@ export function createKlineChart(host, spec = {}) {
     });
     for (const [, key, series] of maSeries) series.applyOptions({ color: next[key] });
     volumeSeries.applyOptions({ color: next.volume });
+    releaseLines?.setColors(next.release, next.card);
     host.querySelectorAll(".kl-legend i").forEach((dot, i) => {
-      dot.style.setProperty("--c", i < MA_DEFS.length ? next[MA_DEFS[i][2]] : next.volume);
+      dot.style.setProperty("--c", i < maDefs.length ? next[maDefs[i][2]] : next.volume);
     });
   });
   theme.observe(document.documentElement, { attributes: true, attributeFilter: ["data-mode"] });
@@ -310,9 +352,28 @@ export function createKlineChart(host, spec = {}) {
       chart.remove();
       host.innerHTML = "";
       host.style.height = "";
-      host.classList.remove("kl-host");
+      host.classList.remove("kl-host", "is-compact");
     },
   };
+}
+
+/* 卡片网格里的小 K 线：滚到视口附近才建图，离开 DOM 时随卡片一起销毁。 */
+export function mountKlineWhenVisible(host, spec) {
+  let chart = null;
+  const build = () => { if (!chart && host.isConnected) chart = createKlineChart(host, spec); };
+  if (typeof IntersectionObserver === "undefined") {
+    build();
+    return { destroy: () => chart?.destroy() };
+  }
+  host.style.height = `${Math.max(64, Number(spec.height) || 112)}px`;
+  const seen = new IntersectionObserver((entries) => {
+    if (entries.some((entry) => entry.isIntersecting)) {
+      seen.disconnect();
+      build();
+    }
+  }, { rootMargin: "200px 0px" });
+  seen.observe(host);
+  return { destroy: () => { seen.disconnect(); chart?.destroy(); } };
 }
 
 /* 折线趋势：和 K 线共用 lightweight-charts 外壳、滚轮缩放、拖拽平移与悬浮读数。
@@ -427,21 +488,9 @@ export function createTrendChart(host, spec = {}) {
 
   const lookup = new Map(input.map((s) => [s, new Map(s.data.map((d) => [d.time, d.value]))]));
   const dates = [...new Set(input.flatMap((s) => s.data.map((d) => d.time)))].sort();
-  const markerTime = (date) => dates.find((time) => time >= date) || null;
-  const releaseItems = (() => {
-    const seen = new Set();
-    return (Array.isArray(spec.releases) ? spec.releases : []).map((r) => {
-      if (!r || !r.date) return null;
-      const date = String(r.date);
-      if (!dates.length || date < dates[0] || date > dates[dates.length - 1]) return null;
-      const time = markerTime(date);
-      if (!time || seen.has(time)) return null;
-      seen.add(time);
-      return { time, label: r.label || "发版" };
-    }).filter(Boolean);
-  })();
-  const releaseLines = releaseItems.length
-    ? releaseLinePrimitive(chart, releaseItems, colors.release, getComputedStyle(document.body).fontFamily, colors.card)
+  const releaseMarks = releaseItems(dates, spec.releases);
+  const releaseLines = releaseMarks.length
+    ? releaseLinePrimitive(chart, releaseMarks, colors.release, getComputedStyle(document.body).fontFamily, colors.card)
     : null;
   if (releaseLines) lineSeries[0].attachPrimitive(releaseLines);
 

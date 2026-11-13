@@ -11,7 +11,7 @@
 import { compact, esc, fmt, pct, REDUCED, segmented } from "./core.js";
 import { patternOf } from "./taxonomy.js";
 import { sunburst } from "./sunburst.js";
-import { lineTrendSVG, wireLineTrendChart } from "./trend_chart.js";
+import { createKlineChart } from "./kline_chart.js";
 import { trendSampleFrame, abTrendSampleRefs, abLeafRefs } from "./trend_samples.js";
 
 const SIDES = ["before", "after", "online"];
@@ -54,6 +54,41 @@ const metricReady = (rnd, metric) => metric === "paired"
   : sideReady(rnd, metric);
 const defaultMetric = (rnd) => (sideReady(rnd, "before") && sideReady(rnd, "after") ? "paired" : "online");
 const roundLabel = (rnd, i) => rnd.label || rnd.release_label || `第 ${i + 1} 期`;
+const roundDate = (rnd) => rnd.released_at || (rnd.dates || [])[1] || null;
+
+/* The AB cell trend is a K-line like every other trend: one candle per release round on its
+   release date. 同题变化 opens at the before-release count and closes at the after-release count of
+   the same questions, so the candle colour reads better / worse at a glance; a single-side reading
+   opens at the previous round's value. Volume is the round's fixed question set; every round's
+   release is a vertical line. Rounds without a date cannot sit on a date axis and are left out. */
+export function abTrendKline(rounds, values, metric, label) {
+  const picks = new Map();
+  const candles = [];
+  let previous = null;
+  rounds.forEach((rnd, i) => {
+    const date = roundDate(rnd);
+    const v = values[i];
+    if (!date || !v) return;
+    const paired = metric === "paired";
+    const open = paired ? v.before : (previous ?? v[metric]);
+    const close = paired ? v.after : v[metric];
+    if (open == null || close == null) return;
+    previous = close;
+    candles.push({
+      time: date, open, close, high: Math.max(open, close), low: Math.min(open, close),
+      volume: Number(rnd.targets) || 0, from: date, to: date, label: v.label,
+    });
+    picks.set(date, { round: rnd, sides: paired ? ["before", "after"] : [metric] });
+  });
+  const spec = {
+    candles, period: "day", height: 260, compact: false,
+    releases: rounds.map((rnd, i) => ({ date: roundDate(rnd), label: roundLabel(rnd, i) })).filter((r) => r.date),
+    openLabel: metric === "paired" ? "发版前" : "上一轮", closeLabel: metric === "paired" ? "发版后同题" : label,
+    volumeName: "固定题", volumeLabel: "固定题", emptyText: "该格没有带发版日期的轮次",
+    tipTime: (candle) => `${candle.label} · ${candle.time}`, tipPeriod: () => "问题数",
+  };
+  return { spec, picks };
+}
 
 /* The comparison records live in the card head, so a new AB round is one more chip there instead of
    another row above the charts.  The model tag stays the only thing a round adds to its label. */
@@ -717,33 +752,7 @@ function trend(rnd, selectedCell, metric) {
     }));
     const cur = values[state.round];
     const label = TREND_LABEL[metric] || metricLabel(metric);
-    const current = metric === "paired"
-      ? (cur.before == null || cur.after == null ? null : cur.after - cur.before)
-      : cur[metric];
-    let cols, series;
-    if (metric === "paired") {
-      if (values.length === 1) {
-        cols = ["发版前", "发版后同题"];
-        series = [{ label: col.name, color: "var(--accent)", values: [cur.before, cur.after],
-          samples: [{ round: rnd, sides: ["before"] }, { round: rnd, sides: ["after"] }] }];
-      } else {
-        cols = values.map((v) => v.label);
-        series = [
-          { label: "发版前", color: "var(--t2)", values: values.map((v) => v.before),
-            samples: rounds.map((r) => ({ round: r, sides: ["before"] })) },
-          { label: "发版后同题", color: "var(--accent)", values: values.map((v) => v.after),
-            samples: rounds.map((r) => ({ round: r, sides: ["after"] })) },
-        ];
-      }
-    } else if (values.length === 1) {
-      cols = [label];
-      series = [{ label, color: "var(--accent)", values: [current],
-        samples: [{ round: rnd, sides: [metric] }] }];
-    } else {
-      cols = values.map((v) => v.label);
-      series = [{ label, color: "var(--accent)", values: values.map((v) => v[metric]),
-        samples: rounds.map((r) => ({ round: r, sides: [metric] })) }];
-    }
+    const kline = abTrendKline(rounds, values, metric, label);
     // 每个口径直接显示“问题数 · 涉及的 Trace 数”；Trace 数就是点击后召回的 case 数。
     // 变化矩阵只看发版前 / 发版后，不再混入线上真实样本。
     const refsBySide = {
@@ -765,18 +774,13 @@ function trend(rnd, selectedCell, metric) {
     const aria = metric === "paired"
       ? `AB 趋势：${row.name} · ${col.name}，${values.map((v) => `${v.label} 发版前 ${amount(v.before)} 发版后同题 ${amount(v.after)}`).join("；")}`
       : `AB 趋势：${row.name} · ${col.name}，${values.map((v) => `${v.label} ${label} ${amount(v[metric])}`).join("；")}`;
-    const width = host.getBoundingClientRect().width || 720;
-    // A single round compares the two batches across the release boundary.
-    const releaseMarks = metric === "paired" && values.length === 1
-      ? [{ at: 0.5, label: roundLabel(rnd, state.round) }] : null;
-    const chart = { height: 260, yAxis: true, minTop: 4, endLabels: series.every((s) => s.values[s.values.length - 1] != null), xLabels: cols, xDates: cols, series, aria, formatValue: fmt, marks: releaseMarks };
-    cellTrendChart = { chart, row, node: col.prefix, colName: col.name, round: rnd };
+    cellTrendChart = { kline: kline.spec, picks: kline.picks, row, node: col.prefix, colName: col.name, round: rnd };
     return `<section class="ab-trend is-on" aria-live="polite">
       <div class="ab-trendhead">
         <span class="ab-trendname">${esc(row.name)} · ${esc(col.name)}</span>
         <span class="ab-trendmetric">${stats}</span>
       </div>
-      ${trendSampleFrame(`<div class="mxt-plot" id="abCellTrend" data-own-tip>${lineTrendSVG({ ...chart, width }).html}</div>`)}
+      ${trendSampleFrame(`<div class="mxt-plot" id="abCellTrend" role="img" aria-label="${esc(aria)}"></div>`)}
     </section>`;
   }
 
@@ -895,7 +899,7 @@ function trend(rnd, selectedCell, metric) {
     const chartHost = host.querySelector("#abCellTrend");
     if (chartHost && cellTrendChart) {
       if (actions.mountCellTrend) cellTrendDrawer = actions.mountCellTrend(chartHost, cellTrendChart);
-      else wireLineTrendChart(chartHost, lineTrendSVG({ ...cellTrendChart.chart, width: chartHost.clientWidth }));
+      else cellTrendDrawer = { ...createKlineChart(chartHost, cellTrendChart.kline), openPick: () => {} };
     }
     host.querySelectorAll("[data-trend-samples]").forEach((chip) => {
       chip.addEventListener("click", () => {
