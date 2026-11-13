@@ -45,7 +45,7 @@ trace 的 `problems` 问题数组与 P0–P4 严重度，并新增 `GET /severit
 | `source` | `prelaunch` / `feedback` | 目录 `0_daily_eval` / `1_lost_user_eval` |
 | `app_version` | `AIME-Atlas_expert`、`aime-fast-new_fast` | `turns[].meta.model` + 模型目录后缀 |
 | `user_id` | 真实用户名或数字 ID | `turns[].meta.user_id` |
-| `day` | `YYYY-MM-DD`（Asia/Shanghai） | `turns[].meta.timestamp` |
+| `day` | `YYYY-MM-DD`（America/New_York，含夏令时） | `turns[].meta.timestamp` |
 | trace | 一条**单轮**对话 | `turns[]` 的一项，id = `turns[].meta.trace_id` |
 | `intent` | `T01` / `T01.S02` | `turns[].meta.task` / `subtask` |
 | `problem` | `S9` / `S9.M5` / `S9.M5.1` | cluster 树的节点 id；未聚类问题 `code=null` |
@@ -140,15 +140,16 @@ curl -s http://10.217.219.2:2224/healthz           # 5003 目前只部署在弗�
 `/healthz` 字段：`ok`、`building`、`traces`、`problems`、`data_updated_at`、`built_at`、
 `build`（最近一次构建摘要与耗时，含 `severity` 各等级条目数）。
 
-验收：
+验收（全仓一次跑完：`scripts/run_tests.sh interfaces`）：
 
 ```bash
-python3 tests/test_acceptance.py                       # fixture，14 条
+python3 tests/test_acceptance.py                       # fixture，20 条
 python3 tests/test_store.py                            # store 层：脏字段入库、输入追加续扫
+python3 tests/test_taxonomy.py                         # 分类树加载与编码升版
 python3 tests/test_acceptance.py --real --base-url http://127.0.0.1:5003   # 真实数据
 ```
 
-## 验证结果（2026-11-03，v2.0 部署在 `interactive-i6piqwvlnsr5`）
+## 验证结果（历史基线：2026-11-03，v2.0 部署在乌兰 `interactive-i6piqwvlnsr5`，该实例 5003 现已停用）
 
 - v1 → v2 首次迁移：清归因派生行后全量重扫 44 个 attribution 文件，151 秒；之后重启/增量重建 3–4 秒。
 - 索引快照（部署后 14:48，数据仍在增长）：18,574 条 trace / 724 条历史版本 / 51,190 个问题条目；

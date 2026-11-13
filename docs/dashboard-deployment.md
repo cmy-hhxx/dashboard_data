@@ -86,7 +86,8 @@ Host aime_rsi_data
   HostName 10.217.219.2
   User root
   Port 2225
-  IdentityFile /Users/cmy/Downloads/chenmingyang2@myhexin.com_rsa.key
+  IdentityFile <本机私钥路径>
+  IdentitiesOnly yes
   ServerAliveInterval 30
   ServerAliveCountMax 6
   TCPKeepAlive yes
@@ -123,8 +124,10 @@ ssh eval_data 'cd /opt/eval_dashboard && ./stop.sh && ./start.sh'
 
 ## 运行要点
 
-- 启动时缺数据先构建；之后按 `REFRESH_SECONDS` 增量构建。当前部署设为 **3600s（小时级）**，
-  `stats_worker` 同样 3600s；页面每 2 分钟条件请求 `data.json`，只有 `generated_at` 变了才换 payload。
+- 启动时缺数据先构建；之后按 `REFRESH_SECONDS` 增量构建，`stats_worker` 按 `STATS_REFRESH_SECONDS`，
+  两者代码默认都是 600s，部署目录的 `deploy.env` 可覆盖（弗吉尼亚 5001 当前未覆盖，即 10 分钟）。
+  构建在 `cache/build.lock` 上加锁：定时刷新、`EVAL_DEPLOY_BUILD=1` 与手动 `python3 build.py` 互相排队，不会并发写同一份产物；
+  页面每 2 分钟条件请求 `data.json`，只有 `generated_at` 变了才换 payload。
 - 无变化时的检查只扫有限层级目录/文件（不再用 `**` 递归遍历 `eval_output` 的 `.runs`/`.delivery`）：
   弗吉尼亚实测 27s（优化前同一份数据 75–743s），乌兰约 0.3s；数据源为空时 `--keep-on-empty` 不写文件，保留上一份 payload。
 - 生成物只留远端；改 `static/` 后需重新执行 `precompress.sh`（`deploy.sh` 自动）。

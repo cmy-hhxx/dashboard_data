@@ -1,6 +1,6 @@
 # 看板构建性能：基线、增量索引与两阶段加速实测
 
-> 2026-11-03。对象是 `dashboard/build.py` 在远程挂载 `/mnt/fin_bench/code_and_clean_data/datasets`
+> **历史基线（2026-11-03）**，数字不随代码更新；当前体积与流程见 [data-server.md](data-server.md)。对象是 `dashboard/build.py` 在远程挂载 `/mnt/fin_bench/code_and_clean_data/datasets`
 > （当前约 44 GB 输入）上的构建。目标是让“每次新增数据 / 每次 build”不再全量重扫、重写。
 >
 > 2026-11-04 部署按产品切分后，乌兰只构建问财、弗吉尼亚只构建 AIME；本文的绝对耗时是切分前
@@ -90,7 +90,7 @@
 
 ### 3.7 输入统计旁路
 
-- `stats_worker.py` 独立常驻，每 30 分钟（`STATS_REFRESH_SECONDS`）把每个输入文件的
+- `stats_worker.py` 独立常驻，按 `STATS_REFRESH_SECONDS`（代码默认 600 s）把每个输入文件的
   `size / mtime_ns / lines / model / split / stats(records,traces,tool_calls,tokens,cache_read,
   by_model.tasks/subtask/lost)` 写到 `<datasets>/stats.json`，并给产品级 `summary / models /
   by_split / files_count / bytes` 和全局 `summary`；

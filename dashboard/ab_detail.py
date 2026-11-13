@@ -33,6 +33,7 @@ from pathlib import Path
 import ab_test
 import build
 import build_store as bs
+from keylocks import KeyedLocks
 
 INDEX_VERSION = 3
 
@@ -149,6 +150,10 @@ def _fill_clusters(detail, trace, index, fallback_trace=""):
     return matched, len(problems), first_hit
 
 
+# File mtimes come from a coarse clock (one kernel tick, 4–10 ms) behind time.time_ns().
+FS_CLOCK_SLACK_NS = 20_000_000
+
+
 class ABDetailBuilder:
     def __init__(self, datasets: Path | str, cache_dir: Path | str, sample_dir: Path | str):
         self.datasets = Path(datasets)
@@ -160,8 +165,7 @@ class ABDetailBuilder:
         # serialised.  Distinct eq details can then be generated in parallel, which
         # matters when several compare panes are opened around the same time.
         self._index_lock = threading.RLock()
-        self._eq_guard = threading.Lock()
-        self._eq_locks = {}
+        self._eq_locks = KeyedLocks()
         self._indexes = {}
         self._before_indexes = {}
         self._gpt_cache = {}
@@ -170,13 +174,7 @@ class ABDetailBuilder:
         self._inputs_lock = threading.Lock()
 
     def _eq_lock(self, round_id: str, eq: int):
-        key = (round_id, eq)
-        with self._eq_guard:
-            lock = self._eq_locks.get(key)
-            if lock is None:
-                lock = threading.Lock()
-                self._eq_locks[key] = lock
-            return lock
+        return self._eq_locks((round_id, eq))
 
     # ---- discovery -------------------------------------------------------------------------
 
@@ -457,9 +455,7 @@ class ABDetailBuilder:
     @staticmethod
     def _save_index(path: Path, index):
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(index, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-        os.replace(tmp, path)
+        build.replace_bytes(path, json.dumps(index, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
     @staticmethod
     def _read_line(round_dir: Path, entry, line_no: int) -> bytes:
@@ -484,8 +480,11 @@ class ABDetailBuilder:
 
     @staticmethod
     def _fresh(path: Path, stamp: int):
+        # ``stamp`` comes from time.time_ns(), file mtimes from the kernel's coarse
+        # clock, which can trail it by a tick: a detail written right after the index
+        # would otherwise look stale and be rebuilt on every request.
         try:
-            if path.stat().st_mtime_ns >= stamp:
+            if path.stat().st_mtime_ns >= stamp - FS_CLOCK_SLACK_NS:
                 build.ensure_detail_gz(path)
                 return True
         except OSError:

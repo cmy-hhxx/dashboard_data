@@ -87,7 +87,7 @@ def snapshot(datasets: Path, store: bs.BuildStore, jobs: int = 0):
 
 def write_atomic(target: Path, data: dict) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_name(target.name + ".tmp")
+    tmp = build.tmp_path(target)
     tmp.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     os.replace(tmp, target)
     return target

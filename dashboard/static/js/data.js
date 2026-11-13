@@ -2125,9 +2125,6 @@ function swapShell(shell, html, animate, source, done = null) {
 const TREND_SEV = ["P0", "P1", "P2", "P3", "P4"];
 const TREND_MEASURE = { count: "出现数", ratio: "出现比例" };
 const TREND_UT_NAME = { all: "全部来源", real: "真实", test: "测试", internal: "内部", unknown: "未知" };
-const TREND_TW = 1200;   // 宽屏的上限；实际 viewBox 宽度按容器量出来的像素走，字才不会被缩
-const TREND_TH = 260;    // 最小绘图高度；线多时按条数长高，给右侧端点标签留位置
-const TREND_PAD = { l: 56, r: 170, t: 16, b: 28 };
 const TREND_CACHE = new Map();
 const TREND_READY = new Map();
 
@@ -2188,13 +2185,8 @@ function trendWindow(trend, range, activeDates) {
    条件池编辑当前选中的折线，点折线卡片切换编辑对象，拖条件到卡片也能改；最多 4 条，
    可以删到 0 条（图表显示空状态），不把多选条件拆成多条线。 */
 const trendUtName = (u) => (u === "all" ? "全部来源" : TREND_UT_NAME[u] || u || "全部");
-const trendLevelName = (l) => (l === "all" ? "全部问题" : l);
 const TREND_UT_SHORT = { all: "全", real: "真", test: "测", internal: "内", unknown: "?" };
 const trendUtShort = (u) => TREND_UT_SHORT[u] || trendUtName(u).slice(0, 1);
-const trendValue = (v, measure) => {
-  if (v == null) return "—";
-  return measure === "ratio" ? `${fmt(v, Math.abs(v) >= 10 ? 1 : 2)}%` : fmt(Math.round(v));
-};
 const trendModelName = (trend, id) => {
   if (!id) return "";
   const m = (trend.modelLabels || []).find((x) => x.id === id);
@@ -2215,13 +2207,7 @@ const trendLineModelName = (trend, line) => {
   return sel.map((m) => trendModelName(trend, m) || m).filter(Boolean).join("+");
 };
 const trendLevelsName = (levels) => (levels && levels.length ? levels.join("+") : "全部问题");
-const trendLevelKey = (levels) => (levels && levels.length ? levels.slice().sort().join(",") : "*");
 const trendLineName = (trend, line) => `${trendLineSourceName(trend, line)} · ${trendLineModelName(trend, line)} · ${trendLevelsName(line.levels)}`;
-const trendSourceKey = (line) => ((line.uts && line.uts.length) ? line.uts.slice().sort().join(",") : "*");
-const trendSortValues = (kind, list, data) => {
-  const order = kind === "ut" ? (data.uts || []) : (data.models || []);
-  return order.filter((v) => list.includes(v));
-};
 
 /* 纵轴上限：四格刻度（含 0），刻度走 1/2/4/5/10 阶梯，标签永远是整数（计数）
    或整齐的百分数（比例），不会出现 0/67/133 这种读不出来的刻度。 */

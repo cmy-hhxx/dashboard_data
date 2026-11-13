@@ -1,5 +1,5 @@
 /* Router and shell: ?view=data|system|samples&product=wencai|aime (+ sample params). */
-import { $, $$, segmented, getJSON, announce } from "./core.js";
+import { $, $$, esc, segmented, getJSON, announce } from "./core.js";
 
 const VIEWS = ["data", "system", "samples", "compare"];
 const PRODUCTS = ["wencai", "aime"];
@@ -141,7 +141,7 @@ async function render({ refresh = false } = {}) {
     await modules[state.view].render(root, { ...state, navigate, loadIndex, refresh });
   } catch (err) {
     console.error(err);
-    root.innerHTML = `<div class="bento"><div class="card" style="--span:12"><div class="empty">页面加载失败：${String(err.message || err)}</div></div></div>`;
+    root.innerHTML = `<div class="bento"><div class="card" style="--span:12"><div class="empty">页面加载失败：${esc(String(err.message || err))}</div></div></div>`;
   }
   $("#mask").classList.add("is-off");
 }

@@ -49,7 +49,6 @@ DOCS_DIR = REPO / "docs"
 SEVERITIES = ("P0", "P1", "P2", "P3", "P4")
 SEVERITY_VERSION = "2026-11"
 
-DATASET = "aime_eval"
 DATASET_ALIASES = {"aime_eval"}
 
 # problem 编码为 null 时的展示名：这是"聚类未覆盖"，不是"其他"或异常。

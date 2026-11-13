@@ -20,6 +20,7 @@ from pathlib import Path
 
 import json_compat as json
 import build
+from keylocks import KeyedLocks
 import build_store as bs
 
 LIST_VERSION = 5
@@ -50,8 +51,7 @@ class InputLister:
         self.cache = Path(cache_dir) / "inputs"
         self.cache.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
-        self._key_guard = threading.Lock()
-        self._key_locks = {}
+        self._listing_lock = KeyedLocks()
         self._files = {}
         self._paired = {}
         self._index = {}
@@ -113,18 +113,16 @@ class InputLister:
         self._files[product] = (t0, files, threading.Event())
         try:
             payload = {"ts": t0, "files": [p.relative_to(self.datasets).as_posix() for p in files]}
-            tmp = self._files_path(product).with_suffix(".tmp")
-            tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-            tmp.replace(self._files_path(product))
-        except (OSError, ValueError):
-            pass
+            build.replace_bytes(self._files_path(product), json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"[inputs] file list for {product} not cached: {exc}", flush=True)
         return files
 
     def _refresh_files(self, product: str):
         try:
             self._scan_files(product)
-        except Exception:  # noqa: BLE001 - 刷新失败就继续用旧清单
-            pass
+        except Exception as exc:  # noqa: BLE001 - 刷新失败就继续用旧清单
+            print(f"[inputs] file list refresh for {product} failed, keeping the old one: {exc}", flush=True)
         finally:
             hit = self._files.get(product)
             if hit:
@@ -269,12 +267,6 @@ class InputLister:
             sig.append([rel, stat.st_size, stat.st_mtime_ns])
         return sig
 
-    def _listing_lock(self, key: str):
-        with self._key_guard:
-            lock = self._key_locks.get(key)
-            if lock is None:
-                lock = self._key_locks[key] = threading.Lock()
-            return lock
 
     def listing(self, product: str, day: str, model: str, split: str):
         files = self._files_for(product, day, model, split)
@@ -299,9 +291,7 @@ class InputLister:
                 pass
             rows = self._scan(product, files)
             payload = {"version": LIST_VERSION, "sig": sig, "files": len(files), "rows": rows}
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-            tmp.replace(path)
+            build.replace_bytes(path, json.dumps(payload, ensure_ascii=False).encode("utf-8"))
             return payload
 
     def _scan(self, product: str, files):
@@ -573,9 +563,7 @@ class InputLister:
         detail["meta"]["request_time"] = detail["meta"].get("request_time") or inp.get("request_time") or meta.get("request_time")
         detail["_stamp"] = stamp
         try:
-            tmp = out.with_suffix(".tmp")
-            tmp.write_text(json.dumps(detail, ensure_ascii=False), encoding="utf-8")
-            tmp.replace(out)
+            build.replace_bytes(out, json.dumps(detail, ensure_ascii=False).encode("utf-8"))
         except OSError:
             pass
         detail.pop("_stamp", None)

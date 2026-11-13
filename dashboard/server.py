@@ -7,6 +7,7 @@ import mimetypes
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -65,24 +66,17 @@ def prewarm_details():
                 prewarm = json.load(fh)
         except (OSError, ValueError):
             prewarm = {}
-        for product in ("wencai", "aime"):
-            slugs = [slug for slug in (prewarm.get(product) or []) if slug][:PREWARM + 10]
+        import build as _build
+        for product in sorted(_build.ENABLED):
+            slugs = [slug for slug in (prewarm.get(product) or []) if slug]
             if not slugs:
                 path = os.path.join(STATIC, f"samples-{product}.json")
                 try:
                     with open(path, encoding="utf-8") as fh:
-                        rows = json.load(fh)["products"][product]["rows"]
+                        slugs = _build.prewarm_picks(json.load(fh)["products"][product]["rows"])
                 except (OSError, ValueError, KeyError):
                     continue
-                picks = rows[:PREWARM]
-                picks += sorted(rows, key=lambda r: r.get("d") or "", reverse=True)[:10]
-                seen = set()
-                slugs = []
-                for row in picks:
-                    slug = row.get("s")
-                    if slug and slug not in seen:
-                        seen.add(slug)
-                        slugs.append(slug)
+            slugs = slugs[:PREWARM + _build.PREWARM_RECENT]
             if slugs:
                 made = _builder.prewarm(slugs)
                 print(f"[serve] prewarmed {made}/{len(slugs)} {product} details", flush=True)
@@ -125,10 +119,17 @@ def refresh_once():
         # threads so pages stay responsive while it runs.
         nice = shutil.which("nice")
         cmd = ([nice, "-n", "10"] if nice else []) + [sys.executable, BUILD, "--keep-on-empty"]
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=1800, cwd=HERE,
-        )
-        line = (proc.stdout.strip().splitlines() or [""])[-1]
+        # Own process group: a timeout must also stop the build's worker pool,
+        # which would otherwise keep running and holding cache/build.sqlite3.
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                cwd=HERE, start_new_session=True)
+        try:
+            stdout, stderr = proc.communicate(timeout=1800)
+        except subprocess.TimeoutExpired:
+            os.killpg(proc.pid, signal.SIGKILL)
+            proc.communicate()
+            raise
+        line = (stdout.strip().splitlines() or [""])[-1]
         if proc.returncode == 0:
             _state["error"] = ""
             try:
@@ -144,7 +145,7 @@ def refresh_once():
                 if _ab_builder is not None:
                     threading.Thread(target=_ab_builder.warm, daemon=True).start()
         else:
-            _state["error"] = (proc.stderr or line or "")[-500:]
+            _state["error"] = (stderr or line or "")[-500:]
             print("[refresh] failed:", _state["error"], flush=True)
     except Exception as exc:  # noqa: BLE001 - keep serving the last good build
         _state["error"] = str(exc)
@@ -344,6 +345,9 @@ class Handler(SimpleHTTPRequestHandler):
 
     def handle_one_request(self):
         started = time.time()
+        # Per request, for every method: a HEAD on a keep-alive connection must not
+        # inherit the policy the previous GET chose.
+        self._cache_policy = None
         try:
             super().handle_one_request()
         finally:
@@ -352,7 +356,6 @@ class Handler(SimpleHTTPRequestHandler):
                 sys.stderr.write(f"[slow] {elapsed:.1f}s {getattr(self, 'command', '?')} {self.path}\n")
 
     def do_GET(self):
-        self._cache_policy = None
         path_only = self.path.split("?", 1)[0]
         if path_only.startswith("/samples/") or path_only.startswith("/ab_samples/"):
             # Content comes from a generated file whose mtime changes when it is
@@ -374,7 +377,6 @@ class Handler(SimpleHTTPRequestHandler):
             }).encode()
             self._send_body(200, body, "application/json")
             return
-        path_only = self.path.split("?", 1)[0]
         if _lister and (path_only == "/inputs.json" or (path_only.startswith("/inputs/") and path_only.endswith(".json"))):
             if self._serve_inputs(path_only):
                 return
@@ -450,19 +452,9 @@ def seed_state():
 
 
 def outputs_ready():
-    if not all(os.path.exists(p) for p in OUTPUTS):
-        return False
-    try:
-        with open(OUTPUTS[0], encoding="utf-8") as fh:
-            data = json.load(fh)
-        with open(OUTPUTS[1], encoding="utf-8") as fh:
-            samples = json.load(fh)
-    except (OSError, ValueError):
-        return False
-    return (all(os.path.exists(os.path.join(STATIC, f"data-{p}.json")) for p in (data.get("products") or {}))
-            and all(os.path.exists(os.path.join(STATIC, f"samples-{p}.json")) for p in (samples.get("products") or {}))
-            and all(os.path.exists(os.path.join(STATIC, f"labels-{p}.json")) for p in (samples.get("products") or {}))
-            and all(os.path.exists(os.path.join(STATIC, f"trends-{p}.json")) for p in (data.get("products") or {})))
+    from pathlib import Path
+    import build as _build
+    return os.path.isdir(OUTPUTS[2]) and _build.payload_files_exist(Path(STATIC))
 
 
 class DashboardServer(ThreadingHTTPServer):
@@ -477,8 +469,8 @@ class DashboardServer(ThreadingHTTPServer):
 
 def main():
     global _builder, _lister, _ab_builder
+    from build import default_datasets
     try:
-        from build import default_datasets
         from detail_builder import DetailBuilder
         _builder = DetailBuilder(
             default_datasets(), os.path.join(HERE, "cache", "build.sqlite3"),
@@ -487,7 +479,6 @@ def main():
     except Exception as exc:  # noqa: BLE001 - keep serving pre-generated details
         print(f"[serve] lazy detail builder disabled: {exc}", flush=True)
     try:
-        from build import default_datasets
         from ab_detail import ABDetailBuilder
         _ab_builder = ABDetailBuilder(
             default_datasets(), os.path.join(HERE, "cache"), os.path.join(STATIC, "ab_samples"),
@@ -496,7 +487,6 @@ def main():
     except Exception as exc:  # noqa: BLE001 - retest details are optional; static files still serve
         print(f"[serve] ab detail builder disabled: {exc}", flush=True)
     try:
-        from build import default_datasets
         from input_list import InputLister
         _lister = InputLister(default_datasets(), os.path.join(HERE, "cache", "build.sqlite3"),
                               os.path.join(HERE, "cache"), STATIC)

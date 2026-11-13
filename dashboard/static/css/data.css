@@ -567,7 +567,6 @@ body.is-mxp-full { overflow: hidden; }
 }
 .mxp-delta { text-align: right; color: var(--muted); }
 .mxp-chart-empty { display: grid; place-items: center; min-height: 200px; color: var(--faint); font-size: var(--fs-meta); }
-.mx-trend-loading .empty { min-height: 220px; display: grid; place-items: center; padding: 0; }
 @media (max-width: 1160px) {
   .mx-panels.is-both, .mx-card.is-mx-full .mx-panels.is-both { grid-template-columns: minmax(0, 1fr); }
 }
@@ -715,7 +714,6 @@ body.is-mxp-full { overflow: hidden; }
 .mxt-xlab { text-anchor: middle; }
 .mxt-area { pointer-events: none; }
 .mxt-line { fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-.mxt-band { pointer-events: none; }
 .mxt-nebula-dot { pointer-events: none; }
 .mxt-dot { stroke: var(--card); stroke-width: 1.2; }
 /* 发版标记：一条贯满上下坐标轴的实线 + 淡红带 + 顶端版本名，压过数据线但只占 1.4px。 */
@@ -731,9 +729,6 @@ body.is-mxp-full { overflow: hidden; }
 /* 两条折线靠近时，环出「点下去会打开哪一条」的点。 */
 .mxt-pick { fill: none; stroke: var(--ink-2); stroke-width: 1.6; opacity: 0; transition: opacity var(--snap); }
 .mxt-pick.is-on { opacity: 0.85; }
-.t-pick-note { margin-top: 6px; color: var(--ink-2); }
-.mxt-gap-line { stroke-dasharray: 2 3; stroke-opacity: 0.5; stroke-width: 1; pointer-events: none; }
-.mxt-gap { font-size: 10px; font-weight: var(--w-medium); paint-order: stroke; stroke: var(--card); stroke-width: 3px; stroke-linejoin: round; pointer-events: none; }
 /* 端点图注压在最后一个点上方：它只负责读数，不能挡住「点圆点看样本」。 */
 .mxt-end { pointer-events: none; }
 .mxt-end text { fill: var(--muted); font-size: 10.5px; paint-order: stroke; stroke: var(--card); stroke-width: 3px; stroke-linejoin: round; }
@@ -746,7 +741,6 @@ body.is-mxp-full { overflow: hidden; }
   .mxt-pick-label { display: none; }
   .mxt-gname { white-space: normal; }
   .mxt-end text { font-size: 9px; }
-  .mxt-gap { font-size: 9px; }
 }
 
 @media (max-width: 860px) {
@@ -763,10 +757,9 @@ body.is-mxp-full { overflow: hidden; }
 
 .md-table th { color: var(--muted); font-weight: var(--w-medium); font-size: var(--fs-meta); letter-spacing: 0.02em; }
 .md-table .num { text-align: right; }
-.card-head .ed-back, .card-head .ed-home { align-self: center; white-space: nowrap; }
+.card-head .ed-back { align-self: center; white-space: nowrap; }
 @media (max-width: 640px) {
   /* Narrow head: actions on the first line, the path drops to its own line. */
-  .card-head .ed-home { margin-left: auto; }
   .card-head #edCrumbs { order: 3; flex-basis: 100%; margin-left: 0; }
 }
 /* 评测数据详情：一张表、固定列宽；数字右对齐、进度用圆环，列与列不再被内容撑得忽宽忽窄。 */

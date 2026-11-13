@@ -27,7 +27,9 @@ Outputs, each with a ``.gz`` twin::
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
+import fcntl
 import gzip
 import hashlib
 import json_compat as json
@@ -2492,23 +2494,46 @@ def system_facts(all_samples, pool):
 
 # --------------------------------------------------------------------------- write
 
+def tmp_path(path: Path) -> Path:
+    """A per-process temp name next to ``path``: two writers never share one."""
+    return path.with_name(f"{path.name}.{os.getpid()}.tmp")
+
+
+def replace_bytes(path: Path, data: bytes) -> None:
+    tmp = tmp_path(path)
+    tmp.write_bytes(data)
+    os.replace(tmp, path)
+
+
 def write_json(path: Path, payload, gz=True):
     data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_bytes(data)
-    os.replace(tmp, path)
+    replace_bytes(path, data)
     if gz:
-        gz_path = Path(str(path) + ".gz")
-        tmp = Path(str(gz_path) + ".tmp")
-        tmp.write_bytes(gzip.compress(data, compresslevel=6, mtime=0))
-        os.replace(tmp, gz_path)
+        replace_bytes(Path(str(path) + ".gz"), gzip.compress(data, compresslevel=6, mtime=0))
         if _brotli is not None:
-            br_path = Path(str(path) + ".br")
-            tmp = Path(str(br_path) + ".tmp")
-            tmp.write_bytes(_brotli.compress(data, quality=BROTLI_QUALITY))
-            os.replace(tmp, br_path)
+            replace_bytes(Path(str(path) + ".br"), _brotli.compress(data, quality=BROTLI_QUALITY))
     return len(data)
+
+
+PREWARM_FIRST = 40
+PREWARM_RECENT = 10
+
+
+def prewarm_picks(rows) -> list:
+    """First-page detail slugs: the first rows as listed plus the most recent days."""
+    picks = [row.get("s") for row in rows[:PREWARM_FIRST]]
+    picks += [row.get("s") for row in sorted(rows, key=lambda row: row.get("d") or "", reverse=True)[:PREWARM_RECENT]]
+    seen = set()
+    return [slug for slug in picks if slug and not (slug in seen or seen.add(slug))]
+
+
+def write_prewarm(out_dir: Path, prewarm: dict) -> None:
+    if not prewarm:
+        return
+    target = out_dir.parent / "cache" / "prewarm.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    replace_bytes(target, json.dumps(prewarm, ensure_ascii=False).encode("utf-8"))
 
 
 def write_prewarm_slugs(out_dir: Path) -> None:
@@ -2524,17 +2549,8 @@ def write_prewarm_slugs(out_dir: Path) -> None:
             rows = json.loads(path.read_text(encoding="utf-8"))["products"][product]["rows"]
         except (OSError, ValueError, KeyError):
             continue
-        picks = [row.get("s") for row in rows[:40]]
-        picks += [row.get("s") for row in sorted(rows, key=lambda row: row.get("d") or "", reverse=True)[:10]]
-        seen = set()
-        prewarm[product] = [slug for slug in picks if slug and not (slug in seen or seen.add(slug))]
-    if not prewarm:
-        return
-    target = out_dir.parent / "cache" / "prewarm.json"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(".tmp")
-    tmp.write_text(json.dumps(prewarm, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, target)
+        prewarm[product] = prewarm_picks(rows)
+    write_prewarm(out_dir, prewarm)
 
 
 def empty_payloads(reason):
@@ -2745,9 +2761,7 @@ def ensure_detail_gz(path: Path):
             return
     except OSError:
         pass
-    tmp = Path(str(gz) + ".tmp")
-    tmp.write_bytes(gzip.compress(path.read_bytes(), compresslevel=6, mtime=0))
-    os.replace(tmp, gz)
+    replace_bytes(gz, gzip.compress(path.read_bytes(), compresslevel=6, mtime=0))
 
 
 _WORKER = {}
@@ -2877,7 +2891,7 @@ def load_sample_cache(cache_dir: Path):
 
 def write_sample_pickle(path: Path, rows):
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = tmp_path(path)
     with open(tmp, "wb") as fh:
         pickle.dump({"version": SAMPLE_CACHE_VERSION, "build": bs.BUILD_VERSION, "rows": rows},
                     fh, protocol=5)
@@ -3065,13 +3079,24 @@ def build_samples(pairs, root, out_dir, store, reader, cluster_index, cluster_si
     return samples, golden_pool, stats
 
 
+def detail_slug(name: str) -> str:
+    """``<slug>.json[.gz|.br][.<pid>.tmp]`` -> ``<slug>``."""
+    name = re.sub(r"(\.\d+)?\.tmp$", "", name)
+    name = re.sub(r"\.(gz|br)$", "", name)
+    return name[:-len(".json")] if name.endswith(".json") else ""
+
+
 def cleanup_samples(sample_dir: Path, slugs):
-    keep = {f"{slug}.json" for slug in slugs}
-    keep |= {f"{name}.gz" for name in keep}
+    """Drop details of samples no longer listed.
+
+    Dotfiles (``.build-version``) belong to the detail builder, and every encoding
+    or in-flight temp file of a listed slug is kept: the server may be writing it.
+    """
+    keep = set(slugs)
     if not sample_dir.exists():
         return
     for path in sample_dir.iterdir():
-        if path.name in keep:
+        if path.name.startswith(".") or detail_slug(path.name) in keep:
             continue
         if path.is_file():
             path.unlink(missing_ok=True)
@@ -3485,20 +3510,12 @@ def build(datasets: Path, out_dir: Path, pairing: str = "auto", log=print, jobs:
         # from the 28 MB samples index stalls the request threads while json parses;
         # write the tiny list here instead.
         try:
-            prewarm = {}
-            for product, payload in indexes.items():
-                rows = ((payload.get("products") or {}).get(product) or {}).get("rows") or []
-                picks = [row.get("s") for row in rows[:40]]
-                picks += [row.get("s") for row in sorted(rows, key=lambda row: row.get("d") or "", reverse=True)[:10]]
-                seen = set()
-                prewarm[product] = [slug for slug in picks if slug and not (slug in seen or seen.add(slug))]
-            prewarm_path = out_dir.parent / "cache" / "prewarm.json"
-            prewarm_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = prewarm_path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(prewarm, ensure_ascii=False), encoding="utf-8")
-            os.replace(tmp, prewarm_path)
-        except (OSError, ValueError):
-            pass
+            write_prewarm(out_dir, {
+                product: prewarm_picks(((payload.get("products") or {}).get(product) or {}).get("rows") or [])
+                for product, payload in indexes.items()
+            })
+        except OSError as exc:
+            debug(f"prewarm list not written: {exc}")
 
         slugs = [s[0] for rows in samples.values() for s in rows]
         cleanup_samples(out_dir / "samples", slugs)
@@ -3797,7 +3814,28 @@ def main(argv=None):
                     help="parallel input-file scans (default: auto, up to 4; 1 disables)")
     args = ap.parse_args(argv)
     args.datasets = args.datasets or default_datasets()
+    with build_lock(args.out.parent / "cache"):
+        return run(args)
 
+
+@contextlib.contextmanager
+def build_lock(cache_dir: Path):
+    """One build at a time per output tree, across processes.
+
+    The server's scheduled refresh, a deploy-time build and a manual run all write
+    the same payloads and ``cache/build.sqlite3``; the second waits for the first
+    (and then usually reuses its result) instead of racing it.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    with open(cache_dir / "build.lock", "a+") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def run(args):
     (data, index), stats = build(args.datasets.resolve(), args.out, args.pairing, jobs=args.jobs)
     try:
         for product in sorted(ENABLED):

@@ -11,11 +11,16 @@ AIME 评测数据在远端服务器上的**搬运、打包与看板**工程。
 servers.conf                    # 本地部署配置（已 gitignore，不入库）
 scripts/pack_aime_io.sh         # 常规打包：AIME 输入 + 输出 → 单个 tar.zst（约 2.5-3 分钟）
 scripts/pack_aime_input.sh      # 旧版单流口径（ceph 单流限速后已不推荐）
+scripts/eval_supervisor.sh      # 容器内守护：按 /opt/eval_services.conf 拉起看板 / 页面 / 供数
+scripts/eval_boot.sh            # 容器启动时调用 eval_supervisor
+scripts/run_tests.sh            # 全部测试套件（在服务器上跑，不在笔记本上跑）
 docs/aime-input-packaging.md    # 打包流程与参数说明
 docs/design-principles.md       # 界面设计原则：层级、字重、数字与动效
 docs/dashboard-deployment.md    # 看板部署、端口、启动与运维手册
 docs/build-performance.md       # 构建基线、增量索引、实测耗时与后续加速点
 docs/接口使用指南.md             # 5003 供数接口 + 5002 页面接口的用法（推荐先读）
+docs/data-server.md             # 弗吉尼亚数据服务器：目录、数据集、字段、构建刷新与常见坑
+docs/prediction-data.md         # 预测卡片读取的 4_forecast 数据协议
 ```
 
 ## 快速开始
@@ -50,7 +55,8 @@ ssh aime_rsi_data 'chmod +x /tmp/pack_aime_io.sh && SRC_BASE=/mnt/aime_eval_ssd/
 
 ## 数据看板
 
-`dashboard/` 是问财 / AIME 评测看板：原生 ES modules + SVG + Python 起服务；除可选的 `orjson` 外不依赖第三方运行时。
+`dashboard/` 是问财 / AIME 评测看板：原生 ES modules + SVG + Python 起服务。前端只额外内置了
+`static/vendor/lightweight-charts`（K 线 / 趋势图）；后端可选 `orjson`（解析加速）与 `brotli`（预压缩）。
 本地读取仓库根目录的 `datasets/`；生产按产品分两套数据根：问财读乌兰的
 `/mnt/fin_bench/code_and_clean_data/datasets`，AIME 看板读弗吉尼亚的 `/mnt/aime_eval_ssd`
 （产品目录 `1_aime`；旧 HDD `/mnt/fin_bench/aime_rsi_data` 已不再使用）；
@@ -64,6 +70,7 @@ ssh aime_rsi_data 'chmod +x /tmp/pack_aime_io.sh && SRC_BASE=/mnt/aime_eval_ssd/
 | 数据 | `?view=data` | 问财 / AIME 的 2+3 Bento：数据量、评测量、归因、聚类、预测 |
 | 评测体系 | `?view=system` | 评测体系 / 证据闭环：评测链路与口径、每个产品 10 个 golden case 的单条轮播、阶段 → 环节 → 机制 → 模式 |
 | 样本 | `?view=samples` | 两栏样本工作台：召回 | 评测输入与输出（同一张卡内三栏） |
+| 版本对比 | `?view=compare` | A/B 轮次的同题对比：改版前 / 改版后 / GPT 回答三列（从 A/B Test 面板进入） |
 
 数据板块的「评测量」卡片右上角有「详情」入口（`?view=data&detail=eval`）：按日期倒序展示每天的评测输入、评测输出与完成率，
 日期 → 模型 → session 逐层下钻；session 的「查看」复用具体数据页的完整输入与输出。日期 / 模型行标记 ✅ 或「未评测」，
@@ -77,20 +84,21 @@ ssh aime_rsi_data 'cd /opt/eval_dashboard && ./start.sh'   # 弗吉尼亚（AIME
 
 服务监听容器 `:5001`（展示端口，乌兰察布对外 `2768`）；其余端口角色（`5002` 页面接口、`5003` 供数、
 `5004` 开发调试、`5005` 备用）与两台服务器的映射见
-[docs/dashboard-deployment.md](docs/dashboard-deployment.md)。服务每小时运行一次
-`build.py --keep-on-empty`；构建是增量的：输入文件按 `(size, mtime_ns)` 只扫描变化部分，
+[docs/dashboard-deployment.md](docs/dashboard-deployment.md)。服务默认每 10 分钟（`REFRESH_SECONDS`，
+可在部署目录的 `deploy.env` 覆盖）运行一次 `build.py --keep-on-empty`，同一输出目录同一时间只跑一个构建（`cache/build.lock`）；构建是增量的：输入文件按 `(size, mtime_ns)` 只扫描变化部分，
 配对和样本摘要写入 `cache/build.sqlite3`。逐样本详情不再在构建时全量生成，而是在样本页
 第一次打开时由 `detail_builder.py` 从 SQLite 行号 + 输入/输出/compact 原始行生成并缓存。
 无数据变化时构建复用上一份 payload；有新数据时只扫新文件、只配对变化文件、只生成新摘要，
 耗时基线见 [docs/build-performance.md](docs/build-performance.md)。首屏样本在服务启动 / 每轮构建后
 后台预热，其余样本首次打开约 0.6–4 秒，之后走静态缓存。删除 `cache/` 会强制全量重建。
 
-`stats_worker.py` 作为独立进程常驻，每 1 小时把输入侧的 records / traces / tools /
+`stats_worker.py` 作为独立进程常驻，默认每 10 分钟（`STATS_REFRESH_SECONDS`）把输入侧的 records / traces / tools /
 tokens / task-subtask / lost 统计写到 `<datasets>/stats.json`；`build.py` 只接受
 `(size, mtime_ns)` 仍匹配的条目，因此旁路统计只是加速器，不会成为正确性依赖。
 
-部署时预压缩 JS/CSS/HTML/SVG；数据侧按产品拆成 `data-<product>.json`、
-`samples-<product>.json` 和逐样本 `samples/<slug>.json`，均带 `.gz`。这些 JSON 使用
+部署时 `precompress.sh` 预压缩 JS/CSS/HTML/SVG；数据侧按产品拆成 `data-<product>.json`、
+`samples-<product>.json`、`labels-<product>.json`、`trends-<product>.json`、`abtests-<product>.json`
+和逐样本 `samples/<slug>.json`，由 `build.py` 原子写出 `.gz` / `.br`。这些 JSON 使用
 `no-cache`，重复访问以 304 重验证，仅 `/healthz` 为 `no-store`。
 端口映射、部署流程、验证方式和部署最佳实践见
 [docs/dashboard-deployment.md](docs/dashboard-deployment.md)。
@@ -104,7 +112,7 @@ tokens / task-subtask / lost 统计写到 `<datasets>/stats.json`；`build.py` �
 - 评测量：按天展示「评测输入 / 已完成」双色柱，支持近 7 天 / 近 30 天 / 全部与全部 / 单模型筛选，**默认全部**；全部区间最多聚合 12 段，柱顶数字用 `K / M / B`，精确值在 tooltip。底部展示完成 Session / 输入 Session、完成 Trace / 输入 Trace 与评测 Tokens；默认「全部 · 全部模型」时，分母逐位等于数据量卡的评测输入 Session / Trace，两张卡因此可以直接对账；切到 7/30 天只是本卡的缩放。严重度在会话场按记录、在归因体系按问题表达。卡片右上角「详情」进入按日期倒序的每日输入 / 输出 / 完成率明细。
 - 归因体系：两列桑基图 `版本 → 归因环节`，悬停版本或环节会高亮对应连线，不显示严重度。
 - 预测体系：一个卡片内三张页签——题量（已揭晓 / 待揭晓 / 不可核验 / 其他题）、能力（各版本准确率与正确 / 错误构成）、归因（模型 → 错因的小型桑基图）。数据来自 `datasets/4_forecast/<产品>/prediction.json`，题库按预测侧自己扫过的题计；没有文件的产品显示「暂无预测数据」，数据协议见 [预测卡片数据接口](docs/prediction-data.md)。
-- 会话场与聚类矩阵：会话场每格是一条评测记录（`session_id × request_time`），按最严重的问题着色，不再合并相邻记录；分组标题显示记录数与场数（场数按 `(split, 模型, session_id)` 去重，与评测量「完成 Session」同口径），图例数字是「最严重级别为该项的记录数」。按可用宽高计算每页容量，超过后分页，并把各严重度均匀分摊到每一页，每个模型/分组下方各自显示记录数与场数，悬停显示该条记录的问题数，点击跳到该条样本。聚类矩阵纵轴是场景（Task → Subtask，长列表折叠为「其他场景」），横轴是问题聚类（环节 → 机制 → 模式），最右侧「问题合计」是该场景在各问题聚类上的问题数合计；每个场景的 Trace 总数只标在场景名后，格子显示「问题数 + 比例」；最底下一行「场景合计」与格子同一样式，点列合计可在卡内看该问题聚类在全部场景上的趋势；最后一行和最后一列用浅背景强调；点行或列标题在原表就地换一层的表，两条面包屑分别返回；点格子不跳页：在卡片里就地换成这个「场景 × 问题聚类」的时间趋势（「其他场景」先展开）。趋势图是一张多折线图：口径（出现数 / 出现比例，比例 = 命中会话占比）、时间（近 7 / 30 天 / 全部）、场景（本场景 / 全部场景）是单选；来源（全部来源 / 真实 / 测试 / 内部 / 未知）、模型（AIME 的 Fast / Expert）、等级（全部问题 / P0-P4）是条件池：来源、模型、等级都可以多选合并成同一条线（如 P0+P1+P2，命中会话按并集算）；下面一排折线卡片最多 4 条、可以删到 0 条，点卡片切换要编辑的那条线，条件也可以直接拖到卡片上；没有折线时图表显示待添加的空状态；右侧端点直接标最新值，同来源同等级的两个模型之间画差距带并标出最新差值，不再放图例。发版日期画成竖线，用来判断发版前后同一个问题率有没有下降；卡片头的「← 返回矩阵」回到原表。聚类矩阵标题旁的「A/B Test」（只有该产品放了 `ab_test/` 轮次才出现）先列出发版对比记录并展示三批汇总：固定题集改版前、固定题集改版后、改版后线上真实用户；汇总按叶子给出改善 / 变差、消除 / 新增及线上重合，再进入与外部矩阵同逻辑的场景 × 问题聚类矩阵，可在同题变化 / 发版前 / 发版后同题测试 / 发版后线上真实四个矩阵之间切换，点格子看跨期趋势。场景的 Trace 总数只标在场景名后（同题变化矩阵标固定题集在该场景的 trace 数，前后不变），普通矩阵的格子只写问题数 + 比例；同题变化矩阵的格子写发版前问题数 → 发版后问题数、净增减和增减比例，色调区分变好 / 变差，场景合计行与变化合计列同样按四个数字折算。线上批次只做验证，不与固定题集直接相减。
+- 会话场与聚类矩阵：会话场每格是一条评测记录（`session_id × request_time`），按最严重的问题着色，不再合并相邻记录；分组标题显示记录数与场数（场数按 `(split, 模型, session_id)` 去重，与评测量「完成 Session」同口径），图例数字是「最严重级别为该项的记录数」。按可用宽高计算每页容量，超过后分页，并把各严重度均匀分摊到每一页，每个模型/分组下方各自显示记录数与场数，悬停显示该条记录的问题数，点击跳到该条样本。聚类矩阵纵轴是场景（Task → Subtask，长列表折叠为「其他场景」），横轴是问题聚类（环节 → 机制 → 模式），最右侧「问题合计」是该场景在各问题聚类上的问题数合计；每个场景的 Trace 总数只标在场景名后，格子显示「问题数 + 比例」；最底下一行「场景合计」与格子同一样式，点列合计可在卡内看该问题聚类在全部场景上的趋势；最后一行和最后一列用浅背景强调；点行或列标题在原表就地换一层的表，两条面包屑分别返回；点格子不跳页：在卡片里就地换成这个「场景 × 问题聚类」的时间趋势（「其他场景」先展开）。趋势图是一张多折线图：口径（出现数 / 出现比例，比例 = 命中会话占比）、场景（本场景 / 全部场景）是单选，时间范围固定为全部日期；来源（全部来源 / 真实 / 测试 / 内部 / 未知）、模型（AIME 的 Fast / Expert）、等级（全部问题 / P0-P4）是条件池：来源、模型、等级都可以多选合并成同一条线（如 P0+P1+P2，命中会话按并集算）；下面一排折线卡片最多 4 条、可以删到 0 条，点卡片切换要编辑的那条线，条件也可以直接拖到卡片上；没有折线时图表显示待添加的空状态；右侧端点直接标最新值，同来源同等级的两个模型之间画差距带并标出最新差值，不再放图例。发版日期画成竖线，用来判断发版前后同一个问题率有没有下降；卡片头的「← 返回矩阵」回到原表。聚类矩阵标题旁的「A/B Test」（只有该产品放了 `ab_test/` 轮次才出现）先列出发版对比记录并展示三批汇总：固定题集改版前、固定题集改版后、改版后线上真实用户；汇总按叶子给出改善 / 变差、消除 / 新增及线上重合，再进入与外部矩阵同逻辑的场景 × 问题聚类矩阵，可在「同题变化」与「线上真实」两个矩阵之间切换，点格子看跨期趋势。场景的 Trace 总数只标在场景名后（同题变化矩阵标固定题集在该场景的 trace 数，前后不变），普通矩阵的格子只写问题数 + 比例；同题变化矩阵的格子写发版前问题数 → 发版后问题数、净增减和增减比例，色调区分变好 / 变差，场景合计行与变化合计列同样按四个数字折算。线上批次只做验证，不与固定题集直接相减。
 - AIME 按一个整体看，不拆日常 / 流失；流失用户只在会话场的版本标题旁标数。
 
 **2. 评测体系说明页**：评测体系（含聚类口径）与证据闭环两张卡片。
@@ -148,13 +156,13 @@ tokens / task-subtask / lost 统计写到 `<datasets>/stats.json`；`build.py` �
 
 | 文件 | 作用 |
 |---|---|
-| `build.py` | 增量扫描 `datasets/`：输入、归因、compact 按 `对应关系.csv` 或 session key 配对 → `static/data.json` + `data-<product>.json`、`static/samples.json` + `samples-<product>.json`、`static/trends-<product>.json`、`static/abtests-<product>.json`（均带 `.gz`）；`cache/build.sqlite3` 保存文件索引、配对与样本摘要；`--jobs` 控制样本构建/输入扫描并发；`--keep-on-empty` 在数据源为空时保留上一份 |
-| `stats_worker.py` | 独立进程，每 1 小时刷新 `<datasets>/stats.json` 输入统计旁路 |
+| `build.py` | 增量扫描 `datasets/`：输入、归因、compact 按 `对应关系.csv` 或 session key 配对 → `static/data.json` + `data-<product>.json`、`static/samples.json`（产品清单）+ `samples-<product>.json`、`labels-<product>.json`、`trends-<product>.json`、`abtests-<product>.json`（均带 `.gz` / `.br`）；`cache/build.sqlite3` 保存文件索引、配对与样本摘要；`--jobs` 控制样本构建/输入扫描并发；`--keep-on-empty` 在数据源为空时保留上一份 |
+| `stats_worker.py` | 独立进程，默认每 10 分钟刷新 `<datasets>/stats.json` 输入统计旁路 |
 | `detail_builder.py` | 样本页首次请求时按 SQLite 行号生成 `samples/<slug>.json(.gz)` |
 | `server.py` | `ThreadingHTTPServer` + 定时执行 `build.py --keep-on-empty`；`/samples/<slug>.json` 按需生成详情；`/healthz` 返回最近一次构建摘要 |
-| `static/` | 三页入口、ES modules、`css/*.css`；无第三方运行时依赖 |
-| `static/js/` | `app.js` 路由/主题/数据加载，`data.js` 数据页，`sunburst.js` 可下钻旭日图，`system.js` 评测体系页，`samples.js` 样本页（含 compact 流程图），`core.js` 共享格式化/提示/数字动效 |
-| `precompress.sh` | 部署时预压缩 JS/CSS/HTML |
+| `static/` | 入口 `index.html`、ES modules、`css/*.css`；`vendor/` 内置 lightweight-charts |
+| `static/js/` | `app.js` 路由/主题/数据加载，`core.js` 共享格式化/提示/数字动效；`data.js` 数据页，`abtest.js` A/B 面板，`kline_chart.js` / `kline_data.js` K 线与趋势图，`trend_chart.js` / `problem_trends.js` 问题趋势卡，`sunburst.js` 旭日图，`galaxy.js` 星图；`system.js` 评测体系页；`samples.js` 样本列表 + `sample_detail.js` 样本详情（样本页与版本对比共用），`compare.js` 版本对比 |
+| `precompress.sh` | 部署时预压缩 JS/CSS/HTML/SVG |
 
 AIME 看板路径相对弗吉尼亚数据根 `/mnt/aime_eval_ssd`，问财相关路径相对乌兰数据根
 `/mnt/fin_bench/code_and_clean_data/datasets`。
@@ -171,10 +179,10 @@ AIME 输入统一在 `1_aime/eval_input/0_daily_eval_input/<model>/<date>.jsonl`
 不含 comparison / compact 汇总记录；AIME 统计 `*_attribution-YYYY-MM-DD.jsonl`）；待评测 = 输入 − 已评测。
 会话场格数 = 已评测记录数；同一 session 的不同 `request_time` 各占一格，按 `(split, 归一化模型, session_id)` 去重后才是「场数」，与评测量完成 Session 对账。
 问财 / AIME 都按 `meta.task` 展示任务分布：问财不展示「其他/其它」，AIME 把「其它」并进「其他」。
-样本 = demo_data 的 attribution + compact 配对；输入按 `(session_id, request_time)` 全日期索引回接，key 不匹配时再按 `trace_id` 回退，不补造缺失内容。
+样本 = 评测输出的 attribution + compact 配对；输入按 `(session_id, request_time)` 全日期索引回接，key 不匹配时再按 `trace_id` 回退，不补造缺失内容。
 同一 key 有多个输入快照时，选覆盖归因各轮 `trace_id` 的那份（不再按文件顺序取第一条），否则后续轮次的 evidence 会没有 transcript、只能显示「未定位」。
 输入/归因/聚类的可用日期以数据目录实际文件为准；看板按文件扫描结果展示，不再在文档里固定快照日期。
-AIME demo 归因带 P0–P4（P4 为提示级）；问财暂无 demo 样本。
+AIME 归因带 P0–P4（P4 为提示级）。
 
 ### 设计规则（可复现的 token）
 

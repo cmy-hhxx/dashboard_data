@@ -85,7 +85,7 @@ curl -sG "$BASE/api/context" \
 | `q` / `m` / `sp` / `d` | 问题 / 模型 / 分组（`daily`、`lost`）/ 日期 |
 | `sid` / `tid` | 会话 ID / trace ID |
 | `tr` / `n` | 轮数 / 问题数 |
-| `w` / `lb` | 最严重等级（P0…）/ 问题标签 |
+| `w` | 最严重等级（P0…）；问题标签已拆到 `/labels-<product>.json`（与 `rows[]` 同序） |
 | `r` / `st` / `pt` | 归因环节 / 阶段 / 模式（编码，映射见 `taxonomy`） |
 | `sc` | 场景（问财） |
 
@@ -111,7 +111,12 @@ curl -s "$BASE/samples/ba6ba417f2.json" -o sample.json
 curl -s --compressed "$BASE/samples-wencai.json" -o index.json
 ```
 
-### 2.4 `/healthz`
+### 2.4 `/labels-<product>.json`
+
+`{schema, product, labels:["…",…]}`：每行的问题标签，与 `samples-<product>.json` 的 `rows[]` 同长度、同顺序（按行号配对）；
+与索引一样已去掉测试用户行。
+
+### 2.5 `/healthz`
 
 ```json
 {"ok": true, "port": 5002, "upstream": "http://127.0.0.1:5001", "upstream_ok": true, "upstream_last_refresh": 1793702589.56}

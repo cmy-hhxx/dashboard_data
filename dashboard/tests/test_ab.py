@@ -287,10 +287,6 @@ class BuildIntegrationTests(unittest.TestCase):
             self.assertFalse((static / "abtests-aime.json.gz").exists())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 # ---- current three-scope layout (02_before_release / 03_after_release_retest) --------------
 
 BEFORE_COVERAGE = """trace_id,session_id,user_id,question_time,mode,question,qtype,status,b_reason,eval_category,eval_store,eval_file,eval_line,eval_n_problem,eval_is_correct,cls_n_items,cls_paths,cls_labels,cls_dates,eval_stores_alt,recycle
@@ -706,3 +702,7 @@ class VerifyAndGptTests(unittest.TestCase):
             self.GPT_RAW["response"]["output"][1]["content"][0]["text"] = "更新后的回答"
             self.add_gpt(base, ["t1"], {"t1": self.GPT_RAW})
             self.assertNotEqual(ab_test.rounds_signature(root), signature)
+
+
+if __name__ == "__main__":
+    unittest.main()

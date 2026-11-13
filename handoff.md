@@ -12,7 +12,7 @@
 ## 1. 先跑起来
 
 ```bash
-cd /Users/cmy/Desktop/eval_data_server
+cd <仓库根目录>
 
 # 数据更新后重建（服务运行时也可以执行）
 ./dashboard/local_dev/refresh.sh
@@ -32,10 +32,8 @@ cd /Users/cmy/Desktop/eval_data_server
 ```bash
 curl -s http://127.0.0.1:5001/healthz   # 必须看 JSON 内容；状态码恒为 200
 
-cd dashboard
-python3 -I -m unittest discover -s tests -p 'test_*.py'
-node tests/test_eval_counts.cjs
-for f in static/js/*.js; do node --input-type=module --check < "$f" || break; done
+scripts/run_tests.sh             # 全部套件；只跑看板：scripts/run_tests.sh dashboard（在服务器上跑）
+for f in dashboard/static/js/*.js; do node --input-type=module --check < "$f" || break; done
 ```
 
 验收固定做：三个视图 × 问财 / AIME × 亮暗色 × 1440/1024/390，控制台无报错、
@@ -88,9 +86,9 @@ server.py（标准库 HTTP，:5001，定时 build）──> app.js
 - compact 的 `evidence_id` 里 message index 是**整场扁平 trace 的全局下标**；build 需按
   各 trace 消息数累加换算成 `(trace, local_index)`，不能把 compact turn 当 trace 直接
   `place()`，否则第 2 条 trace 起的 compact 证据会越界或错位。
-- `server.py` 启动时缺数据会构建，之后每小时刷新（`REFRESH_SECONDS=3600`），页面每 2 分钟条件请求检查并就地刷新；`/healthz`
+- `server.py` 启动时缺数据会构建，之后默认每 10 分钟刷新（`REFRESH_SECONDS`，默认 600，可在 `deploy.env` 覆盖；同一时间只跑一个构建，见 `cache/build.lock`），页面每 2 分钟条件请求检查并就地刷新；`/healthz`
   返回最近一次构建摘要。
-- 前端无框架、无打包器、无外部运行时依赖；原生 ES modules + SVG + 手写 CSS。
+- 前端无框架、无打包器；原生 ES modules + SVG + 手写 CSS，唯一第三方库是内置的 `static/vendor/lightweight-charts`（K 线 / 趋势图）。
 - 生产由 `deploy.sh` 同步代码到远端，在远端构建数据、预压缩并重启；不要手改远端目录。
 
 ## 3. 页面与入口
@@ -196,13 +194,17 @@ A/B 面板里的样本入口（旭日图叶子样本、矩阵格趋势的样本�
 | `dashboard/deploy.sh` | 同步、远端构建、预压缩、重启 | 发布 |
 
 先读 `README.md`、`docs/design-principles.md`、`docs/dashboard-deployment.md`、`docs/build-performance.md`、
-`docs/prediction-data.md`。前端是原生 SVG + ES modules，ECharts / board.js 的实现已不再适用。
+`docs/prediction-data.md`、`docs/data-server.md`。
 
 ## 5. 数据契约
 
 `static/data.json`（共享壳）：
 
-````static/data-<product>.json`：
+```text
+{ schema, generated_at, products{<product>:{…简要}}, taxonomy, system, source }
+```
+
+`static/data-<product>.json`：
 
 ```text
 { schema, generated_at, product, products{<product>:{ kpi, dates, field, cross, patterns, ... }} }
@@ -319,7 +321,7 @@ uid 用户 ID（输入 meta.user_id）· ut 用户类型 real/test/internal/unkn
 
 问题标签 `lb` 已从索引行拆出（2026-11-07）：`static/labels-<product>.json` = `{schema, product,
 labels:["…",…]}`，与 `rows[]` 同长度、同顺序；前端首屏后再拉，搜索时回填。`samples-<product>.json`
-与 5002 的透传接口都不再含 `lb`，业务方按行号配对（见 `docs/接口使用指南.md` 四、变更记录）。
+与 5002 的透传接口都不再含 `lb`，业务方按行号配对（见 `docs/接口使用指南.md` 第 6 节「变更记录」）。
 
 用户类型由 `dashboard/user_rules.py` 判定，规则/名单放在 `<datasets>/user_rules.json`
 （`EVAL_USER_RULES` 可覆盖）：名单优先，然后「超过十位（11 位及以上）的数字 ID = 测试用户、十位及以内 = 真实用户」、
@@ -359,18 +361,18 @@ attribution / compact」的日期，并给出聚类落点缺口与 A/B 轮次、
 5. **改构建性能 / 缓存**：`build_store.py` 的 `scan_file`、`BuildStore`；`build.py` 的
    `scan_inputs`、`pairs_from_keys`、`build_samples`。改 detail 结构时同步 bump
    `build_store.BUILD_VERSION`，否则旧样本缓存会被误用；改完删 `cache/` 跑一次全量验证。
-6. **改样本筛选**：`samples.js` 的 `F()`、`skeleton()`、`syncFilters()` 和列表
+6. **改样本筛选**：`samples.js`（列表）的 `F()`、`skeleton()`、`syncFilters()` 和列表
    过滤逻辑；筛选字段来自 `samples-<product>.json` 行，保持 URL 可分享。
    用户类型筛选走 `ut`（`?ut=test`），流失筛选走 `split=lost`（由行上的 `ul` 标记合成）。
    只改分类规则时改 `<datasets>/user_rules.json`，不要改前端。
 7. **改样式**：改 `css/` 下对应页面的文件（样本页只在 `samples.css`），优先复用现有 token 和类。不用硬边框，用 1%~3% 的
-   微差灰阶分层、同心圆角、16pt 横向 / 16–24pt 纵向间距、数字 `tabular-nums`。
+   微差灰阶分层、同心圆角、README「设计规则」里的间距 token、数字 `tabular-nums`。
 
 ## 7. 容易踩的坑
 
 - **证据闭环高度**：体系页的 `.echo` 固定桌面高度，`#anatomyBody` 需要
   `min-height: 0` 才能内部滚动；不要把 `.echo` 改成内容撑高。
-- **证据连线**：`samples.js` 的 `drawThreads` 依赖 `.anatomy` 内
+- **证据连线**：`sample_detail.js` 的 `drawThreads` 依赖 `.anatomy` 内
   `#sout` / `.timeline` / `.threads` / `#sattr` 的 DOM 顺序；`.threads` 必须仍在对话与归因之间，
   且 `drawThreads` 只查 `#sattr .pcard`。改动右栏结构后要重新量一遍连线。
   连线坐标按实际元素边界计算，两侧留白变化时会自动跟随。

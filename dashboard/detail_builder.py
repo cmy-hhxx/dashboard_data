@@ -16,6 +16,7 @@ from pathlib import Path
 
 import build
 import build_store as bs
+from keylocks import KeyedLocks
 
 SLUG = re.compile(r"^[0-9a-f]{10}$")
 # 详情文件单独失效：配对修正后要给旧样本补输入，但不能连带让 116k 样本缓存全量重建。
@@ -46,8 +47,7 @@ class DetailBuilder:
         self._trace_inputs = None
         self._trace_inputs_at = 0.0
         self._trace_inputs_lock = threading.Lock()
-        self._slug_guard = threading.Lock()
-        self._slug_locks = {}
+        self._slug_lock = KeyedLocks()
 
     def _sync_version(self):
         try:
@@ -81,14 +81,6 @@ class DetailBuilder:
                 pass
         self._local.store = None
         return self._open()
-
-    def _slug_lock(self, slug: str):
-        with self._slug_guard:
-            lock = self._slug_locks.get(slug)
-            if lock is None:
-                lock = threading.Lock()
-                self._slug_locks[slug] = lock
-            return lock
 
     def _input_locations(self):
         """trace_id -> (input file, byte offset); refreshed so new files are reachable."""

@@ -2,7 +2,7 @@
 # Deploy the dashboard to the configured host and (re)start it on :5001.
 # Host/port/key default to the local SSH alias "eval_data" (~/.ssh/config);
 # override with EVAL_DEPLOY_HOST / EVAL_DEPLOY_PORT / EVAL_DEPLOY_KEY.
-# Staging: EVAL_DEPLOY_REMOTE=/opt/eval_dashboard_2 PORT=5002 STATS_WORKER=0 ./dashboard/deploy.sh
+# Staging: EVAL_DEPLOY_REMOTE=/opt/eval_dashboard_2 PORT=5004 STATS_WORKER=0 ./dashboard/deploy.sh
 set -euo pipefail
 
 HOST="${EVAL_DEPLOY_HOST:-eval_data}"
@@ -45,7 +45,9 @@ RUN_ENV=""
 for var in PORT STATS_WORKER REFRESH_SECONDS STATS_REFRESH_SECONDS EVAL_DATASETS EVAL_PRODUCTS; do
   if [ -n "${!var:-}" ]; then RUN_ENV+="export $var=$(printf '%q' "${!var}")"$'\n'; fi
 done
-RSYNC=(rsync -az --delete --exclude 'data.json' --exclude 'data.json.gz' --exclude 'data-*.json' --exclude 'data-*.json.gz' --exclude 'samples.json' --exclude 'samples.json.gz' --exclude 'samples-*.json' --exclude 'samples-*.json.gz' --exclude 'labels-*.json' --exclude 'labels-*.json.gz' --exclude 'trends-*.json' --exclude 'trends-*.json.gz' --exclude 'abtests-*.json' --exclude 'abtests-*.json.gz' --exclude 'static/samples' --exclude 'static/ab_samples' --exclude 'static/.samples-*' --exclude 'server.pid' --exclude 'stats.pid' --exclude 'backup_stats.pid' --exclude 'deploy.env' --exclude 'logs' --exclude 'cache' --exclude 'cache_backup' --exclude 'static_backup' --exclude '*.log' --exclude '__pycache__' --exclude 'local_dev' --exclude 'tests'
+# Build outputs live next to the code: every top-level payload (.json and its .gz/.br twins)
+# and the generated detail trees stay on the host; rsync --delete must not touch them.
+RSYNC=(rsync -az --delete --exclude '/static/*.json' --exclude '/static/*.json.gz' --exclude '/static/*.json.br' --exclude 'static/samples' --exclude 'static/ab_samples' --exclude 'static/.samples-*' --exclude '*.pid' --exclude 'deploy.env' --exclude 'logs' --exclude 'cache' --exclude 'cache_backup' --exclude 'static_backup' --exclude '*.log' --exclude '__pycache__' --exclude 'local_dev' --exclude 'tests'
   -e "ssh ${SSH_OPTS[*]}")
 
 retry "${SSH[@]}" "$HOST" "mkdir -p $REMOTE/static $REMOTE/logs"

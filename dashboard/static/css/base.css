@@ -162,7 +162,7 @@ html[data-still] *, html[data-still] *::before, html[data-still] *::after {
 /* Small severity swatches (9-11px) cannot all clear 3:1 against the card: the ramp is monotone,
    so P3/P4 have to stay light. A hairline ring carries the shape instead of the fill. */
 :root { --swatch-ring: inset 0 0 0 1px color-mix(in oklab, var(--ink) 16%, transparent); }
-.sev i, .legend button i, .filters button i, .li i, .keys i, .fx-iso i { box-shadow: var(--swatch-ring); }
+.sev i, .legend button i, .filters button i, .li i, .keys i { box-shadow: var(--swatch-ring); }
 
 :root {
   --t0: color-mix(in oklab, var(--ink) 82%, var(--card));

@@ -17,7 +17,7 @@
 
 | 路径 | 说明 |
 |---|---|
-| `/compare`、`/compare/` | 302 到 `/compare/?compare=1`；`product` / `round` / `pair` / `online` 原样保留 |
+| `/compare`、`/compare/` | 302 到 `/compare/?view=compare&compare=1`；`product` / `round` / `pair` / `online` 原样保留 |
 | `/compare/…` | 反代看板同路径（`/compare/js/compare.js` → 看板 `/js/compare.js`，`/compare/data.json` → 看板 `/data.json`） |
 | `/compare_details`、`/compare_details/…` | `/compare` 的别名，方便业务方按目录名访问 |
 | `/healthz` | 5002 页面服务原有存活检查 |
@@ -73,4 +73,4 @@ python3 -m unittest discover -s tests -p 'test_*.py' -v
 - 只展示已存在的 `round` + `pair`/`online`；没有同题数据时看板显示空态，不静默换题。
 - 只支持 GET/HEAD；无鉴权，按约定部署在内网。
 - `compare=1` 的隐藏样式在看板源码 `dashboard/static/css/compare.css`，随看板一起发布。
-- 预测能力行来自看板的 `data.json`；缺失时该行不显示。
+- 预测能力行来自看板的 `data.json`；缺失时该行仍在，显示「—」。

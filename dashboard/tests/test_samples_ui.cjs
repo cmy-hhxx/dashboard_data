@@ -7,10 +7,18 @@ const file = path.join(__dirname, "../static/js/samples.js");
 const source = fs.readFileSync(file, "utf8");
 const js = source.replace(/^import .*\n/gm, "")
   .replace("export async function render", "async function render");
-const prefix = 'const SEV = ["P0", "P1", "P2", "P3", "P4"];\nconst WORST = [...SEV, "none"];\n'
-  + 'const USER_TYPE_SHORT = { real: "真实", test: "测试", internal: "内部", unknown: "未知" };\n'
-  + 'const utOf = (r) => (r && USER_TYPE_SHORT[r.ut] ? r.ut : "unknown");\n'
-  + 'const isLostRow = (r) => !!(r && (r.ul || r.sp === "lost"));\n';
+// samples.js imports these one-liners; lift them from their real modules so the
+// test cannot drift from them.
+const lift = (rel, names) => {
+  const text = fs.readFileSync(path.join(__dirname, "../static/js", rel), "utf8");
+  return names.map((name) => {
+    const line = text.split("\n").find((l) => l.startsWith(`export const ${name} =`));
+    assert(line, `${rel} must export ${name} on one line`);
+    return line.replace(/^export /, "");
+  }).join("\n") + "\n";
+};
+const prefix = lift("core.js", ["SEV", "WORST"])
+  + lift("sample_detail.js", ["USER_TYPE_SHORT", "utOf", "isLostRow"]);
 const cut = js.indexOf("async function render");
 const context = vm.createContext({ console });
 vm.runInContext(`${prefix}${js.slice(0, cut)}\nglobalThis.api = { groupSessions, severityHit, cascadeHit, listHit };`, context);

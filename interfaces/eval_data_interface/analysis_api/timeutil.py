@@ -40,15 +40,3 @@ def local_day(dt):
     if dt is None:
         return None
     return dt.astimezone(EASTERN).strftime("%Y-%m-%d")
-
-
-def day_of(value):
-    return local_day(parse_iso(value))
-
-
-def seconds_ago(iso_value, now=None):
-    dt = parse_iso(iso_value)
-    if dt is None:
-        return None
-    now = now or datetime.now(UTC)
-    return (now - dt).total_seconds()

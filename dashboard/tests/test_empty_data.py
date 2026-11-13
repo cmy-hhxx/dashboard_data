@@ -206,6 +206,8 @@ class BuildTests(unittest.TestCase):
             builder = DetailBuilder(datasets, static.parent / "cache" / "build.sqlite3",
                                     static / "samples", static.parent / "cache")
             path = builder.ensure(sample["s"])
+            # Age the file so a rewrite inside the same clock tick still shows a newer mtime.
+            os.utime(path, (time.time() - 60, time.time() - 60))
             before = Path(path).stat().st_mtime
             builder.version_stamp = time.time() + 5
             path = builder.ensure(sample["s"])

@@ -1,7 +1,7 @@
 # 本地调试
 
 本地只读取仓库根目录的 `datasets/`；数据未放入时，数据看板与样本页保持待接入空态。
-`EVAL_DATASETS` 可显式指定其他数据根目录。三个生成脚本在本地与生产使用同一套解析逻辑。
+`EVAL_DATASETS` 可显式指定其他数据根目录。本地与生产用同一个 `build.py`、同一套解析逻辑。
 
 ## 启动
 
@@ -24,14 +24,15 @@
 datasets/
   0_wencai/
     eval_input/<model>/<date>.jsonl
-    eval_output/0_daily_eval_output/<model>/...
+    eval_output/0_daily_eval/<model>/...
   1_aime/
     eval_input/0_daily_eval_input/<model>/<date>.jsonl
-    eval_output/demo_data/<model>/...
+    eval_output/0_daily_eval/<model>/<model>_attribution-<date>.jsonl
+    eval_output/0_daily_eval/<model>/compact/<model>_compact-<date>.jsonl
+    eval_output/cluster/<model>/cluster_tree.json
 ```
 
-`demo_data` 是已有评测产物的目录名称，由数据解析器兼容读取。
-数据目录不提交到 Git。目录尚不存在或没有文件时，生成空数据索引。
+线上目录结构与字段见 [docs/data-server.md](../../docs/data-server.md)。数据目录不提交到 Git。目录尚不存在或没有文件时，生成空数据索引。
 
 放好或更新数据后执行：
 
@@ -55,6 +56,7 @@ PORT=5055 ./dashboard/local_dev/start.sh
 ## 检查
 
 ```bash
-node --test dashboard/tests/*.test.mjs
-python3 -m unittest discover -s dashboard/tests -p 'test_*.py'
+scripts/run_tests.sh dashboard
 ```
+
+部分用例会真实构建 payload，较重；在服务器上跑，不要在要保持轻量的笔记本上跑。

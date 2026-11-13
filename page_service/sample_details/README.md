@@ -42,12 +42,9 @@ http://<看板主机>:2833/?product=&case=  ──> /api/context（迷你索引�
 `static/entry.js` 与 `static/detail.css` 是本模块唯一的新前端代码（约 100 行）：
 入口取迷你索引后调用快照里的 `render()`，覆盖 CSS 把左侧样本列表和顶部导航去掉。
 
-**注意**：快照不会自动跟着看板更新。看板改了 pane 的样式/渲染后，需要重新拷贝一次：
-
-```bash
-cp dashboard/static/css/{base,layout,content,samples}.css page_service/sample_details/static/css/
-cp dashboard/static/js/{core,render,particles,samples}.js page_service/sample_details/static/js/
-```
+**注意**：这份快照已冻结，且与看板分叉——看板后来把 `samples.js` 拆成了 `samples.js` + `sample_detail.js` + `taxonomy.js`，
+`base.css` / `layout.css` / `samples.css` 也已改动。**不要再按文件名逐个 `cp` 覆盖**：只拷部分文件会让 `samples.js`
+引用不存在的模块，页面直接打不开。要同步看板的修复，需整体迁移到看板现在的模块结构（单独排期）。
 
 ## 本地跑
 
@@ -119,16 +116,3 @@ curl -sI "http://<看板主机>:2833/compare/?compare=1&product=wencai&round=…
   所以看板重建后下一次刷新页面即可看到新数据。
 - 页面只做单样本查看，不做列表/搜索/批量导出。
 
-## 页面效果
-
-单条样本（问财，1440 宽）：
-
-![问财单条样本](docs/pane.png)
-
-多轮会话合并（AIME，4 轮，默认停在最后一轮）：
-
-![AIME 多轮会话](docs/pane-merged.png)
-
-窄屏（1024 宽，面板自动改单列）：
-
-![窄屏](docs/pane-1024.png)

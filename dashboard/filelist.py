@@ -50,7 +50,7 @@ class TreeCache:
             self.dir.mkdir(parents=True, exist_ok=True)
             payload = {"version": VERSION, "root": str(root), "dirs": dirs}
             path = self._path(key)
-            tmp = path.with_name(path.name + ".tmp")
+            tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
             tmp.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
             tmp.replace(path)
         except OSError:
