@@ -365,7 +365,7 @@ class OutputsReadyTests(unittest.TestCase):
             (static / "samples").mkdir()
             (static / "data.json").write_text(json.dumps({"products": {"wencai": {}}}), encoding="utf-8")
             (static / "samples.json").write_text(json.dumps({"products": {"wencai": {}}}), encoding="utf-8")
-            for name in ("data-wencai.json", "samples-wencai.json", "labels-wencai.json"):
+            for name in ("data-wencai.json", "samples-wencai.json", "labels-wencai.json", "recall-wencai.json"):
                 (static / name).write_text("{}", encoding="utf-8")
             outputs = [str(static / "data.json"), str(static / "samples.json"), str(static / "samples")]
             with mock.patch.object(server, "STATIC", str(static)), \
@@ -373,6 +373,21 @@ class OutputsReadyTests(unittest.TestCase):
                 self.assertFalse(server.outputs_ready())
                 (static / "trends-wencai.json").write_text("{}", encoding="utf-8")
                 self.assertTrue(server.outputs_ready())
+
+
+
+class RecallHeadTests(unittest.TestCase):
+    def test_head_keeps_whole_sessions_of_the_first_rows_in_order(self):
+        import build
+        rows = [{"s": f"r{i}", "sid": f"s{i % 7}", "sp": "daily", "m": "aime_fast"} for i in range(50)]
+        payload = {"schema": 2, "available": ["aime"], "products": {"aime": {"label": "AIME", "rows": rows}}}
+        with mock.patch.object(build, "RECALL_HEAD_ROWS", 3):
+            head = build.recall_head(payload, "aime")
+        prod = head["products"]["aime"]
+        # Sessions s0, s1, s2 own the first three rows; every one of their rows comes along, in order.
+        self.assertEqual([r["s"] for r in prod["rows"]], [r["s"] for r in rows if r["sid"] in ("s0", "s1", "s2")])
+        self.assertEqual(prod["head"], {"rows": 50, "sessions": 7})
+        self.assertEqual((head["available"], prod["label"]), (["aime"], "AIME"))
 
 
 if __name__ == "__main__":

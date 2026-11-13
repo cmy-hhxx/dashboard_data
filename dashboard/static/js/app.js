@@ -11,6 +11,9 @@ const SAMPLE_PARAMS = {
   model: null, scene: null, sub: null, stage: null, mech: null, pattern: null, date: null, case: null, trace: null,
 };
 const COMPARE_PARAMS = { pair: null, online: null, round: null };
+// Views that read data-<product>.json (17 MB for AIME). The others only need the data.json shell,
+// so they neither wait for it nor spend the bandwidth their own payloads need.
+const NEEDS_PRODUCT = new Set(["data", "compare"]);
 // Each product's board runs on its own server; a product with no data here opens its server instead.
 // The map comes from the server's config/sites.json, inlined into index.html.
 const SITES = (() => {
@@ -124,6 +127,18 @@ async function loadIndex(product = state.product) {
   }
 }
 
+/* The first page of the sample list (recall-<product>.json, a few hundred KB) paints while the
+   full index (tens of MB) is still downloading; null when the head is unavailable. */
+const recallP = {};
+function loadRecallHead(product = state.product) {
+  recallP[product] = recallP[product] || getJSON(`recall-${product}.json`).catch(() => {
+    recallP[product] = null;
+    return null;
+  });
+  return recallP[product];
+}
+const peekIndex = (product = state.product) => state.indexes[product] || null;
+
 async function render({ refresh = false } = {}) {
   readURL();
   document.documentElement.dataset.view = state.view;
@@ -135,14 +150,14 @@ async function render({ refresh = false } = {}) {
   const root = $(`.view[data-view="${state.view}"]`);
   try {
     modules[state.view] = modules[state.view] || (await loaders[state.view]());
-    if (state.data) {
+    if (state.data && NEEDS_PRODUCT.has(state.view)) {
       try {
         await loadProductData(state.product);
       } catch (err) {
         console.error(err);
       }
     }
-    await modules[state.view].render(root, { ...state, navigate, loadIndex, refresh });
+    await modules[state.view].render(root, { ...state, navigate, loadIndex, peekIndex, loadRecallHead, refresh });
   } catch (err) {
     console.error(err);
     root.innerHTML = `<div class="bento"><div class="card" style="--span:12"><div class="empty">页面加载失败：${esc(String(err.message || err))}</div></div></div>`;
@@ -246,8 +261,9 @@ async function boot() {
   const dataP = getJSON("data.json").catch(() => ({ products: {}, source: { pairs: 0 } }));
   const moduleP = loaders[state.view]().catch(() => null);
   if (state.view === "samples") {
-    state.indexP[state.product] = getJSON(`samples-${state.product}.json`);
-    state.indexP[state.product].catch(() => {});
+    // The page paints from the small recall head and fetches the full index after the first
+    // session; only without a head (or for a filtered link) does it wait for the full one.
+    loadRecallHead(state.product);
   }
   state.data = await dataP;
   const asked = new URLSearchParams(location.search).get("product");
@@ -259,7 +275,7 @@ async function boot() {
   if (away) return location.replace(away);
   // The product payload is the largest first-screen fetch: start it as soon as data.json
   // names the product, while the view module (and its chart vendor) is still loading.
-  const productP = loadProductData(state.product).catch((err) => console.error(err));
+  const productP = NEEDS_PRODUCT.has(state.view) ? loadProductData(state.product).catch((err) => console.error(err)) : null;
   const mod = await moduleP;
   if (mod) modules[state.view] = mod;
   await productP;

@@ -108,10 +108,46 @@ function groupSessions(rows) {
   });
 }
 
+/* The full recall index is tens of MB. The first page comes from the small recall head
+   (every row of the sessions on the default first page) and the full index replaces it in
+   place when it lands. Anything the head cannot answer exactly — a filter, another sort or
+   page, a session outside it — waits for the full index instead. */
+const sessionKey = (row) => `${row.sp}|${row.m}|${row.sid || row.s}`;
+async function indexFor(c) {
+  if (c.peekIndex?.(c.product) || !c.loadRecallHead || dirty() || F().sort !== "sev") return c.loadIndex(c.product);
+  const head = await c.loadRecallHead(c.product);
+  const rows = head?.products?.[c.product]?.rows;
+  const wanted = params().get("case");
+  if (!rows?.length || (wanted && !rows.some((row) => row.s === wanted || sessionKey(row) === wanted))) {
+    return c.loadIndex(c.product);
+  }
+  return head;
+}
+
+/* Fetch the full index once the visible session is on screen, so its details do not share the
+   line with tens of MB, then swap it in place (session and scroll stay). */
+let upgrading = false;
+function upgradeIndex() {
+  if (upgrading || !S.prod?.head) return;
+  upgrading = true;
+  ctx.loadIndex(ctx.product)
+    .then(() => { if (S.prod?.head && root?.isConnected && document.documentElement.dataset.view === "samples") return render(root, ctx); })
+    .catch(() => {})
+    .finally(() => { upgrading = false; });
+}
+
+/* Until the full index is in, list interactions queue behind it. */
+function whenFull() {
+  if (!S.prod?.head) return false;
+  $("#slist", root)?.setAttribute("aria-busy", "true");
+  ctx.loadIndex(ctx.product).then(() => render(root, ctx)).catch(() => {});
+  return true;
+}
+
 export async function render(r, c) {
   ctx = c;
   root = r;
-  const index = await c.loadIndex(c.product);
+  const index = await indexFor(c);
   const prod = index.products[c.product];
   if (S.product === c.product && S.prod && prod && S.prod !== prod && $(".bench", root)) {
     // Fresh index from an in-place refresh: regroup, keep the reader's session and filters.
@@ -142,7 +178,7 @@ export async function render(r, c) {
   // the AIME index). Search works without it and gets more accurate when it lands.
   // 5002 单样本页的索引只含该会话那几行（子集），行号对不上全量 labels，由 entry 传
   // oneSession 跳过；那边的调用方要标签直接取 /labels-<product>.json 按行号配对。
-  if (!c.oneSession) {
+  if (!c.oneSession && !prod.head) {
     labelsP = labelsP || getJSON(`labels-${c.product}.json`)
       .then((payload) => {
         const labels = payload.labels || [];
@@ -184,6 +220,7 @@ export async function render(r, c) {
     const card = sev && $(`#sattr .pcard[data-sev="${sev}"]`, root);
     if (card) requestAnimationFrame(() => flash(card));
   }
+  upgradeIndex();
   return { trace: focusTrace || null, traceMiss: detail ? detail.miss : null };
 }
 
@@ -256,7 +293,7 @@ function skeleton() {
   const pager = $("#spager", root);
   pager.addEventListener("click", (e) => {
     const b = e.target.closest("button[data-page]");
-    if (!b) return;
+    if (!b || whenFull()) return;
     const pages = Math.max(1, Math.ceil(S.rows.length / PAGE));
     S.page = b.dataset.page === "first" ? 1
       : b.dataset.page === "last" ? pages
@@ -285,6 +322,7 @@ function skeleton() {
 function setFilter(patch) {
   ctx.navigate(patch, { replace: true });
   S.page = 1;
+  if (whenFull()) return;
   syncFilters();
   renderList();
 }
@@ -367,7 +405,10 @@ function renderList() {
   S.page = Math.max(1, Math.min(pages, S.page));
   S.pageRows = S.rows.slice((S.page - 1) * PAGE, S.page * PAGE);
   const label = (id) => (S.prod.models.find((m) => m.id === id) || { label: id }).label;
-  $("#scount", root).textContent = `${fmt(S.rows.length)} / ${fmt(S.all.length)} 个会话`;
+  // The head holds only the first page; its counts come from the full index it was cut from.
+  const total = S.prod.head ? S.prod.head.sessions : S.all.length;
+  $("#scount", root).textContent = `${fmt(S.prod.head ? total : S.rows.length)} / ${fmt(total)} 个会话`;
+  $("#slist", root).removeAttribute("aria-busy");
   $("#slist", root).innerHTML = S.pageRows.length
     ? S.pageRows
         .map(
@@ -379,15 +420,15 @@ function renderList() {
         )
         .join("")
     : `<div class="empty">没有符合条件的会话<br><button type="button" class="link" id="sclear">清除筛选</button></div>`;
-  renderPager(pages);
+  renderPager(S.prod.head ? Math.max(1, Math.ceil(total / PAGE)) : pages, S.prod.head ? total : S.rows.length);
   const clear = $("#sclear", root);
   clear && clear.addEventListener("click", () => setFilter({ q: "", w: "", split: "", model: "", ut: "", date: "", scene: "", sub: "", stage: "", mech: "", pattern: "" }));
 }
 
-function renderPager(pages) {
+function renderPager(pages, count) {
   const el = $("#spager", root);
   if (!el) return;
-  el.hidden = S.rows.length <= PAGE;
+  el.hidden = count <= PAGE;
   if (el.hidden) {
     el.innerHTML = "";
     return;

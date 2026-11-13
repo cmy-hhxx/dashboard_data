@@ -2501,6 +2501,33 @@ def write_prewarm(out_dir: Path, prewarm: dict) -> None:
     replace_bytes(target, json.dumps(prewarm, ensure_ascii=False).encode("utf-8"))
 
 
+RECALL_HEAD_ROWS = 400
+
+
+def recall_session_key(row) -> str:
+    """The sample page groups rows into sessions by this key (samples.js groupSessions)."""
+    return f"{row.get('sp')}|{row.get('m')}|{row.get('sid') or row.get('s')}"
+
+
+def recall_head(payload: dict, product: str) -> dict:
+    """The first page of the sample list, small enough to paint before the full index lands.
+
+    Rows are already in the list's default order (most severe first).  The head keeps every
+    row of each session that appears in the first RECALL_HEAD_ROWS rows, so grouping it
+    gives exactly the sessions — and their totals — the full index puts on its first page.
+    """
+    prod = payload["products"][product]
+    rows = prod.get("rows") or []
+    keys = {recall_session_key(row) for row in rows[:RECALL_HEAD_ROWS]}
+    head = [row for row in rows if recall_session_key(row) in keys]
+    sessions = len({recall_session_key(row) for row in rows})
+    return {
+        **{k: v for k, v in payload.items() if k != "products"},
+        "products": {product: {**{k: v for k, v in prod.items() if k != "rows"}, "rows": head,
+                               "head": {"rows": len(rows), "sessions": sessions}}},
+    }
+
+
 def write_prewarm_slugs(out_dir: Path) -> None:
     """Persist the first-page detail slugs from the published sample payloads.
 
@@ -3078,6 +3105,7 @@ def payload_files_exist(out_dir: Path, ab_products=()) -> bool:
     return (all((out_dir / f"data-{p}.json").exists() for p in (data.get("products") or {}))
             and all((out_dir / f"samples-{p}.json").exists() for p in (samples.get("products") or {}))
             and all((out_dir / f"labels-{p}.json").exists() for p in (samples.get("products") or {}))
+            and all((out_dir / f"recall-{p}.json").exists() for p in (samples.get("products") or {}))
             and all((out_dir / f"trends-{p}.json").exists() for p in (data.get("products") or {}))
             and all((out_dir / f"abtests-{p}.json").exists() for p in ab_products))
 
@@ -3448,6 +3476,7 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
         index_bytes = write_json(out_dir / "samples.json", index)
         for product, payload in indexes.items():
             index_bytes += write_json(out_dir / f"samples-{product}.json", payload)
+            index_bytes += write_json(out_dir / f"recall-{product}.json", recall_head(payload, product))
         for product, payload in labels.items():
             index_bytes += write_json(out_dir / f"labels-{product}.json", payload)
         for stale in out_dir.glob("samples-*.json*"):
@@ -3457,6 +3486,10 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
         for stale in out_dir.glob("labels-*.json*"):
             product = stale.name[len("labels-"):].split(".", 1)[0]
             if product not in labels:
+                stale.unlink(missing_ok=True)
+        for stale in out_dir.glob("recall-*.json*"):
+            product = stale.name[len("recall-"):].split(".", 1)[0]
+            if product not in indexes:
                 stale.unlink(missing_ok=True)
         for stale in out_dir.glob("trends-*.json*"):
             product = stale.name[len("trends-"):].split(".", 1)[0]
