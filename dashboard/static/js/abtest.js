@@ -588,13 +588,49 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
      totals.  The plot is zoomed to the change band (totals in the head, values on every step), so a
      483 out of 3288 still reads; the dashed step lines carry the running total between columns.
      The card also hosts the orbit's leaf sample pane, so the tree stays a pure navigator. */
+  /* Net change per stage (S1, S2 …): where the release moved problems, largest first. */
+  function stageChanges(rnd) {
+    const names = new Map((Array.isArray(rnd.nodes) ? rnd.nodes : []).map((n) => [n.id, n.name || n.id]));
+    const by = new Map();
+    (Array.isArray(rnd.leaves) ? rnd.leaves : []).forEach((leaf) => {
+      if (leaf.after == null) return;
+      const id = String(leaf.id || "").split(".")[0];
+      if (!id) return;
+      const row = by.get(id) || { id, name: names.get(id) || id, before: 0, after: 0 };
+      row.before += num(leaf.before);
+      row.after += num(leaf.after);
+      by.set(id, row);
+    });
+    return [...by.values()].map((row) => ({ ...row, d: row.after - row.before }))
+      .filter((row) => row.d).sort((a, b) => Math.abs(b.d) - Math.abs(a.d));
+  }
+
+  function stageRows(stages, limit) {
+    const top = stages.slice(0, limit);
+    const max = Math.max(1, ...top.map((row) => Math.abs(row.d)));
+    return top.map((row) => {
+      const w = (50 * Math.abs(row.d)) / max;
+      const tone = row.d < 0 ? "is-better" : "is-worse";
+      return `<div class="ab-stage ${tone}" title="${esc(`${row.id} ${row.name} · ${fmt(row.before)} → ${fmt(row.after)}`)}">
+        <span class="ab-stage-name"><code>${esc(row.id)}</code>${esc(row.name)}</span>
+        <span class="ab-stage-bar" aria-hidden="true"><i style="${row.d < 0 ? `right:50%` : `left:50%`};width:${w.toFixed(1)}%"></i></span>
+        <span class="num ab-stage-ft">${fmt(row.before)}→${fmt(row.after)}</span>
+        <b class="num">${signed(row.d)}</b>
+      </div>`;
+    }).join("");
+  }
+
   function changeCard(rnd) {
     const measured = sideReady(rnd, "before") && sideReady(rnd, "after");
     const before = num(rnd.sides?.before?.hits);
     const after = num(rnd.sides?.after?.hits);
     const net = after - before;
+    const flows = changeFlows(rnd);
+    const better = flows.filter((f) => f.sign < 0).reduce((n, f) => n + f.count, 0);
+    const worse = flows.filter((f) => f.sign > 0).reduce((n, f) => n + f.count, 0);
+    const stages = measured ? stageChanges(rnd) : [];
     let level = before;
-    const steps = changeFlows(rnd).map((flow) => {
+    const steps = flows.map((flow) => {
       const from = level;
       level += flow.sign * flow.n;
       return { ...flow, from, to: level, delta: flow.sign * flow.n };
@@ -619,11 +655,12 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
       <div class="ab-change-pane">
         <div class="ab-card-top"><span class="ab-card-title">变化构成</span></div>
         ${abComparisonHTML(rnd)}
-        <div class="ab-bridge-main"><b class="num${measured && net < 0 ? " is-better" : measured && net > 0 ? " is-worse" : ""}">${measured ? signed(net) : DASH}</b><small>${measured ? "个问题" : "待复测"}</small></div>
+        <div class="ab-bridge-main"><b class="num${measured && net < 0 ? " is-better" : measured && net > 0 ? " is-worse" : ""}">${measured ? signed(net) : DASH}</b><small>${measured ? "个问题" : "待复测"}</small>${measured && before ? `<span class="ab-bridge-chips"><span class="num${net < 0 ? " is-better" : net > 0 ? " is-worse" : ""}">${net > 0 ? "+" : net < 0 ? "−" : ""}${((100 * Math.abs(net)) / before).toFixed(1)}%</span><span class="is-better"><b class="num">${fmt(better)}</b> 类变好</span><span class="is-worse"><b class="num">${fmt(worse)}</b> 类变差</span></span>` : ""}</div>
         ${measured ? `<div class="ab-wf" role="img" aria-label="${esc(aria)}" title="纵轴只展开变化区间 ${fmt(lo)}–${fmt(hi)}，未从 0 起">
           <div class="ab-wf-plot">${cols}</div>
           <div class="ab-wf-labels">${labels}</div>
         </div>` : ""}
+        ${stages.length ? `<div class="ab-stages" aria-label="各环节净变化">${stageRows(stages, state.overviewOpen === "change" ? 10 : 5)}</div>` : ""}
       </div>
       <div class="ab-side-pane" data-pane="samples"></div>
     </section>`;
@@ -639,8 +676,8 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
         <span class="ab-rank-legend" aria-hidden="true"><i class="is-from"></i>改版前<i class="is-to"></i>改版后</span>
       </div>
       <div class="ab-rank-axis" aria-hidden="true"><div class="ab-rank-axis-track"><span>0</span><span>${fmt(max)}</span></div></div>
-      ${rankPanel("变好", improved.slice(0, 5), "is-better", max, improved.length, rnd)}
-      ${rankPanel("变差", worsened.slice(0, 5), "is-worse", max, worsened.length, rnd)}
+      ${rankPanel("变好", improved.slice(0, open ? 12 : 7), "is-better", max, improved.length, rnd)}
+      ${rankPanel("变差", worsened.slice(0, open ? 12 : 7), "is-worse", max, worsened.length, rnd)}
     </section>`;
   }
 
