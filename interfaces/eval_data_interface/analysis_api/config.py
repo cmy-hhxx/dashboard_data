@@ -33,6 +33,14 @@ REFRESH_SECONDS = int(os.environ.get("REFRESH_SECONDS", "600"))
 # cursor 有效期（秒）
 CURSOR_TTL = int(os.environ.get("CURSOR_TTL", "1800"))
 
+# 同时处理的请求上限：超出时立即返回 429，而不是把线程和内存堆满
+MAX_INFLIGHT = int(os.environ.get("ANALYSIS_MAX_INFLIGHT", "32"))
+# 聚合结果缓存（按快照失效）：条数上限与单条最长存活秒数（不超过 cursor 有效期）
+RESULT_CACHE_SIZE = int(os.environ.get("ANALYSIS_RESULT_CACHE", "256"))
+RESULT_CACHE_TTL = min(int(os.environ.get("ANALYSIS_RESULT_CACHE_TTL", "600")), CURSOR_TTL)
+# 响应体超过这个字节数且客户端接受 gzip 时压缩
+GZIP_MIN_BYTES = 1024
+
 MAX_USER_IDS = 5000
 MAX_TRACE_IDS = 1000
 MAX_CHANGES_PAGE = 1000

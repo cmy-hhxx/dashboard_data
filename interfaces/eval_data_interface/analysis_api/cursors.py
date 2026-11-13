@@ -11,17 +11,34 @@ from pathlib import Path
 from . import config
 
 
+_SECRETS = {}
+
+
 def _secret():
+    """Signing key, read once per state dir.
+
+    ``ANALYSIS_CURSOR_KEY`` wins: every host behind one entry point must share it, or a
+    cursor issued by one host fails on the next.  Without it each host keeps its own
+    random key in ``<state>/cursor.key`` (fine for a single host).
+    """
+    shared = os.environ.get("ANALYSIS_CURSOR_KEY", "").strip()
+    if shared:
+        return shared.encode("utf-8")
     path: Path = config.secret_path()
+    cached = _SECRETS.get(path)
+    if cached is not None:
+        return cached
     if path.exists():
-        return path.read_bytes()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    secret = os.urandom(32)
-    path.write_bytes(secret)
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass
+        secret = path.read_bytes()
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        secret = os.urandom(32)
+        path.write_bytes(secret)
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
+    _SECRETS[path] = secret
     return secret
 
 

@@ -1,10 +1,12 @@
 """HTTP 层：路由、参数归一、响应封装、后台重建。"""
 
+import gzip
 import json
 import secrets
 import threading
 import time
 import traceback
+from collections import OrderedDict
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlparse
@@ -81,6 +83,40 @@ class App:
         self.building = False
         self.started_at = timeutil.utc_rfc3339(datetime.now(timezone.utc))
         self.db_path = config.db_path()
+        # /summary、/severity、/taxonomy 是对内存快照的纯计算（单次 0.2–0.5 s），
+        # 结果按快照缓存：快照一换整体失效，单条最多存活 RESULT_CACHE_TTL 秒（cursor 里带签发时间）。
+        self.results = OrderedDict()
+        self.results_snap = None
+        self.results_lock = threading.Lock()
+        self.inflight = threading.BoundedSemaphore(config.MAX_INFLIGHT)
+
+    def memo(self, snap, key, compute):
+        now = time.time()
+        with self.results_lock:
+            if self.results_snap is not snap:
+                self.results.clear()
+                self.results_snap = snap
+            hit = self.results.get(key)
+            if hit and now - hit[0] < config.RESULT_CACHE_TTL:
+                self.results.move_to_end(key)
+                return hit[1]
+        value = compute()
+        with self.results_lock:
+            if self.results_snap is snap:
+                self.results[key] = (now, value)
+                while len(self.results) > config.RESULT_CACHE_SIZE:
+                    self.results.popitem(last=False)
+        return value
+
+    def warm(self, snap, log=print):
+        """新快照上线后先算一遍最常用的聚合，别让第一个调用方等。"""
+        started = time.time()
+        for path, params in WARM_QUERIES:
+            try:
+                COMPUTE[path](snap, normalize(params))
+            except Exception as exc:  # noqa: BLE001 - 预热失败不影响服务
+                log(f"[warm] {path} {params} 失败：{exc}")
+        log(f"[warm] {len(WARM_QUERIES)} 个常用聚合 {round(time.time() - started, 1)}s")
 
     # -- 构建 ---------------------------------------------------------
     @staticmethod
@@ -113,6 +149,7 @@ class App:
                 if self.snapshot is None:
                     self.snapshot = snap
             log(f"[serve] 先用已有索引：traces={len(snap.traces)}")
+            self.warm(snap, log)
         except Exception as exc:  # noqa: BLE001 - 读不了就等首轮重建
             log(f"[serve] 已有索引不可用：{exc}")
 
@@ -144,6 +181,7 @@ class App:
                 f"[build] ok traces={summary['traces']} history={summary['history']} "
                 f"input={summary['input_traces']} seconds={round(time.time() - started, 1)}"
             )
+            self.warm(snap, log)
         except Exception as exc:  # noqa: BLE001
             log(f"[build] 失败：{exc}")
             log(traceback.format_exc())
@@ -188,12 +226,21 @@ class App:
 APP = App()
 
 
-def _json_response(handler, status, payload):
+def _json_response(handler, status, payload, headers=None):
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    accepts = handler.headers.get("Accept-Encoding", "") if handler.headers else ""
+    compressed = len(body) >= config.GZIP_MIN_BYTES and "gzip" in accepts.lower()
+    if compressed:
+        body = gzip.compress(body, compresslevel=5, mtime=0)
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
     handler.send_header("Cache-Control", "no-store")
+    handler.send_header("Vary", "Accept-Encoding")
+    if compressed:
+        handler.send_header("Content-Encoding", "gzip")
+    for name, value in (headers or {}).items():
+        handler.send_header(name, value)
     handler.end_headers()
     try:
         handler.wfile.write(body)
@@ -277,6 +324,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def _route(self):
         request_id = _request_id()
+        # 超过并发上限直接 429：排队只会把线程和内存堆满，调用方按 Retry-After 退避即可。
+        if not APP.inflight.acquire(blocking=False):
+            exc = errors.rate_limited()
+            _json_response(
+                self,
+                exc.status,
+                {"request_id": request_id, "error": {"code": exc.code, "message": exc.message, "details": exc.details}},
+                headers={"Retry-After": str(exc.details["retry_after"])},
+            )
+            return
         try:
             path, params = self._params()
             self._dispatch(path.rstrip("/"), params)
@@ -299,6 +356,8 @@ class Handler(BaseHTTPRequestHandler):
                     "error": {"code": "UNAVAILABLE", "message": "服务内部错误", "details": {"error": str(exc)}},
                 },
             )
+        finally:
+            APP.inflight.release()
 
     # -- 方法 ---------------------------------------------------------
     def do_GET(self):  # noqa: N802
@@ -383,7 +442,7 @@ class Handler(BaseHTTPRequestHandler):
         if version and version != tree.version:
             raise errors.not_found(f"分类版本 {version} 不存在", taxonomy_version=version)
 
-        data = tree.as_payload()
+        data = APP.memo(snap, ("/taxonomy", id(tree)), tree.as_payload)
         _json_response(
             self,
             200,
@@ -396,39 +455,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _summary(self, params):
         snap = self._snapshot()
-        filters = snapshot.parse_filters(params, snap)
-        group_by = params.get("group_by") or []
-        level = params.get("level") or "top"
-        sort = params.get("sort") or None
-        limit = _int_param(params, "limit", 100)
-        data = snapshot.summary(
-            snap,
-            filters,
-            group_by,
-            level=level,
-            sort=sort,
-            limit=limit,
-            cursor=(params.get("cursor") or None),
-        )
-        _json_response(self, 200, self._envelope(data, filters.echo, snap))
+        data, echo = APP.memo(snap, _cache_key("/summary", params), lambda: _compute_summary(snap, params))
+        _json_response(self, 200, self._envelope(data, echo, snap))
 
     def _severity(self, params):
         snap = self._snapshot()
-        filters = snapshot.parse_filters(params, snap)
-        group_by = params.get("group_by") or []
-        level = params.get("level") or "top"
-        sort = params.get("sort") or None
-        limit = _int_param(params, "limit", 100)
-        data = snapshot.severity(
-            snap,
-            filters,
-            group_by=group_by,
-            level=level,
-            sort=sort,
-            limit=limit,
-            cursor=(params.get("cursor") or None),
-        )
-        _json_response(self, 200, self._envelope(data, filters.echo, snap))
+        data, echo = APP.memo(snap, _cache_key("/severity", params), lambda: _compute_severity(snap, params))
+        _json_response(self, 200, self._envelope(data, echo, snap))
 
     def _traces(self, params):
         snap = self._snapshot()
@@ -560,11 +593,66 @@ def _int_param(params, name, default):
         raise errors.invalid(f"{name} 必须是整数", name) from exc
 
 
+def _cache_key(path, params):
+    return (path, json.dumps(params, ensure_ascii=False, sort_keys=True, default=str))
+
+
+def _compute_summary(snap, params):
+    filters = snapshot.parse_filters(params, snap)
+    data = snapshot.summary(
+        snap,
+        filters,
+        params.get("group_by") or [],
+        level=params.get("level") or "top",
+        sort=params.get("sort") or None,
+        limit=_int_param(params, "limit", 100),
+        cursor=(params.get("cursor") or None),
+    )
+    return data, filters.echo
+
+
+def _compute_severity(snap, params):
+    filters = snapshot.parse_filters(params, snap)
+    data = snapshot.severity(
+        snap,
+        filters,
+        group_by=params.get("group_by") or [],
+        level=params.get("level") or "top",
+        sort=params.get("sort") or None,
+        limit=_int_param(params, "limit", 100),
+        cursor=(params.get("cursor") or None),
+    )
+    return data, filters.echo
+
+
+def _warm_compute(path, fn):
+    def run(snap, params):
+        APP.memo(snap, _cache_key(path, params), lambda: fn(snap, params))
+    return run
+
+
+COMPUTE = {
+    "/summary": _warm_compute("/summary", _compute_summary),
+    "/severity": _warm_compute("/severity", _compute_severity),
+}
+# 最常用的几组聚合（接入说明里的示例调用）；新快照上线即预算。
+WARM_QUERIES = [
+    ("/severity", {"dataset": "aime_eval"}),
+    ("/summary", {"dataset": "aime_eval", "group_by": "intent"}),
+    ("/summary", {"dataset": "aime_eval", "group_by": "problem"}),
+]
+
+
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+    # 批量拉数时并发连接多，默认 backlog 5 会直接拒绝后来的连接（listen 时生效，必须是类属性）。
+    request_queue_size = 128
+
+
 def serve(host=None, port=None, log=print):
     host = host or config.HOST
     port = port or config.PORT
-    server = ThreadingHTTPServer((host, port), Handler)
-    server.daemon_threads = True
+    server = Server((host, port), Handler)
     thread = threading.Thread(target=APP.refresh_loop, args=(log,), daemon=True)
     thread.start()
     log(f"[serve] listening on http://{host}:{port}{config.API_PREFIX}")

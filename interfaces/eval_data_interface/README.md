@@ -98,11 +98,16 @@ trace 的 `problems` 问题数组与 P0–P4 严重度，并新增 `GET /severit
 | `GET /docs` `/docs/{name}` | 接口文档索引与 Markdown 原文（业务方无需仓库即可读取） |
 
 所有 200 响应统一为 `{request_id, schema_version, data, meta}`；错误为
-`{request_id, error:{code, message, details}}`，错误码见协议 §10。`meta` 另含
+`{request_id, error:{code, message, details}}`，错误码见 [接入说明](docs/接入说明.md) 的错误码表。`meta` 另含
 `data_updated_at`（数据产物时间）、`built_at`（快照构建时间）、`latest_seq`（变更流最新位点）。
 
-`cursor` 是无状态签名串（HMAC-SHA256），绑定筛选条件与页大小，30 分钟过期返回 410；
-密钥落盘在 `state/cursor.key`，重启不失效。
+`cursor` 是无状态签名串（HMAC-SHA256），绑定筛选条件与页大小，30 分钟过期返回 410。
+签名密钥取 `ANALYSIS_CURSOR_KEY`；未设置时每台机器在 `state/cursor.key` 自建一把（重启不失效）。
+**多机部署（同一入口后有多台）必须设同一个 `ANALYSIS_CURSOR_KEY`**，否则 A 机签发的 cursor 到 B 机会报签名不匹配。
+
+响应体 ≥ 1 KB 且请求带 `Accept-Encoding: gzip` 时 gzip 压缩。`/summary`、`/severity`、`/taxonomy` 的结果按快照缓存
+（快照更新即失效，单条最长 `ANALYSIS_RESULT_CACHE_TTL` 秒），新快照上线后预算常用聚合。
+同时处理的请求超过 `ANALYSIS_MAX_INFLIGHT`（默认 32）时立即返回 429 `RATE_LIMITED` + `Retry-After`。
 
 ## 本地跑
 
@@ -119,7 +124,9 @@ python3 run.py status
 ```
 
 环境变量：`EVAL_DATASETS`（数据集根）、`ANALYSIS_STATE`（索引与密钥目录，默认 `./state`）、
-`PORT`（默认 5003）、`HOST`、`REFRESH_SECONDS`（默认 600）、`CURSOR_TTL`（默认 1800）。
+`PORT`（默认 5003）、`HOST`、`REFRESH_SECONDS`（默认 600；弗吉尼亚 deploy.env 设为 3600）、`CURSOR_TTL`（默认 1800）、
+`ANALYSIS_CURSOR_KEY`（多机共享的 cursor 签名密钥）、`ANALYSIS_MAX_INFLIGHT`（默认 32）、
+`ANALYSIS_RESULT_CACHE` / `ANALYSIS_RESULT_CACHE_TTL`（聚合缓存条数 / 秒，默认 256 / 600）。
 
 ## 部署与运维
 
