@@ -153,5 +153,24 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(build.decode_question(None), "")
 
 
+
+class AssetVersionTests(unittest.TestCase):
+    def test_index_points_every_asset_at_the_content_hash(self):
+        import server
+        html = server.INDEX[0].decode("utf-8")
+        version = server.ASSET_VERSION
+        self.assertRegex(version, r"^[0-9a-f]{10}$")
+        self.assertIn(f'src="v/{version}/js/app.js"', html)
+        self.assertIn(f'href="v/{version}/css/base.css"', html)
+        self.assertNotRegex(html, r'(href|src)="(js|css|vendor)/')
+        # The site map is inlined so app.js needs no extra request to find the other server.
+        self.assertIn('<script type="application/json" id="sites">', html)
+        match = server.ASSET_RE.match(f"/v/{version}/js/kline_chart.js")
+        self.assertEqual(match.group(2), "js/kline_chart.js")
+        self.assertIsNone(server.ASSET_RE.match(f"/v/{version}/../server.py"))
+        # Same content, same hash: two hosts serving one revision agree on every URL.
+        self.assertEqual(server.asset_version(), version)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -12,10 +12,14 @@ const SAMPLE_PARAMS = {
 };
 const COMPARE_PARAMS = { pair: null, online: null, round: null };
 // Each product's board runs on its own server; a product with no data here opens its server instead.
-const SITES = {
-  wencai: { url: "http://117.50.195.94:2768/", name: "乌兰察布" },
-  aime: { url: "http://10.217.219.2:2221/", name: "弗吉尼亚" },
-};
+// The map comes from the server's config/sites.json, inlined into index.html.
+const SITES = (() => {
+  try {
+    return JSON.parse(document.getElementById("sites")?.textContent || "{}");
+  } catch (err) {
+    return {};
+  }
+})();
 const state = { view: "data", product: "wencai", data: null, indexes: {}, indexP: {}, productData: {}, productP: {} };
 const modules = {};
 const loaders = { data: () => import("./data.js"), system: () => import("./system.js"), samples: () => import("./samples.js"), compare: () => import("./compare.js") };
@@ -246,8 +250,6 @@ async function boot() {
     state.indexP[state.product].catch(() => {});
   }
   state.data = await dataP;
-  const mod = await moduleP;
-  if (mod) modules[state.view] = mod;
   const asked = new URLSearchParams(location.search).get("product");
   if (!asked) {
     state.product = PRODUCTS.find((p) => state.data.products[p]) || "wencai";
@@ -255,11 +257,12 @@ async function boot() {
   // A link to a product served elsewhere (?product=aime on the 问财 server) continues on its server.
   const away = PRODUCTS.includes(asked) && awayURL(asked, new URLSearchParams(location.search));
   if (away) return location.replace(away);
-  try {
-    await loadProductData(state.product);
-  } catch (err) {
-    console.error(err);
-  }
+  // The product payload is the largest first-screen fetch: start it as soon as data.json
+  // names the product, while the view module (and its chart vendor) is still loading.
+  const productP = loadProductData(state.product).catch((err) => console.error(err));
+  const mod = await moduleP;
+  if (mod) modules[state.view] = mod;
+  await productP;
   render();
   stamp();
   setInterval(poll, POLL_MS);

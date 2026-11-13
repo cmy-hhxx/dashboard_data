@@ -19,11 +19,21 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
+# Per-host build cache (SQLite index, pickles); EVAL_CACHE_DIR moves it off the code tree.
+CACHE = os.environ.get("EVAL_CACHE_DIR") or os.path.join(HERE, "cache")
 BUILD = os.path.join(HERE, "build.py")
 OUTPUTS = [os.path.join(STATIC, n) for n in ("data.json", "samples.json", "samples")]
 PORT = int(os.environ.get("PORT", "5001"))
 # 10 minutes plus the ~1 minute incremental build keeps the board well inside 30 minutes of the data.
 REFRESH = int(os.environ.get("REFRESH_SECONDS", "600"))
+
+# Where each product's board lives; the page sends a product that is not built here to its site.
+SITES_FILE = os.environ.get("EVAL_SITES_FILE") or os.path.join(HERE, "config", "sites.json")
+# Browser assets are served under /v/<content hash>/ with a year-long immutable cache; a deploy
+# changes the hash, so clients pick up new code without revalidating every module on every load.
+ASSET_DIRS = ("js", "css", "vendor")
+ASSET_RE = re.compile(r"^/v/([0-9a-f]{10})/((?:js|css|vendor)/[^?]+)$")
+ASSET_REF_RE = re.compile(r'(href|src)="((?:js|css|vendor)/)')
 
 _state = {"last_run": 0, "running": False, "error": "", "seconds": 0, "build": None}
 _lock = threading.Lock()
@@ -62,7 +72,7 @@ def prewarm_details():
         # build.py writes this tiny list; parsing the 20 MB samples index here
         # blocks the request threads on the GIL for a few hundred ms after every build.
         try:
-            with open(os.path.join(HERE, "cache", "prewarm.json"), encoding="utf-8") as fh:
+            with open(os.path.join(CACHE, "prewarm.json"), encoding="utf-8") as fh:
                 prewarm = json.load(fh)
         except (OSError, ValueError):
             prewarm = {}
@@ -94,6 +104,11 @@ def prewarm_input_listings():
         _lister.prewarm_listings(sorted(_build.ENABLED))
     except Exception as exc:  # noqa: BLE001 - listing prewarm is best effort
         print(f"[serve] input listing prewarm failed: {exc}", flush=True)
+
+
+def _products():
+    import build as _build
+    return _build.ENABLED
 
 
 def warm_input_lister():
@@ -240,7 +255,7 @@ class Handler(SimpleHTTPRequestHandler):
         day = (query.get("d") or [""])[0]
         model = (query.get("m") or [""])[0]
         split = (query.get("sp") or ["daily"])[0]
-        if product not in ("wencai", "aime") or not DATE_RE.match(day) or not MODEL_RE.match(model) or split not in ("daily", "lost"):
+        if product not in _products() or not DATE_RE.match(day) or not MODEL_RE.match(model) or split not in ("daily", "lost"):
             self._send_body(400, b'{"error":"bad params"}', "application/json")
             return True
         if path_only == "/inputs.json":
@@ -357,14 +372,23 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         path_only = self.path.split("?", 1)[0]
+        asset = ASSET_RE.match(path_only)
+        if asset:
+            # The current hash is immutable; an old hash (a page opened before a deploy)
+            # still gets today's file, but must not pin it under the old URL.
+            self._cache_policy = ("public, max-age=31536000, immutable"
+                                  if asset.group(1) == ASSET_VERSION else "no-cache")
+            self.path = path_only = "/" + asset.group(2)
+        elif path_only in ("/", "/index.html"):
+            self._cache_policy = "no-cache"
+            self._send_body(200, INDEX[0], "text/html; charset=utf-8", etag=INDEX[1])
+            return
         if path_only.startswith("/samples/") or path_only.startswith("/ab_samples/"):
             # Content comes from a generated file whose mtime changes when it is
             # rebuilt; a short reuse window avoids one RTT per trace.
             self._cache_policy = "public, max-age=120"
-        elif path_only.startswith("/js/") or path_only.startswith("/css/") or path_only in ("/", "/index.html"):
-            # Deploys replace these files under the same name.  A max-age reuse window is how an
-            # old abtest.js survived a deploy while its JSON was already fresh; revalidate every
-            # load instead (ETag/Last-Modified still make the hit a cheap 304).
+        elif not asset and path_only.startswith(("/js/", "/css/", "/vendor/")):
+            # Unversioned asset URLs (old bookmarks, the 5002 proxies) revalidate every load.
             self._cache_policy = "no-cache"
         if self.path.startswith("/healthz"):
             body = json.dumps({
@@ -439,6 +463,43 @@ class Handler(SimpleHTTPRequestHandler):
         sys.stderr.write("%s %s\n" % (time.strftime("%H:%M:%S"), fmt % args))
 
 
+def asset_version():
+    """Content hash of every browser asset: equal code on two hosts gives equal URLs."""
+    digest = hashlib.sha1()
+    for folder in ASSET_DIRS:
+        for root, dirs, files in os.walk(os.path.join(STATIC, folder)):
+            dirs.sort()
+            for name in sorted(files):
+                if name.endswith((".gz", ".br")):
+                    continue
+                path = os.path.join(root, name)
+                digest.update(os.path.relpath(path, STATIC).encode())
+                with open(path, "rb") as fh:
+                    digest.update(fh.read())
+    return digest.hexdigest()[:10]
+
+
+def render_index():
+    """index.html with versioned asset URLs and the site map inlined (no extra request)."""
+    with open(os.path.join(STATIC, "index.html"), encoding="utf-8") as fh:
+        html = fh.read()
+    html = ASSET_REF_RE.sub(lambda m: f'{m.group(1)}="v/{ASSET_VERSION}/{m.group(2)}', html)
+    try:
+        with open(SITES_FILE, encoding="utf-8") as fh:
+            sites = json.load(fh)
+    except (OSError, ValueError) as exc:
+        print(f"[serve] sites config {SITES_FILE} unreadable: {exc}", flush=True)
+        sites = {}
+    script = json.dumps(sites, ensure_ascii=False).replace("</", "<\\/")
+    html = html.replace("</head>", f'<script type="application/json" id="sites">{script}</script>\n</head>', 1)
+    body = html.encode("utf-8")
+    return body, f'"index-{hashlib.sha1(body).hexdigest()[:16]}"'
+
+
+ASSET_VERSION = asset_version()
+INDEX = render_index()
+
+
 def seed_state():
     """Expose the payload produced by deploy.sh before this process started."""
     try:
@@ -473,23 +534,23 @@ def main():
     try:
         from detail_builder import DetailBuilder
         _builder = DetailBuilder(
-            default_datasets(), os.path.join(HERE, "cache", "build.sqlite3"),
-            os.path.join(STATIC, "samples"), os.path.join(HERE, "cache"),
+            default_datasets(), os.path.join(CACHE, "build.sqlite3"),
+            os.path.join(STATIC, "samples"), CACHE,
         )
     except Exception as exc:  # noqa: BLE001 - keep serving pre-generated details
         print(f"[serve] lazy detail builder disabled: {exc}", flush=True)
     try:
         from ab_detail import ABDetailBuilder
         _ab_builder = ABDetailBuilder(
-            default_datasets(), os.path.join(HERE, "cache"), os.path.join(STATIC, "ab_samples"),
+            default_datasets(), CACHE, os.path.join(STATIC, "ab_samples"),
         )
         threading.Thread(target=_ab_builder.warm, daemon=True).start()
     except Exception as exc:  # noqa: BLE001 - retest details are optional; static files still serve
         print(f"[serve] ab detail builder disabled: {exc}", flush=True)
     try:
         from input_list import InputLister
-        _lister = InputLister(default_datasets(), os.path.join(HERE, "cache", "build.sqlite3"),
-                              os.path.join(HERE, "cache"), STATIC)
+        _lister = InputLister(default_datasets(), os.path.join(CACHE, "build.sqlite3"),
+                              CACHE, STATIC)
         # 文件清单在弗吉尼亚要 23 秒（rglob 在 ceph 上），启动就后台读一遍，别让第一次点击等它。
         threading.Thread(target=warm_input_lister, daemon=True).start()
     except Exception as exc:  # noqa: BLE001 - 输入清单不可用时第三级退回旧行为

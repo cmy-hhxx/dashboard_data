@@ -136,6 +136,21 @@ ssh eval_data 'cd /opt/eval_dashboard && ./stop.sh && ./start.sh'
 - 进程守护见下节；日志不轮转，长期运行注意清理 `logs/`。
 - 预测数据放 `datasets/4_forecast/<产品>/prediction.json`，下一轮构建生效。
 
+## 多机部署
+
+同一份代码可以在多台机器上跑看板（每台一个 5001），约定如下：
+
+| 项 | 做法 |
+|---|---|
+| 数据根 | 各机挂同一个 `EVAL_DATASETS`（只读）；`EVAL_PRODUCTS` 决定本机构建哪些产品 |
+| 构建缓存 | `EVAL_CACHE_DIR` 指到本机磁盘（默认 `dashboard/cache`）。SQLite（WAL）不能放在 ceph / NFS 上共享 |
+| 构建互斥 | `build.py` 在 `<cache>/build.lock` 上 flock：同一台机器上的定时构建、部署构建、手动构建排队；各机缓存独立，互不影响 |
+| 产物 | 每台机器写自己的 `static/`；所有临时文件名带进程号，原子替换 |
+| 共享目录写入 | 只有 `STATS_WORKER=1` 的那一台写 `<datasets>/stats.json`；其他机器设 `STATS_WORKER=0`（读同一份旁路统计） |
+| 静态资源 | 页面引用 `v/<内容哈希>/js/…`，同一份代码在任何机器上哈希相同；该路径一年 `immutable` 缓存，发版即换哈希。哈希在服务启动时计算，改了 `static/` 要重启 |
+| 站点表 | 问财 / AIME 各自的看板地址在 `dashboard/config/sites.json`（`EVAL_SITES_FILE` 可换），服务端内联进 `index.html`，不写死在前端 |
+| 5003 供数 | 同一入口后有多台时，全部设同一个 `ANALYSIS_CURSOR_KEY`，否则翻页 cursor 跨机失效；各机 `ANALYSIS_STATE` 各自本地 |
+
 ## 统计 / 索引备份
 
 `dashboard/backup_stats.py` 每小时把「重建/检索所需的派生数据」快照到

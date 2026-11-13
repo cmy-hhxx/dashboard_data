@@ -99,7 +99,7 @@ def refresh(datasets: Path, store: bs.BuildStore, out: Path | None, jobs: int = 
     try:
         return write_atomic(target, data)
     except OSError as exc:
-        fallback = build.DASHBOARD / "cache" / "stats.json"
+        fallback = build.cache_root(build.STATIC) / "stats.json"
         print(f"[stats] {target} not writable ({exc}); writing {fallback}", file=sys.stderr, flush=True)
         return write_atomic(fallback, data)
 
@@ -116,7 +116,7 @@ def main(argv=None):
     ap.add_argument("--once", action="store_true")
     args = ap.parse_args(argv)
     datasets = (args.datasets or build.default_datasets()).resolve()
-    store_path = args.store or (build.DASHBOARD / "cache" / "build.sqlite3")
+    store_path = args.store or (build.cache_root(build.STATIC) / "build.sqlite3")
     store = bs.BuildStore(store_path)
     try:
         while True:

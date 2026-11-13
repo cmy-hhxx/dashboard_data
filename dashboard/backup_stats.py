@@ -139,7 +139,7 @@ def collect_sources(datasets: Path, dashboard: Path) -> list[tuple[Path, Path]]:
             for path in sorted(root.rglob("*")):
                 add(Path("dataset") / path.relative_to(datasets), path)
 
-    cache = dashboard / "cache"
+    cache = Path(os.environ.get("EVAL_CACHE_DIR") or dashboard / "cache")
     for name in CACHE_FILES:
         for path in sorted(cache.glob(name)):
             add(Path("dashboard/cache") / path.name, path)

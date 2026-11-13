@@ -59,6 +59,16 @@ BROTLI_QUALITY = int(os.environ.get("BROTLI_QUALITY", "6"))
 DASHBOARD = Path(__file__).resolve().parent
 REPO = DASHBOARD.parent
 STATIC = DASHBOARD / "static"
+
+
+def cache_root(out_dir: Path) -> Path:
+    """Build cache for an output tree: ``EVAL_CACHE_DIR`` when set, else ``<out>/../cache``.
+
+    The cache (SQLite index, pickles, prewarm list) is per host; point it at local disk
+    when the code directory itself is shared or read-only.
+    """
+    configured = os.environ.get("EVAL_CACHE_DIR")
+    return Path(configured) if configured else out_dir.parent / "cache"
 # 发版日期：数据目录里的 releases.json 优先（数据侧可覆盖），仓库内 config/releases.json 是随代码走的默认值。
 RELEASES_CONFIG = DASHBOARD / "config" / "releases.json"
 PRODUCTION_DATASETS = Path("/mnt/fin_bench/code_and_clean_data/datasets")
@@ -397,7 +407,7 @@ def input_files(datasets: Path, top: Path, product: str):
     """
     # rglob 在弗吉尼亚的 ceph 上要 50 秒（目录太多），改成走目录清单缓存：
     # 只有 mtime 变过的目录才重新 readdir，数据没变时就是几十次 stat。
-    tree = TreeCache(DASHBOARD / "cache")
+    tree = TreeCache(cache_root(STATIC))
     # Directories inside a root that hold published days more than once.
     skip = EXCLUSIVE_INPUT_DIRS if product == "aime" else ("1_lost_user_eval",)
     files = []
@@ -419,7 +429,7 @@ def load_stats_sidecar(datasets: Path):
     The sidecar is only an accelerator: every file is still checked against its
     current ``(size, mtime_ns)`` and falls back to a local scan when stale.
     """
-    for path in (datasets / "stats.json", DASHBOARD / "cache" / "stats.json"):
+    for path in (datasets / "stats.json", cache_root(STATIC) / "stats.json"):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -2486,7 +2496,7 @@ def prewarm_picks(rows) -> list:
 def write_prewarm(out_dir: Path, prewarm: dict) -> None:
     if not prewarm:
         return
-    target = out_dir.parent / "cache" / "prewarm.json"
+    target = cache_root(out_dir) / "prewarm.json"
     target.parent.mkdir(parents=True, exist_ok=True)
     replace_bytes(target, json.dumps(prewarm, ensure_ascii=False).encode("utf-8"))
 
@@ -2872,7 +2882,7 @@ def build_samples(pairs, root, out_dir, store, reader, cluster_index, cluster_si
     # A 16k-brief JSON decode costs 15–35 s.  The pickle is validated against
     # the light SQLite columns (fp/oh/ih/ch), so a stale file can only cost a
     # fallback load, never a wrong hit.
-    cache_dir = out_dir.parent / "cache"
+    cache_dir = cache_root(out_dir)
     pickled, sample_delta = load_sample_cache(cache_dir)
     meta = store.sample_meta(slugs)
     cached, need = {}, []
@@ -3193,7 +3203,7 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
     rules_sig = rules.signature()
     if not datasets.is_dir():
         return empty_payloads("missing"), {}
-    store = bs.BuildStore(out_dir.parent / "cache" / "build.sqlite3")
+    store = bs.BuildStore(cache_root(out_dir) / "build.sqlite3")
     reader = LineReader(datasets, store)
     timers, scan_info = {}, {}
     try:
@@ -3237,7 +3247,7 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
         debug(f"paired {len(pairs)} rows")
 
         t0 = time.time()
-        cluster_sig = cluster_signature(datasets, out_dir.parent / "cache")
+        cluster_sig = cluster_signature(datasets, cache_root(out_dir))
         pairs_sig = hashlib.sha1(
             "\x1f".join([PAIRING_VERSION] + [
                 "%s|%s|%s" % (
@@ -3280,7 +3290,7 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
             timers["aggregate"] = 0.0
             timers["write"] = 0.0
             try:
-                if not (out_dir.parent / "cache" / "prewarm.json").exists():
+                if not (cache_root(out_dir) / "prewarm.json").exists():
                     write_prewarm_slugs(out_dir)
             except (OSError, ValueError):
                 pass
@@ -3294,7 +3304,7 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
             })
             return (None, None), summary
 
-        taxonomy, cluster_index = load_clusters_cached(datasets, cluster_sig, out_dir.parent / "cache")
+        taxonomy, cluster_index = load_clusters_cached(datasets, cluster_sig, cache_root(out_dir))
         timers["cluster"] = round(time.time() - t0, 1)
 
         t0 = time.time()
@@ -3761,7 +3771,7 @@ def main(argv=None):
                     help="parallel input-file scans (default: auto, up to 4; 1 disables)")
     args = ap.parse_args(argv)
     args.datasets = args.datasets or default_datasets()
-    with build_lock(args.out.parent / "cache"):
+    with build_lock(cache_root(args.out)):
         return run(args)
 
 
@@ -3784,11 +3794,14 @@ def build_lock(cache_dir: Path):
 
 def run(args):
     (data, index), stats = build(args.datasets.resolve(), args.out, jobs=args.jobs)
-    try:
-        for product in sorted(ENABLED):
-            write_data_absence(args.datasets.resolve(), product, args.out)
-    except Exception as exc:  # noqa: BLE001 - the report must never fail the build
-        print(f"[absence] {exc}", file=sys.stderr)
+    # A reused build changed nothing, so last round's absence report still holds; rewriting it
+    # meant re-parsing the 40+ MB payloads every 10 minutes for the same answer.
+    if not stats.get("reused"):
+        try:
+            for product in sorted(ENABLED):
+                write_data_absence(args.datasets.resolve(), product, args.out)
+        except Exception as exc:  # noqa: BLE001 - the report must never fail the build
+            print(f"[absence] {exc}", file=sys.stderr)
     out = args.out
     if data is None and index is None:
         print(json.dumps(stats, ensure_ascii=False))
