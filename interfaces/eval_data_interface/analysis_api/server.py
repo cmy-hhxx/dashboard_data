@@ -227,7 +227,9 @@ APP = App()
 
 
 def _json_response(handler, status, payload, headers=None):
-    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    # 原始输入里偶有落单的代理字符（emoji 被截断），ensure_ascii=False 后直接 encode 会 503，
+    # 只用 utf-8 的 replace 兜住坏字节，正常内容不受影响。
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8", "replace")
     accepts = handler.headers.get("Accept-Encoding", "") if handler.headers else ""
     compressed = len(body) >= config.GZIP_MIN_BYTES and "gzip" in accepts.lower()
     if compressed:
