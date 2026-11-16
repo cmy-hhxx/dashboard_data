@@ -4,7 +4,7 @@
    evaluator's badcases, each opening to the case, the evaluator's verdict and evidence, the audit
    model's ruling and the dimension it failed. Reads data.json's judge[<p>]; until that feed exists
    it shows the clearly marked mock from judge_mock.js. */
-import { $, $$, esc, fmt, sevColor, SEV_NAME, bindTips, counter, runCounters } from "./core.js";
+import { $, esc, fmt, sevColor, SEV_NAME, bindTips, counter, runCounters } from "./core.js";
 import { judgeMock } from "./judge_mock.js";
 
 let shown = null;
@@ -28,7 +28,7 @@ const delta = (now, prev, label) => {
 const failTint = (rate) => `--a:${Math.round(4 + Math.max(0, Math.min(1, (1 - rate) / 0.45)) * 60)}%`;
 
 /* Badcase filter: one dimension plus an optional severity or stage, set from anywhere on the page. */
-const B = { dim: "", sev: "", stage: "", open: new Set() };
+const B = { dim: "", sev: "", stage: "", runs: 5, open: new Set() };
 const DIM_ORDER = ["grade", "evidence", "output"];
 const ICON = {
   ok: `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
@@ -81,14 +81,15 @@ function stageCard(J) {
 /* ---------------------------------------------------------------- ② repeat consistency */
 const AGREE = (n) => [`${n}/${n}`, `${n - 1}/${n}`, `${n - 2}/${n}`, `≤${n - 3}/${n}`];
 function repeatCard(J) {
-  const R = J.repeat;
+  const R = J.repeat.byRuns?.[B.runs] || J.repeat;
   const kpis = [["sameSev", "定级一致"], ["sameSet", "问题集一致"], ["sameEvidence", "证据一致"]].map(([k, name], i) => `<div class="jd-kpi" style="--i:${i}" ${tip(`<div class="t-head">${esc(name)}</div>${row(J.version, pc(R[k], 1))}${row(J.prev, pc(R.prev[k], 1))}`)}>
       <span class="jd-kpi-n">${esc(name)}</span><b class="mid">${counter(R[k] * 100, { d: 0, suffix: "%" })}</b>${delta(R[k], R.prev[k], `上一版 ${J.prev} 是 ${pc(R.prev[k], 1)}`)}</div>`).join("");
   const labels = AGREE(R.runs);
   const rows = R.bySev.map((s, i) => `<div class="jd-st" style="--i:${i}" ${tip(`<div class="t-head">${esc(sevName(s.sev))} · ${fmt(s.n)} 个 case</div>${s.agree.map((v, k) => row(`${labels[k]} 次定级相同`, pc(v, 1))).join("")}`)}>
       ${chip(s.sev)}<span class="jd-st-bar">${s.agree.map((v, k) => `<i style="flex:${v} 1 0;--k:${k}"></i>`).join("")}</span><b class="num">${pc(s.agree[0])}</b></div>`).join("");
-  return `<article class="card jd-rep" style="--span:7">
-    <header class="card-head"><h2>重复一致</h2><span class="meta end num">同一 case 重跑 ${R.runs} 次</span></header>
+  return `<article class="card jd-rep" id="jdRep" style="--span:7">
+    <header class="card-head"><h2>重复一致</h2>${runSeg(J)}
+      <span class="meta end num">同一 case 重跑 ${R.runs} 次</span></header>
     <div class="jd-kpis is-3">${kpis}</div>
     <div class="jd-sts">${rows}</div>
     <div class="jd-key">${labels.map((a, k) => `<span><i style="--k:${k}"></i>${a}</span>`).join("")}</div>
@@ -96,16 +97,34 @@ function repeatCard(J) {
 }
 
 function overlapCard(J) {
-  const bins = J.repeat.overlap;
+  const R = J.repeat.byRuns?.[B.runs] || J.repeat;
+  const bins = R.overlap;
   const max = Math.max(...bins.map((b) => b.n));
   const total = bins.reduce((a, b) => a + b.n, 0) || 1;
   const bars = bins.map((b, i) => `<span class="jd-hb${b.hi <= 0.5 ? " is-low" : ""}" style="--h:${((100 * b.n) / max).toFixed(1)}%;--i:${i}" ${tip(`<div class="t-head">问题集重合 ${pc(b.lo)}–${pc(b.hi)}</div>${row("case", fmt(b.n))}${row("占比", pc(b.n / total, 1))}`)}><i></i></span>`).join("");
   const low = bins.filter((b) => b.hi <= 0.5).reduce((a, b) => a + b.n, 0);
-  return `<article class="card jd-ovl" style="--span:5">
+  return `<article class="card jd-ovl" id="jdOvl" style="--span:5">
     <header class="card-head"><h2>问题集重合</h2><span class="meta end num">低于 50% 的 case ${pc(low / total, 1)}</span></header>
+    <p class="jd-cap">同一道 case 重跑 <b class="num">${R.runs}</b> 次，把每次得到的问题集两两比对，算一次重合比例；越靠左，说明重跑出来的问题越不一致。</p>
     <div class="jd-hist">${bars}</div>
     <div class="jd-hist-x num"><span>0%</span><span>50%</span><span>100%</span></div>
   </article>`;
+}
+
+/* 5 / 10 / 15 reruns: one switch drives both the KPI row and the overlap histogram. */
+function runSeg(J) {
+  const options = J.repeat.options || [B.runs];
+  if (options.length < 2) return "";
+  return `<div class="jd-bc-seg jd-runseg" role="group" aria-label="重跑次数">${options.map((n) =>
+    `<button type="button" data-runs="${n}" aria-pressed="${B.runs === n}">${n} 次</button>`).join("")}</div>`;
+}
+
+function paintRuns(root, J) {
+  const rep = $("#jdRep", root);
+  const ovl = $("#jdOvl", root);
+  if (rep) rep.outerHTML = repeatCard(J);
+  if (ovl) ovl.outerHTML = overlapCard(J);
+  runCounters(root);
 }
 
 /* ---------------------------------------------------------------- ③ human agreement */
@@ -203,7 +222,6 @@ function paintBadcases(root, J) {
   $("#jdBcList", root).innerHTML = list.length
     ? list.map((b, i) => badcaseRow(J, b, i)).join("")
     : `<div class="empty">没有符合条件的 badcase<br><button type="button" class="link" data-bc-dim="" data-bc-reset>查看全部</button></div>`;
-  $$(".jd-dim", root).forEach((el) => el.classList.toggle("is-picked", el.dataset.dim === B.dim));
 }
 
 /* Every reading drills into the cases behind it: a dimension card, a severity bar or a stage cell
@@ -219,6 +237,12 @@ function wire(root) {
       if (open) B.open.add(r.dataset.bc); else B.open.delete(r.dataset.bc);
       r.classList.toggle("is-open", open);
       head.setAttribute("aria-expanded", String(open));
+      return;
+    }
+    const runs = e.target.closest("[data-runs]");
+    if (runs) {
+      B.runs = Number(runs.dataset.runs);
+      paintRuns(root, J);
       return;
     }
     const clear = e.target.closest("[data-bc-clear]");
@@ -246,7 +270,7 @@ export async function render(root, c) {
   if (shown === key && root.firstChild) return;
   shown = key;
   tips.clear();
-  B.dim = ""; B.sev = ""; B.stage = ""; B.open.clear();
+  B.dim = ""; B.sev = ""; B.stage = ""; B.runs = 5; B.open.clear();
   const J = d.judge?.[c.product] || judgeMock(c.product, d.taxonomy);
   root._jd = J;
   root.innerHTML = `<div class="bento jd">

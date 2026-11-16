@@ -147,9 +147,17 @@ export function judgeMock(product, tax) {
   }));
 
   const runs = 5;
+  // One model of a rerun: every extra run repeats a case's severity with probability p, so the
+  // share of cases whose runs *all* agree is p^(n-1), and the per-severity split follows a
+  // binomial. 5 runs come out as written; 10 and 15 are the same model, further out.
+  const sameSev5 = round(jitter(0.78, 0.02));
+  // Heavier severities are argued over more: their runs agree less often than "no problem".
+  const shape = { P0: 0.84, P1: 0.9, P2: 0.96, P3: 0.99, P4: 1.02, none: 1.05 };
+  const raw = LEVELS.map((sev) => clamp(sameSev5 * shape[sev] + (r() - 0.5) * 0.06, 0.2, 0.96));
+  const rawMean = LEVELS.reduce((a, _s, i) => a + raw[i] * (sevShare[i] || 0.12), 0)
+    / LEVELS.reduce((a, _s, i) => a + (sevShare[i] || 0.12), 0);
   const repeatBySev = LEVELS.map((sev, i) => {
-    const firm = sev === "none" ? 0.8 : [0.71, 0.62, 0.52, 0.48, 0.57][i];
-    const a = clamp(jitter(firm, 0.08), 0.2, 0.95);
+    const a = clamp(raw[i] * (sameSev5 / rawMean), 0.2, 0.96);
     const b = (1 - a) * jitter(0.55, 0.1);
     const c = (1 - a - b) * jitter(0.65, 0.1);
     return { sev, n: Math.round(audited * (sevShare[i] || 0.12)), agree: [a, b, c, Math.max(0, 1 - a - b - c)].map((v) => round(v)) };
@@ -159,10 +167,57 @@ export function judgeMock(product, tax) {
     lo: k / 10, hi: (k + 1) / 10,
     n: Math.round(12 + 340 * Math.exp(-((k - 7.6) ** 2) / 3.2) + r() * 14),
   }));
+  const baseSet = round(jitter(0.69, 0.02));
+  const baseEvidence = round(jitter(0.74, 0.02));
+  const prev5 = { sameSev: 0.77, sameSet: 0.63, sameEvidence: 0.7 };
+  const bucket = (p, n) => {
+    const m = n - 1;
+    const pm = [1];
+    for (let k = 1; k <= m; k += 1) pm.push((pm[k - 1] * (m - k + 1)) / k * p);
+    const out = [0, 0, 0, 0];
+    for (let k = 0; k <= m; k += 1) {
+      const share = k / m;
+      const idx = share >= 1 ? 0 : share >= (m - 1) / m ? 1 : share >= (m - 2) / m ? 2 : 3;
+      out[idx] += pm[k] * (1 - p) ** (m - k);
+    }
+    const total = out.reduce((x, y) => x + y, 0) || 1;
+    return out.map((v) => round(v / total));
+  };
+  // More reruns, lower overlap: the same cases slide down the histogram as n grows.
+  const shiftOverlap = (bins, step) => {
+    if (!step) return bins.map((b) => ({ ...b }));
+    const out = bins.map((b) => ({ lo: b.lo, hi: b.hi, n: 0 }));
+    bins.forEach((b, k) => {
+      const to = Math.max(0, k - step);
+      const lo = Math.floor(to);
+      const hi = Math.min(bins.length - 1, lo + 1);
+      out[lo].n += b.n * (1 - (to - lo));
+      out[hi].n += b.n * (to - lo);
+    });
+    return out.map((b) => ({ ...b, n: Math.round(b.n) }));
+  };
+  const byRuns = Object.fromEntries([5, 10, 15].map((n) => {
+    const m = n - 1;
+    const bySev = repeatBySev.map((s) => ({ ...s, agree: bucket(s.agree[0] ** (1 / 4), n) }));
+    const totalN = bySev.reduce((a, s) => a + s.n, 0) || 1;
+    const sameSev = round(bySev.reduce((a, s) => a + s.agree[0] * s.n, 0) / totalN);
+    return [n, {
+      runs: n, sameSev,
+      sameSet: round(baseSet ** (m / 4)),
+      sameEvidence: round(baseEvidence ** (m / 4)),
+      prev: {
+        sameSev: round(prev5.sameSev ** (m / 4)),
+        sameSet: round(prev5.sameSet ** (m / 4)),
+        sameEvidence: round(prev5.sameEvidence ** (m / 4)),
+      },
+      bySev, overlap: shiftOverlap(overlap, n === 5 ? 0 : n === 10 ? 0.7 : 1.5),
+    }];
+  }));
   const repeat = {
-    runs, sameSev: round(jitter(0.81, 0.02)), sameSet: round(jitter(0.69, 0.02)), sameEvidence: round(jitter(0.74, 0.02)),
-    prev: { sameSev: 0.77, sameSet: 0.63, sameEvidence: 0.7 },
-    bySev: repeatBySev, overlap,
+    runs, options: [5, 10, 15], byRuns,
+    sameSev: byRuns[5].sameSev, sameSet: byRuns[5].sameSet, sameEvidence: byRuns[5].sameEvidence,
+    prev: byRuns[5].prev,
+    bySev: byRuns[5].bySev, overlap: byRuns[5].overlap,
   };
 
   const sizes = [40, 120, 260, 300, 220, 260];

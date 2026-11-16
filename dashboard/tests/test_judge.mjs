@@ -46,3 +46,24 @@ test("the mock keeps the shape the real judge feed must follow", () => {
   });
   assert.ok(["grade", "evidence", "output"].every((k) => j.badcases.some((b) => b.fail === k)));
 });
+
+test("repeat consistency is offered at 5, 10 and 15 reruns and decays with each one", () => {
+  const j = judgeMock("aime", null);
+  assert.deepEqual(j.repeat.options, [5, 10, 15]);
+  const runs = j.repeat.options.map((n) => j.repeat.byRuns[n]);
+  runs.forEach((r) => {
+    assert.equal(r.runs, j.repeat.options[runs.indexOf(r)]);
+    assert.equal(r.overlap.length, 10);
+    assert.ok(r.overlap.every((b) => b.n >= 0));
+    r.bySev.forEach((s) => assert.ok(Math.abs(s.agree.reduce((a, b) => a + b, 0) - 1) < 0.01));
+    ["sameSev", "sameSet", "sameEvidence"].forEach((k) => {
+      assert.ok(r[k] >= 0 && r[k] <= 1);
+      assert.ok(r.prev[k] >= 0 && r.prev[k] <= 1);
+    });
+  });
+  for (let i = 1; i < runs.length; i += 1) {
+    assert.ok(runs[i].sameSev < runs[i - 1].sameSev);
+    assert.ok(runs[i].sameSet < runs[i - 1].sameSet);
+    assert.ok(runs[i].sameEvidence < runs[i - 1].sameEvidence);
+  }
+});

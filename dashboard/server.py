@@ -57,6 +57,11 @@ MODEL_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 AB_ROUND_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*$")
 AB_DETAIL_RE = re.compile(r"^/ab_samples/([^/]+)/(before-[0-9A-Za-z_-]+|\d+)\.json$")
 GPT_DETAIL_RE = re.compile(r"^/gpt_samples/([^/]+)/([0-9A-Za-z_-]+)\.json$")
+# /bench/<product>.json?kind=golden|bad&page=1&size=25: the case list is tens of thousands of rows,
+# so the page asks for one slice instead of downloading the whole bench payload.
+BENCH_RE = re.compile(r"^/bench/([a-z][a-z0-9_]*)\.json$")
+_BENCH_CACHE = {}
+_BENCH_LOCK = threading.Lock()
 
 
 def prewarm_details():
@@ -179,6 +184,30 @@ def scheduler(delay):
         except Exception as exc:  # noqa: BLE001
             print("[refresh] loop error:", exc, flush=True)
         time.sleep(REFRESH)
+
+
+def bench_payload(product):
+    """The Bench list written by build.py, re-read only when the file changes."""
+    path = os.path.join(STATIC, f"bench-{product}.json")
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    key = (st.st_mtime_ns, st.st_size)
+    with _BENCH_LOCK:
+        hit = _BENCH_CACHE.get(product)
+        if hit and hit[0] == key:
+            return hit[1]
+    try:
+        with open(path, encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    with _BENCH_LOCK:
+        if len(_BENCH_CACHE) > 4:
+            _BENCH_CACHE.clear()
+        _BENCH_CACHE[product] = (key, payload)
+    return payload
 
 class Handler(SimpleHTTPRequestHandler):
     # HTTP/1.1 keeps the connection alive for the many sample-detail requests
@@ -370,6 +399,43 @@ class Handler(SimpleHTTPRequestHandler):
             if elapsed >= 2.0:
                 sys.stderr.write(f"[slow] {elapsed:.1f}s {getattr(self, 'command', '?')} {self.path}\n")
 
+    def _serve_bench(self, path_only):
+        """One page of Bench's golden / badcase list; the payload stays on disk."""
+        match = BENCH_RE.match(path_only)
+        if not match:
+            return False
+        product = match.group(1)
+        payload = bench_payload(product)
+        if not payload:
+            self._send_body(404, b'{"error":"bench unavailable"}', "application/json")
+            return True
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        kind = (query.get("kind") or ["golden"])[0]
+        rows = (payload.get("rows") or {}).get(kind)
+        if rows is None:
+            self._send_body(400, b'{"error":"unknown kind"}', "application/json")
+            return True
+        sev = (query.get("sev") or [""])[0]
+        if sev:
+            rows = [row for row in rows if row.get("w") == sev]
+        try:
+            size = max(1, min(100, int((query.get("size") or ["25"])[0])))
+            page = max(1, int((query.get("page") or ["1"])[0]))
+        except ValueError:
+            size, page = 25, 1
+        total = len(rows)
+        pages = max(1, (total + size - 1) // size)
+        page = min(page, pages)
+        start = (page - 1) * size
+        body = json.dumps({
+            "product": product, "kind": kind, "page": page, "size": size,
+            "total": total, "pages": pages, "generated_at": payload.get("generated_at"),
+            "kinds": payload.get("kinds") or {}, "rows": rows[start:start + size],
+        }, ensure_ascii=False, separators=(",", ":")).encode()
+        self._cache_policy = "no-cache"
+        self._send_body(200, body, "application/json")
+        return True
+
     def do_GET(self):
         path_only = self.path.split("?", 1)[0]
         asset = ASSET_RE.match(path_only)
@@ -416,6 +482,8 @@ class Handler(SimpleHTTPRequestHandler):
         if _lister and (path_only == "/inputs.json" or (path_only.startswith("/inputs/") and path_only.endswith(".json"))):
             if self._serve_inputs(path_only):
                 return
+        if self._serve_bench(path_only):
+            return
         if _builder and path_only.startswith("/samples/") and path_only.endswith(".json"):
             slug = path_only[len("/samples/"):-len(".json")]
             try:

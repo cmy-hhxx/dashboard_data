@@ -1,23 +1,27 @@
-/* Bench: golden cases and badcases as one accordion list (rows reuse 评测评测's .jd-bcr). */
+/* Bench: golden cases and badcases, one list at a time, a page at a time. Rows reuse
+   评测评测's .jd-bcr accordion; only the columns and the opened case's own layout differ. */
 .bn .card-head { flex-wrap: wrap; align-items: center; gap: var(--sp-3) var(--sp-4); }
 .bn .card-head h2 { font-weight: var(--w-title); }
 .bn .jd-bc-tools { margin-left: var(--sp-2); }
-.bn .bn-q { width: 220px; height: 30px; margin-left: auto; }
-.bn-sevs { display: inline-flex; gap: 2px; }
+.bn .jd-bc-seg button small { margin-left: 2px; }
+.bn-sevs { display: inline-flex; gap: 2px; margin-left: var(--sp-2); }
 .bn-sev {
   display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 var(--sp-2); border-radius: var(--r-chip);
   color: var(--muted); font-size: var(--fs-meta); transition: background var(--snap), color var(--snap);
 }
 .bn-sev i { width: 7px; height: 7px; border-radius: 2px; background: var(--c); }
+.bn-sev small { color: var(--faint); font-size: var(--fs-micro); }
 .bn-sev:hover { background: var(--hover); color: var(--ink); }
 .bn-sev[aria-pressed="true"] { background: var(--ink); color: var(--card); }
+.bn-sev[aria-pressed="true"] small { color: color-mix(in oklab, var(--card) 70%, transparent); }
 
+/* Both lists are named, not tinted: the severity chip is the only colour in a row. */
 .bn-kind {
-  justify-self: start; height: 22px; padding: 0 var(--sp-2); border-radius: var(--r-chip); line-height: 22px; font-size: var(--fs-meta);
+  justify-self: start; height: 22px; padding: 0 var(--sp-2); border-radius: var(--r-chip); line-height: 22px;
+  background: var(--well); color: var(--muted); font-size: var(--fs-meta); white-space: nowrap;
 }
-.bn-kind.is-golden { color: var(--accent); background: var(--accent-soft); }
-.bn .jd-bcr-dim::before { content: "Badcase · "; }
-.bn-in { grid-template-columns: minmax(0, 1fr) 200px; }
+.bn-kind.is-golden { color: var(--ink-2); }
+.bn-in { grid-template-columns: minmax(0, 1fr) 208px; }
 .bn-prob { display: grid; gap: var(--sp-1); padding: var(--sp-3) 0; }
 .bn-prob + .bn-prob { border-top: 1px solid var(--well-2); }
 .bn-prob-top { display: flex; align-items: center; gap: var(--sp-3); }
@@ -28,8 +32,11 @@
 .bn-kinds { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); color: var(--muted); font-size: var(--fs-meta); }
 .bn-kinds b { margin-right: 3px; color: var(--ink); font-weight: var(--w-medium); }
 .bn-open { justify-self: start; margin-top: var(--sp-3); }
+.bn-note { color: var(--muted); font-size: var(--fs-meta); line-height: 1.55; }
+.bn-none { color: var(--ink-2); font-size: var(--fs-small); line-height: 1.6; }
+.bn-wait { padding: var(--sp-5) 0; color: var(--muted); font-size: var(--fs-small); }
+.bn .pager { padding: var(--sp-4) 0 0; }
 
 @media (max-width: 1180px) {
-  .bn .bn-q { width: 100%; margin-left: 0; order: 9; }
   .bn-in { grid-template-columns: minmax(0, 1fr); }
 }

@@ -2465,6 +2465,112 @@ def system_facts(all_samples, pool):
     }
 
 
+# --------------------------------------------------------------------------- bench
+
+BENCH_SCHEMA = 1
+
+
+def _bench_row(rec, kind, slug_by_trace):
+    """One case as Bench lists it: the question, who ran it, when, and how bad it was."""
+    sev = rec.get("severity") or ""
+    n = int(rec.get("problem_count") or 0)
+    if kind == "golden" and (n or sev not in ("", "none")):
+        return None
+    if kind == "bad" and sev not in ("P0", "P1"):
+        return None
+    return {
+        "i": rec.get("bad_case_id") or "",
+        "q": rec.get("question") or "",
+        "m": rec.get("model") or "",
+        "d": (rec.get("request_time") or "")[:10] or (rec.get("batch_id") or "")[:10],
+        "t": rec.get("request_time") or "",
+        # Golden means the evaluator filed nothing; an explicit "none" keeps the chip honest.
+        "w": "none" if kind == "golden" else sev,
+        "n": n,
+        "c": rec.get("severity_counts") or {},
+        "sid": rec.get("session_id") or "",
+        "s": slug_by_trace.get(str(rec.get("trace_id") or "")),
+    }
+
+
+def _bench_file_rows(kind, path, slug_by_trace):
+    rows = []
+    try:
+        with path.open(encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                row = _bench_row(rec, kind, slug_by_trace)
+                if row:
+                    rows.append(row)
+    except OSError:
+        return None
+    return rows
+
+
+def _bench_sample_rows(kind, samples):
+    """Fallback for a product with no pipeline split: this build's own cases."""
+    out = []
+    for slug, _brief, row, _facts in samples:
+        sev = row.get("w") or "none"
+        n = int(row.get("n") or 0)
+        if kind == "golden" and (n or sev != "none"):
+            continue
+        if kind == "bad" and sev not in ("P0", "P1"):
+            continue
+        sv = row.get("sv") or []
+        out.append({
+            "i": slug, "q": row.get("q") or "", "m": row.get("m") or "",
+            "d": row.get("d") or "", "t": row.get("d") or "",
+            "w": "none" if kind == "golden" else sev, "n": n,
+            "c": {s: sv[k] for k, s in enumerate(SEVERITIES) if k < len(sv) and sv[k]},
+            "sid": row.get("sid") or "", "s": slug,
+        })
+    return out
+
+
+def _bench_meta(rows, sev_counts=None):
+    dates = [r["d"] for r in rows if r.get("d")]
+    models = Counter(r["m"] for r in rows if r.get("m"))
+    meta = {"count": len(rows), "dates": [min(dates), max(dates)] if dates else [],
+            "models": [{"id": k, "n": v} for k, v in models.most_common()]}
+    if sev_counts is not None:
+        meta["sev"] = sev_counts
+    return meta
+
+
+def bench_payload(root: Path, product, samples, slug_by_trace):
+    """Bench's two lists, from the pipeline's own split when it published one.
+
+    ``goldencase_<product>.jsonl`` holds cases the evaluator left alone (no problems at all);
+    ``badcase_<product>.jsonl`` holds cases with a P0 or P1. Every row keeps the sample slug, so a
+    row opens the same trajectory 具体数据 shows.
+    """
+    golden = _bench_file_rows("golden", root / f"goldencase_{product}.jsonl", slug_by_trace)
+    bad = _bench_file_rows("bad", root / f"badcase_{product}.jsonl", slug_by_trace)
+    if golden is None or bad is None:
+        golden = _bench_sample_rows("golden", samples)
+        bad = _bench_sample_rows("bad", samples)
+    golden.sort(key=lambda r: r["t"], reverse=True)
+    bad.sort(key=lambda r: r["t"], reverse=True)
+    bad.sort(key=lambda r: SEVERITIES.index(r["w"]) if r["w"] in SEVERITIES else 9)
+    for row in golden:
+        row.pop("t", None)
+    for row in bad:
+        row.pop("t", None)
+    sev = Counter(r["w"] for r in bad)
+    return {
+        "schema": BENCH_SCHEMA, "product": product,
+        "kinds": {
+            "golden": _bench_meta(golden),
+            "bad": _bench_meta(bad, {s: sev.get(s, 0) for s in ("P0", "P1")}),
+        },
+        "rows": {"golden": golden, "bad": bad},
+    }
+
+
 # --------------------------------------------------------------------------- write
 
 def tmp_path(path: Path) -> Path:
@@ -3115,6 +3221,7 @@ def payload_files_exist(out_dir: Path, ab_products=()) -> bool:
             and all((out_dir / f"labels-{p}.json").exists() for p in (samples.get("products") or {}))
             and all((out_dir / f"recall-{p}.json").exists() for p in (samples.get("products") or {}))
             and all((out_dir / f"trends-{p}.json").exists() for p in (data.get("products") or {}))
+            and all((out_dir / f"bench-{p}.json").exists() for p in (samples.get("products") or {}))
             and all((out_dir / f"abtests-{p}.json").exists() for p in ab_products))
 
 
@@ -3557,6 +3664,21 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
         for stale in out_dir.glob("recall-*.json*"):
             product = stale.name[len("recall-"):].split(".", 1)[0]
             if product not in indexes:
+                stale.unlink(missing_ok=True)
+        # Bench reads the pipeline's golden/badcase split when the datasets root has one, and
+        # falls back to this build's own cases otherwise; either way the rows carry a slug.
+        slug_by_trace = {
+            str((brief.get("ids") or {}).get("trace")): slug
+            for slug, brief, _row, _facts in all_samples
+            if (brief.get("ids") or {}).get("trace")
+        }
+        for product in samples:
+            payload = bench_payload(datasets, product, samples[product], slug_by_trace)
+            payload["generated_at"] = generated
+            write_json(out_dir / f"bench-{product}.json", payload)
+        for stale in out_dir.glob("bench-*.json*"):
+            product = stale.name[len("bench-"):].split(".", 1)[0]
+            if product not in samples:
                 stale.unlink(missing_ok=True)
         for stale in out_dir.glob("trends-*.json*"):
             product = stale.name[len("trends-"):].split(".", 1)[0]

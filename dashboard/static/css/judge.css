@@ -3,7 +3,7 @@
 .jd .card-head .meta.end { margin-left: auto; }
 .jd-mock {
   display: inline-flex; align-items: center; height: 20px; padding: 0 var(--sp-2); border-radius: var(--r-chip);
-  background: color-mix(in oklab, var(--sev-3) 16%, var(--card)); color: var(--ink-2); font-size: var(--fs-meta);
+  background: var(--well); color: var(--muted); font-size: var(--fs-meta);
 }
 .jd-sev { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-meta); color: var(--ink-2); white-space: nowrap; }
 .jd-sev i { width: 8px; height: 8px; border-radius: 2px; background: var(--c); }
@@ -32,7 +32,7 @@
 .jd-cm-r { display: flex; align-items: center; }
 .jd-cm-c {
   display: grid; place-items: center; height: 40px; border-radius: 4px; font-size: var(--fs-micro);
-  background: color-mix(in oklab, var(--accent) var(--a), var(--well)); color: var(--ink-2);
+  background: color-mix(in oklab, var(--ink) var(--a), var(--well)); color: var(--ink-2);
   animation: rise 420ms cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: calc(var(--i) * 18ms);
   transition: transform var(--snap), box-shadow var(--snap);
 }
@@ -44,7 +44,7 @@
 .jd-st { display: grid; grid-template-columns: 52px minmax(0, 1fr) 36px; gap: var(--sp-3); align-items: center; animation: rise 420ms cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: calc(var(--i) * 40ms); }
 .jd-st > b { text-align: right; font-size: var(--fs-small); font-weight: var(--w-medium); }
 .jd-st-bar { display: flex; gap: 2px; height: 12px; }
-.jd-st-bar i, .jd-key i { border-radius: 3px; background: color-mix(in oklab, var(--accent) calc(100% - var(--k) * 28%), var(--well)); }
+.jd-st-bar i, .jd-key i { border-radius: 3px; background: color-mix(in oklab, var(--ink) calc(64% - var(--k) * 15%), var(--well)); }
 .jd-st-bar i { transform-origin: 0 50%; animation: jd-grow-x 600ms cubic-bezier(0.16, 1, 0.3, 1) both; }
 .jd-key { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-4); margin-top: var(--sp-4); color: var(--muted); font-size: var(--fs-micro); }
 .jd-key span { display: inline-flex; align-items: center; gap: 5px; }
@@ -68,10 +68,10 @@
 .jd-db-n code { margin-right: 6px; font: var(--fs-micro) var(--mono); color: var(--faint); }
 .jd-db-t { position: relative; height: 14px; }
 .jd-db-t::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: var(--well-2); }
-.jd-db-l { position: absolute; top: calc(50% - 1.5px); height: 3px; border-radius: 2px; background: var(--t4); }
+.jd-db-l { position: absolute; top: calc(50% - 1.5px); height: 3px; border-radius: 2px; background: var(--well-2); }
 .jd-db-p, .jd-db-r { position: absolute; top: 50%; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; display: inline-block; }
-.jd-db-p { background: var(--accent); box-shadow: 0 0 0 2px var(--card); }
-.jd-db-r { background: var(--card); box-shadow: inset 0 0 0 2px var(--ink-2), 0 0 0 2px var(--card); }
+.jd-db-p { background: var(--ink-2); box-shadow: 0 0 0 2px var(--card); }
+.jd-db-r { background: var(--card); box-shadow: inset 0 0 0 2px var(--faint), 0 0 0 2px var(--card); }
 .jd-legend .jd-db-p, .jd-legend .jd-db-r { margin: 0; width: 9px; height: 9px; }
 .jd-db-axis { min-height: 18px; animation: none; }
 .jd-db-axis .jd-db-t::before { display: none; }
@@ -85,9 +85,8 @@
 .jd-top .card-head { margin: 0; }
 
 /* ① three dimensions: ring, per-severity pass bars, why it failed */
-.jd-dim { gap: var(--sp-4); transition: box-shadow var(--snap); animation: rise 520ms cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: calc(var(--i) * 60ms); }
+.jd-dim { gap: var(--sp-4); animation: rise 520ms cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: calc(var(--i) * 60ms); }
 .jd-dim .card-head { margin-bottom: 0; }
-.jd-dim.is-picked { box-shadow: var(--shadow), 0 0 0 2px var(--accent); }
 .jd-go {
   display: inline-flex; align-items: center; gap: 2px; height: 24px; padding: 0 6px 0 var(--sp-2); border-radius: var(--r-chip);
   color: var(--muted); font-size: var(--fs-meta); transition: background var(--snap), color var(--snap);
@@ -99,16 +98,16 @@
 .jd-ring {
   --p: 0; display: grid; place-items: center; width: 108px; aspect-ratio: 1; border-radius: 50%;
   background: radial-gradient(closest-side, var(--card) 80%, transparent 81%),
-    conic-gradient(var(--accent) calc(var(--p) * 1%), color-mix(in oklab, var(--sev-1) 22%, var(--well)) 0);
+    conic-gradient(var(--ink) calc(var(--p) * 1%), var(--well-2) 0);
   animation: jd-spin-in 900ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 @property --p { syntax: "<number>"; inherits: false; initial-value: 0; }
 @keyframes jd-spin-in { from { --p: 0; } }
 .jd-dim-side { display: grid; gap: var(--sp-2); justify-items: start; min-width: 0; }
 .jd-dim-n { color: var(--muted); font-size: var(--fs-meta); }
-.jd-rstack, .jd-rs i { --rc: color-mix(in oklab, var(--sev-1) calc(92% - var(--k) * 18%), var(--well)); }
+.jd-rstack, .jd-rs i { --rc: color-mix(in oklab, var(--sev-1) calc(78% - var(--k) * 20%), var(--well)); }
 .jd-rstack { display: flex; gap: 2px; width: 100%; height: 8px; }
-.jd-rstack i { border-radius: 2px; background: color-mix(in oklab, var(--sev-1) calc(92% - var(--k) * 18%), var(--well)); transform-origin: 0 50%; animation: jd-grow-x 700ms 200ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+.jd-rstack i { border-radius: 2px; background: color-mix(in oklab, var(--sev-1) calc(78% - var(--k) * 20%), var(--well)); transform-origin: 0 50%; animation: jd-grow-x 700ms 200ms cubic-bezier(0.16, 1, 0.3, 1) both; }
 .jd-sbs { display: grid; gap: 2px; }
 .jd-sb {
   display: grid; grid-template-columns: 52px minmax(0, 1fr) 36px; gap: var(--sp-3); align-items: center; min-height: 26px;
@@ -117,11 +116,11 @@
 }
 .jd-sb:hover { background: var(--hover); }
 .jd-sb > b { text-align: right; font-size: var(--fs-small); font-weight: var(--w-medium); }
-.jd-sb-t { position: relative; height: 8px; border-radius: 4px; background: color-mix(in oklab, var(--sev-1) 16%, var(--well)); overflow: hidden; }
-.jd-sb-t i { position: absolute; inset: 0 auto 0 0; width: var(--w); border-radius: 4px; background: var(--accent); transform-origin: 0 50%; animation: jd-grow-x 700ms cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: calc(160ms + var(--i) * 40ms); }
+.jd-sb-t { position: relative; height: 8px; border-radius: 4px; background: var(--well-2); overflow: hidden; }
+.jd-sb-t i { position: absolute; inset: 0 auto 0 0; width: var(--w); border-radius: 4px; background: var(--ink-2); transform-origin: 0 50%; animation: jd-grow-x 700ms cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: calc(160ms + var(--i) * 40ms); }
 .jd-rss { display: grid; gap: 2px; margin-top: auto; padding-top: var(--sp-3); border-top: 1px solid var(--well-2); }
 .jd-rs { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; gap: var(--sp-2); align-items: center; min-height: 22px; font-size: var(--fs-small); }
-.jd-rs i { width: 8px; height: 8px; border-radius: 2px; background: color-mix(in oklab, var(--sev-1) calc(92% - var(--k) * 18%), var(--well)); }
+.jd-rs i { width: 8px; height: 8px; border-radius: 2px; background: var(--rc); }
 .jd-rs em { font-style: normal; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .jd-rs b { color: var(--muted); font-weight: normal; font-size: var(--fs-meta); }
 
@@ -141,10 +140,14 @@
 
 /* ② repeat consistency */
 .jd-ovl .card-head .meta.end { margin-left: auto; }
+.jd-runseg { margin-left: var(--sp-2); }
+.jd-runseg button { height: 22px; padding: 0 var(--sp-2); font-size: var(--fs-meta); }
+.jd-cap { margin: calc(-1 * var(--sp-2)) 0 var(--sp-3); color: var(--muted); font-size: var(--fs-small); line-height: 1.55; max-width: 52ch; }
+.jd-cap b { color: var(--ink-2); font-weight: var(--w-medium); }
 .jd-hist { display: flex; align-items: flex-end; gap: 4px; flex: 1; min-height: 180px; padding-top: var(--sp-3); }
 .jd-hb { flex: 1 1 0; display: flex; align-items: flex-end; height: 100%; border-radius: 4px; transition: background var(--snap); }
 .jd-hb:hover { background: var(--hover); }
-.jd-hb i { width: 100%; height: var(--h); border-radius: 4px 4px 2px 2px; background: var(--accent); transform-origin: 50% 100%; animation: jd-grow 620ms cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: calc(var(--i) * 35ms); }
+.jd-hb i { width: 100%; height: var(--h); border-radius: 4px 4px 2px 2px; background: var(--ink-2); transform-origin: 50% 100%; animation: jd-grow 620ms cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: calc(var(--i) * 35ms); }
 .jd-hb.is-low i { background: color-mix(in oklab, var(--sev-1) 70%, var(--well)); }
 .jd-hist-x { display: flex; justify-content: space-between; margin-top: var(--sp-2); color: var(--faint); font-size: var(--fs-micro); }
 @keyframes jd-grow { from { transform: scaleY(0); } }
@@ -176,7 +179,7 @@
 }
 .jd-bcr-dim {
   justify-self: start; height: 22px; padding: 0 var(--sp-2); border-radius: var(--r-chip); line-height: 22px; font-size: var(--fs-meta);
-  color: var(--ink-2); background: color-mix(in oklab, var(--sev-1) 14%, var(--card));
+  color: var(--muted); background: var(--well);
 }
 .jd-bcr-q { display: grid; gap: 1px; min-width: 0; }
 .jd-bcr-q b, .jd-bcr-q span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

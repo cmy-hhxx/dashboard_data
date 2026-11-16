@@ -2,7 +2,7 @@
    the batch's numbers: clustering walks real problems through the taxonomy, and the evidence loop
    opens concrete golden cases message by message. */
 import {
-  $, $$, esc, fmt, SEV, sevColor, KIND,
+  $, $$, esc, fmt, SEV, sevColor, KIND, getJSON,
   bindTips, REDUCED,
 } from "./core.js";
 import { threadFlow } from "./particles.js";
@@ -11,7 +11,11 @@ let shown = null;
 
 const ROLE = { planning: "规划", request_generation: "请求生成", tool: "工具执行", script: "脚本执行", skill: "技能装载", delivery: "交付" };
 
-const E = { product: null, goldens: [], index: 0, obs: null, flow: null };
+const E = { product: null, goldens: [], index: 0, obs: null, flow: null, details: new Map() };
+const clip = (text, max) => {
+  const v = String(text == null ? "" : text);
+  return v.length > max ? `${v.slice(0, max)}…` : v;
+};
 
 function compactAnatomy(a) {
   if (!a || a.empty || !(a.messages || []).length || a.messages.length <= 22) return a;
@@ -34,6 +38,7 @@ export async function render(root, c) {
   const key = `${c.product}|${d.generated_at}`;
   if (shown === key && root.firstChild) return;
   shown = key;
+  E.details.clear();
 
   const prods = Object.values(d.products || {});
   if (!prods.length) {
@@ -213,7 +218,7 @@ function anatomyBody(a) {
     .map((p) => {
       const ev = (p.ev || []).filter((e) => e.q);
       return `<div class="aprob" data-p="${p.id}" style="--c:${sevColor(p.sev)}" role="button" tabindex="0" aria-expanded="false">
-        <div class="aprob-top"><span class="sev-badge">${p.sev}</span><span>${esc(roleName(p.role))}</span>${p.path ? `<span class="mono faint">${esc(p.path)}</span>` : ""}</div>
+        <div class="aprob-top"><span class="sev-badge">${p.sev}</span><span>${esc(roleName(p.role))}</span>${p.path ? `<span class="mono faint">${esc(p.path)}</span>` : ""}<span class="aprob-n">看证据<i aria-hidden="true"></i></span></div>
         <div class="t">${esc(p.label)}</div><div class="s">${esc(p.comp || "")}${(p.msgs || []).length ? ` · ${p.msgs.map((m) => `#${m}`).join(" ")}` : ""}</div>
         ${ev.length ? `<ol class="aprob-ev">${ev.map((e) => `<li><span class="num">${e.m == null ? "—" : `#${e.m}`}</span><q>${esc(e.q)}</q></li>`).join("")}</ol>` : ""}</div>`;
     })
@@ -285,6 +290,37 @@ function wireAnatomy(root, a) {
   }
   const box = $("#anatomyBody .anatomy", root);
   if (!box || !a || a.empty) return;
+  // The shared payload keeps the anchors only (quotes are stripped to save 4 MB). Opening a
+  // problem pulls that one case's full detail and fills its quotes in place, once per case.
+  const fullDetail = (slug) => {
+    if (!slug) return Promise.resolve(null);
+    if (!E.details.has(slug)) E.details.set(slug, getJSON(`samples/${slug}.json`).catch(() => null));
+    return E.details.get(slug);
+  };
+  const fillEvidence = (detail) => {
+    if (!detail) return;
+    $$(".aprob", box).forEach((el) => {
+      const p = (detail.attribution && detail.attribution.problems || []).find((x) => String(x.id) === el.dataset.p);
+      if (!p) return;
+      const quotes = (p.ev || []).map((k) => (detail.evidence || [])[k]).filter((e) => e && e.q).slice(0, 4);
+      el.querySelector(".aprob-ev")?.remove();
+      const ol = document.createElement("ol");
+      ol.className = "aprob-ev";
+      ol.innerHTML = quotes.length
+        ? quotes.map((e) => `<li><span class="num">${e.m == null ? "—" : `#${e.m}`}</span><q>${esc(clip(e.q, 240))}</q></li>`).join("")
+        : '<li class="is-loading">这条问题没有登记原文引用</li>';
+      el.appendChild(ol);
+    });
+  };
+  let tracing = null; // { pid, at }: the trace stays lit across redraws for a moment
+  const markPaths = (pid) => {
+    $$(`.threads path[data-p="${pid}"]`, box).forEach((p, i) => {
+      p.classList.remove("is-trace");
+      void p.getBoundingClientRect();
+      p.style.animationDelay = `${i * 90}ms`;
+      p.classList.add("is-trace");
+    });
+  };
   const draw = () => {
     const svg = $(".threads svg", box);
     if (!svg) return;
@@ -303,10 +339,14 @@ function wireAnatomy(root, a) {
         const r = m.getBoundingClientRect();
         const y1 = r.top + Math.min(r.height / 2, 14) - host.top;
         const w = host.width;
-        paths += `<path data-p="${pid}" style="--c:${sevColor(prob.sev)}" d="M0 ${y1} C ${w * 0.55} ${y1}, ${w * 0.45} ${y2}, ${w} ${y2}"/>`;
+        paths += `<path data-p="${pid}" pathLength="1" style="--c:${sevColor(prob.sev)}" d="M0 ${y1} C ${w * 0.55} ${y1}, ${w * 0.45} ${y2}, ${w} ${y2}"/>`;
       });
     });
     svg.innerHTML = paths;
+    // Opening a problem resizes the pane, which rebuilds every path; replay the draw-in on the
+    // fresh ones for as long as the trace lasts, so a late relayout cannot cut it short.
+    if (tracing && performance.now() - tracing.at < 1600) markPaths(tracing.pid);
+    else tracing = null;
     const on = box.querySelector(".aprob.on");
     if (on) $$(".threads path", box).forEach((p) => p.classList.toggle("on", p.dataset.p === on.dataset.p));
   };
@@ -332,6 +372,21 @@ function wireAnatomy(root, a) {
     focus(b ? b.dataset.p : null);
   });
   box.addEventListener("pointerleave", () => { if (pinned == null) focus(null); });
+  // A clicked problem plays its own evidence: each thread draws from the problem back to the
+  // message it cites, and those messages light in the order they are cited.
+  const trace = (pid, prob) => {
+    if (REDUCED || !pid) return;
+    tracing = { pid, at: performance.now() };
+    markPaths(pid);
+    (prob.msgs || []).forEach((mi, k) => {
+      const m = $(`.rail-msg[data-m="${mi}"]`, box);
+      if (!m) return;
+      m.classList.remove("is-pulse");
+      void m.offsetWidth;
+      m.style.setProperty("--k", k);
+      m.classList.add("is-pulse");
+    });
+  };
   const toggle = (el) => {
     if (el.classList.contains("aprob")) {
       // A problem opens to its evidence and pins its threads; its messages open with it.
@@ -343,6 +398,16 @@ function wireAnatomy(root, a) {
       focus(pinned);
       const prob = a.problems.find((x) => String(x.id) === el.dataset.p);
       if (open && prob) {
+        trace(el.dataset.p, prob);
+        if (!el.querySelector(".aprob-ev")) {
+          el.insertAdjacentHTML("beforeend", '<ol class="aprob-ev"><li class="is-loading">正在读取原文证据…</li></ol>');
+          fullDetail(a.slug).then((detail) => {
+            el.querySelector(".aprob-ev")?.remove();
+            fillEvidence(detail);
+            if (!detail) el.insertAdjacentHTML("beforeend", '<ol class="aprob-ev"><li class="is-loading">原文证据暂时读不到</li></ol>');
+            if (el.classList.contains("is-open")) trace(el.dataset.p, prob);
+          });
+        }
         const first = $(`.rail-msg[data-m="${(prob.msgs || [])[0]}"]`, box);
         first?.scrollIntoView({ block: "nearest", behavior: "smooth" });
       }
@@ -368,9 +433,8 @@ function wireAnatomy(root, a) {
 
 /* ---------------------------------------------------------------- 聚类: a problem walked through the grid */
 
-/* Each example lights its 环节 row, then its 机制 column, then its cell and pattern, and the steps
-   on the left fill in as it goes. Hovering the section holds the walk; a click on the grid takes
-   over (a row, column or cell lists its patterns) until the pointer leaves. */
+/* The grid is a reference, not a slideshow: a problem is shown once and stays put, and a click on
+   a row, column or cell lists what lives there. Nothing walks on its own. */
 function wireCluster(tx, tax, examples) {
   const stageOf = (id) => tax.stages.find((x) => x.id === id);
   const mechOf = (id) => tax.mechanisms.find((x) => x.id === id);
@@ -384,11 +448,6 @@ function wireCluster(tx, tax, examples) {
       x.classList.toggle("is-hl", (x.classList.contains("fx-g-row") && !!sid && x.dataset.s === sid)
         || (x.classList.contains("fx-g-col") && !!mid && x.dataset.m === mid));
     });
-    $$(".fx-g-c.is-hit", tx).forEach((x) => x.classList.remove("is-hit"));
-    if (cell) {
-      const c = $(`.fx-g-c[data-s="${sid}"][data-m="${mid}"]`, tx);
-      if (c) { void c.offsetWidth; c.classList.add("is-hit"); }
-    }
   };
   const step = (k, html) => {
     const li = $(`.fx-cl-seq li[data-step="${k}"]`, tx);
@@ -398,80 +457,46 @@ function wireCluster(tx, tax, examples) {
   };
   const detail = $("#fxDetail", tx);
   const prob = $("#fxProb", tx);
-  const pick = (sid, mid) => {
+  const pick = (sid, mid, hot = null) => {
     mark(sid, mid, !!(sid && mid));
-    detail.innerHTML = patternList(tax, sid, mid);
+    detail.innerHTML = patternList(tax, sid, mid, hot);
   };
-
-  let at = 0;
-  let held = false;
-  let manual = false;
-  const walk = () => {
-    if (!examples.length || !tx.isConnected) return;
-    const ex = examples[at % examples.length];
-    at++;
+  const show = (ex) => {
     const [sid, mid] = ex.path.split(".");
     const st = stageOf(sid);
     const m = mechOf(mid);
     const pt = tax.patterns[ex.path] || {};
     prob.innerHTML = `<span class="sev-badge" style="--c:${sevColor(ex.sev)}">${esc(ex.sev)}</span><b>${esc(ex.label)}</b>${ex.q ? `<small>${esc(ex.q)}</small>` : ""}`;
-    prob.classList.remove("is-in");
-    void prob.offsetWidth;
-    prob.classList.add("is-in");
-    [1, 2, 3].forEach((k) => step(k, ""));
-    mark(null, null, false);
-    const seq = [
-      [REDUCED ? 0 : 520, () => { mark(sid, null, false); step(1, `<code>${sid}</code>${esc(st ? st.name : sid)}`); }],
-      [REDUCED ? 0 : 1180, () => { mark(sid, mid, false); step(2, `<code>${mid}</code>${esc(m ? m.name : mid)}`); }],
-      [REDUCED ? 0 : 1840, () => {
-        mark(sid, mid, true);
-        step(3, `<code>${ex.path}</code>${esc(pt.name || ex.path)}`);
-        detail.innerHTML = patternList(tax, sid, mid, ex.path);
-      }],
-    ];
-    seq.forEach(([ms, fn]) => later(fn, ms));
+    step(1, `<code>${sid}</code>${esc(st ? st.name : sid)}`);
+    step(2, `<code>${mid}</code>${esc(m ? m.name : mid)}`);
+    step(3, `<code>${ex.path}</code>${esc(pt.name || ex.path)}`);
+    pick(sid, mid, ex.path);
   };
-  const later = (fn, ms) => {
-    const id = setTimeout(() => { E.fxT.delete(id); if (!manual) fn(); }, ms);
-    E.fxT.add(id);
-  };
-  tx.addEventListener("pointerenter", () => { held = true; });
-  tx.addEventListener("pointerleave", () => {
-    held = false;
-    if (manual) { manual = false; walk(); }
-  });
+
   tx.addEventListener("click", (e) => {
     const b = e.target.closest("button.fx-g-c, .fx-g-row, .fx-g-col");
     if (!b) return;
-    manual = true;
     [1, 2, 3].forEach((k) => step(k, ""));
     prob.innerHTML = "";
     pick(b.dataset.s || null, b.dataset.m || null);
   });
   // Hovering a cell lights its row and column heads, so the two axes read as one coordinate.
   tx.addEventListener("pointerover", (e) => {
-    if (!manual) return;
     const c = e.target.closest(".fx-g-c");
     $$(".fx-g-row", tx).forEach((x) => x.classList.toggle("is-hl", !!c && x.dataset.s === c.dataset.s));
     $$(".fx-g-col", tx).forEach((x) => x.classList.toggle("is-hl", !!c && x.dataset.m === c.dataset.m));
   });
-  if (!examples.length) {
+  if (examples.length) show(examples[0]);
+  else {
     const first = $("button.fx-g-c", tx);
     if (first) pick(first.dataset.s, null);
-    return;
   }
-  walk();
-  E.clTimer = setInterval(() => {
-    if (held || manual || document.hidden || !tx.offsetParent) return;
-    walk();
-  }, REDUCED ? 6000 : 4200);
 }
 
 /* ---------------------------------------------------------------- 评测体系 wiring: wires, pulses */
 
 function wireFx(root, tax, examples = []) {
   clearInterval(E.fxTimer);
-  clearInterval(E.clTimer);
   if (E.fxT) E.fxT.forEach(clearTimeout);
   E.fxT = new Set();
   if (E.fxObs) E.fxObs.disconnect();
