@@ -10,7 +10,6 @@ import { mountProblemTrends } from "./problem_trends.js";
 import { traceSeverityModel, traceShares } from "./trace_analysis.js";
 import { createKlineChart, createTrendChart, KLINE_PERIODS } from "./kline_chart.js";
 import { buildIntradayCandles } from "./kline_data.js";
-import { matrixHeatSummary } from "./matrix_heat.js";
 import { trendSampleFrame, abTrendSampleRefs, resolveABSamples, trendSampleCandidates, trendSampleProblems, traceSampleRefs } from "./trend_samples.js";
 import { patternName as patName } from "./taxonomy.js";
 
@@ -351,6 +350,28 @@ const EV_PER_ROW = 15;
 const RANGE_LABEL = { 7: "近 7 天", 30: "近 30 天", all: "全部" };
 // year: 「全部」柱状图超过 12 个月时切到年份，点某一年再下钻成该年的月份。
 const EV = { range: "all", model: "all", year: null };
+// 模型分段只保留这几个已知家族：变体（b_expert_only_*、b_expert_search_test_v2）按前缀归入
+// 对应家族，归不进去的模型不占用分段，也不进入任何单模型口径（全部里仍然算）。
+const EV_FAMILIES = [
+  { id: "a_fast", label: "A Fast", match: /^a_fast/ },
+  { id: "b_fast", label: "B Fast", match: /^b_fast/ },
+  { id: "a_expert", label: "A Expert", match: /^a_expert/ },
+  { id: "b_expert", label: "B Expert", match: /^b_expert/ },
+  { id: "aime_fast", label: "Fast", match: /^aime_fast/ },
+  { id: "aime_expert", label: "Expert", match: /^aime_expert/ },
+  { id: "fast", label: "Fast", match: /^fast/ },
+  { id: "expert", label: "Expert", match: /^expert/ },
+];
+const modelFamily = (id) => EV_FAMILIES.find((f) => f.match.test(String(id || "").toLowerCase()))?.id || null;
+function familyInput(input, family) {
+  const models = input?.models || {};
+  return Object.keys(models).reduce((acc, key) => {
+    if (modelFamily(key) !== family) return acc;
+    acc.sessions += models[key].sessions || 0;
+    acc.traces += models[key].traces || 0;
+    return acc;
+  }, { sessions: 0, traces: 0 });
+}
 
 function evalRows(p) {
   if (Array.isArray(p.daily) && p.daily.length) return p.daily;
@@ -362,12 +383,12 @@ function evalRows(p) {
 }
 
 function evalModels(p) {
-  const labels = new Map(p.models.map((m) => [m.id, m.label]));
-  const present = [...new Set(evalRows(p).map((r) => r.m).filter(Boolean))];
-  const ids = p.models.map((m) => m.id).filter((id) => present.includes(id));
-  const extra = present.filter((id) => id !== "all" && !ids.includes(id));
-  return [{ id: "all", label: "全部" }, ...ids.map((id) => ({ id, label: labels.get(id) || id })),
-    ...extra.map((id) => ({ id, label: id }))];
+  const present = new Set();
+  evalRows(p).forEach((row) => {
+    const family = modelFamily(row.m);
+    if (family) present.add(family);
+  });
+  return [{ id: "all", label: "全部" }, ...EV_FAMILIES.filter((f) => present.has(f.id)).map(({ id, label }) => ({ id, label }))];
 }
 
 function evalWindow(p) {
@@ -375,7 +396,7 @@ function evalWindow(p) {
   const blank = () => ({ inputs: 0, evaluated: 0, traces: 0, tokens: 0, tokenRecords: 0, sessions: 0,
     inTraces: 0, hasTraces: true, hasIns: true, sids: new Set(), inSids: new Set() });
   evalRows(p)
-    .filter((r) => EV.model === "all" || r.m === EV.model)
+    .filter((r) => EV.model === "all" || modelFamily(r.m) === EV.model)
     .forEach((r) => {
       const x = byDay.get(r.d) || blank();
       x.inputs += r.inputs || 0;
@@ -485,7 +506,7 @@ function evalTotals(p) {
   const input = p.input || {};
   const scoped = EV.range !== "all" || !!EV.year;
   const model = EV.model !== "all";
-  const allInput = model ? (input.models?.[EV.model] || {}) : input;
+  const allInput = model ? familyInput(input, EV.model) : input;
   return {
     scoped,
     sessions: [scoped || model ? w.totalSessions : k.unique_sessions, scoped ? w.totalInputSessions : allInput.sessions],
@@ -563,12 +584,14 @@ function evalCompact(p) {
   const inWindow = new Set(w.days.map((x) => x.d));
   const by = new Map();
   evalRows(p)
-    .filter((r) => inWindow.has(r.d) && (EV.model === "all" || r.m === EV.model))
+    .filter((r) => inWindow.has(r.d) && (EV.model === "all" || modelFamily(r.m) === EV.model))
     .forEach((r) => {
-      const x = by.get(r.m) || { m: r.m, inputs: 0, done: 0 };
+      const family = modelFamily(r.m);
+      if (!family) return;
+      const x = by.get(family) || { m: family, inputs: 0, done: 0 };
       x.inputs += r.inputs || 0;
       x.done += r.evaluated || 0;
-      by.set(r.m, x);
+      by.set(family, x);
     });
   const rank = [...by.values()]
     .sort((a, b) => b.done - a.done || b.inputs - a.inputs)
@@ -1557,83 +1580,6 @@ function matrixTable(view) {
   </div>`;
 }
 
-/* Matrix analysis: exclusive Trace severity distribution and counts over time.
-   The timeline uses deduplicated hit sessions for each type, never sums sibling hit counts. */
-function mxTrendSummary(trend, view, clusterRoot, state) {
-  if (!trend?.scenes) return null;
-  const scenes = new Set(trend.scenes.map(([task, sub], i) => view.rows.some((row) => sceneMatches(row, task, sub)) ? i : -1).filter((i) => i >= 0));
-  const summary = matrixHeatSummary(trend, clusterRoot, state.heatPath || [], scenes);
-  return summary ? { ...summary, scenes } : null;
-}
-
-/* A heat cell is a ready-made 具体数据 query: that day × the scene scope × the cluster path.
-   The page's own filters carry the same names, so the chip can be read and cleared there. */
-function heatSamplePatch(summary, trend, node, date) {
-  const patch = { date };
-  const scenes = [...(summary?.scenes || [])].map((i) => trend.scenes[i]).filter(Boolean);
-  if (scenes.length === 1) {
-    patch.scene = scenes[0][0];
-    if (scenes[0][1]) patch.sub = scenes[0][1];
-  }
-  const [stage, mech] = String(node).split(".");
-  if (/^S\d+$/.test(stage || "")) patch.stage = stage;
-  if (/^M\d+$/.test(mech || "")) patch.mech = mech;
-  if (patch.stage && patch.mech && (node.split(".").length >= 3)) patch.pattern = node;
-  return patch;
-}
-
-const mxRateText = (v) => v == null ? "—" : `${fmt(v, 1)}%`;
-const mxDeltaText = (v) => v == null ? "—" : `${v > 0 ? "+" : v < 0 ? "−" : ""}${fmt(Math.abs(v), 1)}`;
-
-function mxPerspectiveTimeline(summary, loading) {
-  if (!summary) return `<div class="mxp-chart-empty">${loading ? "正在读取趋势…" : "暂无趋势数据"}</div>`;
-  const { dates, daily } = summary;
-  // The heat is a record of evaluated days, not a calendar. Use the last seven dates that
-  // actually carry traces for this scope; skipped days never become empty columns.
-  const dataIdx = dates.map((_, i) => i).filter((i) => daily[i].sessions > 0 && summary.groups.some((g) => g.days[i].observed));
-  const recentIdx = (dataIdx.length ? dataIdx : dates.map((_, i) => i)).slice(-14);
-  const priorIdx = dataIdx.slice(-28, -14);
-  const totalIdx = dataIdx.slice(-30);
-  const calendar = recentIdx.map((i) => dates[i]);
-  const index = new Map(dates.map((d, i) => [d, i]));
-  const heat = (v) => (0.06 + 0.84 * Math.sqrt(Math.min(100, v) / 100)).toFixed(3);
-  const periodRate = (group, idxs) => {
-    let hits = 0, sessions = 0;
-    idxs.forEach((i) => {
-      const day = group.days[i];
-      if (!day.observed) return;
-      sessions += daily[i].sessions;
-      hits += day.hits;
-    });
-    return sessions > 0 ? 100 * Math.min(hits, sessions) / sessions : null;
-  };
-  const rows = summary.groups.map((group) => {
-    const recent = periodRate(group, recentIdx);
-    const prior = periodRate(group, priorIdx);
-    const delta = recent != null && prior != null ? recent - prior : null;
-    const total = totalIdx.reduce((sum, i) => sum + (group.days[i].observed ? Number(group.days[i].n) || 0 : 0), 0);
-    const cells = calendar.map((d) => {
-      const i = index.get(d);
-      const day = i == null ? null : group.days[i];
-      const sessions = i == null ? 0 : daily[i].sessions;
-      const rate = day?.observed && sessions > 0 ? 100 * Math.min(day.hits, sessions) / sessions : null;
-      const hits = rate == null ? 0 : Number(day.hits) || 0;
-      const tip = `${group.name}|${d} · ${mxRateText(rate)}|${day && rate != null ? `${fmt(day.hits)} 命中会话 / ${fmt(sessions)} 会话` : "无观测数据"}`;
-      const color = rate == null ? "var(--sev-none)" : `color-mix(in oklab, var(--accent) ${Number(heat(rate)) * 100}%, var(--well))`;
-      if (!hits) return `<span class="${rate == null ? "is-missing" : ""}" style="--c:${color}" data-tip="${esc(tip)}"></span>`;
-      return `<button type="button" class="mxp-cell" style="--c:${color}" data-tip="${esc(tip)}" data-heat-date="${d}" data-heat-node="${esc(group.node.prefix)}" aria-label="${esc(`${d} ${group.name} ${mxRateText(rate)}，查看当天具体数据`)}"></button>`;
-    }).join("");
-    return { group, recent, total, html: `<div class="mxp-heat-row">${group.node.children?.length ? `<button type="button" class="mxp-heat-name" data-heat-node="${esc(group.node.prefix)}" aria-label="下钻 ${esc(group.name)}" title="${esc(group.name)}">${esc(group.name)}<i class="mx-caret" aria-hidden="true"></i></button>` : `<span class="mxp-heat-name" title="${esc(group.name)}">${esc(group.name)}</span>`}<div class="tiles mxp-heat-days">${cells}</div><b class="num">${mxRateText(recent)}</b><span class="mxp-delta num ${delta == null || Math.abs(delta) < 0.05 ? "" : delta > 0 ? "is-up" : "is-down"}" title="较前 14 个评测日变化，单位：百分点">${mxDeltaText(delta)}</span></div>` };
-  }).filter(({ group }) => recentIdx.some((i) => group.days[i].observed && group.days[i].n > 0))
-    .sort((a, b) => b.total - a.total || a.group.node.prefix.localeCompare(b.group.node.prefix));
-  const tickAt = calendar.length > 7 ? [0, Math.floor((calendar.length - 1) / 2), calendar.length - 1] : calendar.map((_, i) => i);
-  const ticks = tickAt.map((i) => `<span style="grid-column:${i + 1}">${calendar[i].slice(5)}</span>`).join("");
-  return `${summary.path.length ? `<div class="mxp-heat-nav"><button type="button" class="mx-back" data-heat-back aria-label="返回上一级问题分类">← 返回</button><span>${esc(summary.path[summary.path.length - 1].name)}</span></div>` : ""}<div class="mxp-heat" role="group" aria-label="最近 14 个评测日各类问题发生率">
-    <div class="mxp-heat-head"><span class="mxp-heat-label">问题发生率</span><div class="mxp-heat-dates num">${ticks}</div><span>近 14 天</span><span>变化</span></div>
-    ${rows.map((row) => row.html).join("") || '<div class="mxp-chart-empty">暂无带日期的问题</div>'}
-  </div>`;
-}
-
 const KLINE_NAME = Object.fromEntries(KLINE_PERIODS);
 const CLOCK = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit", hour12: false });
 const clockOf = (time) => (typeof time === "number" ? CLOCK.format(new Date(time * 1000)) : String(time));
@@ -1700,22 +1646,21 @@ function mxRatePick(model, candle, selected, period) {
   };
 }
 
-/* The right lens and heat share the left card grid's baseline. Measure the left grid, subtract
-   the heat and the lens chrome, and give the trend exactly the remaining height. */
+/* The two columns share one baseline: the trend fills the lens until its bottom meets the left
+   card grid's bottom. The lens is sized by its content, so measuring the chrome on the current
+   paint stays valid as the chart grows. */
 function analysisChartHeight(panel, chartHost) {
   const lens = panel.querySelector(".mxp-lens");
   if (lens?.classList.contains("is-full")) return Math.max(480, Math.round(window.innerHeight - 260));
   const panels = panel.closest(".mx-panels");
   const issueShell = document.getElementById("mxIssueTrends");
   if (!panels?.classList.contains("is-both") || !issueShell || issueShell.hidden) return 260;
-  const heat = panel.querySelector(".mxp-chart-panel");
-  if (!lens || !heat) return 260;
+  if (!lens) return 260;
   const lr = issueShell.getBoundingClientRect();
   const pr = lens.getBoundingClientRect();
-  const hr = heat.getBoundingClientRect();
   if (!lr.height || !pr.height) return 260;
   const chrome = pr.height - chartHost.getBoundingClientRect().height;
-  return Math.max(200, Math.round(lr.bottom - pr.top - 12 - hr.height - chrome));
+  return Math.max(200, Math.round(lr.bottom - pr.top - chrome));
 }
 
 function wireMatrixAnalysis(panel, model, state, trend) {
@@ -1911,8 +1856,7 @@ function wireMatrixAnalysis(panel, model, state, trend) {
   panel._mxFitObserver = ro;
 }
 
-function matrixPerspectiveHTML(view, trend, loading = false, state = {}, clusterRoot) {
-  const summary = mxTrendSummary(trend, view, clusterRoot, state);
+function matrixPerspectiveHTML(trend, loading = false, state = {}) {
   const model = traceSeverityModel(trend);
   const shares = model ? traceShares(model.counts) : [];
   const levels = model?.levels || WORST;
@@ -1982,9 +1926,6 @@ function matrixPerspectiveHTML(view, trend, loading = false, state = {}, cluster
         </div>` : ""}</div>
         ${trendSampleFrame(`<div class="mpt-chart mxp-rate-chart" data-own-tip>${model?.total ? "" : `<div class="empty">${empty}</div>`}</div>`)}
       </div>
-    </section>
-    <section class="mxp-heat-wrap">
-      <section class="mxp-chart-panel">${mxPerspectiveTimeline(summary, loading)}</section>
     </section>
   </div>`;
 }
@@ -3557,7 +3498,6 @@ function wire(bento, p, tax, u) {
 
     function renderIssueTrends(reveal = true) {
       if (!issueEl || !panelsOpen || !issueData) return;
-      u.mx.issuePath = Array.isArray(u.mx.heatPath) ? u.mx.heatPath.slice() : [];
       u.mx.issueZoom = null;
       const names = new Map();
       (tax.stages || []).forEach((node) => { if (node && node.id) names.set(node.id, node.name); });
@@ -3568,14 +3508,6 @@ function wire(bento, p, tax, u) {
       const update = () => mountProblemTrends(issueEl, issueData, u.mx, names, layoutPanels, {
         mountDetailChart: (plot, node, renderChart, interaction) => mountSampleTrend(plot, renderChart,
           (pick) => loadTrendSamplePage(issueData, { node, scenes: null }, pick), interaction),
-        // 左侧趋势下钻后，右侧热力矩阵跟着同一个路径重画；热力矩阵自己的下钻仍会反向刷新左侧。
-        onPath: () => {
-          const heatPanel = $(".mxp-chart-panel", perspectiveEl);
-          if (!heatPanel || !mxView) return;
-          heatPanel._cancelHeat?.();
-          heatPanel.innerHTML = mxPerspectiveTimeline(mxTrendSummary(trendData, mxView, clusterRoot, u.mx), false);
-          animateHeat();
-        },
       });
       if (reveal) layoutPanels(update);
       else update();
@@ -3595,22 +3527,6 @@ function wire(bento, p, tax, u) {
       }
     }
 
-    /* 会话场的格子入场：按行优先下标错开 0.9ms，只动 opacity / transform；钻取仍走原来的淡入。 */
-    function animateHeat() {
-      const heat = $(".mxp-heat", perspectiveEl);
-      if (!heat) return;
-      if (REDUCED) { heat.classList.remove("is-intro"); return; }
-      let i = 0;
-      heat.querySelectorAll(".mxp-heat-row").forEach((row) => {
-        row.querySelectorAll(".mxp-heat-days.tiles > *").forEach((cell) => cell.style.setProperty("--i", String(Math.min(i++, 240))));
-      });
-      heat.classList.remove("is-intro");
-      void heat.offsetWidth;
-      heat.classList.add("is-intro");
-      clearTimeout(heat._intro);
-      heat._intro = setTimeout(() => heat.classList.remove("is-intro"), 1600);
-    }
-
     function renderPerspective(loading = perspectiveLoading, reveal = true) {
       if (!perspectiveEl || !panelsOpen || !mxView) return;
       const update = () => {
@@ -3618,37 +3534,11 @@ function wire(bento, p, tax, u) {
         const old = perspectiveEl.querySelector(".mxp-rate-chart");
         old?._drawer?.destroy();
         old?._kline?.destroy();
-        perspectiveEl.innerHTML = `<div class="mx-perspective-inner">${matrixPerspectiveHTML(mxView, trendData, loading, u.mx, clusterRoot)}</div>`;
+        perspectiveEl.innerHTML = `<div class="mx-perspective-inner">${matrixPerspectiveHTML(trendData, loading, u.mx)}</div>`;
       };
       if (reveal) layoutPanels(update);
       else update();
       wireMatrixAnalysis(perspectiveEl, traceSeverityModel(trendData), u.mx, trendData);
-      animateHeat();
-      const heatPanel = $(".mxp-chart-panel", perspectiveEl);
-      heatPanel.onclick = (event) => {
-        const cell = event.target.closest("[data-heat-date]");
-        if (cell) {
-          const current = mxTrendSummary(trendData, mxView, clusterRoot, u.mx);
-          openSamples(heatSamplePatch(current, trendData, cell.dataset.heatNode, cell.dataset.heatDate));
-          return;
-        }
-        const down = event.target.closest("[data-heat-node]");
-        const back = event.target.closest("[data-heat-back]");
-        if (!down && !back) return;
-        const current = mxTrendSummary(trendData, mxView, clusterRoot, u.mx);
-        const keys = (current?.path || []).map((node) => node.prefix);
-        u.mx.heatPath = down ? [...keys, down.dataset.heatNode] : keys.slice(0, -1);
-        heatPanel._cancelHeat?.();
-        layoutPanels(() => {
-          if (panelsOpen && issueData) renderIssueTrends(false);
-          heatPanel.innerHTML = mxPerspectiveTimeline(mxTrendSummary(trendData, mxView, clusterRoot, u.mx), false);
-        });
-        const clear = () => { heatPanel.style.opacity = ""; heatPanel.style.transform = ""; };
-        const cancel = sunburstTween((k) => { heatPanel.style.opacity = String(.4 + .6 * k); heatPanel.style.transform = `translateY(${-4 * (1 - k)}px)`; }, { finish: clear });
-        heatPanel._cancelHeat = () => { cancel(); clear(); };
-        const focus = down ? $("[data-heat-back]", heatPanel) : $(`[data-heat-node="${keys[keys.length - 1]}"]`, heatPanel);
-        focus?.focus({ preventScroll: true });
-      };
     }
 
     async function hydratePerspective() {

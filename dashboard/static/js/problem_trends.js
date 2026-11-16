@@ -221,10 +221,8 @@ export function mountProblemTrends(host, trend, state = {}, names = new Map(), l
     if (!node.children.some((child) => observationIndexes(model, child, idx).length > 0)) return;
     const path = resolvePath(model, state.issuePath).nodes.map((item) => item.id);
     state.issuePath = [...path, node.id];
-    state.heatPath = state.issuePath.slice();
     state.issueZoom = null;
     paint(true, card);
-    actions.onPath?.(state.issuePath.slice());
   };
   host._mptClick = onClick;
   host.addEventListener("click", onClick);

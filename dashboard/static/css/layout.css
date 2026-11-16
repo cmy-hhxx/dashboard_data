@@ -39,6 +39,12 @@
 }
 .seg button[aria-pressed="true"], .seg button[aria-selected="true"] { color: var(--ink); }
 .seg button:hover { color: var(--ink-2); }
+/* Each product wears its server's name above it, small and in that server's own hue. */
+#productSwitch button { display: grid; place-content: center; justify-items: center; gap: 1px; padding: 0 12px; line-height: 1.1; }
+.seg-loc { font-size: 10px; letter-spacing: 0.04em; color: var(--loc); opacity: 0.7; transition: opacity var(--snap); }
+#productSwitch button[aria-pressed="true"] .seg-loc { opacity: 1; }
+[data-value="wencai"] > .seg-loc { --loc: var(--loc-ulq); }
+[data-value="aime"] > .seg-loc { --loc: var(--loc-vir); }
 
 .icon-btn {
   width: 36px; height: 36px; display: grid; place-items: center; border-radius: var(--r-ctl);

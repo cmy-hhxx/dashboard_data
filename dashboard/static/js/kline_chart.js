@@ -246,6 +246,7 @@ export function createKlineChart(host, spec = {}) {
   host.innerHTML = `${legend}<div class="kl-canvas"></div><div class="kl-tip" hidden></div>`;
   const canvas = host.querySelector(".kl-canvas");
   const tip = host.querySelector(".kl-tip");
+  if (compact) tip.classList.add("is-compact");
 
   const chart = createChart(canvas, {
     width: Math.max(1, canvas.clientWidth),
@@ -355,7 +356,9 @@ export function createKlineChart(host, spec = {}) {
     const openValue = spec.openValue == null
       ? candle.open
       : (typeof spec.openValue === "function" ? spec.openValue(candle) : spec.openValue);
-    tip.innerHTML = `<div class="kl-tip-head"><b class="num">${esc(when)}</b><span>${esc(unit)}</span></div>
+    tip.innerHTML = compact
+      ? `<div class="kl-tip-mini"><b class="num">${esc(when)}</b><span class="num">${esc(number(candle.close))}</span></div>`
+      : `<div class="kl-tip-head"><b class="num">${esc(when)}</b><span>${esc(unit)}</span></div>
       <div class="kl-tip-row"><span>${esc(spec.openLabel || "开盘")}</span><b class="num">${number(openValue)}</b></div>
       <div class="kl-tip-row"><span>${esc(spec.closeLabel || "收盘")}</span><b class="num">${number(candle.close)}</b></div>
       ${spec.volumeLabel ? `<div class="kl-tip-row"><span>${esc(spec.volumeLabel)}</span><b class="num">${fmt(candle.volume)}</b></div>` : ""}

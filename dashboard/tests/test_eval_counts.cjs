@@ -7,7 +7,7 @@ const path = require("node:path");
 const source = fs.readFileSync(path.join(__dirname, "../static/js/data.js"), "utf8");
 const context = vm.createContext({ sum: (xs) => xs.reduce((a, b) => a + b, 0) });
 vm.runInContext(source.slice(source.indexOf("const dayCount ="), source.indexOf("function evalStats(")) +
-  "\nglobalThis.calc = (p, range, model = 'all') => { EV.range = range; EV.model = model; EV.year = null; return evalTotals(p); }; globalThis.defaultRange = EV.range;", context);
+  "\nglobalThis.calc = (p, range, model = 'all') => { EV.range = range; EV.model = model; EV.year = null; return evalTotals(p); }; globalThis.families = (p) => evalModels(p); globalThis.defaultRange = EV.range;", context);
 
 const p = {
   kpi: { unique_sessions: 2, traces: 5, tokens: 150 },
@@ -35,4 +35,35 @@ const historical = { ...p, kpi: { unique_sessions: 3299, traces: 3299, tokens: 3
   daily: [{ d: "2026-10-01", m: "fast", sp: "daily", evaluated: 3299 }, { d: "2026-11-03", m: "fast", sp: "daily", inputs: 78 }] };
 assert.equal(context.calc(historical, "all").sessions[0], 3299);
 assert.equal(context.calc(historical, "30").sessions[0], 0, "An explicit 30-day window is still windowed");
-console.log("PASS: full default, time/model filters, trace units, cross-day session deduplication");
+
+// The model segment keeps only the known families; prefixed variants fold into their family and
+// unlabelled models do not become a segment (they still count in 全部).
+const grouped = {
+  kpi: { unique_sessions: 0, traces: 0, tokens: 0 },
+  input: { models: {
+    b_expert: { sessions: 1, traces: 9 }, b_expert_only_doubao_search: { sessions: 1, traces: 3 }, "未标注": { sessions: 1, traces: 1 },
+  } },
+  daily: [
+    { d: "2026-11-01", m: "a_fast", inputs: 1, evaluated: 1, traces: 2, sessions: 1, sids: [0], tokens: 10 },
+    { d: "2026-11-01", m: "b_expert", inputs: 1, evaluated: 1, traces: 2, sessions: 1, sids: [1], tokens: 10 },
+    { d: "2026-11-02", m: "b_expert_only_doubao_search", inputs: 1, evaluated: 1, traces: 3, sessions: 1, sids: [2], tokens: 20 },
+    { d: "2026-11-02", m: "未标注", inputs: 1, evaluated: 1, traces: 1, sessions: 1, sids: [3], tokens: 5 },
+  ],
+};
+assert.deepEqual(plain(context.families(grouped)).map((m) => m.label), ["全部", "A Fast", "B Expert"]);
+const bExpert = plain(context.calc(grouped, "all", "b_expert"));
+assert.deepEqual(bExpert.traces, [5, 12], "B Expert includes its prefixed variants on both sides");
+assert.deepEqual(bExpert.sessions, [2, 2]);
+
+// AIME has one Fast and one Expert family, so the segment never grows an A/B split.
+const aime = {
+  kpi: { unique_sessions: 0, traces: 0, tokens: 0 },
+  input: { models: { aime_fast: { sessions: 2, traces: 4 }, aime_expert: { sessions: 1, traces: 6 } } },
+  daily: [
+    { d: "2026-11-01", m: "aime_fast", inputs: 2, evaluated: 2, traces: 3, sessions: 2, sids: [0, 1], tokens: 10 },
+    { d: "2026-11-02", m: "aime_expert", inputs: 1, evaluated: 1, traces: 5, sessions: 1, sids: [2], tokens: 20 },
+  ],
+};
+assert.deepEqual(plain(context.families(aime)).map((m) => m.label), ["全部", "Fast", "Expert"]);
+assert.deepEqual(plain(context.calc(aime, "all", "aime_expert")).traces, [5, 6]);
+console.log("PASS: full default, time/model filters, trace units, cross-day session deduplication, model families");

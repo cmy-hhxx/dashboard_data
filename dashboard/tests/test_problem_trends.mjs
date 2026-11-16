@@ -7,7 +7,6 @@ globalThis.window = {};
 const { buildProblemTrendModel, problemRateValues, problemKlineRows, problemKlineSpec, mountProblemTrends } = await import("../static/js/problem_trends.js");
 const { traceSeverityModel, traceShares } = await import("../static/js/trace_analysis.js");
 const { abComparisonHTML, abRoundsHTML, mountAB, metricValue, metricTip } = await import("../static/js/abtest.js");
-const { matrixHeatSummary } = await import("../static/js/matrix_heat.js");
 const { trendSampleCandidates, trendSampleProblems, traceSampleRefs, abTrendSampleRefs, abLeafRefs, resolveABSamples } = await import("../static/js/trend_samples.js");
 
 const cell = (date, node, count, hits) => [date, 0, node, 0, 0, 0, 0, count, 0, 0, 0, 0, hits, 0, 0, hits];
@@ -428,39 +427,6 @@ test("AB sample navigation opens the exact retest detail without borrowing the b
   assert.equal(resolveABSamples([online], [row, { ...row, s: "live-1" }], "S1").items[0].row.s, "live-1");
   // A baseline trace that matches more than one index row stays unavailable: never guess.
   assert.deepEqual(resolveABSamples([ref], [row, { ...row, s: "retest" }], "S1"), { items: [], unavailable: 1 });
-});
-
-test("heatmap drills only the taxonomy axis and reads each parent union once", () => {
-  const leaf = { name: "加工计算错误", prefix: "S9.M5.1" };
-  const mechanism = { name: "计算", prefix: "S9.M5", children: [leaf] };
-  const stage = { name: "答案合成", prefix: "S9", children: [mechanism] };
-  const root = { children: [stage] };
-  const scenes = new Set([0]);
-  const top = matrixHeatSummary(trend, root, [], scenes);
-  const middle = matrixHeatSummary(trend, root, ["S9"], scenes);
-  const bottom = matrixHeatSummary(trend, root, ["S9", "S9.M5"], scenes);
-  assert.deepEqual(top.dates, bottom.dates);
-  assert.deepEqual(top.daily, bottom.daily);
-  assert.deepEqual(top.daily.map((day) => day.sessions), [100, 100, 100]);
-  assert.equal(top.groups[0].days[0].hits, 80);
-  assert.equal(middle.groups[0].days[0].hits, 60);
-  assert.equal(bottom.groups[0].days[0].hits, 50);
-  assert.equal(bottom.groups[0].days[1].observed, true); // Evaluated day with no matching problem is a real zero.
-  assert.equal(bottom.groups[0].days[1].hits, 0);
-  assert.deepEqual(bottom.path.map((node) => node.prefix), ["S9", "S9.M5"]);
-  const invalid = matrixHeatSummary(trend, root, ["S9", "other", "S9.M5"], scenes);
-  assert.deepEqual(invalid.path.map((node) => node.prefix), ["S9"]);
-  assert.deepEqual(matrixHeatSummary(trend, root, [], new Set([1])).daily.map((day) => day.sessions), [0, 0, 0]);
-  assert.equal(matrixHeatSummary(trend, null), null);
-});
-
-test("heatmap preserves missing union data instead of summing overlapping severities", () => {
-  const root = { children: [{ name: "答案合成", prefix: "S9" }] };
-  const legacy = { ...trend, cells: [cell(0, 0, 165, 80).slice(0, 15)] };
-  const day = matrixHeatSummary(legacy, root, [], new Set([0])).groups[0].days[0];
-  assert.equal(day.n, 165);
-  assert.equal(day.observed, false);
-  assert.equal(day.hits, 0);
 });
 
 test("sample recall filters the selected day, series, scene and taxonomy boundary", () => {
