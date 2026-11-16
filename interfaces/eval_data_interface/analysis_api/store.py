@@ -543,7 +543,8 @@ def ingest_attribution(conn, aime: Path, item_codes_by_model, intent_tree, log):
                 continue
             smeta = record.get("session_meta") or {}
             session_id = _text(smeta.get("session_id") or smeta.get("thread_id"))
-            question = _decoded(smeta.get("question"))
+            # 上游字段漂移：老记录写 question，新记录（2026-11-11 起）只写同义的 question_text
+            question = _decoded(smeta.get("question") or smeta.get("question_text"))
             session_problems = record.get("session_problem") or []
             turns = record.get("turns") or []
             for turn_index, turn in enumerate(turns):

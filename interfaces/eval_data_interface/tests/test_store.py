@@ -66,6 +66,26 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(question, "투자 대상 시장：아직 모르겠음；보유 기간：1주 이내、1개월")
         self.assertEqual(user, "12345")
 
+    def test_question_text_fallback_and_preview_truncated(self):
+        """上游改用 question_text：问句要能入库，query_preview 按 160 字截断。"""
+        attr = self.aime / "eval_output" / "0_daily_eval" / "aime_expert" / f"aime_expert_attribution-{fixtures.DAY}.jsonl"
+        question = "英伟达" * (config.QUERY_PREVIEW_CHARS // 3 + 10)
+        row = fixtures._session("thread_q", "trace_textq", "2026-10-20T06:00:00.000Z", "投教问答",
+                                "金融术语与指标释义", 12345, "AIME-Atlas", [], question=question)
+        row["session_meta"].pop("question")
+        row["session_meta"]["question_text"] = question
+        _append(attr, row)
+        store.build(self.root)
+        with self._db() as db:
+            stored = db.execute(
+                "SELECT question FROM traces WHERE trace_id = 'trace_textq'").fetchone()[0]
+        self.assertEqual(stored, question)
+
+        snap = self._snapshot()
+        item = snapshot._item(snap, snap.by_id["trace_textq"][0])
+        self.assertEqual(item["query_preview"], question[: config.QUERY_PREVIEW_CHARS])
+        self.assertEqual(len(item["query_preview"]), config.QUERY_PREVIEW_CHARS)
+
     def test_input_append_resumes(self):
         first = store.build(self.root)
         self.assertEqual(first["resumed_input"], 0)

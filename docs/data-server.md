@@ -140,5 +140,9 @@ round.json                         {"released_at", "label", "title"}
 - **并发构建**：历史上部署构建与定时构建同时写 `cache/build.sqlite3` 出现过 `database is locked`；现在由 `cache/build.lock` 排队。
 - **只读备份目录**：`0_daily_eval-pre-split-*` 是拆分前备份，任何扫描都不要把它算进来。
 - **测试用户**：5002 / 5003 对外数据会去掉测试用户行（规则见 `user_rules.json`）；看板内部仍保留并可筛选。
+- **问句字段漂移**：归因 `session_meta` 的问句在 2026-11-11 起从 `question` 改名 `question_text`，个别文件两种混写（输入侧两种都有）。
+  5003 索引按 `question or question_text` 取值；只读 `question` 会让 `query_preview` 变空串，还会把空问句算成同一条重复问句、误判测试用户。
+- **改了 5003 的入库解析逻辑，要让已有归因文件重扫**：删掉对应 `files` 行再重启构建，只重扫这些文件：
+  `DELETE FROM files WHERE kind='attribution' AND path IN (...)`。不要清 `traces`（`ensure_schema` 那套会丢掉旧状态，变更流会把全量当新增重放）。
 - **部署记录**：生产上的 `logs/deployed-revision.json` 是一次手工发布留下的（仓库脚本不写它），2026-11-13 时仍停在 a3a559c，
   而实际代码已与 main 一致；判断线上版本请比对文件哈希。
