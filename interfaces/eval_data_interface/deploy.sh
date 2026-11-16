@@ -34,6 +34,13 @@ rsync -az --delete -e "ssh ${SSH_OPTS[*]}" \
   ./ "${HOST_ALIAS}:${REMOTE}/"
 
 if [ -n "$RUN_ENV" ]; then
+  # 没显式传入的变量沿用远端已有取值：漏传不能把数据根 / 刷新间隔改回默认
+  EXISTING="$(ssh "$HOST_ALIAS" "cat '${REMOTE}/deploy.env' 2>/dev/null" || true)"
+  for var in PORT REFRESH_SECONDS EVAL_DATASETS ANALYSIS_STATE; do
+    case "$RUN_ENV" in *"export $var="*) continue ;; esac
+    line="$(printf '%s\n' "$EXISTING" | grep -E "^export ${var}=" | tail -n 1 || true)"
+    if [ -n "$line" ]; then RUN_ENV+="$line"$'\n'; fi
+  done
   printf '%s' "$RUN_ENV" | ssh "$HOST_ALIAS" "cat > '${REMOTE}/deploy.env'"
 fi
 
