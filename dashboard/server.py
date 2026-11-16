@@ -390,6 +390,18 @@ class Handler(SimpleHTTPRequestHandler):
         elif not asset and path_only.startswith(("/js/", "/css/", "/vendor/")):
             # Unversioned asset URLs (old bookmarks, the 5002 proxies) revalidate every load.
             self._cache_policy = "no-cache"
+        # Warming up after a restart: the port already answers (so browsers wait instead of seeing
+        # ERR_CONNECTION_REFUSED), pages and assets load, data asks to be retried shortly.
+        if _warming.is_set() and (self.path.startswith("/healthz") or path_only.endswith(".json")):
+            self._cache_policy = "no-store"
+            body = b'{"ok": false, "warming": true}'
+            self.send_response(503)
+            self.send_header("Retry-After", "3")
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.startswith("/healthz"):
             body = json.dumps({
                 "ok": _state["error"] == "",
@@ -518,6 +530,11 @@ def outputs_ready():
     return os.path.isdir(OUTPUTS[2]) and _build.payload_files_exist(Path(STATIC))
 
 
+# Set while main() is still loading builders (or building the very first payloads) with the port
+# already open; the handler answers data requests 503 + Retry-After until it clears.
+_warming = threading.Event()
+
+
 class DashboardServer(ThreadingHTTPServer):
     """Long-lived HTTP/1.1 server sized for a burst of sample details."""
 
@@ -530,6 +547,14 @@ class DashboardServer(ThreadingHTTPServer):
 
 def main():
     global _builder, _lister, _ab_builder
+    # Listen before anything slow. The builders below, and on a fresh host a whole first build,
+    # used to run before the bind, so every restart or deploy left the port closed and browsers
+    # got ERR_CONNECTION_REFUSED; now they get a page whose data requests are retried.
+    server = DashboardServer(("0.0.0.0", PORT), Handler)
+    _warming.set()
+    serving = threading.Thread(target=server.serve_forever, name="serve", daemon=True)
+    serving.start()
+    print(f"[serve] listening on :{PORT}, warming up", flush=True)
     from build import default_datasets
     try:
         from detail_builder import DetailBuilder
@@ -566,9 +591,9 @@ def main():
     seed_state()
     threading.Thread(target=scheduler, args=(REFRESH if age < 120 else 0,), daemon=True).start()
     threading.Thread(target=prewarm_details, daemon=True).start()
-    server = DashboardServer(("0.0.0.0", PORT), Handler)
+    _warming.clear()
     print(f"[serve] http://0.0.0.0:{PORT} static={STATIC} refresh={REFRESH}s", flush=True)
-    server.serve_forever()
+    serving.join()
 
 
 if __name__ == "__main__":

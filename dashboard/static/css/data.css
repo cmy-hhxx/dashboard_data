@@ -380,11 +380,11 @@ body.is-mx-full { overflow: hidden; }
 .mx-panels.is-both .mpt-card { grid-template-rows: auto minmax(0, 1fr) auto; align-content: stretch; }
 .mx-panels.is-both .mpt-card > .mpt-chart { align-self: center; }
 /* 两栏并排时左栏按宽度自动选 3/4 列：1440 下 4 列 × 3 行，右栏趋势图才有正常的横向比例；
-   卡片底部的三个读数压到一行，列宽固定，长数字不再把脚注挤成两行。 */
+   卡片底部的两个读数压到一行，长数字不再把脚注挤成两行。 */
 @media (min-width: 1161px) {
   .mx-panels.is-both .mpt-grid { grid-template-columns: repeat(auto-fill, minmax(175px, 1fr)); }
   .mx-panels.is-both .mpt-card > footer {
-    grid-template-columns: minmax(0, 1fr) 34px 46px;
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 4px; min-height: 0; font-size: 11px;
   }
   .mx-panels.is-both .mpt-card > footer .num { white-space: nowrap; }
@@ -546,9 +546,8 @@ body.is-mxp-full { overflow: hidden; }
 /* 卡片里的日 K 线固定 112px（compact：无轴无图例）；放大后的详情图 320px，样本抽屉的画布高跟着图走。 */
 .mpt-chart { min-width: 0; height: 112px; }
 .mpt-chart.mpt-chart-detail { height: auto; min-height: 320px; }
-/* 三个读数各占一列：总数左、发生率右、子类数右，四行卡片之间形成三条对齐的列。 */
-.mpt-card > footer { display: grid; grid-template-columns: minmax(0, 1fr) 44px 64px; min-height: 24px; align-items: baseline; gap: 8px; color: var(--faint); font-size: var(--fs-micro); }
-.mpt-card > footer b { color: var(--ink-2); font-weight: var(--w-medium); text-align: right; }
+/* 两个读数：问题总数在左、子类数在右，各行卡片之间对齐成两列。 */
+.mpt-card > footer { display: grid; grid-template-columns: minmax(0, 1fr) auto; min-height: 24px; align-items: baseline; gap: 8px; color: var(--faint); font-size: var(--fs-micro); }
 .mpt-children { text-align: right; }
 .mpt-empty { grid-column: 1 / -1; display: grid; place-items: center; min-height: 180px; color: var(--faint); font-size: var(--fs-meta); }
 @media (max-width: 700px) {

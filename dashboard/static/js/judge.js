@@ -163,9 +163,9 @@ function bcTools(J) {
   return `<div class="jd-bc-seg" role="group" aria-label="未通过维度">${seg}</div>${tokens}`;
 }
 
-function bcRow(J, b, i) {
+/* One badcase as an accordion row; Bench lists the same rows. */
+export function badcaseRow(J, b, i, open = B.open.has(b.id)) {
   const dim = J.dims.find((d) => d.key === b.fail);
-  const open = B.open.has(b.id);
   const ev = b.evidence.map((e) => `<li class="${e.ok ? "" : "is-bad"}"><span class="num">#${e.m}</span><q>${esc(e.quote)}</q>${e.ok ? "" : `<i class="jd-x">${ICON.no}</i>`}</li>`).join("");
   const verdicts = DIM_ORDER.map((k) => {
     const d = J.dims.find((x) => x.key === k);
@@ -201,7 +201,7 @@ function paintBadcases(root, J) {
   $("#jdBcTools", root).innerHTML = bcTools(J);
   $("#jdBcCount", root).textContent = `${fmt(list.length)} / ${fmt(J.badcases.length)}`;
   $("#jdBcList", root).innerHTML = list.length
-    ? list.map((b, i) => bcRow(J, b, i)).join("")
+    ? list.map((b, i) => badcaseRow(J, b, i)).join("")
     : `<div class="empty">没有符合条件的 badcase<br><button type="button" class="link" data-bc-dim="" data-bc-reset>查看全部</button></div>`;
   $$(".jd-dim", root).forEach((el) => el.classList.toggle("is-picked", el.dataset.dim === B.dim));
 }

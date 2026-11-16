@@ -1,9 +1,9 @@
 /* Router and shell: ?view=data|system|samples&product=wencai|aime (+ sample params). */
-import { $, $$, esc, segmented, getJSON, announce, installTips } from "./core.js";
+import { $, $$, esc, segmented, getJSON, announce, installTips, importRetry, onNetwork, REDUCED } from "./core.js";
 
-const VIEWS = ["data", "system", "judge", "samples", "forecast", "compare"];
+const VIEWS = ["data", "system", "judge", "bench", "samples", "forecast", "compare"];
 const PRODUCTS = ["wencai", "aime"];
-const VIEW_NAME = { data: "数据看板", system: "评测体系", judge: "评测评测", samples: "具体数据", forecast: "预测数据", compare: "版本对比" };
+const VIEW_NAME = { data: "数据看板", system: "评测体系", judge: "评测评测", bench: "Bench", samples: "具体数据", forecast: "预测数据", compare: "版本对比" };
 // Sample params (case / trace / filters) and compare params (pair / round / online) never leak
 // across views, or a stale deep link would reopen the previous drill on the next page.
 const SAMPLE_PARAMS = {
@@ -26,7 +26,29 @@ const SITES = (() => {
 })();
 const state = { view: "data", product: "wencai", data: null, indexes: {}, indexP: {}, productData: {}, productP: {} };
 const modules = {};
-const loaders = { data: () => import("./data.js"), system: () => import("./system.js"), judge: () => import("./judge.js"), samples: () => import("./samples.js"), forecast: () => import("./forecast.js"), compare: () => import("./compare.js") };
+// Each view module loads on first visit; a refused connection retries instead of breaking the view.
+const loaders = Object.fromEntries([
+  ["data", () => import("./data.js")], ["system", () => import("./system.js")], ["judge", () => import("./judge.js")],
+  ["bench", () => import("./bench.js")], ["samples", () => import("./samples.js")], ["forecast", () => import("./forecast.js")],
+  ["compare", () => import("./compare.js")],
+].map(([view, load]) => [view, () => importRetry(load, `./${view}.js`)]));
+
+/* While a view's code or data is on its way it shows its own shape in shimmering placeholders,
+   so the page never flashes empty; the view's render replaces it. */
+const SKELETON = {
+  data: [[3, 132], [3, 132], [3, 132], [3, 132], [8, 360], [4, 360], [12, 420]],
+  system: [[12, 420], [12, 520]],
+  judge: [[12, 64], [4, 380], [4, 380], [4, 380], [12, 150], [7, 320], [5, 320]],
+  bench: [[12, 64], [12, 560]],
+  compare: [[12, 72], [12, 560]],
+};
+function skeletonHTML(view) {
+  if (view === "samples" || view === "forecast") {
+    return `<div class="bench-skel"><div class="skel-card"><span class="skel" style="height:36px"></span>${'<span class="skel skel-line"></span>'.repeat(9)}</div><div class="skel-card"><span class="skel" style="height:56px"></span><span class="skel" style="flex:1"></span></div></div>`;
+  }
+  return `<div class="bento" aria-busy="true">${(SKELETON[view] || SKELETON.system).map(([span, h], i) =>
+    `<div class="card skel-card" style="--span:${span};height:${h}px;--i:${i}"><span class="skel skel-title"></span><span class="skel" style="flex:1"></span></div>`).join("")}</div>`;
+}
 
 function readURL() {
   const q = new URLSearchParams(location.search);
@@ -146,9 +168,19 @@ async function render({ refresh = false } = {}) {
   viewSeg.set(state.view, { silent: true });
   productSeg.set(state.product, { silent: true });
   $$(".view").forEach((v) => v.classList.toggle("is-active", v.dataset.view === state.view));
-  if (lastView !== state.view) window.scrollTo(0, 0);
+  if (lastView !== state.view) {
+    window.scrollTo(0, 0);
+    if (lastView && !REDUCED) {
+      const knob = $("#viewSwitch .seg-knob");
+      knob.classList.remove("is-swept");
+      void knob.offsetWidth;
+      knob.classList.add("is-swept");
+    }
+  }
   lastView = state.view;
   const root = $(`.view[data-view="${state.view}"]`);
+  const waiting = !modules[state.view] || (state.data && NEEDS_PRODUCT.has(state.view) && state.productData[state.product] !== true);
+  if (waiting && !root.firstChild) root.innerHTML = skeletonHTML(state.view);
   try {
     modules[state.view] = modules[state.view] || (await loaders[state.view]());
     if (state.data && NEEDS_PRODUCT.has(state.view)) {
@@ -252,13 +284,49 @@ async function boot() {
     if (!b || !new URLSearchParams(location.search).get("detail")) return;
     navigate({ view: "data", detail: null, ed: null, em: null, ep: null, edp: null });
   });
-  $("#themeToggle").addEventListener("click", () => {
+  $("#themeToggle").addEventListener("click", (e) => {
     const next = document.documentElement.dataset.mode === "dark" ? "light" : "dark";
-    document.documentElement.dataset.mode = next;
-    try {
-      localStorage.setItem("eval-mode", next);
-    } catch (e) {}
+    const apply = () => {
+      document.documentElement.dataset.mode = next;
+      try {
+        localStorage.setItem("eval-mode", next);
+      } catch (err) {}
+    };
+    // The new theme grows as a circle out of the toggle; without view transitions every colour
+    // eases over instead of snapping.
+    const root = document.documentElement;
+    if (REDUCED) return apply();
+    if (document.startViewTransition) {
+      const r = e.currentTarget.getBoundingClientRect();
+      root.style.setProperty("--vt-x", `${r.left + r.width / 2}px`);
+      root.style.setProperty("--vt-y", `${r.top + r.height / 2}px`);
+      root.classList.add("is-theming");
+      document.startViewTransition(apply).finished.finally(() => root.classList.remove("is-theming"));
+      return;
+    }
+    root.classList.add("is-theme-fade");
+    apply();
+    setTimeout(() => root.classList.remove("is-theme-fade"), 520);
   });
+  // A strip under the bar while requests are being retried; it leaves once something answers.
+  onNetwork(({ ok, attempt, wait }) => {
+    const bar = $("#net");
+    if (ok) {
+      if (!bar.hidden) {
+        $("#netText").textContent = "已重新连上";
+        bar.classList.add("is-ok");
+        setTimeout(() => { bar.hidden = true; bar.classList.remove("is-ok"); }, 1600);
+        poll();
+      }
+      return;
+    }
+    bar.hidden = false;
+    bar.classList.remove("is-ok");
+    $("#netText").textContent = wait
+      ? `连不上服务器，${Math.max(1, Math.round(wait / 1000))} 秒后第 ${attempt} 次重试`
+      : "连不上服务器，稍后会自动再试";
+  });
+  window.addEventListener("online", () => poll());
   installTips();
   // Start the initial view's code and data before the shell waits on the JSON.
   readURL();

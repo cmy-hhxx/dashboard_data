@@ -145,6 +145,31 @@ class RuntimeTests(unittest.TestCase):
                 httpd.server_close()
                 server.STATIC, server._builder = old_static, old_builder
 
+    def test_warming_server_answers_data_with_retry_instead_of_refusing(self):
+        import server
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        server._warming.set()
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", httpd.server_address[1], timeout=5)
+            for path in ("/data.json", "/healthz"):
+                conn.request("GET", path)
+                res = conn.getresponse()
+                self.assertEqual(res.status, 503)
+                self.assertEqual(res.getheader("Retry-After"), "3")
+                self.assertTrue(json.loads(res.read())["warming"])
+            server._warming.clear()
+            conn.request("GET", "/healthz")
+            res = conn.getresponse()
+            self.assertEqual(res.status, 200)
+            res.read()
+            conn.close()
+        finally:
+            server._warming.clear()
+            httpd.shutdown()
+            httpd.server_close()
+
     def test_survey_question_reads_as_text(self):
         survey = [{"header": "투자 대상 시장", "selected": ["아직 모르겠음"]},
                   {"header": "보유 기간", "selected": ["1주 이내", "1개월"]}]

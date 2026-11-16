@@ -243,21 +243,62 @@ export function segmented(el, onPick) {
   return { set, get: () => value };
 }
 
-export async function getJSON(url, { retries = 3 } = {}) {
+/* Network status the shell shows as a "reconnecting" strip. A refused connection (the server is
+   restarting, or its port is not listening yet) is retried with growing, jittered waits instead
+   of failing the page after a second; 4xx answers are real and are never retried. */
+const net = { down: 0, listeners: new Set() };
+export function onNetwork(fn) { net.listeners.add(fn); return () => net.listeners.delete(fn); }
+function netReport(ok, attempt = 0, wait = 0) {
+  if (ok) {
+    if (!net.down) return;
+    net.down = 0;
+  } else net.down = attempt;
+  net.listeners.forEach((fn) => fn({ ok, attempt, wait }));
+}
+const backoff = (attempt) => Math.min(15000, 600 * 2 ** attempt) * (0.75 + Math.random() * 0.5);
+const pause = (ms) => new Promise((resolve) => {
+  // Coming back online (or to the tab) cuts the wait short.
+  const done = () => { clearTimeout(t); window.removeEventListener("online", done); resolve(); };
+  const t = setTimeout(done, ms);
+  window.addEventListener("online", done, { once: true });
+});
+
+export async function getJSON(url, { retries = 6 } = {}) {
   for (let attempt = 0; ; attempt += 1) {
     let res;
     try {
       res = await fetch(url, { cache: "no-cache" });
     } catch (err) {
-      if (attempt >= retries) throw err;
-      await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
+      // fetch() rejects on ERR_CONNECTION_REFUSED / reset / offline: nothing answered at all.
+      if (attempt >= retries) { netReport(false, attempt + 1, 0); throw err; }
+      const wait = backoff(attempt);
+      netReport(false, attempt + 1, wait);
+      await pause(wait);
       continue;
     }
+    netReport(true);
     if (res.ok) return await res.json();
     // A deploy/build can briefly put the reverse proxy in front of a restarting
     // server; retry only gateway/server failures, never 4xx.
     if (res.status < 500 || attempt >= retries) throw new Error(`${url} ${res.status}`);
-    await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
+    await pause(backoff(attempt));
+  }
+}
+
+/* A view module that failed to load (server down mid-navigation) is retried with a cache-busting
+   query: a rejected dynamic import is remembered by URL, so the same URL would fail forever. */
+export async function importRetry(load, url, retries = 5) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const mod = await (attempt ? import(`${url}?retry=${Date.now()}`) : load());
+      netReport(true);
+      return mod;
+    } catch (err) {
+      if (attempt >= retries) throw err;
+      const wait = backoff(attempt);
+      netReport(false, attempt + 1, wait);
+      await pause(wait);
+    }
   }
 }
 

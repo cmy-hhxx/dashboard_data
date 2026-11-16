@@ -7,6 +7,7 @@
 
 - 两个接口怎么用、两套部署的 IP / 端口 / 容器名：`docs/接口使用指南.md`
 - 看板交接、数据流与常见坑：`handoff.md`
+- 页面打不开 / ERR_CONNECTION_REFUSED 的根因与排查：`docs/connection-refused.md`
 - 弗吉尼亚数据服务器的目录、字段、构建刷新与常见坑：`docs/data-server.md`
 - 跑全部测试：`scripts/run_tests.sh`（在服务器上跑）
 - 各服务的发布脚本：`interfaces/eval_data_interface/deploy.sh`、`page_service/sample_details/deploy.sh`、

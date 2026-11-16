@@ -1,0 +1,35 @@
+/* Bench: golden cases and badcases as one accordion list (rows reuse 评测评测's .jd-bcr). */
+.bn .card-head { flex-wrap: wrap; align-items: center; gap: var(--sp-3) var(--sp-4); }
+.bn .card-head h2 { font-weight: var(--w-title); }
+.bn .jd-bc-tools { margin-left: var(--sp-2); }
+.bn .bn-q { width: 220px; height: 30px; margin-left: auto; }
+.bn-sevs { display: inline-flex; gap: 2px; }
+.bn-sev {
+  display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 var(--sp-2); border-radius: var(--r-chip);
+  color: var(--muted); font-size: var(--fs-meta); transition: background var(--snap), color var(--snap);
+}
+.bn-sev i { width: 7px; height: 7px; border-radius: 2px; background: var(--c); }
+.bn-sev:hover { background: var(--hover); color: var(--ink); }
+.bn-sev[aria-pressed="true"] { background: var(--ink); color: var(--card); }
+
+.bn-kind {
+  justify-self: start; height: 22px; padding: 0 var(--sp-2); border-radius: var(--r-chip); line-height: 22px; font-size: var(--fs-meta);
+}
+.bn-kind.is-golden { color: var(--accent); background: var(--accent-soft); }
+.bn .jd-bcr-dim::before { content: "Badcase · "; }
+.bn-in { grid-template-columns: minmax(0, 1fr) 200px; }
+.bn-prob { display: grid; gap: var(--sp-1); padding: var(--sp-3) 0; }
+.bn-prob + .bn-prob { border-top: 1px solid var(--well-2); }
+.bn-prob-top { display: flex; align-items: center; gap: var(--sp-3); }
+.bn-prob-top b { font-size: var(--fs-small); font-weight: var(--w-medium); color: var(--ink); }
+.bn-prob-meta { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); padding-left: 2px; color: var(--muted); font-size: var(--fs-meta); }
+.bn-prob-meta code { font: var(--fs-micro) var(--mono); color: var(--faint); }
+.bn-prob .jd-ev li { box-shadow: inset 2px 0 0 var(--c); }
+.bn-kinds { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); color: var(--muted); font-size: var(--fs-meta); }
+.bn-kinds b { margin-right: 3px; color: var(--ink); font-weight: var(--w-medium); }
+.bn-open { justify-self: start; margin-top: var(--sp-3); }
+
+@media (max-width: 1180px) {
+  .bn .bn-q { width: 100%; margin-left: 0; order: 9; }
+  .bn-in { grid-template-columns: minmax(0, 1fr); }
+}
