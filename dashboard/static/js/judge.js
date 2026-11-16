@@ -25,7 +25,7 @@ const delta = (now, prev, label) => {
   return `<span class="jd-delta${d > 0 ? " is-good" : d < 0 ? " is-bad" : ""}" title="${esc(label)}">${d > 0 ? "▲" : d < 0 ? "▼" : "·"} ${signed(d)}pt</span>`;
 };
 // Pass rates tint by how far they fall short: 100% is the plain well, 55% and below is full tint.
-const failTint = (rate) => `--a:${Math.round(4 + Math.max(0, Math.min(1, (1 - rate) / 0.45)) * 60)}%`;
+const failTint = (rate) => `--a:${Math.round(3 + Math.max(0, Math.min(1, (1 - rate) / 0.45)) * 44)}%`;
 
 /* Badcase filter: one dimension plus an optional severity or stage, set from anywhere on the page. */
 const B = { dim: "", sev: "", stage: "", runs: 5, open: new Set() };

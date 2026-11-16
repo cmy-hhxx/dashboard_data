@@ -1,5 +1,5 @@
-/* Bench: golden cases and badcases, one list at a time, a page at a time. Rows reuse
-   评测评测's .jd-bcr accordion; only the columns and the opened case's own layout differ. */
+/* Bench: golden cases and badcases, one list at a time, a page at a time. A row is one line and
+   one action — open that case in 具体数据 — so the list stays a list, not a second detail page. */
 .bn .card-head { flex-wrap: wrap; align-items: center; gap: var(--sp-3) var(--sp-4); }
 .bn .card-head h2 { font-weight: var(--w-title); }
 .bn .jd-bc-tools { margin-left: var(--sp-2); }
@@ -15,28 +15,39 @@
 .bn-sev[aria-pressed="true"] { background: var(--ink); color: var(--card); }
 .bn-sev[aria-pressed="true"] small { color: color-mix(in oklab, var(--card) 70%, transparent); }
 
-/* Both lists are named, not tinted: the severity chip is the only colour in a row. */
-.bn-kind {
-  justify-self: start; height: 22px; padding: 0 var(--sp-2); border-radius: var(--r-chip); line-height: 22px;
-  background: var(--well); color: var(--muted); font-size: var(--fs-meta); white-space: nowrap;
+.bn-list { display: grid; gap: 2px; }
+.bn-row {
+  display: grid; grid-template-columns: 64px minmax(0, 1fr) 112px 96px 72px; gap: var(--sp-4); align-items: center;
+  width: 100%; min-height: 48px; padding: var(--sp-2) var(--sp-3); border-radius: var(--r-well);
+  text-align: left; transition: background var(--snap);
+  animation: rise 380ms cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: calc(var(--i) * 22ms);
 }
-.bn-kind.is-golden { color: var(--ink-2); }
-.bn-in { grid-template-columns: minmax(0, 1fr) 208px; }
-.bn-prob { display: grid; gap: var(--sp-1); padding: var(--sp-3) 0; }
-.bn-prob + .bn-prob { border-top: 1px solid var(--well-2); }
-.bn-prob-top { display: flex; align-items: center; gap: var(--sp-3); }
-.bn-prob-top b { font-size: var(--fs-small); font-weight: var(--w-medium); color: var(--ink); }
-.bn-prob-meta { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); padding-left: 2px; color: var(--muted); font-size: var(--fs-meta); }
-.bn-prob-meta code { font: var(--fs-micro) var(--mono); color: var(--faint); }
-.bn-prob .jd-ev li { box-shadow: inset 2px 0 0 var(--c); }
-.bn-kinds { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); color: var(--muted); font-size: var(--fs-meta); }
-.bn-kinds b { margin-right: 3px; color: var(--ink); font-weight: var(--w-medium); }
-.bn-open { justify-self: start; margin-top: var(--sp-3); }
-.bn-note { color: var(--muted); font-size: var(--fs-meta); line-height: 1.55; }
-.bn-none { color: var(--ink-2); font-size: var(--fs-small); line-height: 1.6; }
+.bn-row:hover { background: var(--well); }
+.bn-row:active { transform: scale(0.997); }
+.bn-row.is-static { cursor: default; }
+.bn-q { display: grid; gap: 1px; min-width: 0; }
+.bn-q b, .bn-q span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bn-q b { font-size: var(--fs-small); font-weight: var(--w-medium); color: var(--ink); }
+.bn-q span { font-size: var(--fs-meta); color: var(--muted); }
+.bn-m { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-meta); color: var(--ink-2); }
+.bn-d { color: var(--faint); font-size: var(--fs-meta); text-align: right; }
+.bn-go {
+  display: inline-flex; align-items: center; justify-content: flex-end; gap: 1px;
+  color: var(--muted); font-size: var(--fs-meta); white-space: nowrap;
+}
+.bn-go svg { width: 14px; height: 14px; transition: transform var(--snap); }
+.bn-row:hover .bn-go { color: var(--accent); }
+.bn-row:hover .bn-go svg { transform: translateX(2px); }
+.bn-go.is-none { color: var(--faint); }
 .bn-wait { padding: var(--sp-5) 0; color: var(--muted); font-size: var(--fs-small); }
-.bn .pager { padding: var(--sp-4) 0 0; }
+.bn .pager { justify-content: center; padding: var(--sp-4) 0 0; }
+.bn .pager .pager-info { margin: 0 var(--sp-2); }
 
 @media (max-width: 1180px) {
-  .bn-in { grid-template-columns: minmax(0, 1fr); }
+  .bn-row { grid-template-columns: 64px minmax(0, 1fr) 96px 72px; }
+  .bn-m { display: none; }
+}
+@media (max-width: 860px) {
+  .bn-row { grid-template-columns: 64px minmax(0, 1fr) 72px; gap: var(--sp-3); }
+  .bn-d { display: none; }
 }
