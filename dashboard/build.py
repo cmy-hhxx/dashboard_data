@@ -2370,6 +2370,7 @@ def taxonomy_out(taxonomy, used_patterns):
 
 
 GOLDEN_LIMIT = 10
+GOLDEN_FULL = 600  # characters a golden-case message expands to on 评测体系
 
 
 def golden_candidate(detail):
@@ -2386,18 +2387,25 @@ def golden_candidate(detail):
     if detail["lang"] == "zh":
         score += 1.5
     msgs = traces[0]["messages"]
+
+    def first_text(m):
+        return next((x for b in m["blocks"] for x in b["x"] if isinstance(x, str) and x.strip()), "")
+
     return score, {
         "slug": detail["slug"], "product": detail["product"], "model": detail["model"],
         "date": detail["date"], "question": detail["question"],
+        # "text" is the one-line rail; "full" (only when longer) is what a reader expands to.
         "messages": [
-            {"k": m["k"], "name": m.get("name"), "dur": m.get("dur"),
-             "text": clip(next((x for b in m["blocks"] for x in b["x"] if isinstance(x, str) and x.strip()), ""), 90)}
+            {"k": m["k"], "name": m.get("name"), "dur": m.get("dur"), "text": clip(first_text(m), 90),
+             **({"full": clip(first_text(m), GOLDEN_FULL)} if len(first_text(m)) > 90 else {})}
             for m in msgs
         ],
         "problems": [
             {"id": p["id"], "sev": p["sev"], "label": p["label"], "role": p["role"], "comp": p["comp"],
              "path": p["cl"]["path"] if p["cl"] else None,
-             "msgs": sorted({detail["evidence"][e]["m"] for e in p["ev"] if "m" in detail["evidence"][e]})}
+             "msgs": sorted({detail["evidence"][e]["m"] for e in p["ev"] if "m" in detail["evidence"][e]}),
+             "ev": [{"m": detail["evidence"][e].get("m"), "q": clip(detail["evidence"][e].get("q"), 240)}
+                    for e in p["ev"] if detail["evidence"][e].get("q")][:6]}
             for p in probs
         ],
     }

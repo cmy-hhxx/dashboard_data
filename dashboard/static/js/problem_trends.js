@@ -39,8 +39,9 @@ export function buildProblemTrendModel(trend, names = new Map()) {
   });
   const root = { id: "root", name: "全部问题", counts: new Float64Array(dates.length), children: [] };
   [...byId.values()].forEach((node) => {
-    const parent = node.id.includes(".") ? byId.get(node.id.split(".").slice(0, -1).join(".")) : root;
-    (parent || root).children.push(node);
+    const parent = (node.id.includes(".") ? byId.get(node.id.split(".").slice(0, -1).join(".")) : root) || root;
+    parent.children.push(node);
+    node.parent = parent;
   });
   // Parents in the payload already carry aggregate counts; fill any missing fallback from children.
   const fill = (node) => {
@@ -89,9 +90,21 @@ export function problemKlineSpec(model, node, idx, expanded = false, onPick = nu
     rows, period: "day", compact: !expanded, height: expanded ? DETAIL_CHART_H : CARD_CHART_H,
     releases: model.releases, valueFormat: rateText, volumeName: "评测会话",
     openLabel: "前一观测日", closeLabel: "发生率", volumeLabel: "评测会话",
+    // The hover reads the whole day for this branch: how many problems and sessions it hit, its
+    // share of the level above, and the leading child, so a card can be read without opening it.
     tipExtra: (candle) => {
       const row = byDate.get(String(candle.time));
-      return row ? `<div class="kl-tip-row"><span>问题</span><b class="num">${fmt(row.problems)}</b></div>` : "";
+      if (!row) return "";
+      const di = model.dates.indexOf(row.date);
+      const up = node.parent;
+      const share = up && up !== model.root && up.counts[di] > 0 ? row.problems / up.counts[di] : null;
+      const lead = node.children.filter((child) => child.counts[di] > 0)
+        .sort((a, b) => b.counts[di] - a.counts[di])[0];
+      const line = (label, value) => `<div class="kl-tip-row"><span>${esc(label)}</span><b class="num">${value}</b></div>`;
+      return line("问题", fmt(row.problems))
+        + line("命中会话", fmt(row.hits))
+        + (share == null ? "" : line(`占${up.name}`, `${fmt(100 * share, 1)}%`))
+        + (lead ? `<div class="kl-tip-row kl-tip-lead"><span>最多</span><b title="${esc(lead.name)}">${esc(lead.name)} · ${fmt(lead.counts[di])}</b></div>` : "");
     },
     emptyText: "当前分类暂无时间趋势",
     onPick: onPick && ((candle) => onPick({

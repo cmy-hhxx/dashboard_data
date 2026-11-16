@@ -75,37 +75,49 @@ function releaseLinePrimitive(chart, items, color, fontFamily, backdrop) {
       context.lineWidth = Math.max(1, Math.round(1.4 * hr));
       context.font = `${Math.round(11 * vr)}px ${fontFamily}`;
       context.textBaseline = "top";
-      let lastLabel = -Infinity;
-      const xs = items.map(({ time }) => timeScale.timeToCoordinate(time));
-      items.forEach(({ time, label }, i) => {
-        const x = xs[i];
-        if (x == null) return;
-        const px = Math.round(x * hr) + 0.5;
-        const nextX = xs.slice(i + 1).find((v) => v != null);
-        context.strokeStyle = stroke;
-        context.lineWidth = Math.max(1, Math.round(1.4 * hr));
+      // Lines first (left to right, nudged apart so two close releases stay two lines), then labels:
+      // each takes the right side of its line, else the left, else the next row down, preferring a
+      // spot no other line runs through.
+      const lines = items.map(({ time, label }) => ({ x: timeScale.timeToCoordinate(time), label }))
+        .filter((l) => l.x != null).sort((p, q) => p.x - q.x);
+      let lastPx = -Infinity;
+      lines.forEach((l) => {
+        l.px = Math.max(Math.round(l.x * hr) + 0.5, lastPx + 3 * hr);
+        lastPx = l.px;
         context.beginPath();
-        context.moveTo(px, 0);
-        context.lineTo(px, bitmapSize.height);
+        context.moveTo(l.px, 0);
+        context.lineTo(l.px, bitmapSize.height);
         context.stroke();
-        // 版本名只在有空间时写，挤在一起的两根线不叠字；靠近右边缘时改为左对齐。
-        if (label && px - lastLabel >= 12 * hr) {
-          const gap = 6 * hr;
-          const y = 4 * vr;
-          const textW = context.measureText(label).width;
-          // Flip to the left when the right edge or the next release line would cut the label.
-          const crowded = nextX != null && Math.round(nextX * hr) - px < gap * 2 + textW;
-          const right = crowded || px + gap + textW > bitmapSize.width;
-          context.textAlign = right ? "right" : "left";
-          const tx = right ? px - gap : px + gap;
-          context.lineJoin = "round";
-          context.lineWidth = Math.max(2, Math.round(3 * hr));
-          context.strokeStyle = halo;
-          context.strokeText(label, tx, y);
-          context.fillStyle = stroke;
-          context.fillText(label, tx, y);
-          lastLabel = px;
+      });
+      const placed = [];
+      const gap = 6 * hr;
+      const rowH = 15 * vr;
+      const free = (lo, hi, row, strict) => lo >= 0 && hi <= bitmapSize.width
+        && !placed.some((p) => p.row === row && lo < p.hi + gap && hi > p.lo - gap)
+        && (!strict || !lines.some((l) => l.px > lo - 2 * hr && l.px < hi + 2 * hr));
+      lines.forEach((l) => {
+        if (!l.label) return;
+        const w = context.measureText(l.label).width;
+        const sides = [[l.px + gap, l.px + gap + w, "left"], [l.px - gap - w, l.px - gap, "right"]];
+        let spot = null;
+        for (const strict of [true, false]) {
+          for (let row = 0; row < 4 && !spot; row++) {
+            const hit = sides.find(([lo, hi]) => free(lo, hi, row, strict));
+            if (hit) spot = { lo: hit[0], hi: hit[1], align: hit[2], row };
+          }
+          if (spot) break;
         }
+        if (!spot) return;
+        placed.push(spot);
+        const tx = spot.align === "left" ? spot.lo : spot.hi;
+        const y = 4 * vr + spot.row * rowH;
+        context.textAlign = spot.align;
+        context.lineJoin = "round";
+        context.lineWidth = Math.max(2, Math.round(3 * hr));
+        context.strokeStyle = halo;
+        context.strokeText(l.label, tx, y);
+        context.fillStyle = stroke;
+        context.fillText(l.label, tx, y);
       });
       context.restore();
     });
@@ -184,19 +196,26 @@ function releasePads(times, releases) {
   return [...new Set(dates)].sort();
 }
 
-/* 发版日落到图上已有的时间点：取发版当天或之后的第一个点，超出数据范围的不画，同一点只画一次。 */
-function releaseItems(times, releases) {
+/* 发版日落到图上已有的时间点：取发版当天或之后的第一个点，超出数据范围的不画；
+   落在同一点的几次发版合成一根线，版本名并列。 */
+export function releaseItems(times, releases) {
   const dates = [...times].map(String).sort();
-  const seen = new Set();
-  return (Array.isArray(releases) ? releases : []).map((r) => {
-    if (!r || !r.date) return null;
+  const byTime = new Map();
+  (Array.isArray(releases) ? releases : []).forEach((r) => {
+    if (!r || !r.date) return;
     const date = String(r.date);
-    if (!dates.length || date < dates[0] || date > dates[dates.length - 1]) return null;
+    if (!dates.length || date < dates[0] || date > dates[dates.length - 1]) return;
     const time = dates.find((t) => t >= date);
-    if (!time || seen.has(time)) return null;
-    seen.add(time);
-    return { time, label: r.label || "发版" };
-  }).filter(Boolean);
+    if (!time) return;
+    const label = r.label || "发版";
+    const at = byTime.get(time);
+    if (!at) byTime.set(time, { time, label, labels: [label] });
+    else if (!at.labels.includes(label)) {
+      at.labels.push(label);
+      at.label = at.labels.join(" · ");
+    }
+  });
+  return [...byTime.values()].sort((a, b) => (a.time < b.time ? -1 : 1));
 }
 
 const timeText = (time) => (typeof time === "string" ? time : time?.year ? `${time.year}-${String(time.month).padStart(2, "0")}-${String(time.day).padStart(2, "0")}` : String(time || ""));
@@ -339,6 +358,7 @@ export function createKlineChart(host, spec = {}) {
   sizeObserver.observe(canvas);
 
   const byTime = new Map(candles.map((candle) => [String(candle.time), candle]));
+  const releaseAt = new Map(releases.map((r) => [String(r.time), r.label]));
   const number = valueText || ((value) => fmt(value, Number.isInteger(value) ? 0 : 1));
   chart.subscribeCrosshairMove((param) => {
     if (!param?.point || param.time == null) {
@@ -356,13 +376,23 @@ export function createKlineChart(host, spec = {}) {
     const openValue = spec.openValue == null
       ? candle.open
       : (typeof spec.openValue === "function" ? spec.openValue(candle) : spec.openValue);
+    const released = releaseAt.get(String(candle.time));
+    const extra = typeof spec.tipExtra === "function" ? spec.tipExtra(candle) : "";
+    const volumeRow = spec.volumeLabel ? `<div class="kl-tip-row"><span>${esc(spec.volumeLabel)}</span><b class="num">${fmt(candle.volume)}</b></div>` : "";
+    const releaseRow = released ? `<div class="kl-tip-row kl-tip-rel"><span>发版</span><b>${esc(released)}</b></div>` : "";
+    // The card-sized chart reads the same candle in fewer rows: the close with its move, then
+    // whatever the caller adds; a bare date + number told too little.
+    const move = candle.close - openValue;
+    const moveText = Number.isFinite(move) && move !== 0
+      ? `<small class="kl-tip-move ${move > 0 ? "is-up" : "is-down"}">${move > 0 ? "▲" : "▼"}${esc(number(Math.abs(move)))}</small>` : "";
     tip.innerHTML = compact
-      ? `<div class="kl-tip-mini"><b class="num">${esc(when)}</b><span class="num">${esc(number(candle.close))}</span></div>`
+      ? `<div class="kl-tip-head"><b class="num">${esc(when)}</b></div>
+      <div class="kl-tip-row"><span>${esc(spec.closeLabel || "收盘")}</span><b class="num">${esc(number(candle.close))}${moveText}</b></div>
+      ${volumeRow}${extra}${releaseRow}`
       : `<div class="kl-tip-head"><b class="num">${esc(when)}</b><span>${esc(unit)}</span></div>
       <div class="kl-tip-row"><span>${esc(spec.openLabel || "开盘")}</span><b class="num">${number(openValue)}</b></div>
       <div class="kl-tip-row"><span>${esc(spec.closeLabel || "收盘")}</span><b class="num">${number(candle.close)}</b></div>
-      ${spec.volumeLabel ? `<div class="kl-tip-row"><span>${esc(spec.volumeLabel)}</span><b class="num">${fmt(candle.volume)}</b></div>` : ""}
-      ${typeof spec.tipExtra === "function" ? spec.tipExtra(candle) : ""}`;
+      ${volumeRow}${extra}${releaseRow}`;
     tip.hidden = false;
     hideTip();
     placeTip(tip, host, canvas, param.point.x, compact ? 0 : chart.priceScale("right").width());

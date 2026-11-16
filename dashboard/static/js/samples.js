@@ -384,28 +384,33 @@ function revealPage(slug) {
   }
 }
 
+/* The forecast list head fits the 300px pane: result and version are full-width segments that
+   carry their counts (and each version's hit rate), the long-tailed dimensions are selects. */
 function forecastFilters(f, p) {
   const count = (key) => {
     const m = new Map();
     S.all.forEach((r) => m.set(r[key], (m.get(r[key]) || 0) + 1));
     return [...m].sort((a, b) => b[1] - a[1]);
   };
-  const btn = (k, v, label, color) =>
-    `<button type="button" data-k="${k}" data-v="${esc(v)}" aria-pressed="${f[k] === v}"${color ? ` style="--c:${color}"` : ""}>${color ? "<i></i>" : ""}${esc(label)}</button>`;
-  const row = (k, items) => `<div class="frow"><span class="fk">${k}</span>${items}</div>`;
-  const opt = (v, label, on) => `<option value="${esc(v)}"${on ? " selected" : ""}>${esc(label)}</option>`;
   const R = ctx.forecast.result;
   const resColor = { correct: "var(--accent)", wrong: "var(--sev-1)", pending: "var(--muted)" };
-  let html = row("回答结果", ["correct", "wrong", "pending"].map((k) => btn("res", k, R[k], resColor[k])).join(""));
-  html += row("回答版本", p.models.map((m) => btn("model", m.id, m.label)).join(""));
-  html += row("标的类别", count("c").map(([c]) => btn("cls", c, c)).join(""));
-  const types = count("t").map(([t]) => t);
-  const causes = [...new Set(S.all.map((r) => r.e).filter(Boolean))].sort((a, b) => a.localeCompare(b, "zh"));
-  html += `<div class="cascade">
-    <select data-k="typ" aria-label="题型"><option value="">全部题型</option>${types.map((t) => opt(t, t, f.typ === t)).join("")}</select>
-    <select data-k="cause" aria-label="错误归因"><option value="">全部归因</option>${causes.map((t) => opt(t, t, f.cause === t)).join("")}</select>
-  </div>`;
-  return html;
+  const n = (pred) => S.all.filter(pred).length;
+  const seg = (k, v, label, extra, color) =>
+    `<button type="button" data-k="${k}" data-v="${esc(v)}" aria-pressed="${f[k] === v}"${color ? ` style="--c:${color}"` : ""}>${color ? "<i></i>" : ""}<span>${esc(label)}</span>${extra}</button>`;
+  const res = ["correct", "wrong", "pending"].map((k) =>
+    seg("res", k, R[k], `<small class="num">${fmt(n((r) => r.res === k))}</small>`, resColor[k])).join("");
+  const vers = p.models.map((m) => {
+    const settled = n((r) => r.m === m.id && (r.res === "correct" || r.res === "wrong"));
+    const right = n((r) => r.m === m.id && r.res === "correct");
+    const rate = settled ? `<small class="num" title="已揭晓 ${fmt(settled)} 份中正确 ${fmt(right)} 份">${Math.round((100 * right) / settled)}%</small>` : "";
+    return seg("model", m.id, m.label, rate);
+  }).join("");
+  const opt = (v, label, on) => `<option value="${esc(v)}"${on ? " selected" : ""}>${esc(label)}</option>`;
+  const sel = (k, all, items) => `<select data-k="${k}" aria-label="${all}" class="${f[k] ? "is-on" : ""}"><option value="">${all}</option>${items.map(([v, c]) => opt(v, `${v} · ${fmt(c)}`, f[k] === v)).join("")}</select>`;
+  const causes = count("e").filter(([e]) => e);
+  return `<div class="frow fc-seg">${res}</div>
+    <div class="frow fc-seg is-ver">${vers}</div>
+    <div class="cascade fc-sel">${sel("cls", "全部标的", count("c"))}${sel("typ", "全部题型", count("t"))}${causes.length ? sel("cause", "全部归因", causes) : ""}</div>`;
 }
 
 function syncFilters() {
@@ -535,7 +540,7 @@ function renderList() {
   // The head holds only the first page; its counts come from the full index it was cut from.
   const total = S.prod.head ? S.prod.head.sessions : S.all.length;
   $("#scount", root).textContent = ctx.forecast
-    ? `${fmt(S.rows.length)} / ${fmt(questionTotal)} 道预测题 · ${fmt(answerTotal)} 份回答`
+    ? `${fmt(S.rows.length)} / ${fmt(questionTotal)} 题 · ${fmt(answerTotal)} 份回答`
     : `${fmt(S.prod.head ? total : S.rows.length)} / ${fmt(total)} 个会话`;
   $("#slist", root).removeAttribute("aria-busy");
   const resColor = { correct: "var(--accent)", wrong: "var(--sev-1)", pending: "var(--muted)" };

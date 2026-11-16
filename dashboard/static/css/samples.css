@@ -540,7 +540,17 @@
 .fc-t { padding-top: 8px; border-top: 1px solid var(--line, rgba(0,0,0,.08)); margin-top: 8px; }
 .fc-t .summary { margin: 4px 0 0; white-space: pre-wrap; }
 /* 预测数据: one row per question, its versions as chips */
-.fk { font-size: 11px; color: var(--faint); align-self: center; margin-right: 6px; white-space: nowrap; }
+.filters .fc-seg { width: 100%; gap: 3px; }
+.filters .fc-seg button { flex: 1 1 0; min-width: 0; justify-content: center; gap: 5px; padding: 0 6px; background: var(--well); font-size: var(--fs-meta); }
+.filters .fc-seg button span { overflow: hidden; text-overflow: ellipsis; }
+.filters .fc-seg button i { flex: none; width: 6px; height: 6px; }
+.filters .fc-seg button small { color: var(--faint); font-size: var(--fs-micro); transition: color var(--snap); }
+.filters .fc-seg button:hover { background: var(--well-2); }
+.filters .fc-seg button[aria-pressed="true"] { background: var(--ink); color: var(--card); }
+.filters .fc-seg button[aria-pressed="true"] small { color: color-mix(in oklab, var(--card) 70%, transparent); }
+.filters .fc-sel { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.filters .fc-sel select:last-child:nth-child(odd) { grid-column: 1 / -1; }
+.filters .fc-sel select.is-on { background: var(--active); color: var(--ink); }
 .vchips { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: 6px; }
 .vchip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; line-height: 1; padding: 3px 7px; border-radius: 999px;
   color: var(--ink-2, var(--ink)); background: color-mix(in oklab, var(--c) 12%, var(--card)); border: 1px solid transparent; }

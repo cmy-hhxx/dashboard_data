@@ -501,11 +501,13 @@ body.is-mxp-full { overflow: hidden; }
 .kl-tip-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-3); white-space: nowrap; }
 .kl-tip-head b { font-weight: var(--w-medium); font-variant-numeric: tabular-nums; }
 .kl-tip-head span { color: var(--muted); font-size: var(--fs-meta); font-weight: normal; }
-/* 卡片里的迷你 K 线只有 112px 高：悬浮读数压成一行，避免盖住整张图。 */
-.kl-tip.is-compact { min-width: 0; padding: 3px 8px; line-height: 1.35; }
-.kl-tip-mini { display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
-.kl-tip-mini b { color: var(--ink); font-weight: var(--w-medium); font-variant-numeric: tabular-nums; }
-.kl-tip-mini span { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+/* 卡片里的迷你 K 线只有 112px 高：读数用小一号字、紧行距，浮在图外侧不压住曲线。 */
+.kl-tip.is-compact { min-width: 148px; padding: 6px 10px; line-height: 1.3; font-size: var(--fs-meta); }
+.kl-tip.is-compact .kl-tip-head { margin-bottom: 2px; }
+.kl-tip-move { margin-left: 6px; font-size: var(--fs-micro); font-weight: normal; }
+.kl-tip-move.is-up { color: var(--sev-1); }
+.kl-tip-move.is-down { color: var(--accent); }
+.kl-tip-rel b { color: var(--release, var(--sev-0)); font-weight: var(--w-medium); }
 @media (max-width: 1160px) {
   .mx-panels.is-both, .mx-card.is-mx-full .mx-panels.is-both { grid-template-columns: minmax(0, 1fr); }
 }
@@ -1083,3 +1085,4 @@ body.is-modal { overflow: hidden; }
 .fc-t { padding-top: 8px; border-top: 1px solid var(--line, rgba(0,0,0,.08)); margin-top: 8px; }
 .fc-t .summary { margin: 4px 0 0; white-space: pre-wrap; }
 
+.kl-tip-lead b { max-width: 150px; overflow: hidden; text-overflow: ellipsis; font-weight: normal; }

@@ -1,13 +1,13 @@
-/* 评测评测: how far the evaluator itself can be trusted. Six readings of one judge version against
-   human re-labels and its own repeated runs: agreement, calibration, repeatability, per-stage error,
-   bias, and agreement over time. Reads data.json's judge[<p>]; until that feed exists it shows the
-   clearly marked mock from judge_mock.js. */
-import { esc, fmt, sevColor, SEV_NAME, bindTips, counter, runCounters } from "./core.js";
-import { createKlineChart } from "./kline_chart.js";
+/* 评测评测: how far the evaluator itself can be trusted. Top to bottom: a second model's audit of
+   every filed problem on three dimensions (定级合理 / 证据闭环 / 输出准确) and where by stage it
+   fails; repeat consistency across reruns of one case; agreement with human re-labels; and the
+   evaluator's badcases, each opening to the case, the evaluator's verdict and evidence, the audit
+   model's ruling and the dimension it failed. Reads data.json's judge[<p>]; until that feed exists
+   it shows the clearly marked mock from judge_mock.js. */
+import { $, $$, esc, fmt, sevColor, SEV_NAME, bindTips, counter, runCounters } from "./core.js";
 import { judgeMock } from "./judge_mock.js";
 
 let shown = null;
-let kline = null;
 const tips = new Map();
 const tip = (html) => {
   const k = `j${tips.size}`;
@@ -16,149 +16,228 @@ const tip = (html) => {
 };
 const row = (label, value) => `<div class="t-row"><span>${esc(label)}</span><b class="num">${value}</b></div>`;
 const pc = (v, d = 0) => `${fmt(100 * v, d)}%`;
-const signed = (v, d = 2) => `${v > 0 ? "+" : v < 0 ? "−" : ""}${fmt(Math.abs(v), d)}`;
+const signed = (v, d = 1) => `${v > 0 ? "+" : v < 0 ? "−" : ""}${fmt(Math.abs(v), d)}`;
 const sevName = (k) => SEV_NAME[k] || k;
 const chip = (k) => `<span class="jd-sev" style="--c:${sevColor(k)}"><i></i>${esc(sevName(k))}</span>`;
+const delta = (now, prev, label) => {
+  if (prev == null) return "";
+  const d = (now - prev) * 100;
+  return `<span class="jd-delta${d > 0 ? " is-good" : d < 0 ? " is-bad" : ""}" title="${esc(label)}">${d > 0 ? "▲" : d < 0 ? "▼" : "·"} ${signed(d)}pt</span>`;
+};
+// Pass rates tint by how far they fall short: 100% is the plain well, 55% and below is full tint.
+const failTint = (rate) => `--a:${Math.round(4 + Math.max(0, Math.min(1, (1 - rate) / 0.45)) * 60)}%`;
 
-/* ---------------------------------------------------------------- headline */
-const KPIS = [
-  ["kappa", "人工一致 κ", (v) => fmt(v, 2), 2, 1],
-  ["precision", "精确率", (v) => pc(v), 0, 100],
-  ["recall", "召回率", (v) => pc(v), 0, 100],
-  ["ece", "校准误差", (v) => fmt(v, 3), 3, 1, true],
-  ["repeat", "重复一致", (v) => pc(v), 0, 100],
-  ["evidence", "证据可回链", (v) => pc(v), 0, 100],
-];
-function headline(J) {
-  const tiles = KPIS.map(([key, name, show, d, scale, lowerBetter], i) => {
-    const v = J.kpi[key];
-    const prev = J.kpiPrev?.[key];
-    const delta = prev == null ? null : v - prev;
-    const good = delta == null ? null : lowerBetter ? delta < 0 : delta > 0;
-    const shownDelta = delta == null ? "" : scale === 100 ? `${signed(delta * 100, 1)}pt` : signed(delta, d);
-    return `<div class="jd-kpi" style="--i:${i}" ${tip(`<div class="t-head">${esc(name)}</div>${row(J.version, show(v))}${prev == null ? "" : row(J.prev, show(prev))}`)}>
-      <span class="jd-kpi-n">${esc(name)}</span>
-      <b class="mid">${counter(v * scale, { d: scale === 100 ? 0 : d, suffix: scale === 100 ? "%" : "" })}</b>
-      ${delta == null ? "" : `<span class="jd-delta${good ? " is-good" : " is-bad"}">${delta > 0 ? "▲" : "▼"} ${shownDelta}</span>`}
-    </div>`;
-  }).join("");
-  return `<article class="card jd-head" style="--span:12">
+/* Badcase filter: one dimension plus an optional severity or stage, set from anywhere on the page. */
+const B = { dim: "", sev: "", stage: "", open: new Set() };
+const DIM_ORDER = ["grade", "evidence", "output"];
+const ICON = {
+  ok: `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  no: `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4.5 4.5l7 7m0-7l-7 7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>`,
+  go: `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  chev: `<svg class="jd-bcr-chev" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+};
+
+/* ---------------------------------------------------------------- page head */
+function topCard(J) {
+  return `<article class="card jd-top" style="--span:12">
     <header class="card-head"><h2>评测评测</h2>${J.mock ? `<span class="jd-mock" title="judge_mock.js">示例数据</span>` : ""}
-      <span class="meta end num">${esc(J.version)} · ${fmt(J.labeled)} 条人工复标 · ${J.runs} 次重跑</span></header>
-    <div class="jd-kpis">${tiles}</div>
+      <span class="meta end num">${esc(J.version)} 对比 ${esc(J.prev)} · ${fmt(J.audited)} 个问题复核 · ${J.runs} 次重跑 · ${fmt(J.labeled)} 条人工复标</span></header>
   </article>`;
 }
 
-/* ---------------------------------------------------------------- agreement: human × judge */
+/* ---------------------------------------------------------------- ① three dimensions */
+function dimCard(J, d, i) {
+  const bars = d.bySev.map((s, k) => `<button type="button" class="jd-sb" data-bc-dim="${d.key}" data-bc-sev="${s.sev}" style="--i:${k}" ${tip(`<div class="t-head">${esc(d.name)} · 评测器定为 ${esc(sevName(s.sev))}</div>${row("通过", pc(s.rate, 1))}${row("复核问题", fmt(s.n))}${row("未通过", fmt(Math.round(s.n * (1 - s.rate))))}`)}>
+      ${chip(s.sev)}<span class="jd-sb-t"><i style="--w:${(s.rate * 100).toFixed(1)}%"></i></span><b class="num">${pc(s.rate)}</b></button>`).join("");
+  const total = d.reasons.reduce((a, b) => a + b.n, 0) || 1;
+  const reasons = d.reasons.map((x, k) => `<span class="jd-rs" style="--k:${k}" ${tip(`<div class="t-head">${esc(x.name)}</div>${row("未通过中占", pc(x.n / total, 1))}${row("问题", fmt(x.n))}`)}><i></i><em>${esc(x.name)}</em><b class="num">${pc(x.n / total)}</b></span>`).join("");
+  const stack = d.reasons.map((x, k) => `<i style="flex:${x.n} 1 0;--k:${k}"></i>`).join("");
+  const bad = J.badcases.filter((b) => b.fail === d.key).length;
+  return `<article class="card jd-dim" style="--span:4;--i:${i}" data-dim="${d.key}">
+    <header class="card-head"><h2>${esc(d.name)}</h2>
+      <button type="button" class="jd-go end" data-bc-dim="${d.key}">${fmt(bad)} 个 badcase${ICON.go}</button></header>
+    <div class="jd-dim-hero">
+      <span class="jd-ring" style="--p:${(d.rate * 100).toFixed(1)}"><b class="mid">${counter(d.rate * 100, { d: 1, suffix: "%" })}</b></span>
+      <div class="jd-dim-side">${delta(d.rate, d.prev, `${J.prev} ${pc(d.prev, 1)}`)}<span class="jd-dim-n num">${fmt(Math.round(d.n * (1 - d.rate)))} / ${fmt(d.n)} 未通过</span>
+        <span class="jd-rstack">${stack}</span></div>
+    </div>
+    <div class="jd-sbs">${bars}</div>
+    <div class="jd-rss">${reasons}</div>
+  </article>`;
+}
+
+function stageCard(J) {
+  const cols = J.stages;
+  const head = `<span></span>${cols.map((s) => `<span class="jd-sg-h" title="${esc(s.name)}"><code>${esc(s.id)}</code>${esc(s.name)}</span>`).join("")}`;
+  const body = J.dims.map((d) => `<span class="jd-sg-r">${esc(d.name)}</span>${cols.map((s, k) => {
+    const v = s[d.key];
+    return `<button type="button" class="jd-sg-c" data-bc-dim="${d.key}" data-bc-stage="${s.id}" style="${failTint(v)};--i:${k}" ${tip(`<div class="t-head">${esc(s.name)} · ${esc(d.name)}</div>${row("通过", pc(v, 1))}${row("复核问题", fmt(s.n))}${row("未通过", fmt(Math.round(s.n * (1 - v))))}`)}>${pc(v)}</button>`;
+  }).join("")}`).join("");
+  return `<article class="card jd-stage" style="--span:12">
+    <div class="jd-sg" style="--cols:${cols.length}">${head}${body}</div>
+  </article>`;
+}
+
+/* ---------------------------------------------------------------- ② repeat consistency */
+const AGREE = (n) => [`${n}/${n}`, `${n - 1}/${n}`, `${n - 2}/${n}`, `≤${n - 3}/${n}`];
+function repeatCard(J) {
+  const R = J.repeat;
+  const kpis = [["sameSev", "定级一致"], ["sameSet", "问题集一致"], ["sameEvidence", "证据一致"]].map(([k, name], i) => `<div class="jd-kpi" style="--i:${i}" ${tip(`<div class="t-head">${esc(name)}</div>${row(J.version, pc(R[k], 1))}${row(J.prev, pc(R.prev[k], 1))}`)}>
+      <span class="jd-kpi-n">${esc(name)}</span><b class="mid">${counter(R[k] * 100, { d: 0, suffix: "%" })}</b>${delta(R[k], R.prev[k], `${J.prev} ${pc(R.prev[k], 1)}`)}</div>`).join("");
+  const labels = AGREE(R.runs);
+  const rows = R.bySev.map((s, i) => `<div class="jd-st" style="--i:${i}" ${tip(`<div class="t-head">${esc(sevName(s.sev))} · ${fmt(s.n)} 个 case</div>${s.agree.map((v, k) => row(`${labels[k]} 次定级相同`, pc(v, 1))).join("")}`)}>
+      ${chip(s.sev)}<span class="jd-st-bar">${s.agree.map((v, k) => `<i style="flex:${v} 1 0;--k:${k}"></i>`).join("")}</span><b class="num">${pc(s.agree[0])}</b></div>`).join("");
+  return `<article class="card jd-rep" style="--span:7">
+    <header class="card-head"><h2>重复一致</h2><span class="meta end num">同一 case 重跑 ${R.runs} 次</span></header>
+    <div class="jd-kpis is-3">${kpis}</div>
+    <div class="jd-sts">${rows}</div>
+    <div class="jd-key">${labels.map((a, k) => `<span><i style="--k:${k}"></i>${a}</span>`).join("")}</div>
+  </article>`;
+}
+
+function overlapCard(J) {
+  const bins = J.repeat.overlap;
+  const max = Math.max(...bins.map((b) => b.n));
+  const total = bins.reduce((a, b) => a + b.n, 0) || 1;
+  const bars = bins.map((b, i) => `<span class="jd-hb${b.hi <= 0.5 ? " is-low" : ""}" style="--h:${((100 * b.n) / max).toFixed(1)}%;--i:${i}" ${tip(`<div class="t-head">问题集重合 ${pc(b.lo)}–${pc(b.hi)}</div>${row("case", fmt(b.n))}${row("占比", pc(b.n / total, 1))}`)}><i></i></span>`).join("");
+  const low = bins.filter((b) => b.hi <= 0.5).reduce((a, b) => a + b.n, 0);
+  return `<article class="card jd-ovl" style="--span:5">
+    <header class="card-head"><h2>问题集重合</h2><span class="meta end num">低于 50% 的 case ${pc(low / total, 1)}</span></header>
+    <div class="jd-hist">${bars}</div>
+    <div class="jd-hist-x num"><span>0%</span><span>50%</span><span>100%</span></div>
+  </article>`;
+}
+
+/* ---------------------------------------------------------------- ③ human agreement */
 function confusionCard(J) {
-  const { labels, m } = J.confusion;
+  const { labels, m } = J.human.confusion;
   const rowSum = m.map((r) => r.reduce((a, b) => a + b, 0));
   const head = `<span></span>${labels.map((k) => `<span class="jd-cm-h">${esc(sevName(k))}</span>`).join("")}`;
   const body = labels.map((h, i) => `<span class="jd-cm-r">${chip(h)}</span>${labels.map((j, k) => {
     const share = rowSum[i] ? m[i][k] / rowSum[i] : 0;
-    const diag = i === k;
-    return `<span class="jd-cm-c${diag ? " is-diag" : ""}" style="--a:${Math.round(8 + share * 82)}%;--i:${i + k}" ${tip(`<div class="t-head">人工 ${esc(sevName(h))} · 评测器 ${esc(sevName(j))}</div>${row("样本", fmt(m[i][k]))}${row("占该行", pc(share, 1))}`)}>${m[i][k] ? fmt(m[i][k]) : ""}</span>`;
+    return `<span class="jd-cm-c${i === k ? " is-diag" : ""}" style="--a:${Math.round(8 + share * 82)}%;--i:${i + k}" ${tip(`<div class="t-head">人工 ${esc(sevName(h))} · 评测器 ${esc(sevName(j))}</div>${row("样本", fmt(m[i][k]))}${row("占该行", pc(share, 1))}`)}>${m[i][k] ? fmt(m[i][k]) : ""}</span>`;
   }).join("")}`).join("");
-  const agree = labels.reduce((a, _, i) => a + m[i][i], 0) / rowSum.reduce((a, b) => a + b, 0);
-  return `<article class="card" style="--span:5">
-    <header class="card-head"><h2>一致性</h2><span class="meta end num">对角 ${pc(agree, 1)}</span></header>
+  const agree = labels.reduce((a, _, i) => a + m[i][i], 0) / (rowSum.reduce((a, b) => a + b, 0) || 1);
+  return `<article class="card" style="--span:7">
+    <header class="card-head"><h2>人工一致</h2>
+      <span class="meta end num">κ ${fmt(J.human.kappa, 2)}</span>${delta(J.human.kappa, J.human.prev, `${J.prev} κ ${fmt(J.human.prev, 2)}`)}<span class="meta num">对角 ${pc(agree, 1)}</span></header>
     <div class="jd-cm"><span class="jd-cm-axis is-y">人工</span><span class="jd-cm-axis is-x">评测器</span>
       <div class="jd-cm-grid">${head}${body}</div></div>
   </article>`;
 }
 
-/* ---------------------------------------------------------------- calibration */
-function calibrationCard(J) {
-  const W = 300, H = 222, L = 30, R = 292, T = 8, B = 156, VT = 172, VB = 208;
-  const x = (v) => L + (R - L) * v;
-  const y = (v) => B - (B - T) * v;
-  const bins = J.calibration;
-  const nMax = Math.max(...bins.map((b) => b.n));
-  const ece = bins.reduce((a, b) => a + b.n * Math.abs(b.hit - b.c), 0) / bins.reduce((a, b) => a + b.n, 0);
-  const curve = bins.map((b) => `${x(b.c).toFixed(1)},${y(b.hit).toFixed(1)}`).join(" ");
-  const gap = `${bins.map((b) => `${x(b.c).toFixed(1)},${y(b.c).toFixed(1)}`).join(" ")} ${bins.slice().reverse().map((b) => `${x(b.c).toFixed(1)},${y(b.hit).toFixed(1)}`).join(" ")}`;
-  const bw = (R - L) / bins.length;
-  const grid = [0, 0.5, 1].map((v) => `<line class="jd-grid" x1="${L}" x2="${R}" y1="${y(v)}" y2="${y(v)}"/><text class="jd-ax" x="${L - 6}" y="${y(v) + 3.5}" text-anchor="end">${pc(v)}</text>`).join("");
-  const xt = [0, 0.5, 1].map((v) => `<text class="jd-ax" x="${x(v)}" y="${H - 2}" text-anchor="${v === 0 ? "start" : v === 1 ? "end" : "middle"}">${pc(v)}</text>`).join("");
-  const vols = bins.map((b, i) => {
-    const h = ((VB - VT) * b.n) / nMax;
-    return `<rect class="jd-vol" x="${(L + i * bw + 1).toFixed(1)}" y="${(VB - h).toFixed(1)}" width="${(bw - 2).toFixed(1)}" height="${h.toFixed(1)}" rx="1.5" style="--i:${i}"/>`;
-  }).join("");
-  const dots = bins.map((b) => `<circle class="jd-dot" cx="${x(b.c).toFixed(1)}" cy="${y(b.hit).toFixed(1)}" r="3.5"/>`).join("");
-  const hits = bins.map((b, i) => `<rect class="jd-hit" x="${(L + i * bw).toFixed(1)}" y="${T}" width="${bw.toFixed(1)}" height="${VB - T}" ${tip(`<div class="t-head">置信度 ${pc(b.c - 0.05)}–${pc(b.c + 0.05)}</div>${row("人工确认", pc(b.hit, 1))}${row("偏差", `${signed((b.hit - b.c) * 100, 1)}pt`)}${row("样本", fmt(b.n))}`)}/>`).join("");
-  return `<article class="card" style="--span:4">
-    <header class="card-head"><h2>校准</h2><span class="meta end num">ECE ${fmt(ece, 3)}</span></header>
-    <svg class="jd-cal" viewBox="0 0 ${W} ${H}" role="img" aria-label="评测器置信度与人工确认率">
-      ${grid}<line class="jd-ideal" x1="${x(0)}" y1="${y(0)}" x2="${x(1)}" y2="${y(1)}"/>
-      <polygon class="jd-gap" points="${gap}"/><polyline class="jd-curve" points="${curve}"/>${dots}${vols}${xt}${hits}
-    </svg>
-  </article>`;
-}
-
-/* ---------------------------------------------------------------- repeatability */
-const AGREE = ["5/5", "4/5", "3/5", "≤2/5"];
-function stabilityCard(J) {
-  const rows = J.stability.map((s, i) => `<div class="jd-st" style="--i:${i}" ${tip(`<div class="t-head">人工 ${esc(sevName(s.sev))} · ${fmt(s.n)} 条</div>${s.agree.map((v, k) => row(`${J.runs} 次中 ${AGREE[k]} 相同`, pc(v, 1))).join("")}`)}>
-      ${chip(s.sev)}<span class="jd-st-bar">${s.agree.map((v, k) => `<i style="flex:${v} 1 0;--k:${k}"></i>`).join("")}</span><b class="num">${pc(s.agree[0])}</b></div>`).join("");
-  return `<article class="card" style="--span:3">
-    <header class="card-head"><h2>重复一致</h2><span class="meta end num">${J.runs} 次重跑</span></header>
-    <div class="jd-sts">${rows}</div>
-    <div class="jd-key">${AGREE.map((a, k) => `<span><i style="--k:${k}"></i>${a}</span>`).join("")}</div>
-  </article>`;
-}
-
-/* ---------------------------------------------------------------- per-stage precision / recall */
-function categoryCard(J) {
-  const lo = Math.floor(Math.min(...J.categories.flatMap((c) => [c.precision, c.recall])) * 10) / 10;
-  const span = 1 - lo;
-  const at = (v) => `${(((v - lo) / span) * 100).toFixed(2)}%`;
-  const f1 = (c) => (2 * c.precision * c.recall) / (c.precision + c.recall);
-  const rows = J.categories.slice().sort((a, b) => f1(a) - f1(b)).map((c, i) => {
+function sevPrCard(J) {
+  const at = (v) => `${(v * 100).toFixed(2)}%`;
+  const rows = J.human.bySev.map((c, i) => {
     const a = Math.min(c.precision, c.recall), b = Math.max(c.precision, c.recall);
-    return `<div class="jd-db" style="--i:${i}" ${tip(`<div class="t-head">${esc(c.name)}</div>${row("精确率", pc(c.precision, 1))}${row("召回率", pc(c.recall, 1))}${row("F1", fmt(f1(c), 2))}${row("样本", fmt(c.n))}`)}>
-      <span class="jd-db-n"><code>${esc(c.id)}</code>${esc(c.name)}</span>
+    return `<div class="jd-db" style="--i:${i}" ${tip(`<div class="t-head">${esc(sevName(c.sev))}</div>${row("精确率", pc(c.precision, 1))}${row("召回率", pc(c.recall, 1))}${row("人工样本", fmt(c.n))}`)}>
+      <span class="jd-db-n">${chip(c.sev)}</span>
       <span class="jd-db-t"><i class="jd-db-l" style="left:${at(a)};width:calc(${at(b)} - ${at(a)})"></i><i class="jd-db-p" style="left:${at(c.precision)}"></i><i class="jd-db-r" style="left:${at(c.recall)}"></i></span>
-      <b class="num">${fmt(f1(c), 2)}</b></div>`;
+      <b class="num">${pc((2 * c.precision * c.recall) / (c.precision + c.recall || 1))}</b></div>`;
   }).join("");
-  const ticks = [lo, lo + span / 2, 1].map((v) => `<span style="left:${at(v)}">${pc(v)}</span>`).join("");
-  return `<article class="card" style="--span:7">
-    <header class="card-head"><h2>分环节误差</h2>
+  const ticks = [0, 0.5, 1].map((v) => `<span style="left:${at(v)}">${pc(v)}</span>`).join("");
+  return `<article class="card jd-pr" style="--span:5">
+    <header class="card-head"><h2>分级对齐</h2>
       <span class="jd-legend end"><span><i class="jd-db-p"></i>精确率</span><span><i class="jd-db-r"></i>召回率</span><span class="num">F1</span></span></header>
     <div class="jd-dbs">${rows}<div class="jd-db jd-db-axis"><span></span><span class="jd-db-t">${ticks}</span><span></span></div></div>
   </article>`;
 }
 
-/* ---------------------------------------------------------------- bias: severity shift by slice */
-function biasCard(J) {
-  const lim = Math.max(0.3, ...J.bias.map((b) => Math.max(Math.abs(b.lo), Math.abs(b.hi))));
-  const at = (v) => `${(50 + (50 * v) / lim).toFixed(2)}%`;
-  const rows = J.bias.slice().sort((a, b) => b.shift - a.shift).map((b, i) => {
-    const from = Math.min(0, b.shift), to = Math.max(0, b.shift);
-    return `<div class="jd-bi" style="--i:${i}" ${tip(`<div class="t-head">${esc(b.name)}</div>${row("评测器 − 人工", `${signed(b.shift)} 级`)}${row("95% 区间", `${signed(b.lo)} ~ ${signed(b.hi)}`)}${row("样本", fmt(b.n))}`)}>
-      <span class="jd-bi-n">${esc(b.name)}</span>
-      <span class="jd-bi-t"><i class="jd-bi-b${b.shift > 0 ? " is-pos" : " is-neg"}" style="left:${at(from)};width:calc(${at(to)} - ${at(from)})"></i><i class="jd-bi-ci" style="left:${at(b.lo)};width:calc(${at(b.hi)} - ${at(b.lo)})"></i></span>
-      <b class="num">${signed(b.shift)}</b></div>`;
-  }).join("");
-  return `<article class="card" style="--span:5">
-    <header class="card-head"><h2>定级偏差</h2></header>
-    <div class="jd-bis">${rows}<div class="jd-bi jd-bi-axis"><span></span><span class="jd-bi-t"><span style="left:0">偏轻</span><span style="left:50%">0</span><span style="left:100%">偏重</span></span><span></span></div></div>
+/* ---------------------------------------------------------------- ④ badcases */
+function badcaseCard() {
+  return `<article class="card jd-bc" style="--span:12" id="jdBadcases">
+    <header class="card-head"><h2>评测器 badcase</h2><div class="jd-bc-tools" id="jdBcTools"></div><span class="meta end num" id="jdBcCount"></span></header>
+    <div class="jd-bcl" id="jdBcList"></div>
   </article>`;
 }
 
-/* ---------------------------------------------------------------- over time + disagreements */
-function trendCard() {
-  return `<article class="card" style="--span:8">
-    <header class="card-head"><h2>一致性走势</h2></header>
-    <div class="jd-trend" data-own-tip></div>
-  </article>`;
+function bcTools(J) {
+  const n = (key) => J.badcases.filter((b) => !key || b.fail === key).length;
+  const seg = [["", "全部"], ...J.dims.map((d) => [d.key, d.name])].map(([k, name]) =>
+    `<button type="button" data-bc-dim="${k}" data-bc-reset aria-pressed="${B.dim === k}">${esc(name)}<small class="num">${fmt(n(k))}</small></button>`).join("");
+  const stage = B.stage && J.stages.find((s) => s.id === B.stage);
+  const tokens = [
+    B.sev ? `<button type="button" class="jd-tok" data-bc-clear="sev" aria-label="取消等级筛选">${chip(B.sev)}<i aria-hidden="true">×</i></button>` : "",
+    stage ? `<button type="button" class="jd-tok" data-bc-clear="stage" aria-label="取消环节筛选"><code>${esc(stage.id)}</code>${esc(stage.name)}<i aria-hidden="true">×</i></button>` : "",
+  ].join("");
+  return `<div class="jd-bc-seg" role="group" aria-label="未通过维度">${seg}</div>${tokens}`;
 }
-function disagreeCard(J) {
-  const rows = J.disagreements.map((d, i) => `<div class="jd-dis" style="--i:${i}" ${tip(`<div class="t-head">${esc(d.q)}</div>${row("人工", esc(sevName(d.human)))}${row("评测器", esc(sevName(d.judge)))}`)}>
-      <span class="jd-dis-q">${esc(d.q)}</span><span class="jd-dis-v">${chip(d.human)}<i aria-hidden="true">→</i>${chip(d.judge)}</span><span class="jd-dis-k">${esc(d.kind)}</span></div>`).join("");
-  return `<article class="card" style="--span:4">
-    <header class="card-head"><h2>分歧样本</h2><span class="meta end num">${fmt(J.disagreements.length)}</span></header>
-    <div class="jd-diss">${rows}</div>
-  </article>`;
+
+function bcRow(J, b, i) {
+  const dim = J.dims.find((d) => d.key === b.fail);
+  const open = B.open.has(b.id);
+  const ev = b.evidence.map((e) => `<li class="${e.ok ? "" : "is-bad"}"><span class="num">#${e.m}</span><q>${esc(e.quote)}</q>${e.ok ? "" : `<i class="jd-x">${ICON.no}</i>`}</li>`).join("");
+  const verdicts = DIM_ORDER.map((k) => {
+    const d = J.dims.find((x) => x.key === k);
+    const v = b.verdict[k];
+    return `<div class="jd-vd${v.ok ? " is-ok" : " is-fail"}"><span class="jd-vd-i">${v.ok ? ICON.ok : ICON.no}</span><b>${esc(d ? d.name : k)}</b>${v.ok ? "" : `<p>${esc(v.note)}</p>`}</div>`;
+  }).join("");
+  const runs = b.runs.map((s, k) => `<span class="jd-run${s === b.sev ? "" : " is-off"}" style="--c:${sevColor(s)}" title="第 ${k + 1} 次 · ${esc(sevName(s))}">${esc(s)}</span>`).join("");
+  const same = b.runs.filter((s) => s === b.sev).length;
+  return `<div class="jd-bcr${open ? " is-open" : ""}" style="--i:${i}" data-bc="${b.id}">
+    <button type="button" class="jd-bcr-head" aria-expanded="${open}" aria-controls="bc-${b.id}">
+      <span class="jd-bcr-dim" data-fail="${b.fail}">${esc(dim ? dim.name : b.fail)}</span>
+      ${chip(b.sev)}
+      <span class="jd-bcr-q"><b>${esc(b.label)}</b><span>${esc(b.q)}</span></span>
+      <span class="jd-bcr-st"><code>${esc(b.stage)}</code>${esc(b.stageName)}</span>
+      <span class="jd-bcr-m num">${esc(b.model)} · ${esc(b.date.slice(5))}</span>
+      ${ICON.chev}
+    </button>
+    <div class="jd-bcr-body" id="bc-${b.id}" role="region" aria-label="${esc(b.label)}"><div class="jd-bcr-in">
+      <section class="jd-bcx is-eval"><span class="jd-bcx-k">评测器</span>
+        <div class="jd-bcx-q">${esc(b.q)}</div>
+        <div class="jd-bcx-top">${chip(b.sev)}<b>${esc(b.label)}</b><span class="jd-bcx-st"><code>${esc(b.stage)}</code>${esc(b.stageName)}</span></div>
+        <ol class="jd-ev">${ev}</ol></section>
+      <section class="jd-bcx is-audit"><span class="jd-bcx-k">判定模型</span>${verdicts}
+        ${b.suggest ? `<div class="jd-sug">${chip(b.sev)}<i aria-hidden="true">→</i>${chip(b.suggest)}</div>` : ""}</section>
+      <section class="jd-bcx is-side"><span class="jd-bcx-k">重跑 <b class="num">${same}/${b.runs.length}</b></span><div class="jd-runs">${runs}</div>
+        <span class="jd-bcx-k">人工</span><div class="jd-human">${chip(b.human)}${b.human === b.sev ? "" : `<i class="jd-x">${ICON.no}</i>`}</div></section>
+    </div></div>
+  </div>`;
+}
+
+function paintBadcases(root, J) {
+  const list = J.badcases.filter((b) => (!B.dim || b.fail === B.dim) && (!B.sev || b.sev === B.sev) && (!B.stage || b.stage === B.stage));
+  $("#jdBcTools", root).innerHTML = bcTools(J);
+  $("#jdBcCount", root).textContent = `${fmt(list.length)} / ${fmt(J.badcases.length)}`;
+  $("#jdBcList", root).innerHTML = list.length
+    ? list.map((b, i) => bcRow(J, b, i)).join("")
+    : `<div class="empty">没有符合条件的 badcase<br><button type="button" class="link" data-bc-dim="" data-bc-reset>查看全部</button></div>`;
+  $$(".jd-dim", root).forEach((el) => el.classList.toggle("is-picked", el.dataset.dim === B.dim));
+}
+
+/* Every reading drills into the cases behind it: a dimension card, a severity bar or a stage cell
+   narrows the badcase list and scrolls to it; the list's own segments reset the narrowing. */
+function wire(root) {
+  root.addEventListener("click", (e) => {
+    const J = root._jd;
+    if (!J) return;
+    const head = e.target.closest(".jd-bcr-head");
+    if (head) {
+      const r = head.closest(".jd-bcr");
+      const open = !B.open.has(r.dataset.bc);
+      if (open) B.open.add(r.dataset.bc); else B.open.delete(r.dataset.bc);
+      r.classList.toggle("is-open", open);
+      head.setAttribute("aria-expanded", String(open));
+      return;
+    }
+    const clear = e.target.closest("[data-bc-clear]");
+    if (clear) {
+      B[clear.dataset.bcClear] = "";
+      paintBadcases(root, J);
+      return;
+    }
+    const pick = e.target.closest("[data-bc-dim]");
+    if (!pick) return;
+    const inList = !!pick.closest("#jdBadcases");
+    B.dim = pick.dataset.bcDim;
+    if (pick.hasAttribute("data-bc-reset") || !inList) {
+      B.sev = pick.dataset.bcSev || "";
+      B.stage = pick.dataset.bcStage || "";
+    }
+    paintBadcases(root, J);
+    if (!inList) $("#jdBadcases", root).scrollIntoView({ behavior: "smooth", block: "start" });
+  });
 }
 
 export async function render(root, c) {
@@ -167,19 +246,20 @@ export async function render(root, c) {
   if (shown === key && root.firstChild) return;
   shown = key;
   tips.clear();
+  B.dim = ""; B.sev = ""; B.stage = ""; B.open.clear();
   const J = d.judge?.[c.product] || judgeMock(c.product, d.taxonomy);
+  root._jd = J;
   root.innerHTML = `<div class="bento jd">
-    ${headline(J)}${confusionCard(J)}${calibrationCard(J)}${stabilityCard(J)}${categoryCard(J)}${biasCard(J)}${trendCard()}${disagreeCard(J)}
+    ${topCard(J)}${J.dims.map((x, i) => dimCard(J, x, i)).join("")}${stageCard(J)}
+    ${repeatCard(J)}${overlapCard(J)}
+    ${confusionCard(J)}${sevPrCard(J)}
+    ${badcaseCard()}
   </div>`;
-  if (!root._jdTips) {
-    root._jdTips = true;
+  paintBadcases(root, J);
+  if (!root._jdWired) {
+    root._jdWired = true;
     bindTips(root, (t) => tips.get(t.dataset.k) || null);
+    wire(root);
   }
   runCounters(root);
-  kline?.destroy();
-  kline = createKlineChart(root.querySelector(".jd-trend"), {
-    rows: J.trend, period: "day", height: 280, releases: J.releases || [],
-    valueFormat: (v) => fmt(v, 2), volumeName: "人工复标", volumeLabel: "人工复标",
-    openLabel: "前一日 κ", closeLabel: "κ",
-  });
 }
