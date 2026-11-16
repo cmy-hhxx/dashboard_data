@@ -44,7 +44,7 @@ function paintList(root) {
   $("#bnTools", root).innerHTML = segHTML();
   $("#bnCount", root).textContent = `${fmt(S.total)} 条`;
   $("#bnList", root).innerHTML = S.rows.length
-    ? S.rows.map((r, i) => rowHTML(r, i)).join("")
+    ? `<div class="bn-head" aria-hidden="true"><span>等级</span><span>问题</span><span class="bn-m">模型</span><span class="bn-d">日期</span><span>操作</span></div>${S.rows.map((r, i) => rowHTML(r, i)).join("")}`
     : `<div class="empty">这一组还没有数据。</div>`;
   const pager = $("#bnPager", root);
   pager.hidden = S.total <= PAGE;

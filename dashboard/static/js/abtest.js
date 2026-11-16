@@ -47,6 +47,8 @@ const SIDE_TONE = { before: "var(--t2)", after: "var(--accent)", online: "var(--
    the bento push-pull: measure, switch the layout, play every card from its old box. */
 const OVERVIEW_CARDS = ["orbit", "change", "ranks"];
 const PUSH_ICON = `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 8h3.2M2.5 8 5.1 5.4M2.5 8 5.1 10.6M13.5 8H10.3M13.5 8l-2.6-2.6M13.5 8l-2.6 2.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+// An open card folds back with the same left-pointing arrow every 收起 uses.
+const BACK_ICON = `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
 const sideReady = (rnd, side) => !!(rnd.sides && rnd.sides[side]);
 const metricReady = (rnd, metric) => metric === "paired"
@@ -539,7 +541,7 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
   function pushButton(card, name) {
     const open = state.overviewOpen === card;
     const label = `${open ? "收起" : "放大"}${name}`;
-    return `<button type="button" class="ab-card-btn" data-act="abcard" data-card="${card}" aria-pressed="${open}" aria-label="${label}" title="${esc(label)}">${PUSH_ICON}</button>`;
+    return `<button type="button" class="ab-card-btn" data-act="abcard" data-card="${card}" aria-pressed="${open}" aria-label="${label}" title="${esc(label)}">${open ? BACK_ICON : PUSH_ICON}</button>`;
   }
 
   function orbitCard(rnd) {
@@ -910,6 +912,7 @@ function trend(rnd, selectedCell, metric) {
         btn.setAttribute("aria-pressed", String(deep));
         btn.setAttribute("aria-label", label);
         btn.title = label;
+        btn.innerHTML = deep ? BACK_ICON : PUSH_ICON;
       }
     });
     if (!REDUCED) {

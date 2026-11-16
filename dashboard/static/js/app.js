@@ -1,9 +1,10 @@
 /* Router and shell: ?view=data|system|samples&product=wencai|aime (+ sample params). */
 import { $, $$, esc, segmented, getJSON, announce, installTips, importRetry, onNetwork, REDUCED } from "./core.js";
+import { pixelToggle } from "./pixel_toggle.js";
 
-const VIEWS = ["data", "system", "judge", "bench", "samples", "forecast", "compare"];
+const VIEWS = ["data", "system", "judge", "bench", "samples", "forecast", "compare", "docs"];
 const PRODUCTS = ["wencai", "aime"];
-const VIEW_NAME = { data: "数据看板", system: "评测体系", judge: "评测评测", bench: "Bench", samples: "具体数据", forecast: "预测数据", compare: "版本对比" };
+const VIEW_NAME = { data: "数据看板", system: "评测体系", judge: "评测评测", bench: "Bench", samples: "具体数据", forecast: "预测数据", compare: "版本对比", docs: "文档" };
 // Sample params (case / trace / filters) and compare params (pair / round / online) never leak
 // across views, or a stale deep link would reopen the previous drill on the next page.
 const SAMPLE_PARAMS = {
@@ -30,7 +31,7 @@ const modules = {};
 const loaders = Object.fromEntries([
   ["data", () => import("./data.js")], ["system", () => import("./system.js")], ["judge", () => import("./judge.js")],
   ["bench", () => import("./bench.js")], ["samples", () => import("./samples.js")], ["forecast", () => import("./forecast.js")],
-  ["compare", () => import("./compare.js")],
+  ["compare", () => import("./compare.js")], ["docs", () => import("./docs.js")],
 ].map(([view, load]) => [view, () => importRetry(load, `./${view}.js`)]));
 
 /* While a view's code or data is on its way it shows its own shape in shimmering placeholders,
@@ -41,6 +42,7 @@ const SKELETON = {
   judge: [[12, 64], [4, 380], [4, 380], [4, 380], [12, 150], [7, 320], [5, 320]],
   bench: [[12, 64], [12, 560]],
   compare: [[12, 72], [12, 560]],
+  docs: [[12, 120], [6, 280], [6, 280]],
 };
 function skeletonHTML(view) {
   if (view === "samples" || view === "forecast") {
@@ -269,7 +271,7 @@ async function poll() {
 async function boot() {
   viewSeg = segmented($("#viewSwitch"), (v) => {
     announce(`切换到${VIEW_NAME[v]}`);
-    navigate({ view: v, ...(v === "compare" || v === "forecast" ? SAMPLE_PARAMS : {}), ...(v === "data" ? { detail: null, ed: null, em: null, ep: null, edp: null } : {}), ...COMPARE_PARAMS });
+    navigate({ view: v, doc: null, ...(v === "compare" || v === "forecast" ? SAMPLE_PARAMS : {}), ...(v === "data" ? { detail: null, ed: null, em: null, ep: null, edp: null } : {}), ...COMPARE_PARAMS });
   });
   productSeg = segmented($("#productSwitch"), (p) => {
     const away = awayURL(p, { view: state.view, product: p });
@@ -284,29 +286,33 @@ async function boot() {
     if (!b || !new URLSearchParams(location.search).get("detail")) return;
     navigate({ view: "data", detail: null, ed: null, em: null, ep: null, edp: null });
   });
-  $("#themeToggle").addEventListener("click", (e) => {
-    const next = document.documentElement.dataset.mode === "dark" ? "light" : "dark";
-    const apply = () => {
-      document.documentElement.dataset.mode = next;
-      try {
-        localStorage.setItem("eval-mode", next);
-      } catch (err) {}
-    };
-    // The new theme grows as a circle out of the toggle; without view transitions every colour
-    // eases over instead of snapping.
-    const root = document.documentElement;
-    if (REDUCED) return apply();
-    if (document.startViewTransition) {
-      const r = e.currentTarget.getBoundingClientRect();
-      root.style.setProperty("--vt-x", `${r.left + r.width / 2}px`);
-      root.style.setProperty("--vt-y", `${r.top + r.height / 2}px`);
-      root.classList.add("is-theming");
-      document.startViewTransition(apply).finished.finally(() => root.classList.remove("is-theming"));
-      return;
-    }
-    root.classList.add("is-theme-fade");
-    apply();
-    setTimeout(() => root.classList.remove("is-theme-fade"), 520);
+  // The theme switch is a pixel day/night toggle. Flipping it (click, drag or keyboard) grows the
+  // new theme as a circle out of the knob; without view transitions every colour eases over.
+  pixelToggle($("#themeToggle"), {
+    day: document.documentElement.dataset.mode !== "dark",
+    onChange: (day, el) => {
+      const next = day ? "light" : "dark";
+      const apply = () => {
+        document.documentElement.dataset.mode = next;
+        try {
+          localStorage.setItem("eval-mode", next);
+        } catch (err) {}
+      };
+      const root = document.documentElement;
+      if (REDUCED) return apply();
+      if (document.startViewTransition) {
+        const r = el.getBoundingClientRect();
+        root.style.setProperty("--vt-x", `${r.left + (day ? r.width - 14 : 14)}px`);
+        root.style.setProperty("--vt-y", `${r.top + r.height / 2}px`);
+        root.classList.add("is-theming");
+        document.startViewTransition(apply).finished.finally(() => root.classList.remove("is-theming"));
+        return null;
+      }
+      root.classList.add("is-theme-fade");
+      apply();
+      setTimeout(() => root.classList.remove("is-theme-fade"), 520);
+      return null;
+    },
   });
   // A strip under the bar while requests are being retried; it leaves once something answers.
   onNetwork(({ ok, attempt, wait }) => {

@@ -17,6 +17,7 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='1' y='1' width='6' height='6' rx='1.5' fill='%23d35e2c'/%3E%3Crect x='9' y='1' width='6' height='6' rx='1.5' fill='%23dfe3e8'/%3E%3Crect x='17' y='1' width='6' height='6' rx='1.5' fill='%23a01e26'/%3E%3Crect x='1' y='9' width='6' height='6' rx='1.5' fill='%23dfe3e8'/%3E%3Crect x='9' y='9' width='6' height='6' rx='1.5' fill='%23d35e2c'/%3E%3Crect x='17' y='9' width='6' height='6' rx='1.5' fill='%23dfe3e8'/%3E%3C/svg%3E">
 <link rel="modulepreload" href="js/app.js">
 <link rel="modulepreload" href="js/core.js">
+<link rel="modulepreload" href="js/pixel_toggle.js">
 <link rel="stylesheet" href="css/base.css">
 <link rel="stylesheet" href="css/layout.css">
 <link rel="stylesheet" href="css/content.css">
@@ -27,6 +28,7 @@
 <link rel="stylesheet" href="css/samples.css">
 <link rel="stylesheet" href="css/abtest.css">
 <link rel="stylesheet" href="css/compare.css">
+<link rel="stylesheet" href="css/docs.css">
 </head>
 <body>
 <a class="skip" href="#main">跳到主要内容</a>
@@ -42,6 +44,7 @@
     <button type="button" data-value="samples">具体数据</button>
     <button type="button" data-value="forecast">预测数据</button>
     <button type="button" data-value="compare">版本对比</button>
+    <button type="button" data-value="docs">文档</button>
   </nav>
   </div>
   <div class="top-end">
@@ -51,10 +54,7 @@
     <button type="button" data-value="wencai"><small class="seg-loc">乌兰察布</small><span>问财</span></button>
     <button type="button" data-value="aime"><small class="seg-loc">弗吉尼亚</small><span>AIME</span></button>
   </div>
-  <button class="icon-btn" id="themeToggle" type="button" aria-label="切换深色模式">
-    <svg class="i-sun" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="1.6"/><path d="M12 3v2M12 19v2M21 12h-2M5 12H3M18.4 5.6 17 7M7 17l-1.4 1.4M18.4 18.4 17 17M7 7 5.6 5.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-    <svg class="i-moon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
-  </button>
+  <button class="px-toggle" id="themeToggle" type="button" role="switch" aria-label="日间模式"></button>
   </div>
 </header>
 <div class="net" id="net" role="status" aria-live="polite" hidden><i aria-hidden="true"></i><span id="netText"></span></div>
@@ -67,6 +67,7 @@
   <section class="view" data-view="samples" aria-label="具体数据"></section>
   <section class="view" data-view="forecast" aria-label="预测数据"></section>
   <section class="view" data-view="compare" aria-label="版本对比"></section>
+  <section class="view" data-view="docs" aria-label="文档"></section>
 </main>
 
 <div class="tip" id="tip" role="tooltip"></div>

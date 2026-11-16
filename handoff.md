@@ -96,7 +96,8 @@ server.py（标准库 HTTP，:5001，定时 build）──> app.js
 | 路由 | 模块 | 内容 |
 |---|---|---|
 | `?view=data&product=wencai\|aime` | `data.js` | 会话场、聚类矩阵、数据量、评测量、归因、聚类、预测；所有下钻都在页内 |
-| `?view=system&product=…` | `system.js` | 评测体系机制图（输入 → 压缩 → 归因 → 聚类）、证据闭环 |
+| `?view=system&product=…` | `system.js` | 评测体系机制图（输入 → 压缩 → 归因 → 聚类热力矩阵）、证据闭环；点问题进入全屏逐步推导（`evidence_theater.js`）；每个标签页会话首次进入时多光标搭建一遍（`builder.js`，sessionStorage `eval-build:sys`） |
+| `?view=docs[&doc=severity\|capacity]` | `docs.js` | 文档：液体注入卡片（`shader_flood.js`，WebGL，2D canvas 兜底）；文档页暂为占位 |
 | `?view=samples&product=…&case=…&trace=…` | `samples.js` | 具体数据两栏：问句列表 | 同卡上方轨迹概览 + 三列（轨迹 / 对话 / 归因）；证据连线在对话与归因之间；`trace` 定位到会话里的某一轮 |
 | `?view=data&detail=eval&ed=…&em=…` | `data.js` | 评测量详情：日期 → 模型 → session 三层表格；最后一层进入具体数据的完整输入/输出 |
 
@@ -175,6 +176,10 @@ A/B 面板里的样本入口（旭日图叶子样本、矩阵格趋势的样本�
 | `dashboard/tests/test_kline_chart.mjs` | K 线周期聚合与周期按钮回归 | 改 K 线口径 |
 | `dashboard/config/releases.json` | 发版日期默认配置（`<datasets>/releases.json` 可覆盖） | 新增发版、改版本名 |
 | `dashboard/static/js/system.js` | 评测体系机制图、聚类（阶段 → 环节 → 机制 → 模式）、证据闭环 | 体系页 |
+| `dashboard/static/js/evidence_theater.js` | 证据闭环全屏视图：左轨迹、右「问题 → 证据引用 → 原始消息 → 推导出的现象」四步，引用到原句的连线；懒读 `samples/<slug>.json` 补现象 / 推理 / 定级理由 | 体系页证据呈现 |
+| `dashboard/static/js/builder.js` | 多光标页面搭建动画 + 底部播放条（暂停 / 重播 / 跳过）；只用 clip-path 隐藏，跳过或完成后清掉 | 体系页入场 |
+| `dashboard/static/js/shader_flood.js` + `docs.js` + `css/docs.css` | 文档页与液体注入卡片 | 文档页 |
+| `dashboard/static/js/pixel_toggle.js` | 顶栏像素日夜开关（点击 / 拖动 / 键盘），切主题仍走 app.js 的 view transition | 主题开关 |
 | `dashboard/static/js/samples.js` | 具体数据两栏工作台（样本列表 + 详情） | 列表、筛选、分页 |
 | `dashboard/static/js/sample_detail.js` | 样本详情工厂（head + 轨迹 / 中间链路 / 归因、证据连线、轮次切换）；samples 与版本对比共用，`prefix` 控制 id | 详情呈现、证据交互 |
 | `dashboard/static/js/compare.js` + `css/compare.css` | 版本对比页：同题列表 + 改版前 / 改版后 / GPT 三栏详情（GPT 懒读 `/gpt_samples/`），A/B 面板样本的落点 | 同题对比排版、路由、事实核验 |

@@ -76,8 +76,6 @@
 .icon-btn:hover { background: var(--hover); }
 .icon-btn:active { transform: scale(0.94); }
 .icon-btn svg { width: 18px; height: 18px; }
-:root[data-mode="dark"] .i-sun { display: none; }
-:root:not([data-mode="dark"]) .i-moon { display: none; }
 
 main { padding: 8px var(--gutter) 48px; max-width: var(--page-max); margin: 0 auto; }
 html[data-view="samples"] main, html[data-view="forecast"] main { max-width: none; padding-bottom: 16px; }
@@ -184,6 +182,9 @@ button.cell[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px 
   .card { grid-column: span min(var(--span, 4) * 2, 12); }
   .card.keep { grid-column: span var(--span); }
 }
+/* With 文档 the switch is one tab wider: between 1180 and 1360px the clock would slide under it,
+   so it steps aside there (it is hidden below 1180 anyway). */
+@media (max-width: 1360px) { .stamp { display: none; } }
 /* The page switch plus its mark needs the bar's whole width before the two side groups fit; below
    that the switch takes a second row instead of sliding under the clock and product switch. */
 @media (max-width: 1180px) {

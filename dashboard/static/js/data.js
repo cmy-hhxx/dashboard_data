@@ -80,7 +80,7 @@ export async function render(root, c) {
   }
 }
 
-const ICON_COLLAPSE = `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 15l6-6 6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const ICON_COLLAPSE = `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 /* Every push-pull card carries the way back to its default state in the head, so one card's
    transition reads the same as the next instead of hiding inside the star map. */
 const stateBtn = `<button type="button" class="icon-btn card-state" data-collapse hidden aria-label="收起卡片" title="收起">${ICON_COLLAPSE}</button>`;

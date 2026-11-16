@@ -15,27 +15,45 @@
 .bn-sev[aria-pressed="true"] { background: var(--ink); color: var(--card); }
 .bn-sev[aria-pressed="true"] small { color: color-mix(in oklab, var(--card) 70%, transparent); }
 
-.bn-list { display: grid; gap: 2px; }
+/* One grid for the whole list: the head row and every case row are subgrids of .bn-list, so the
+   level chip, the question, the model, the date and the action share column edges and the text
+   of every cell sits on the question's first baseline. */
+.bn-list {
+  --bn-cols: 76px minmax(0, 1fr) 132px 96px 64px;
+  display: grid; grid-template-columns: var(--bn-cols); column-gap: var(--sp-4); row-gap: 2px;
+}
+.bn-head, .bn-row { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; }
+@supports not (grid-template-columns: subgrid) {
+  .bn-head, .bn-row { grid-template-columns: var(--bn-cols); column-gap: var(--sp-4); }
+}
+.bn-head {
+  align-items: end; padding: 0 var(--sp-3) var(--sp-2); border-bottom: 1px solid var(--well-2); margin-bottom: var(--sp-1);
+  color: var(--faint); font-size: var(--fs-meta);
+}
+.bn-head > span:last-child { text-align: right; }
 .bn-row {
-  display: grid; grid-template-columns: 64px minmax(0, 1fr) 112px 96px 72px; gap: var(--sp-4); align-items: center;
+  align-items: first baseline;
   width: 100%; min-height: 48px; padding: var(--sp-2) var(--sp-3); border-radius: var(--r-well);
-  text-align: left; transition: background var(--snap);
+  text-align: left; font: inherit; color: inherit; transition: background var(--snap);
   animation: rise 380ms cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: calc(var(--i) * 22ms);
 }
+.bn-row > * { min-width: 0; }
 .bn-row:hover { background: var(--well); }
 .bn-row:active { transform: scale(0.997); }
 .bn-row.is-static { cursor: default; }
+.bn-row .jd-sev { justify-self: start; line-height: var(--lh-small, 1.5); }
 .bn-q { display: grid; gap: 1px; min-width: 0; }
 .bn-q b, .bn-q span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bn-q b { font-size: var(--fs-small); font-weight: var(--w-medium); color: var(--ink); }
+.bn-q b { font-size: var(--fs-small); line-height: 1.5; font-weight: var(--w-medium); color: var(--ink); }
 .bn-q span { font-size: var(--fs-meta); color: var(--muted); }
-.bn-m { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-meta); color: var(--ink-2); }
-.bn-d { color: var(--faint); font-size: var(--fs-meta); text-align: right; }
+.bn-m, .bn-d { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-meta); line-height: 1.5; }
+.bn-m { color: var(--ink-2); }
+.bn-d { color: var(--muted); font-variant-numeric: tabular-nums; }
 .bn-go {
-  display: inline-flex; align-items: center; justify-content: flex-end; gap: 1px;
-  color: var(--muted); font-size: var(--fs-meta); white-space: nowrap;
+  display: inline-flex; align-items: baseline; justify-content: flex-end; gap: 1px; justify-self: end;
+  color: var(--muted); font-size: var(--fs-meta); line-height: 1.5; white-space: nowrap;
 }
-.bn-go svg { width: 14px; height: 14px; transition: transform var(--snap); }
+.bn-go svg { width: 14px; height: 14px; align-self: center; transition: transform var(--snap); }
 .bn-row:hover .bn-go { color: var(--accent); }
 .bn-row:hover .bn-go svg { transform: translateX(2px); }
 .bn-go.is-none { color: var(--faint); }
@@ -44,10 +62,11 @@
 .bn .pager .pager-info { margin: 0 var(--sp-2); }
 
 @media (max-width: 1180px) {
-  .bn-row { grid-template-columns: 64px minmax(0, 1fr) 96px 72px; }
+  .bn-list { --bn-cols: 76px minmax(0, 1fr) 96px 64px; }
   .bn-m { display: none; }
 }
 @media (max-width: 860px) {
-  .bn-row { grid-template-columns: 64px minmax(0, 1fr) 72px; gap: var(--sp-3); }
+  .bn-list { --bn-cols: 76px minmax(0, 1fr) 56px; column-gap: var(--sp-3); }
   .bn-d { display: none; }
 }
+.bn-list > .empty, .bn-list > .bn-wait { grid-column: 1 / -1; }

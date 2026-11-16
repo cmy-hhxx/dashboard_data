@@ -1,4 +1,18 @@
 /* 评测评测: the evaluator audited on three dimensions, against its own reruns and human re-labels */
+
+/* Three colours for the whole page: the accent for what passed (rings, pass bars, agreement),
+   neutrals for structure, and one alert hue for failure. Severity is that same alert hue at five
+   depths, so P0–P4 read as one scale instead of five colours; in dark mode the most severe step
+   stays the brightest, as everywhere else on the board. */
+.jd {
+  --jd-alert: #bf3822;
+  --sev-0: var(--jd-alert);
+  --sev-1: color-mix(in oklab, var(--jd-alert) 80%, var(--card));
+  --sev-2: color-mix(in oklab, var(--jd-alert) 62%, var(--card));
+  --sev-3: color-mix(in oklab, var(--jd-alert) 46%, var(--card));
+  --sev-4: color-mix(in oklab, var(--jd-alert) 32%, var(--card));
+}
+:root[data-mode="dark"] .jd { --jd-alert: #fa8565; }
 .jd .card { display: flex; flex-direction: column; }
 .jd .card-head .meta.end { margin-left: auto; }
 .jd-mock {
@@ -20,7 +34,7 @@
 .jd-kpi-n { color: var(--muted); font-size: var(--fs-meta); }
 .jd-delta { font-size: var(--fs-meta); font-variant-numeric: tabular-nums; color: var(--muted); }
 .jd-delta.is-good { color: var(--accent); }
-.jd-delta.is-bad { color: var(--sev-1); }
+.jd-delta.is-bad { color: var(--jd-alert); }
 
 /* agreement matrix: human rows × judge columns, the diagonal carries the eye */
 .jd-cm { position: relative; display: grid; grid-template-columns: 16px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); flex: 1; }
@@ -105,9 +119,9 @@
 @keyframes jd-spin-in { from { --p: 0; } }
 .jd-dim-side { display: grid; gap: var(--sp-2); justify-items: start; min-width: 0; }
 .jd-dim-n { color: var(--muted); font-size: var(--fs-meta); }
-.jd-rstack, .jd-rs i { --rc: color-mix(in oklab, var(--sev-1) calc(78% - var(--k) * 20%), var(--well)); }
+.jd-rstack, .jd-rs i { --rc: color-mix(in oklab, var(--jd-alert) calc(78% - var(--k) * 20%), var(--well)); }
 .jd-rstack { display: flex; gap: 2px; width: 100%; height: 8px; }
-.jd-rstack i { border-radius: 2px; background: color-mix(in oklab, var(--sev-1) calc(78% - var(--k) * 20%), var(--well)); transform-origin: 0 50%; animation: jd-grow-x 700ms 200ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+.jd-rstack i { border-radius: 2px; background: color-mix(in oklab, var(--jd-alert) calc(78% - var(--k) * 20%), var(--well)); transform-origin: 0 50%; animation: jd-grow-x 700ms 200ms cubic-bezier(0.16, 1, 0.3, 1) both; }
 .jd-sbs { display: grid; gap: 2px; }
 .jd-sb {
   display: grid; grid-template-columns: 52px minmax(0, 1fr) 36px; gap: var(--sp-3); align-items: center; min-height: 26px;
@@ -132,7 +146,7 @@
 .jd-sg-r { display: flex; align-items: center; color: var(--ink-2); font-size: var(--fs-small); }
 .jd-sg-c {
   height: 32px; border-radius: 5px; font-size: var(--fs-meta); font-variant-numeric: tabular-nums; color: var(--ink-2);
-  background: color-mix(in oklab, var(--sev-2) var(--a), var(--well));
+  background: color-mix(in oklab, var(--jd-alert) var(--a), var(--well));
   animation: rise 420ms cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: calc(var(--i) * 22ms);
   transition: transform var(--snap), box-shadow var(--snap);
 }
@@ -148,7 +162,7 @@
 .jd-hb { flex: 1 1 0; display: flex; align-items: flex-end; height: 100%; border-radius: 4px; transition: background var(--snap); }
 .jd-hb:hover { background: var(--hover); }
 .jd-hb i { width: 100%; height: var(--h); border-radius: 4px 4px 2px 2px; background: var(--accent); transform-origin: 50% 100%; animation: jd-grow 620ms cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: calc(var(--i) * 35ms); }
-.jd-hb.is-low i { background: color-mix(in oklab, var(--sev-1) 70%, var(--well)); }
+.jd-hb.is-low i { background: color-mix(in oklab, var(--jd-alert) 70%, var(--well)); }
 .jd-hist-x { display: flex; justify-content: space-between; margin-top: var(--sp-2); color: var(--faint); font-size: var(--fs-micro); }
 @keyframes jd-grow { from { transform: scaleY(0); } }
 
@@ -212,8 +226,8 @@
 }
 .jd-ev li > span { color: var(--faint); font-size: var(--fs-meta); }
 .jd-ev q { color: var(--ink-2); quotes: "“" "”"; }
-.jd-ev li.is-bad { background: color-mix(in oklab, var(--sev-1) 10%, var(--card)); box-shadow: inset 2px 0 0 var(--sev-1); }
-.jd-x { display: inline-grid; place-items: center; width: 16px; height: 16px; color: var(--sev-1); }
+.jd-ev li.is-bad { background: color-mix(in oklab, var(--jd-alert) 10%, var(--card)); box-shadow: inset 2px 0 0 var(--jd-alert); }
+.jd-x { display: inline-grid; place-items: center; width: 16px; height: 16px; color: var(--jd-alert); }
 .jd-x svg { width: 14px; height: 14px; }
 .jd-vd { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 2px var(--sp-2); align-items: center; padding: var(--sp-2) 0; }
 .jd-vd + .jd-vd { border-top: 1px solid var(--well-2); }
@@ -221,7 +235,7 @@
 .jd-vd-i svg { width: 12px; height: 12px; }
 .jd-vd.is-ok .jd-vd-i { color: var(--accent); background: var(--accent-soft, color-mix(in oklab, var(--accent) 14%, var(--card))); }
 .jd-vd.is-ok b { color: var(--muted); font-weight: normal; font-size: var(--fs-small); }
-.jd-vd.is-fail .jd-vd-i { color: var(--card); background: var(--sev-1); }
+.jd-vd.is-fail .jd-vd-i { color: var(--card); background: var(--jd-alert); }
 .jd-vd.is-fail b { font-size: var(--fs-small); font-weight: var(--w-medium); }
 .jd-vd p { grid-column: 2; margin: 2px 0 0; color: var(--ink-2); font-size: var(--fs-small); line-height: 1.55; }
 .jd-sug { display: inline-flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-1); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-chip); background: var(--well); justify-self: start; }

@@ -6,16 +6,14 @@ import {
   bindTips, REDUCED,
 } from "./core.js";
 import { threadFlow } from "./particles.js";
+import { openTheater } from "./evidence_theater.js";
+import { buildPage } from "./builder.js";
 
 let shown = null;
 
 const ROLE = { planning: "规划", request_generation: "请求生成", tool: "工具执行", script: "脚本执行", skill: "技能装载", delivery: "交付" };
 
-const E = { product: null, goldens: [], index: 0, obs: null, flow: null, details: new Map() };
-const clip = (text, max) => {
-  const v = String(text == null ? "" : text);
-  return v.length > max ? `${v.slice(0, max)}…` : v;
-};
+const E = { product: null, goldens: [], raw: [], index: 0, obs: null, flow: null, details: new Map(), theater: new Map() };
 
 function compactAnatomy(a) {
   if (!a || a.empty || !(a.messages || []).length || a.messages.length <= 22) return a;
@@ -39,6 +37,7 @@ export async function render(root, c) {
   if (shown === key && root.firstChild) return;
   shown = key;
   E.details.clear();
+  E.theater.clear();
 
   const prods = Object.values(d.products || {});
   if (!prods.length) {
@@ -52,12 +51,15 @@ export async function render(root, c) {
   else if (src) picked = src[c.product] || [];
   if (E.product !== c.product) E.index = 0;
   E.product = c.product;
+  E.raw = (Array.isArray(picked) ? picked : picked ? [picked] : []).filter((g) => g && (g.messages || []).length && (g.problems || []).length);
   E.goldens = (Array.isArray(picked) ? picked : picked ? [picked] : []).map(compactAnatomy);
   if (E.index >= E.goldens.length) E.index = 0;
 
   E.nav = c.navigate || null;
+  E.tax = d.taxonomy;
+  const pd = d.products && d.products[c.product];
   root.innerHTML = `<div class="bento">
-    ${flowCard(d.taxonomy)}
+    ${flowCard(d.taxonomy, pd)}
     ${goldenCard(E.goldens, E.index)}
   </div>`;
   if (!root._sysTips) {
@@ -68,6 +70,20 @@ export async function render(root, c) {
   renderMeta(root, E.goldens[E.index]);
   wireAnatomy(root, E.goldens[E.index]);
   wireFx(root, d.taxonomy, clusterExamples(d.taxonomy, E.goldens));
+  // The page builds itself under a dozen cursors on the first visit of the session; afterwards it
+  // simply appears, and the player in the corner can replay the build on request.
+  buildPage(root, { key: "sys", targets: buildTargets(root) });
+}
+
+/* What the cursors build, in reading order: each card's frame, then its blocks. */
+function buildTargets(root) {
+  return $$(".bento > .card", root).flatMap((card) => [
+    { el: card, kind: "frame", label: "Card" },
+    { el: $(".card-head h2", card), kind: "text", label: "Heading" },
+    ...$$(".fx-col > .fx-label, .fx-box, .fx-hub, .fx-cl-side, .fx-g, .fx-pm, .echo-tabs, .anatomy .rail, .anatomy .aprobs", card)
+      .map((el) => ({ el, kind: el.matches(".fx-label") ? "text" : el.matches(".fx-g, .rail, .aprobs") ? "grid" : "block",
+        label: el.matches(".fx-g") ? "Heatmap" : el.matches(".rail") ? "Messages" : el.matches(".aprobs") ? "Problems" : el.matches(".fx-label") ? "Label" : el.matches(".fx-hub") ? "Hub" : "Block" })),
+  ].filter((t) => t.el));
 }
 
 /* ---------------------------------------------------------------- 评测体系: one mechanism diagram */
@@ -87,7 +103,7 @@ const FX_OUT = [
 const taxoNum = (a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1));
 const patNum = (id) => id.split(".").map((x) => Number(x.replace(/\D/g, "")) || 0);
 
-function flowCard(tax) {
+function flowCard(tax, pd) {
   const ticks = Array.from({ length: 60 }, (_, k) => {
     const c = k % 9 === 0 ? FX_STEPS[(k / 9) % FX_STEPS.length][1] : "";
     const a = (k * Math.PI) / 30;
@@ -107,13 +123,13 @@ function flowCard(tax) {
     return `<div class="fx-box fx-out" style="--c:${c}" title="${sub} · ${rule}">${ico}<span class="fx-txt"><b>${t}</b>${label}</span></div>`;
   }).join("");
   const taxHTML = tax ? `<div class="fx-tax" id="fxTax">
-      <div class="fx-label"><span class="num">04</span>聚类</div>
+      <div class="fx-label"><span class="num">04</span>聚类<span class="fx-tap">${TAP_ICON}点矩阵里的格子、行或列，看它归了哪些模式</span></div>
       <div class="fx-cl">
         <div class="fx-cl-side">
           <div class="fx-cl-prob" id="fxProb"></div>
           <ol class="fx-cl-seq">${["环节", "机制", "模式"].map((t, i) => `<li data-step="${i + 1}"><span class="num">${i + 1}</span><b>${t}</b><em id="fxStep${i + 1}"></em></li>`).join("")}</ol>
         </div>
-        ${taxGrid(tax)}
+        ${taxGrid(tax, pd)}
       </div>
       <div class="fx-pm" id="fxDetail"></div></div>` : "";
   return `<article class="card" style="--span:12">
@@ -128,26 +144,44 @@ function flowCard(tax) {
     </div>${taxHTML}</article>`;
 }
 
-/* The taxonomy is one grid: 环节 (rows, grouped by phase) × 机制 (columns); a filled cell is a
-   pair that has L3 patterns. Clustering walks a problem through it: row, then column, then the
-   pattern in that cell. A cell, a row head or a column head also opens its patterns below. */
+/* The taxonomy is one grid: 环节 (rows, grouped by phase) × 机制 (columns), drawn as a heatmap.
+   With a batch on hand a cell's number is how many problems were clustered into that pair (the
+   cluster matrix's own count); without one it is how many L3 patterns the pair defines. The shade
+   follows the number on a square-root scale so one huge cell does not wash the rest out. */
 const l3 = (tax) => Object.entries(tax.patterns).filter(([id]) => id.split(".").length === 3);
-function taxGrid(tax) {
+const TAP_ICON = `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6.5 8.5V3.8a1.2 1.2 0 0 1 2.4 0v3.4l3 .6a1.4 1.4 0 0 1 1.1 1.6l-.5 3a2 2 0 0 1-2 1.6H8.3a2 2 0 0 1-1.6-.8L4.4 10a1.1 1.1 0 0 1 1.7-1.4z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>`;
+function cellCounts(tax, pd) {
+  const pats = l3(tax);
+  const byPattern = (sid, mid) => pats.filter(([id]) => id.startsWith(`${sid}.${mid}.`)).length;
+  const mx = pd && pd.matrix;
+  if (mx && Object.keys(mx).length) {
+    return { unit: "问题", n: (sid, mid) => ((mx[sid] || {})[mid] || {}).n || 0, has: byPattern };
+  }
+  return { unit: "模式", n: byPattern, has: byPattern };
+}
+function taxGrid(tax, pd) {
   const stages = tax.stages.slice().sort(taxoNum);
   const mechs = tax.mechanisms.slice().sort(taxoNum);
-  const pats = l3(tax);
-  const n = (sid, mid) => pats.filter(([id]) => id.startsWith(`${sid}.${mid}.`)).length;
+  const cc = cellCounts(tax, pd);
+  const n = (sid, mid) => cc.n(sid, mid);
+  let max = 0;
+  stages.forEach((st) => mechs.forEach((m) => { max = Math.max(max, n(st.id, m.id)); }));
+  const heat = (v) => (max ? Math.sqrt(v / max) : 0).toFixed(3);
   const head = `<span class="fx-g-corner"></span><span></span>${mechs.map((m) =>
     `<button type="button" class="fx-g-col" data-m="${m.id}" title="${esc(m.def || "")}"><code>${m.id}</code>${esc(m.name)}</button>`).join("")}`;
-  let d = 0;
   const body = tax.phases.map((ph) => {
     const list = stages.filter((st) => st.phase === ph.id);
     if (!list.length) return "";
-    return list.map((st, i) => `${i === 0 ? `<span class="fx-g-ph" style="grid-row:span ${list.length}">${esc(ph.name)}</span>` : ""}<button type="button" class="fx-g-row" data-s="${st.id}" title="${esc(st.def || "")}"><code>${st.id}</code>${esc(st.name)}</button>${mechs.map((m) => (n(st.id, m.id)
-      ? `<button type="button" class="fx-g-c" data-s="${st.id}" data-m="${m.id}" style="--d:${d++}" aria-label="${esc(`${st.name} × ${m.name}`)}"><i></i></button>`
-      : `<span class="fx-g-c is-empty" data-s="${st.id}" data-m="${m.id}"></span>`)).join("")}`).join("");
+    return list.map((st, i) => `${i === 0 ? `<span class="fx-g-ph" style="grid-row:span ${list.length}">${esc(ph.name)}</span>` : ""}<button type="button" class="fx-g-row" data-s="${st.id}" title="${esc(st.def || "")}"><code>${st.id}</code>${esc(st.name)}</button>${mechs.map((m) => {
+      const v = n(st.id, m.id);
+      return v || cc.has(st.id, m.id)
+        ? `<button type="button" class="fx-g-c${Number(heat(v)) > 0.62 ? " is-hot" : ""}" data-s="${st.id}" data-m="${m.id}" style="--h:${heat(v)}" aria-label="${esc(`${st.name} × ${m.name}：${fmt(v)} 个${cc.unit}`)}" title="${esc(`${st.name} × ${m.name} · ${fmt(v)} 个${cc.unit}`)}"><b class="num">${v ? fmt(v) : "·"}</b></button>`
+        : `<span class="fx-g-c is-empty" data-s="${st.id}" data-m="${m.id}"></span>`;
+    }).join("")}`).join("");
   }).join("");
-  return `<div class="fx-g" style="--cols:${mechs.length}">${head}${body}</div>`;
+  const legend = `<div class="fx-g-key"><span>格内数字：${cc.unit === "问题" ? "本批次归入该格的问题数" : "该格定义的聚类模式数（暂无批次数据）"}</span>
+    <span class="fx-g-ramp"><small class="num">0</small><i></i><small class="num">${fmt(max)}</small></span></div>`;
+  return `<div class="fx-gw"><div class="fx-g" style="--cols:${mechs.length}">${head}${body}</div>${legend}</div>`;
 }
 
 /* Problems to walk through the grid: the golden cases' own clustered problems first, else one
@@ -177,6 +211,7 @@ function patternList(tax, sid, mid, hot = null) {
 
 /* ---------------------------------------------------------------- evidence closure */
 
+const PLAY_ICON = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.5v9l7.5-4.5z" fill="currentColor"/></svg>`;
 const ICON_OPEN = `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
 /* Concrete cases as tabs; the picked case reads as messages ← threads → problems, and every
@@ -192,10 +227,12 @@ function goldenCard(cases, index) {
   return `<article class="card" style="--span:12">
     <header class="card-head"><h2>证据闭环</h2><span class="meta" id="eMeta"></span>
       <span class="meta-end end">
+        <button type="button" class="echo-btn is-primary" id="eTheater">${PLAY_ICON}逐步看证据闭环</button>
         <button type="button" class="echo-btn" id="eExpand" aria-pressed="false">展开全部消息</button>
         <button type="button" class="echo-btn is-link" id="eOpen" hidden>完整轨迹${ICON_OPEN}</button>
       </span></header>
     ${tabs}
+    <p class="echo-hint">左边是这道 case 的消息轨迹，右边是评测器找到的问题，连线是证据。点任一问题，进入全屏一步步看它怎样从原文推出来。</p>
     ${a ? `<div class="echo"><div class="echo-main"><div id="anatomyBody">${anatomyBody(a)}</div></div></div>` : `<div class="empty">暂无 golden case。</div>`}
   </article>`;
 }
@@ -215,13 +252,9 @@ function anatomyBody(a) {
   const probs = a.problems
     .slice()
     .sort((x, y) => SEV.indexOf(x.sev) - SEV.indexOf(y.sev))
-    .map((p) => {
-      const ev = (p.ev || []).filter((e) => e.q);
-      return `<div class="aprob" data-p="${p.id}" style="--c:${sevColor(p.sev)}" role="button" tabindex="0" aria-expanded="false">
-        <div class="aprob-top"><span class="sev-badge">${p.sev}</span><span>${esc(roleName(p.role))}</span>${p.path ? `<span class="mono faint">${esc(p.path)}</span>` : ""}<span class="aprob-n">看证据<i aria-hidden="true"></i></span></div>
-        <div class="t">${esc(p.label)}</div><div class="s">${esc(p.comp || "")}${(p.msgs || []).length ? ` · ${p.msgs.map((m) => `#${m}`).join(" ")}` : ""}</div>
-        ${ev.length ? `<ol class="aprob-ev">${ev.map((e) => `<li><span class="num">${e.m == null ? "—" : `#${e.m}`}</span><q>${esc(e.q)}</q></li>`).join("")}</ol>` : ""}</div>`;
-    })
+    .map((p) => `<div class="aprob" data-p="${p.id}" style="--c:${sevColor(p.sev)}" role="button" tabindex="0" aria-haspopup="dialog" aria-label="${esc(`${p.sev} ${p.label}：全屏逐步查看证据`)}">
+        <div class="aprob-top"><span class="sev-badge">${p.sev}</span><span>${esc(roleName(p.role))}</span>${p.path ? `<span class="mono faint">${esc(p.path)}</span>` : ""}<span class="aprob-n">逐步推导<i aria-hidden="true"></i></span></div>
+        <div class="t">${esc(p.label)}</div><div class="s">${esc(p.comp || "")}${(p.msgs || []).length ? ` · ${p.msgs.map((m) => `#${m}`).join(" ")}` : ""}</div></div>`)
     .join("");
   return `<div class="anatomy${a.messages.length >= 12 ? " is-fill" : ""}">
     <div class="rail">${msgs}</div>
@@ -261,7 +294,19 @@ function showCase(root) {
   if (all) all.setAttribute("aria-pressed", "false");
 }
 
+/* The full-screen walk-through; it reads the uncompacted case (every message) and pulls the case's
+   full detail for the phenomenon, the reasoning and the grading reason. */
+function theater(from, problem) {
+  const g = E.goldens[E.index];
+  const index = Math.max(0, E.raw.findIndex((x) => x.slug === (g && g.slug)));
+  openTheater({
+    cases: E.raw, index, problem, product: E.product, tax: E.tax, nav: E.nav, from, details: E.theater,
+    fetch: (slug) => getJSON(`samples/${slug}.json`, { retries: 1 }).catch(() => null),
+  });
+}
+
 function wireGoldens(root) {
+  $("#eTheater", root)?.addEventListener("click", (e) => theater(e.currentTarget, null));
   $("#eTabs", root)?.addEventListener("click", (e) => {
     const t = e.target.closest("[data-i]");
     if (!t || Number(t.dataset.i) === E.index) return;
@@ -290,37 +335,6 @@ function wireAnatomy(root, a) {
   }
   const box = $("#anatomyBody .anatomy", root);
   if (!box || !a || a.empty) return;
-  // The shared payload keeps the anchors only (quotes are stripped to save 4 MB). Opening a
-  // problem pulls that one case's full detail and fills its quotes in place, once per case.
-  const fullDetail = (slug) => {
-    if (!slug) return Promise.resolve(null);
-    if (!E.details.has(slug)) E.details.set(slug, getJSON(`samples/${slug}.json`).catch(() => null));
-    return E.details.get(slug);
-  };
-  const fillEvidence = (detail) => {
-    if (!detail) return;
-    $$(".aprob", box).forEach((el) => {
-      const p = (detail.attribution && detail.attribution.problems || []).find((x) => String(x.id) === el.dataset.p);
-      if (!p) return;
-      const quotes = (p.ev || []).map((k) => (detail.evidence || [])[k]).filter((e) => e && e.q).slice(0, 4);
-      el.querySelector(".aprob-ev")?.remove();
-      const ol = document.createElement("ol");
-      ol.className = "aprob-ev";
-      ol.innerHTML = quotes.length
-        ? quotes.map((e) => `<li><span class="num">${e.m == null ? "—" : `#${e.m}`}</span><q>${esc(clip(e.q, 240))}</q></li>`).join("")
-        : '<li class="is-loading">这条问题没有登记原文引用</li>';
-      el.appendChild(ol);
-    });
-  };
-  let tracing = null; // { pid, at }: the trace stays lit across redraws for a moment
-  const markPaths = (pid) => {
-    $$(`.threads path[data-p="${pid}"]`, box).forEach((p, i) => {
-      p.classList.remove("is-trace");
-      void p.getBoundingClientRect();
-      p.style.animationDelay = `${i * 90}ms`;
-      p.classList.add("is-trace");
-    });
-  };
   const draw = () => {
     const svg = $(".threads svg", box);
     if (!svg) return;
@@ -343,10 +357,6 @@ function wireAnatomy(root, a) {
       });
     });
     svg.innerHTML = paths;
-    // Opening a problem resizes the pane, which rebuilds every path; replay the draw-in on the
-    // fresh ones for as long as the trace lasts, so a late relayout cannot cut it short.
-    if (tracing && performance.now() - tracing.at < 1600) markPaths(tracing.pid);
-    else tracing = null;
     const on = box.querySelector(".aprob.on");
     if (on) $$(".threads path", box).forEach((p) => p.classList.toggle("on", p.dataset.p === on.dataset.p));
   };
@@ -358,7 +368,6 @@ function wireAnatomy(root, a) {
   if (E.flow) E.flow.destroy();
   E.flow = threadFlow($(".threads svg", box));
 
-  let pinned = null;
   const focus = (pid) => {
     box.classList.toggle("is-focus", pid != null);
     const prob = pid != null && a.problems.find((x) => String(x.id) === pid);
@@ -367,50 +376,14 @@ function wireAnatomy(root, a) {
     $$(".rail-msg", box).forEach((m) => m.classList.toggle("on", !!prob && (prob.msgs || []).includes(Number(m.dataset.m))));
   };
   box.addEventListener("pointerover", (e) => {
-    if (pinned != null) return;
     const b = e.target.closest(".aprob");
     focus(b ? b.dataset.p : null);
   });
-  box.addEventListener("pointerleave", () => { if (pinned == null) focus(null); });
-  // A clicked problem plays its own evidence: each thread draws from the problem back to the
-  // message it cites, and those messages light in the order they are cited.
-  const trace = (pid, prob) => {
-    if (REDUCED || !pid) return;
-    tracing = { pid, at: performance.now() };
-    markPaths(pid);
-    (prob.msgs || []).forEach((mi, k) => {
-      const m = $(`.rail-msg[data-m="${mi}"]`, box);
-      if (!m) return;
-      m.classList.remove("is-pulse");
-      void m.offsetWidth;
-      m.style.setProperty("--k", k);
-      m.classList.add("is-pulse");
-    });
-  };
+  box.addEventListener("pointerleave", () => focus(null));
   const toggle = (el) => {
     if (el.classList.contains("aprob")) {
-      // A problem opens to its evidence and pins its threads; its messages open with it.
-      const open = !el.classList.contains("is-open");
-      $$(".aprob.is-open", box).forEach((x) => { x.classList.remove("is-open"); x.setAttribute("aria-expanded", "false"); });
-      el.classList.toggle("is-open", open);
-      el.setAttribute("aria-expanded", String(open));
-      pinned = open ? el.dataset.p : null;
-      focus(pinned);
-      const prob = a.problems.find((x) => String(x.id) === el.dataset.p);
-      if (open && prob) {
-        trace(el.dataset.p, prob);
-        if (!el.querySelector(".aprob-ev")) {
-          el.insertAdjacentHTML("beforeend", '<ol class="aprob-ev"><li class="is-loading">正在读取原文证据…</li></ol>');
-          fullDetail(a.slug).then((detail) => {
-            el.querySelector(".aprob-ev")?.remove();
-            fillEvidence(detail);
-            if (!detail) el.insertAdjacentHTML("beforeend", '<ol class="aprob-ev"><li class="is-loading">原文证据暂时读不到</li></ol>');
-            if (el.classList.contains("is-open")) trace(el.dataset.p, prob);
-          });
-        }
-        const first = $(`.rail-msg[data-m="${(prob.msgs || [])[0]}"]`, box);
-        first?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-      }
+      // A problem opens the full-screen walk-through at itself; nothing unfolds in place.
+      theater(el, el.dataset.p);
       return;
     }
     if (!el.classList.contains("has-more")) return;
@@ -433,8 +406,9 @@ function wireAnatomy(root, a) {
 
 /* ---------------------------------------------------------------- 聚类: a problem walked through the grid */
 
-/* The grid is a reference, not a slideshow: a problem is shown once and stays put, and a click on
-   a row, column or cell lists what lives there. Nothing walks on its own. */
+/* The grid is a reference, not a slideshow. It opens still, with a prompt saying what to click;
+   a cell, a row or a column lists what lives there, and 「看一个例子」 walks one real problem
+   through 环节 → 机制 → 模式 — once per click, never on its own. */
 function wireCluster(tx, tax, examples) {
   const stageOf = (id) => tax.stages.find((x) => x.id === id);
   const mechOf = (id) => tax.mechanisms.find((x) => x.id === id);
@@ -473,7 +447,18 @@ function wireCluster(tx, tax, examples) {
     pick(sid, mid, ex.path);
   };
 
+  let shown = -1;
+  const guide = () => {
+    prob.innerHTML = `<span class="fx-guide">${TAP_ICON}</span><b>点矩阵里任意一格、一行或一列</b><small>下方会列出它归入的全部聚类模式${examples.length ? "；也可以先看一个真实问题怎样被归类" : ""}</small>${examples.length ? '<button type="button" class="fx-ex" data-ex>看一个例子</button>' : ""}`;
+    detail.innerHTML = '<p class="fx-pm-empty">还没有选中格子。矩阵颜色越深，归到这里的越多。</p>';
+  };
   tx.addEventListener("click", (e) => {
+    if (e.target.closest("[data-ex]")) {
+      shown = (shown + 1) % examples.length;
+      show(examples[shown]);
+      prob.insertAdjacentHTML("beforeend", `<button type="button" class="fx-ex" data-ex>${examples.length > 1 ? `换一个例子 <span class="num">${shown + 1}/${examples.length}</span>` : "再看一次"}</button>`);
+      return;
+    }
     const b = e.target.closest("button.fx-g-c, .fx-g-row, .fx-g-col");
     if (!b) return;
     [1, 2, 3].forEach((k) => step(k, ""));
@@ -486,11 +471,7 @@ function wireCluster(tx, tax, examples) {
     $$(".fx-g-row", tx).forEach((x) => x.classList.toggle("is-hl", !!c && x.dataset.s === c.dataset.s));
     $$(".fx-g-col", tx).forEach((x) => x.classList.toggle("is-hl", !!c && x.dataset.m === c.dataset.m));
   });
-  if (examples.length) show(examples[0]);
-  else {
-    const first = $("button.fx-g-c", tx);
-    if (first) pick(first.dataset.s, null);
-  }
+  guide();
 }
 
 /* ---------------------------------------------------------------- 评测体系 wiring: wires, pulses */
