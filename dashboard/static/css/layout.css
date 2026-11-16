@@ -10,7 +10,8 @@
   backdrop-filter: saturate(1.4) blur(14px);
   -webkit-backdrop-filter: saturate(1.4) blur(14px);
 }
-.brand { display: flex; align-items: center; justify-self: start; }
+.top-mid { grid-column: 2; display: flex; align-items: center; justify-self: center; gap: 10px; min-width: 0; }
+.brand { display: flex; align-items: center; flex: none; }
 .brand-mark { width: 22px; height: 22px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; }
 .brand-mark i { border-radius: 2px; background: var(--sev-none); transition: transform var(--spring), background var(--snap); }
 .brand-mark i:nth-child(1), .brand-mark i:nth-child(5) { background: var(--sev-2); }
@@ -183,12 +184,17 @@ button.cell[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px 
   .card { grid-column: span min(var(--span, 4) * 2, 12); }
   .card.keep { grid-column: span var(--span); }
 }
-@media (max-width: 860px) {
-  :root { --gutter: 16px; --r-card: 22px; }
+/* The page switch plus its mark needs the bar's whole width before the two side groups fit; below
+   that the switch takes a second row instead of sliding under the clock and product switch. */
+@media (max-width: 1180px) {
   .top { grid-template-columns: auto minmax(0, 1fr); gap: 10px; }
   .top-end { gap: 10px; }
+  .top-mid { display: contents; }
   #viewSwitch { grid-column: 1 / -1; grid-row: 2; justify-self: stretch; overflow-x: auto; }
   .stamp { display: none; }
+}
+@media (max-width: 860px) {
+  :root { --gutter: 16px; --r-card: 22px; }
   .bento { grid-template-columns: minmax(0, 1fr); }
   :root { --card-px: var(--sp-5); --card-py: var(--sp-5); }
   .card, .card.keep { grid-column: 1 / -1; }
