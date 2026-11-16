@@ -1,11 +1,11 @@
 /* K 线图：看板里所有趋势都画成它——日期横轴、蜡烛、底部评测量能、发版竖线。
-   按天采样的序列聚合成日/周/月/年蜡烛，叠加 MA5 / MA10 / MA20；compact 模式给卡片里的小图用
-   （无图例、无均线、无坐标轴、不响应拖拽缩放）。
+   按天采样的序列聚合成日/周/月/年蜡烛，不画均线；compact 模式给卡片里的小图用
+   （无图例、无坐标轴、不响应拖拽缩放）。
    基于 TradingView 的 lightweight-charts（Apache-2.0，vendor 在 static/vendor）；不自绘 Canvas。
    数据口径由调用方给全量 rows；这里只负责聚合和绘制，不做任何筛选。 */
 import { createChart, CandlestickSeries, HistogramSeries, LineSeries, AreaSeries, ColorType } from "../vendor/lightweight-charts.production.js";
 import { esc, fmt, hideTip } from "./core.js";
-import { KLINE_PERIODS, PERIOD_NAME, buildCandles, movingAverage } from "./kline_data.js";
+import { KLINE_PERIODS, PERIOD_NAME, buildCandles } from "./kline_data.js";
 
 export { KLINE_PERIODS } from "./kline_data.js";
 /* Custom properties may hold var()/color-mix(); resolve them to a concrete sRGB color the chart
@@ -40,9 +40,7 @@ function palette() {
     up: colorOf("--sev-1", "#bf3822"),
     down: colorOf("--loc-ulq", "#1d7d72"),
     volume: alphaColor(colorOf("--muted", "#697280"), 0.5),
-    ma5: colorOf("--accent", "#3552d8"),
-    ma10: colorOf("--mx-c4", "#b3651f"),
-    ma20: colorOf("--mx-c3", "#6a43b8"),
+    line: colorOf("--accent", "#3552d8"),
     release: colorOf("--release", "#b3261e"),
   };
 }
@@ -146,11 +144,8 @@ function wireWheelZoom(host, chart, enabled) {
     chart.timeScale().setVisibleLogicalRange({ from: mid - half, to: mid + half });
   };
   host.addEventListener("wheel", onWheel, { passive: false, capture: true });
-  host.title = "拖拽平移 · 解锁后滚轮缩放";
   return () => host.removeEventListener("wheel", onWheel, true);
 }
-
-const MA_DEFS = [["MA5", 5, "ma5"], ["MA10", 10, "ma10"], ["MA20", 20, "ma20"]];
 
 const LOCK_ICON = `<svg class="i-zoom-lock" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="4" y="7" width="8" height="6" rx="1.2" stroke="currentColor" stroke-width="1.3"/><path d="M6 7V5.3a2 2 0 0 1 4 0V7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg><svg class="i-zoom-unlock" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="4" y="7" width="8" height="6" rx="1.2" stroke="currentColor" stroke-width="1.3"/><path d="M6 7V5.3a2 2 0 0 1 3.8-.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>`;
 
@@ -176,14 +171,21 @@ function zoomLock(spec, compact) {
   };
 }
 
-/* The reading sits at the top of the price pane on the side away from the pointer, so it never
-   covers the candle being read. */
-function placeTip(tip, host, canvas, pointX, rightInset = 0) {
-  const pad = 8;
+/* The reading sits beside the pointer, on its right unless the plot (or the window) ends there,
+   vertically centred on it and kept inside the window, so it reads next to the candle it is about. */
+function placeTip(tip, host, canvas, point, rightInset = 0) {
+  const gap = 14;
   const width = tip.offsetWidth;
-  const left = pointX > host.clientWidth / 2 ? pad : Math.max(pad, host.clientWidth - rightInset - width - pad);
+  const height = tip.offsetHeight;
+  const box = host.getBoundingClientRect();
+  const limit = Math.min(host.clientWidth - rightInset, window.innerWidth - 8 - box.left);
+  let left = point.x + gap;
+  if (left + width > limit) left = point.x - width - gap;
+  left = Math.max(Math.max(0, 8 - box.left), left);
+  const y = canvas.offsetTop + point.y;
+  const top = Math.max(8 - box.top, Math.min(window.innerHeight - 8 - box.top - height, y - height / 2));
   tip.style.left = `${left}px`;
-  tip.style.top = `${canvas.offsetTop + pad}px`;
+  tip.style.top = `${top}px`;
 }
 
 /* Release dates outside the data still get their line: they become empty slots on the time axis. */
@@ -252,13 +254,9 @@ export function createKlineChart(host, spec = {}) {
   host.style.height = `${height}px`;
 
   const colors = palette();
-  const maSeries = [];
-  // A moving average needs at least its span of candles; listing one that cannot draw is noise.
-  const maDefs = compact ? [] : MA_DEFS.filter(([, span]) => span <= candles.length);
   const lock = zoomLock(spec, compact);
   const legend = compact ? "" : `<div class="kl-legend">
-      ${maDefs.map(([name, , key]) => `<span><i style="--c:${colors[key]}"></i>${name}</span>`).join("")}
-      <span class="kl-vol-key"><i class="is-vol"></i>量能 · ${esc(spec.volumeName || "Trace")}</span>
+      <span class="kl-vol-key"><i class="is-vol"></i>${esc(spec.volumeName || "Trace")} 数量</span>
       ${lock.html}
     </div>`;
   if (compact) host.classList.add("is-compact");
@@ -319,15 +317,6 @@ export function createKlineChart(host, spec = {}) {
       colors.release, getComputedStyle(document.body).fontFamily, colors.card)
     : null;
   if (releaseLines) candleSeries.attachPrimitive(releaseLines);
-
-  for (const [name, span, key] of maDefs) {
-    const series = chart.addSeries(LineSeries, {
-      color: colors[key], lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
-      crosshairMarkerVisible: false, priceFormat: { type: "price", precision: 1, minMove: 0.1 },
-    }, 0);
-    series.setData(movingAverage(candles, span));
-    maSeries.push([name, key, series]);
-  }
 
   const volumePane = chart.addPane();
   const volumeSeries = volumePane.addSeries(HistogramSeries, {
@@ -395,7 +384,7 @@ export function createKlineChart(host, spec = {}) {
       ${volumeRow}${extra}${releaseRow}`;
     tip.hidden = false;
     hideTip();
-    placeTip(tip, host, canvas, param.point.x, compact ? 0 : chart.priceScale("right").width());
+    placeTip(tip, host, canvas, param.point, compact ? 0 : chart.priceScale("right").width());
   });
 
   if (typeof spec.onPick === "function") {
@@ -417,11 +406,10 @@ export function createKlineChart(host, spec = {}) {
       upColor: next.up, downColor: next.down,
       borderUpColor: next.up, borderDownColor: next.down, wickUpColor: next.up, wickDownColor: next.down,
     });
-    for (const [, key, series] of maSeries) series.applyOptions({ color: next[key] });
     volumeSeries.applyOptions({ color: next.volume });
     releaseLines?.setColors(next.release, next.card);
-    host.querySelectorAll(".kl-legend i").forEach((dot, i) => {
-      dot.style.setProperty("--c", i < maDefs.length ? next[maDefs[i][2]] : next.volume);
+    host.querySelectorAll(".kl-legend i").forEach((dot) => {
+      dot.style.setProperty("--c", next.volume);
     });
   });
   theme.observe(document.documentElement, { attributes: true, attributeFilter: ["data-mode"] });
@@ -535,7 +523,7 @@ export function createTrendChart(host, spec = {}) {
 
   const byApi = new Map();
   const lineSeries = input.map((s) => {
-    const color = cssColor(s.color, colors.ma5);
+    const color = cssColor(s.color, colors.line);
     const series = chart.addSeries(AreaSeries, {
       lineColor: color,
       topColor: alphaColor(color, 0.14),
@@ -599,11 +587,11 @@ export function createTrendChart(host, spec = {}) {
       return;
     }
     tip.innerHTML = `<div class="kl-tip-head"><b class="num">${esc(when)}</b><span>${esc(measure === "ratio" ? "出现比例" : "出现数")}</span></div>${rows
-      .map(({ s, v }) => `<div class="kl-tip-row"><span class="kl-tip-name"><i style="--c:${cssColor(s.color, colors.ma5)}"></i>${esc(s.name || "")}</span><b class="num">${esc(valueText(v))}</b></div>`)
+      .map(({ s, v }) => `<div class="kl-tip-row"><span class="kl-tip-name"><i style="--c:${cssColor(s.color, colors.line)}"></i>${esc(s.name || "")}</span><b class="num">${esc(valueText(v))}</b></div>`)
       .join("")}`;
     tip.hidden = false;
     hideTip();
-    placeTip(tip, host, canvas, param.point.x, chart.priceScale("right").width());
+    placeTip(tip, host, canvas, param.point, chart.priceScale("right").width());
   });
 
   if (typeof spec.onPick === "function") {
@@ -645,7 +633,7 @@ export function createTrendChart(host, spec = {}) {
       crosshair: { vertLine: { color: next.border }, horzLine: { color: next.border } },
     });
     lineSeries.forEach((series, i) => {
-      const color = cssColor(input[i].color, next.ma5);
+      const color = cssColor(input[i].color, next.line);
       series.applyOptions({ lineColor: color, topColor: alphaColor(color, 0.14), bottomColor: alphaColor(color, 0.01) });
     });
     if (volumeSeries) volumeSeries.applyOptions({ color: next.volume });

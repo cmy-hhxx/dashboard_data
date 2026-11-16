@@ -64,50 +64,111 @@ export function runCounters(root) {
   });
 }
 
-/* Tooltip: one floating node; any [data-tip="title|value"] or element.tipHTML gets it. */
+/* Tooltip: one floating node for the whole page, and only ever one tip on screen.
+   - [data-tip] / [data-cell] / [data-mx] inside a bindTips(root, resolve) root get the root's HTML;
+   - a native title is taken over on hover (kept as data-hint, so the browser's own tooltip never
+     stacks on ours) and shown in the same node;
+   - charts that place their own reading ([data-own-tip], .kl-host) keep it, and showing this node
+     hides any chart reading still up.
+   A small target gets the tip right below it (above when the viewport ends), a large one gets it
+   beside the pointer; either way it flips at the right and bottom edges instead of being cut. */
 const tipEl = () => document.getElementById("tip");
-export function showTip(html, x, y) {
+let tipByHover = false; // shown by the hover controller (vs. a chart or list calling showTip itself)
+export function showTip(html, x, y, box = null) {
   const el = tipEl();
+  if (!el) return;
+  tipByHover = false;
   el.innerHTML = html;
   el.classList.add("is-on");
+  document.querySelectorAll(".kl-tip:not([hidden])").forEach((t) => { t.hidden = true; });
   const w = el.offsetWidth;
   const h = el.offsetHeight;
-  const left = Math.min(window.innerWidth - w - 12, x + 14);
-  const top = y + h + 20 > window.innerHeight ? y - h - 12 : y + 16;
-  el.style.left = `${Math.max(8, left)}px`;
-  el.style.top = `${Math.max(8, top)}px`;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const gap = 10;
+  let top;
+  if (box && box.height <= 72) top = box.bottom + gap + h <= vh - 8 ? box.bottom + gap : box.top - h - gap;
+  else top = y + 16 + h <= vh - 8 ? y + 16 : y - h - gap;
+  const left = x + 12 + w <= vw - 8 ? x + 12 : x - w - 12;
+  el.style.left = `${Math.max(8, Math.min(vw - w - 8, left))}px`;
+  el.style.top = `${Math.max(8, Math.min(vh - h - 8, top))}px`;
 }
 export function hideTip() {
-  tipEl().classList.remove("is-on");
+  tipEl()?.classList.remove("is-on");
 }
-export function bindTips(root, resolve) {
-  // Over the session field this fires per tile; one hit-test per frame is enough.
+
+const tipRoots = new Map();
+// Move every title on the hovered chain into data-hint; an icon-only control keeps it as its label.
+function adoptTitles(node) {
+  for (let n = node; n && n.nodeType === 1 && n !== document.body; n = n.parentElement) {
+    const text = n.getAttribute("title");
+    if (text == null) continue;
+    n.removeAttribute("title");
+    if (!text) continue;
+    n.dataset.hint = text;
+    if (!n.hasAttribute("aria-label") && !n.textContent.trim()) n.setAttribute("aria-label", text);
+  }
+}
+const deepest = (nodes) => nodes.filter(Boolean).reduce((a, b) => (!a || (a !== b && a.contains(b)) ? b : a), null);
+
+export function installTips() {
+  if (installTips.done) return;
+  installTips.done = true;
+  // A title set later (a toggle relabelling itself) is taken over at once, not on the next hover.
+  new MutationObserver((list) => list.forEach((m) => {
+    if (m.target.hasAttribute("title")) adoptTitles(m.target);
+  })).observe(document.body, { attributes: true, attributeFilter: ["title"], subtree: true });
   let queued = null;
   let raf = 0;
-  const show = () => {
+  const show = (html, e, box) => {
+    showTip(html, e.clientX, e.clientY, box);
+    tipByHover = true;
+  };
+  const run = () => {
     raf = 0;
     const e = queued;
-    if (!e) return;
-    // Canvases (星图, K 线) hit-test and place their own tooltip; only one tip may be on screen.
-    if (e.target.closest && e.target.closest("[data-own-tip], .kl-host")) return hideTip();
-    const t = e.target.closest ? e.target.closest("[data-tip],[data-cell],[data-mx]") : null;
-    if (!t || !root.contains(t)) return hideTip();
+    if (!e || !(e.target instanceof Element)) return hideTip();
+    adoptTitles(e.target);
+    const hint = e.target.closest("[data-hint]");
+    const chart = e.target.closest("[data-own-tip], .kl-host");
+    let t = e.target.closest("[data-tip],[data-cell],[data-mx]");
+    const root = t && deepest([...tipRoots.keys()].filter((r) => r.contains(t)));
+    if (!root) t = null;
+    // The innermost of a custom tip, a hint and a chart wins; a chart's own controls keep their hint.
+    const pick = deepest([t, hint, chart]);
+    // A chart or list that calls showTip itself also hides it; only a tip this controller left up goes.
+    if (!pick || pick === chart) {
+      if (tipByHover) hideTip();
+      return;
+    }
+    const box = pick.getBoundingClientRect();
+    if (pick === hint) return show(`<div class="t-hint">${esc(hint.dataset.hint)}</div>`, e, box);
+    const resolve = tipRoots.get(root);
     const html = resolve ? resolve(t) : null;
-    if (html) return showTip(html, e.clientX, e.clientY);
+    if (html) return show(html, e, box);
     if (t.dataset.tip) {
       const [a, b, note] = t.dataset.tip.split("|");
       const label = SEV_NAME[a] || a;
-      showTip(`<div class="t-row">${esc(label)}<b class="num">${esc(b)}</b></div>${note ? `<div class="t-note">${esc(note)}</div>` : ""}`, e.clientX, e.clientY);
-    } else hideTip();
+      return show(`<div class="t-row">${esc(label)}<b class="num">${esc(b ?? "")}</b></div>${note ? `<div class="t-note">${esc(note)}</div>` : ""}`, e, box);
+    }
+    if (tipByHover) hideTip();
   };
-  root.addEventListener("pointermove", (e) => {
+  // Over the session field this fires per tile; one hit-test per frame is enough.
+  document.addEventListener("pointermove", (e) => {
     queued = e;
-    if (!raf) raf = requestAnimationFrame(show);
-  });
-  root.addEventListener("pointerleave", () => {
-    queued = null;
-    hideTip();
-  });
+    if (!raf) raf = requestAnimationFrame(run);
+  }, { passive: true });
+  // Titles go before the browser's delay can show them, even when the pointer stops dead.
+  document.addEventListener("pointerover", (e) => { if (e.target instanceof Element) adoptTitles(e.target); }, true);
+  const off = () => { queued = null; hideTip(); };
+  document.addEventListener("pointerleave", off);
+  window.addEventListener("scroll", hideTip, { passive: true, capture: true });
+  window.addEventListener("blur", off);
+}
+
+export function bindTips(root, resolve) {
+  tipRoots.set(root, resolve || null);
+  installTips();
 }
 
 /* Segmented control: click springs the knob; dragging tracks the pointer 1:1 and snaps crisply. */

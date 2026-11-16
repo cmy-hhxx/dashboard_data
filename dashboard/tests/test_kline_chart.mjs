@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { buildCandles, buildIntradayCandles, movingAverage, KLINE_PERIODS } = await import("../static/js/kline_data.js");
+const { buildCandles, buildIntradayCandles, KLINE_PERIODS } = await import("../static/js/kline_data.js");
 
 const row = (date, value, volume = 1) => ({ date, value, volume });
 
@@ -50,15 +50,6 @@ test("month and year candles aggregate high, low, close and volume", () => {
 test("invalid dates and days with no evaluated volume are skipped", () => {
   const candles = buildCandles([row("not-a-date", 4), row("2026-11-01", 4, 0), row("2026-11-02", 0, 3)]);
   assert.deepEqual(candles.map((candle) => [candle.time, candle.close]), [["2026-11-02", 0]]);
-});
-
-test("MA5 averages the last five closes and starts only when the window is full", () => {
-  const candles = [1, 2, 3, 4, 5, 6].map((value, i) => buildCandles([row(`2026-11-0${i + 1}`, value, 1)])[0]);
-  const ma = movingAverage(candles, 5);
-  assert.deepEqual(ma, [
-    { time: "2026-11-05", value: 3 },
-    { time: "2026-11-06", value: 4 },
-  ]);
 });
 
 test("all five period buttons exist in display order", () => {

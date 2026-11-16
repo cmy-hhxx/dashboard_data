@@ -417,7 +417,7 @@ function matrixTableAb(view, rnd, metric, selected) {
   return `<div class="matrix abmatrix${change ? " is-change" : ""}" style="--cols:${cols.length};--rows:${rows.length}">
     <div class="mx-rows"><span class="mx-corner" aria-hidden="true"></span>${rowLabels}<span class="rh"><span class="mx-lab mx-total-lab" title="${esc(totalTitle)}">场景合计<em class="mx-vol num">${fmt(totalVolume)}</em></span></span></div>
     <div class="mx-scroll"><div class="mx-grid">${heads}${gridCells}${foot}</div></div>
-    <div class="mx-tots"><span class="rowtot-head" title="该场景在当前口径下的问题数合计"><span class="mx-lab mx-total-lab">${change ? "变化合计" : "问题合计"}</span></span>${tots}${footTotal}</div>
+    <div class="mx-tots"><span class="rowtot-head" title="这个场景按当前筛选的问题数加起来"><span class="mx-lab mx-total-lab">${change ? "变化合计" : "问题合计"}</span></span>${tots}${footTotal}</div>
   </div>`;
 }
 
@@ -672,7 +672,7 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     const open = state.overviewOpen === "ranks";
     return `<section class="ab-card ab-rank-card${open ? " is-deep" : state.overviewOpen ? " is-compact" : ""}" data-abcard="ranks" data-abname="问题变化">
       <div class="ab-card-top">
-        <span class="ab-card-title" title="同题变化 = 同题复测 − 同题基线；线上真实只单独计入">问题变化</span>
+        <span class="ab-card-title" title="同一道题改版后的结果减去改版前的结果；线上真实用户的数据另算">问题变化</span>
         <span class="ab-rank-legend" aria-hidden="true"><i class="is-from"></i>改版前<i class="is-to"></i>改版后</span>
       </div>
       <div class="ab-rank-axis" aria-hidden="true"><div class="ab-rank-axis-track"><span>0</span><span>${fmt(max)}</span></div></div>

@@ -1,5 +1,5 @@
 /* Router and shell: ?view=data|system|samples&product=wencai|aime (+ sample params). */
-import { $, $$, esc, segmented, getJSON, announce } from "./core.js";
+import { $, $$, esc, segmented, getJSON, announce, installTips } from "./core.js";
 
 const VIEWS = ["data", "system", "judge", "samples", "forecast", "compare"];
 const PRODUCTS = ["wencai", "aime"];
@@ -259,6 +259,7 @@ async function boot() {
       localStorage.setItem("eval-mode", next);
     } catch (e) {}
   });
+  installTips();
   // Start the initial view's code and data before the shell waits on the JSON.
   readURL();
   const dataP = getJSON("data.json").catch(() => ({ products: {}, source: { pairs: 0 } }));

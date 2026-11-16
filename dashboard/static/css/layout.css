@@ -169,3 +169,4 @@ button.cell[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px 
   .card, .card.keep { grid-column: 1 / -1; padding: var(--py) var(--px); }
   .big { font-size: var(--fs-num-l); }
 }
+.t-hint { max-width: 280px; color: var(--ink-2); font-size: var(--fs-small); line-height: 1.55; white-space: normal; overflow-wrap: anywhere; }

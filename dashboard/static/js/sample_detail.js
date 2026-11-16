@@ -289,7 +289,7 @@ export function createSampleDetail(host, ctxArg, opts = {}) {
     const ut = utOf(session);
     const userItem = uid
       ? `<button type="button" class="copy" data-copy="${esc(uid)}" title="用户类型：${esc(USER_TYPE_NAME[ut] || "未知")}">用户 ID <span class="num">${esc(uid.length > 18 ? `${uid.slice(0, 8)}…${uid.slice(-6)}` : uid)}</span><span class="utag is-${ut}">${USER_TYPE_SHORT[ut] || "未知"}</span></button>`
-      : `<span class="id-miss" title="评测输入 meta 里没有 user_id">用户 ID <span class="num">—</span><span class="utag is-unknown">未知</span></span>`;
+      : `<span class="id-miss" title="这条记录没有用户 ID">用户 ID <span class="num">—</span><span class="utag is-unknown">未知</span></span>`;
     return `<div class="idline">${userItem}${detailIds(D, S.trace).map(([k, v]) => `<button type="button" class="copy" data-copy="${esc(v)}">${k} <span class="num">${esc(v.length > 18 ? `${v.slice(0, 8)}…${v.slice(-6)}` : v)}</span></button>`).join("")}</div>`;
   }
 

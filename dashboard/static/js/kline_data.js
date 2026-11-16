@@ -95,14 +95,3 @@ export function buildIntradayCandles(intraday, selected, levels) {
   }
   return candles;
 }
-
-export function movingAverage(candles, span) {
-  const out = [];
-  let total = 0;
-  for (let i = 0; i < candles.length; i++) {
-    total += candles[i].close;
-    if (i >= span) total -= candles[i - span].close;
-    if (i >= span - 1) out.push({ time: candles[i].time, value: Math.round((total / span) * 100) / 100 });
-  }
-  return out;
-}

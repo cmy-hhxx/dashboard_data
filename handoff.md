@@ -108,7 +108,7 @@ P0-P4 多折线趋势（默认全部来源 × 全部模型 × 全部问题，时
 两栏并排时左右两栏从同一条顶线开始，第一张卡的上沿对齐；右栏工具条里是等级 chips，
 卡内左侧是问题等级环形图（各段合计 100%，环心是 Trace 总数，右侧图例行可开关趋势），右侧是 Trace 趋势 K 线；
 K 线口径为全量日期：每个周期内「所选等级 Trace 数」聚合成蜡烛（开盘取上一周期收盘，最高/最低取周期内极值），
-叠加 MA5 / MA10 / MA20 与「全部等级总 Trace」量能；`mxp-trend-head` 内是 日内行情 / 日K / 周K / 月K / 年K 周期切换；
+叠加「全部等级总 Trace」量能（不画均线）；`mxp-trend-head` 内是 日内行情 / 日K / 周K / 月K / 年K 周期切换；
 「日内行情」只画最新交易日的 5 分钟蜡烛（按美东时间当天过滤，跨午夜的请求不并入）：图从当日 0 累计，没有新数据的槽画平；
 悬浮显示本根 5 分钟蜡烛的「开盘（5分钟前）/ 收盘（5分钟后）」。解锁后滚轮 / 捏合 / 拖时间轴缩放，双击复位；
 点蜡烛打开对应日期的样本抽屉：抬头只显示时间 / 数据量 / 返回，周期切换在抽屉打开时收起；抽屉不显示汇总条和底部说明。
@@ -169,10 +169,10 @@ A/B 面板里的样本入口（旭日图叶子样本、矩阵格趋势的样本�
 | `dashboard/static/js/core.js` | 共享格式化、数字动画、`segmented`、提示等 | 通用交互 |
 | `dashboard/static/js/data.js` | 数据页各卡片、评测量详情、聚类矩阵与格子里的趋势图 | 数据页排版、下钻、趋势 |
 | `dashboard/static/js/trend_chart.js` | 共享趋势图：折线/面积、问题聚类点、发版红线、格子趋势几何 | 趋势图形状、坐标轴、发版标注 |
-| `dashboard/static/js/kline_data.js` | K 线聚合：日内行情 5 分钟 / 日/周/月/年 OHLCV 与均线，纯函数 | 周期口径、聚合规则 |
-| `dashboard/static/js/kline_chart.js` | 基于 vendor 的 lightweight-charts 画蜡烛、MA5/10/20、量能与悬浮读数；`createTrendChart` 为聚类矩阵的多线趋势（面积叠加、Trace 量能、发版红线、解锁按钮控制滚轮缩放） | 图表交互、配色、图例 |
+| `dashboard/static/js/kline_data.js` | K 线聚合：日内行情 5 分钟 / 日/周/月/年 OHLCV，纯函数 | 周期口径、聚合规则 |
+| `dashboard/static/js/kline_chart.js` | 基于 vendor 的 lightweight-charts 画蜡烛、量能与悬浮读数；`createTrendChart` 为聚类矩阵的多线趋势（面积叠加、Trace 量能、发版红线、解锁按钮控制滚轮缩放） | 图表交互、配色、图例 |
 | `dashboard/static/vendor/lightweight-charts.production.js` | TradingView lightweight-charts v5.2.1（Apache-2.0，许可证同目录） | 升级图表库 |
-| `dashboard/tests/test_kline_chart.mjs` | K 线周期聚合、均线与周期按钮回归 | 改 K 线口径 |
+| `dashboard/tests/test_kline_chart.mjs` | K 线周期聚合与周期按钮回归 | 改 K 线口径 |
 | `dashboard/config/releases.json` | 发版日期默认配置（`<datasets>/releases.json` 可覆盖） | 新增发版、改版本名 |
 | `dashboard/static/js/system.js` | 评测体系机制图、聚类（阶段 → 环节 → 机制 → 模式）、证据闭环 | 体系页 |
 | `dashboard/static/js/samples.js` | 具体数据两栏工作台（样本列表 + 详情） | 列表、筛选、分页 |

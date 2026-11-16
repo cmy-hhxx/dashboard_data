@@ -269,7 +269,7 @@ function paintField(field, p, filter) {
 function volumeCard(p) {
   const k = p.kpi;
   const input = p.input || {};
-  const pending = `<span class="stat-pending" title="当前 data.json 还没有评测输入的工具调用 / Tokens 聚合，需补数据后接入">—</span>`;
+  const pending = `<span class="stat-pending" title="工具调用和 Token 用量的数据还没接进来">—</span>`;
   const tin = input.tokens_in;
   const tout = input.tokens_out;
   // Input tokens lead; the output side rides along small, so the cell never truncates.
@@ -289,7 +289,7 @@ function volumeCard(p) {
     ["工具调用", input.tool_calls != null ? num(input.tool_calls) : pending],
     ["Tokens 输入/输出", tokens],
   ];
-  const note = lost ? `<div class="sb-keys"><span class="sb-key" title="外圈细环是该分支里流失用户 trace 的占比，列表红字是流失 trace 数"><i></i>流失</span></div>` : "";
+  const note = lost ? `<div class="sb-keys"><span class="sb-key" title="外圈细环是这一类里流失用户的 Trace 占比；红字是流失 Trace 的个数"><i></i>流失</span></div>` : "";
   const segs = volMiniSegs(p);
   const segTotal = sum(segs.map((x) => x.n)) || 1;
   const folded = miniView(miniRing(segs), [
@@ -1242,12 +1242,12 @@ function attrCard(p) {
 function clusterCard(p, tax) {
   if (!tax) return card(4, "聚类体系", `<div class="empty">缺少聚类体系文件</div>`);
   const note = p.kpi.unclustered
-    ? `<span class="sb-key is-note" title="归因没有匹配到聚类模式的问题：计入问题总数，不进矩阵"><i></i>未聚类 ${fmt(p.kpi.unclustered)}</span>`
+    ? `<span class="sb-key is-note" title="没归到任何问题类型的问题：算进问题总数，但不出现在矩阵里"><i></i>未聚类 ${fmt(p.kpi.unclustered)}</span>`
     : "";
   const phases = (cluTree(p, tax).children || []).filter((c) => c.n > 0).sort((a, b) => b.n - a.n);
   const phaseTotal = sum(phases.map((c) => c.n)) || 1;
   return card(4, "聚类体系", `<div class="duo sm" id="clu"></div>
-    <div class="sb-keys"><span class="sb-key" title="外圈细环是该分支里 P0·P1 问题的占比，列表红字是 P0+P1 数"><i></i>P0·P1</span>${note}</div>${GX}${miniView(miniRing([
+    <div class="sb-keys"><span class="sb-key" title="外圈细环是这一类里 P0、P1 问题的占比；红字是 P0、P1 问题的个数"><i></i>P0·P1</span>${note}</div>${GX}${miniView(miniRing([
       { n: p.kpi.clustered || 0, c: "var(--accent)" }, { n: p.kpi.unclustered || 0, c: "var(--t4)" },
     ]), [
       [counter(p.kpi.problems), "问题"], [pct(p.kpi.clustered, p.kpi.problems), "已聚类"],
@@ -1626,7 +1626,7 @@ function matrixTable(view) {
   return `<div class="matrix mx-swap-panel" style="--cols:${cols.length};--rows:${rows.length}">
     <div class="mx-rows"><span class="mx-corner" aria-hidden="true"></span>${rowLabels}<span class="rh"><span class="mx-lab mx-total-lab">场景合计<em class="mx-vol num">${fmt(grandTraces)}</em></span></span></div>
     <div class="mx-scroll"><div class="mx-grid">${heads}${gridCells}${foot}</div></div>
-    <div class="mx-tots"><span class="rowtot-head" title="该场景在各问题聚类上的问题数合计"><span class="mx-lab mx-total-lab">问题合计</span></span>${tots}<span class="rowtot rowtot-foot">${fmt(grand)}</span></div>
+    <div class="mx-tots"><span class="rowtot-head" title="这个场景在所有问题类型上的问题数加起来"><span class="mx-lab mx-total-lab">问题合计</span></span>${tots}<span class="rowtot rowtot-foot">${fmt(grand)}</span></div>
   </div>`;
 }
 
@@ -2386,7 +2386,7 @@ function trendBodyHTML(data, spec, title) {
           <svg class="i-zoom-lock" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="4" y="7" width="8" height="6" rx="1.2" stroke="currentColor" stroke-width="1.3"/><path d="M6 7V5.3a2 2 0 0 1 4 0V7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
           <svg class="i-zoom-unlock" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="4" y="7" width="8" height="6" rx="1.2" stroke="currentColor" stroke-width="1.3"/><path d="M6 7V5.3a2 2 0 0 1 3.8-.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
         </button>
-        <span class="mxt-vol-key"><i aria-hidden="true"></i>量能 · Trace</span>
+        <span class="mxt-vol-key"><i aria-hidden="true"></i>Trace 数量</span>
       </div>
     </div>
     ${trendSampleFrame(`<div class="mxt-plot" id="mxtPlot" data-own-tip aria-label="${esc(title)}"></div>`)}

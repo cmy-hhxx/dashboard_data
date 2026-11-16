@@ -169,7 +169,7 @@ export function mountProblemTrends(host, trend, state = {}, names = new Map(), l
       const branch = node.children.some(hasObservations);
       const tag = `${node.children.filter(hasObservations).length} 个子类`;
       // 分支卡片本身也是下钻入口；放大镜只负责把单条曲线展开看细节。
-      const plot = `<div class="mpt-chart${expanded ? " mpt-chart-detail" : ""}" role="img" aria-label="${esc(`${node.name} 的问题发生率日 K 线与评测会话量能`)}"></div>`;
+      const plot = `<div class="mpt-chart${expanded ? " mpt-chart-detail" : ""}" role="img" aria-label="${esc(`${node.name} 的问题发生率日 K 线与评测会话数`)}"></div>`;
       return `<article class="mpt-card${branch ? " is-branch" : ""}${expanded ? " is-expanded" : ""}" data-trend-card="${esc(node.id)}">
         <header><h4 title="${esc(node.name)}">${esc(node.name)}</h4><button type="button" class="icon-btn mpt-action" data-trend-zoom="${esc(node.id)}" aria-expanded="${expanded}" aria-label="${expanded ? "还原" : "放大"} ${esc(node.name)}" title="${expanded ? "还原" : "放大"}"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="${expanded ? "M6 3v3H3m7-3v3h3m0 4h-3v3m-4 0v-3H3" : "M3 6V3h3M10 3h3v3M13 10v3h-3M6 13H3v-3"}" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button></header>
         ${expanded ? trendSampleFrame(plot) : plot}

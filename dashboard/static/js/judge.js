@@ -40,7 +40,7 @@ const ICON = {
 /* ---------------------------------------------------------------- page head */
 function topCard(J) {
   return `<article class="card jd-top" style="--span:12">
-    <header class="card-head"><h2>评测评测</h2>${J.mock ? `<span class="jd-mock" title="judge_mock.js">示例数据</span>` : ""}
+    <header class="card-head"><h2>评测评测</h2>${J.mock ? `<span class="jd-mock" title="这一页用的是示例数据，不是实测结果">示例数据</span>` : ""}
       <span class="meta end num">${esc(J.version)} 对比 ${esc(J.prev)} · ${fmt(J.audited)} 个问题复核 · ${J.runs} 次重跑 · ${fmt(J.labeled)} 条人工复标</span></header>
   </article>`;
 }
@@ -58,7 +58,7 @@ function dimCard(J, d, i) {
       <button type="button" class="jd-go end" data-bc-dim="${d.key}">${fmt(bad)} 个 badcase${ICON.go}</button></header>
     <div class="jd-dim-hero">
       <span class="jd-ring" style="--p:${(d.rate * 100).toFixed(1)}"><b class="mid">${counter(d.rate * 100, { d: 1, suffix: "%" })}</b></span>
-      <div class="jd-dim-side">${delta(d.rate, d.prev, `${J.prev} ${pc(d.prev, 1)}`)}<span class="jd-dim-n num">${fmt(Math.round(d.n * (1 - d.rate)))} / ${fmt(d.n)} 未通过</span>
+      <div class="jd-dim-side">${delta(d.rate, d.prev, `上一版 ${J.prev} 是 ${pc(d.prev, 1)}`)}<span class="jd-dim-n num">${fmt(Math.round(d.n * (1 - d.rate)))} / ${fmt(d.n)} 未通过</span>
         <span class="jd-rstack">${stack}</span></div>
     </div>
     <div class="jd-sbs">${bars}</div>
@@ -83,7 +83,7 @@ const AGREE = (n) => [`${n}/${n}`, `${n - 1}/${n}`, `${n - 2}/${n}`, `≤${n - 3
 function repeatCard(J) {
   const R = J.repeat;
   const kpis = [["sameSev", "定级一致"], ["sameSet", "问题集一致"], ["sameEvidence", "证据一致"]].map(([k, name], i) => `<div class="jd-kpi" style="--i:${i}" ${tip(`<div class="t-head">${esc(name)}</div>${row(J.version, pc(R[k], 1))}${row(J.prev, pc(R.prev[k], 1))}`)}>
-      <span class="jd-kpi-n">${esc(name)}</span><b class="mid">${counter(R[k] * 100, { d: 0, suffix: "%" })}</b>${delta(R[k], R.prev[k], `${J.prev} ${pc(R.prev[k], 1)}`)}</div>`).join("");
+      <span class="jd-kpi-n">${esc(name)}</span><b class="mid">${counter(R[k] * 100, { d: 0, suffix: "%" })}</b>${delta(R[k], R.prev[k], `上一版 ${J.prev} 是 ${pc(R.prev[k], 1)}`)}</div>`).join("");
   const labels = AGREE(R.runs);
   const rows = R.bySev.map((s, i) => `<div class="jd-st" style="--i:${i}" ${tip(`<div class="t-head">${esc(sevName(s.sev))} · ${fmt(s.n)} 个 case</div>${s.agree.map((v, k) => row(`${labels[k]} 次定级相同`, pc(v, 1))).join("")}`)}>
       ${chip(s.sev)}<span class="jd-st-bar">${s.agree.map((v, k) => `<i style="flex:${v} 1 0;--k:${k}"></i>`).join("")}</span><b class="num">${pc(s.agree[0])}</b></div>`).join("");
@@ -120,7 +120,7 @@ function confusionCard(J) {
   const agree = labels.reduce((a, _, i) => a + m[i][i], 0) / (rowSum.reduce((a, b) => a + b, 0) || 1);
   return `<article class="card" style="--span:7">
     <header class="card-head"><h2>人工一致</h2>
-      <span class="meta end num">κ ${fmt(J.human.kappa, 2)}</span>${delta(J.human.kappa, J.human.prev, `${J.prev} κ ${fmt(J.human.prev, 2)}`)}<span class="meta num">对角 ${pc(agree, 1)}</span></header>
+      <span class="meta end num" title="人工与评测器定级的一致程度，1 为完全一致，0 相当于随机">一致系数 κ ${fmt(J.human.kappa, 2)}</span>${delta(J.human.kappa, J.human.prev, `上一版 ${J.prev} 是 ${fmt(J.human.prev, 2)}`)}<span class="meta num">对角 ${pc(agree, 1)}</span></header>
     <div class="jd-cm"><span class="jd-cm-axis is-y">人工</span><span class="jd-cm-axis is-x">评测器</span>
       <div class="jd-cm-grid">${head}${body}</div></div>
   </article>`;
@@ -138,7 +138,7 @@ function sevPrCard(J) {
   const ticks = [0, 0.5, 1].map((v) => `<span style="left:${at(v)}">${pc(v)}</span>`).join("");
   return `<article class="card jd-pr" style="--span:5">
     <header class="card-head"><h2>分级对齐</h2>
-      <span class="jd-legend end"><span><i class="jd-db-p"></i>精确率</span><span><i class="jd-db-r"></i>召回率</span><span class="num">F1</span></span></header>
+      <span class="jd-legend end"><span><i class="jd-db-p"></i>精确率</span><span><i class="jd-db-r"></i>召回率</span><span class="num" title="精确率和召回率的综合分">综合</span></span></header>
     <div class="jd-dbs">${rows}<div class="jd-db jd-db-axis"><span></span><span class="jd-db-t">${ticks}</span><span></span></div></div>
   </article>`;
 }
