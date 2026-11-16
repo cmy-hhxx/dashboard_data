@@ -1,9 +1,9 @@
 /* Router and shell: ?view=data|system|samples&product=wencai|aime (+ sample params). */
 import { $, $$, esc, segmented, getJSON, announce } from "./core.js";
 
-const VIEWS = ["data", "system", "samples", "forecast", "compare"];
+const VIEWS = ["data", "system", "judge", "samples", "forecast", "compare"];
 const PRODUCTS = ["wencai", "aime"];
-const VIEW_NAME = { data: "数据看板", system: "评测体系", samples: "具体数据", forecast: "预测数据", compare: "版本对比" };
+const VIEW_NAME = { data: "数据看板", system: "评测体系", judge: "评测评测", samples: "具体数据", forecast: "预测数据", compare: "版本对比" };
 // Sample params (case / trace / filters) and compare params (pair / round / online) never leak
 // across views, or a stale deep link would reopen the previous drill on the next page.
 const SAMPLE_PARAMS = {
@@ -14,7 +14,7 @@ const SAMPLE_PARAMS = {
 const COMPARE_PARAMS = { pair: null, online: null, round: null };
 // Views that read data-<product>.json (17 MB for AIME). The others only need the data.json shell,
 // so they neither wait for it nor spend the bandwidth their own payloads need.
-const NEEDS_PRODUCT = new Set(["data", "compare"]);
+const NEEDS_PRODUCT = new Set(["data", "forecast", "compare"]);
 // Each product's board runs on its own server; a product with no data here opens its server instead.
 // The map comes from the server's config/sites.json, inlined into index.html.
 const SITES = (() => {
@@ -26,7 +26,7 @@ const SITES = (() => {
 })();
 const state = { view: "data", product: "wencai", data: null, indexes: {}, indexP: {}, productData: {}, productP: {} };
 const modules = {};
-const loaders = { data: () => import("./data.js"), system: () => import("./system.js"), samples: () => import("./samples.js"), forecast: () => import("./forecast.js"), compare: () => import("./compare.js") };
+const loaders = { data: () => import("./data.js"), system: () => import("./system.js"), judge: () => import("./judge.js"), samples: () => import("./samples.js"), forecast: () => import("./forecast.js"), compare: () => import("./compare.js") };
 
 function readURL() {
   const q = new URLSearchParams(location.search);

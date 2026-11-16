@@ -511,6 +511,13 @@ body.is-mxp-full { overflow: hidden; }
 }
 
 /* Global problem-type trends: one time curve per type, all scenes aggregated. */
+/* The way back up the problem levels: every ancestor is a step, the current level is plain text. */
+.mpt-path { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; min-height: 24px; font-size: var(--fs-meta); color: var(--muted); }
+.mpt-path[hidden] { display: none; }
+.mpt-path button { height: 24px; padding: 0 var(--sp-2); border-radius: var(--r-chip); color: var(--muted); transition: background var(--snap), color var(--snap); }
+.mpt-path button:hover { background: var(--hover); color: var(--ink); }
+.mpt-path i { font-style: normal; color: var(--faint); }
+.mpt-path [aria-current] { padding: 0 var(--sp-2); color: var(--ink); font-weight: var(--w-medium); }
 .mpt { display: grid; gap: 12px; min-width: 0; scroll-margin-top: 116px; }
 .mpt-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(205px, 1fr)); gap: 8px;

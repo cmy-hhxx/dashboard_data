@@ -124,12 +124,22 @@ export function mountProblemTrends(host, trend, state = {}, names = new Map(), l
   state.issuePath = Array.isArray(state.issuePath) ? state.issuePath : [];
   const resolved = resolvePath(model, state.issuePath);
   state.issuePath = resolved.nodes.map((node) => node.id);
-  host.innerHTML = `<div class="mpt"><div class="mpt-grid" id="mptGrid"></div></div>`;
+  host.innerHTML = `<div class="mpt"><nav class="mpt-path" id="mptPath" aria-label="问题层级"></nav><div class="mpt-grid" id="mptGrid"></div></div>`;
 
   const grid = host.querySelector("#mptGrid");
+  const trail = host.querySelector("#mptPath");
+  // The way back: every level above the open one is a step; the last one is where you are.
+  const paintPath = (path) => {
+    const steps = [{ name: model.root.name, depth: 0 }, ...path.nodes.map((node, i) => ({ name: node.name, depth: i + 1 }))];
+    trail.hidden = steps.length < 2;
+    trail.innerHTML = steps.map((step, i) => (i === steps.length - 1
+      ? `<span aria-current="location">${esc(step.name)}</span>`
+      : `<button type="button" data-trend-path="${step.depth}">${esc(step.name)}</button><i aria-hidden="true">›</i>`)).join("");
+  };
   const paint = (animate = false, source = null) => {
     hideTip();
     const path = resolvePath(model, state.issuePath);
+    paintPath(path);
     const idx = allIndexes(model);
     const hasObservations = (node) => observationIndexes(model, node, idx).length > 0;
     const children = path.node.children
@@ -203,6 +213,14 @@ export function mountProblemTrends(host, trend, state = {}, names = new Map(), l
 
   const onClick = (e) => {
     if (grid.contains(e.target) && grid.getAttribute("aria-busy") === "true") return;
+    const up = e.target.closest("[data-trend-path]");
+    if (up) {
+      state.issuePath = state.issuePath.slice(0, Number(up.dataset.trendPath));
+      state.issueZoom = null;
+      paint(true, up);
+      actions.onPath?.(state.issuePath.slice());
+      return;
+    }
     const zoom = e.target.closest("[data-trend-zoom]");
     if (zoom) {
       const id = zoom.dataset.trendZoom;

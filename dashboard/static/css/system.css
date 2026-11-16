@@ -61,7 +61,6 @@
 .fx-txt b { font-size: var(--fs-body); font-weight: var(--w-title); color: var(--ink); letter-spacing: 0.01em; }
 .fx-txt small { font-size: var(--fs-meta); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fx-txt em { font-style: normal; font-size: var(--fs-meta); color: var(--c); }
-.fx-end { font-size: var(--fs-meta); font-family: var(--mono); color: var(--faint); }
 .fx-ico { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: color-mix(in oklab, var(--c) 16%, transparent); }
 .fx-ico i { width: 10px; height: 10px; border-radius: 3px; background: var(--c); }
 .fx-in.is-on { background: color-mix(in oklab, var(--accent) 6%, var(--lift)); box-shadow: 0 0 0 1.5px var(--accent), var(--shadow-pop); }
@@ -83,39 +82,10 @@
 .fx-core > span { display: grid; grid-template-columns: repeat(3, 12px); gap: 4px; }
 .fx-core i { width: 12px; height: 12px; border-radius: 3px; background: var(--c); animation: fx-blink 2.6s ease-in-out infinite; }
 .fx-hub.is-on .fx-core { transform: scale(1.07) rotate(-4deg); }
-.fx-steps { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 10px; max-width: 240px; font-size: var(--fs-meta); color: var(--ink-2); }
-.fx-steps span { display: inline-flex; align-items: center; gap: 5px; }
-.fx-steps i { width: 6px; height: 6px; border-radius: 2px; background: var(--c); }
 @keyframes fx-spin { to { transform: rotate(360deg); } }
 @keyframes fx-blink { 50% { opacity: 0.35; } }
 
 .fx-tax { display: grid; gap: 12px; margin-top: var(--py-lg); padding-top: var(--py-lg); border-top: 1px dashed var(--well-2); }
-.fx-tax-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: stretch; }
-.fx-tax .fx-box { padding: 14px 16px; }
-.fx-k { display: block; margin-bottom: 8px; font-size: var(--fs-meta); letter-spacing: 0.08em; color: var(--faint); }
-.fx-ph { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 8px; align-items: start; padding: 3px 0; }
-.fx-ph-n { font-size: var(--fs-meta); line-height: 26px; color: var(--muted); }
-.fx-ph-s { display: flex; flex-wrap: wrap; gap: 4px; }
-.fx-stg {
-  display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 8px; border-radius: 7px;
-  background: var(--well); font-size: var(--fs-small); color: var(--ink-2); transition: background var(--snap), color var(--snap), transform var(--spring);
-}
-.fx-stg code { font-size: var(--fs-meta); font-family: var(--mono); color: var(--faint); }
-.fx-stg:hover { background: var(--well-2); color: var(--ink); }
-.fx-stg:active { transform: scale(0.95); }
-.fx-stg[aria-pressed="true"] { background: var(--ink); color: var(--card); }
-.fx-stg[aria-pressed="true"] code { color: color-mix(in oklab, var(--card) 70%, transparent); }
-.fx-mechs { display: grid; gap: 1px; }
-.fx-mech { display: grid; grid-template-columns: 8px 22px auto minmax(0, 1fr); gap: 8px; align-items: center; min-height: 26px; font-size: var(--fs-small); }
-.fx-mech i { width: 8px; height: 8px; border-radius: 2px; background: var(--c); }
-.fx-mech code { font-size: var(--fs-meta); font-family: var(--mono); color: var(--faint); }
-.fx-mech b { font-weight: var(--w-medium); color: var(--ink); white-space: nowrap; }
-.fx-mech small { font-size: var(--fs-meta); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fx-def { font-size: var(--fs-small); line-height: 1.6; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.fx-def b { margin-right: 6px; color: var(--ink); font-weight: var(--w-medium); }
-.fx-pat { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; align-items: baseline; font-size: var(--fs-small); color: var(--ink-2); }
-.fx-pat code { font-size: var(--fs-meta); font-family: var(--mono); color: var(--faint); }
-.fx-pat span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 证据闭环: problems sit further right, rail fills to the bottom, edges line up */
 .anatomy.is-fill .rail { align-content: space-between; }
@@ -153,69 +123,16 @@
 @keyframes fx-pop { from { transform: scale(0.35); opacity: 0.4; } }
 @keyframes fx-squish { 30% { transform: scale(0.9, 1.07); } 60% { transform: scale(1.06, 0.95); } }
 @keyframes fx-ripple { from { transform: scale(0.75); opacity: 0.9; } to { transform: scale(1.55); opacity: 0; } }
-.fx-steps { gap: 4px; max-width: 270px; }
-.fx-steps span { padding: 2px 7px; border-radius: 6px; transition: background 240ms, color 240ms; }
-.fx-steps span.is-on { background: color-mix(in oklab, var(--c) 16%, transparent); color: var(--ink); }
-.fx-steps span.is-on i { animation: fx-pop 420ms cubic-bezier(0.3, 1.7, 0.5, 1); }
 
-.fx-tax-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-.fx-stgbox, .fx-mechbox { display: grid; grid-template-rows: auto minmax(0, 1fr); }
-.fx-k > span { margin-left: 10px; letter-spacing: 0.02em; }
-.fx-phs { display: grid; align-content: space-between; gap: 6px; }
-.fx-ph { padding: 0; }
-.fx-stg .n { font: var(--fs-micro) var(--mono); color: var(--faint); margin-left: 1px; }
-.fx-stg[aria-pressed="true"] .n { color: color-mix(in oklab, var(--card) 65%, transparent); }
-.fx-mechs { align-content: space-between; gap: 2px; }
-.fx-mech { padding: 0 8px; margin: 0 -8px; border-radius: 6px; transition: opacity var(--snap), background var(--snap); }
-.fx-mech.is-off { opacity: 0.35; }
-.fx-mech.is-hl { background: var(--hover); opacity: 1; }
-#fxDetail { grid-column: 1 / -1; }
-.fx-pm { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--py-lg); align-items: start; }
-.fx-pm-side { display: grid; grid-template-columns: 160px minmax(0, 1fr) auto; column-gap: var(--py-lg); align-items: center; }
-.fx-pm-side .fx-k { grid-column: 1; }
-.fx-pm .fx-def { grid-column: 2; grid-row: 1 / 3; display: block; -webkit-line-clamp: unset; overflow: visible; margin: 0; }
-.fx-pm-n { grid-column: 3; grid-row: 1 / 3; font-size: var(--fs-meta); color: var(--muted); }
 /* Stack mechanism groups; let their patterns share the available width. */
-.fx-pm-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-content: start; }
-.fx-pm-col { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: var(--py-lg); align-items: baseline; min-width: 0; padding-top: 12px; border-top: 1px solid var(--well-2); transition: opacity var(--snap); }
-.fx-pm-items { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); gap: 8px var(--py-lg); }
-.fx-pm-col.is-dim { opacity: 0.28; }
-.fx-pm-h { display: grid; grid-template-columns: 8px 20px minmax(0, 1fr) auto; gap: 7px; align-items: baseline; font-size: var(--fs-meta); line-height: 1.5; }
-.fx-pm-h i { width: 8px; height: 8px; border-radius: 2px; background: var(--c); }
-.fx-pm-h code { font: var(--fs-micro)/1.5 var(--mono); color: var(--muted); }
-.fx-pm-h b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--w-medium); color: var(--ink); }
-.fx-pm-h .num { font-size: var(--fs-meta); color: var(--muted); }
-.fx-pm .fx-pat { grid-template-columns: 72px minmax(0, 1fr); line-height: 1.5; animation: fx-in 420ms cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: calc(var(--d) * 18ms); }
-.fx-pm .fx-pat code { font-size: var(--fs-meta); line-height: 1.5; color: var(--muted); }
-.fx-pm .fx-pat span { white-space: normal; overflow: visible; }
 @keyframes fx-in { from { opacity: 0; transform: translateY(5px); } }
 @media (max-width: 860px) {
-  .fx-tax-grid { grid-template-columns: minmax(0, 1fr); }
-  .fx-pm { grid-template-columns: minmax(0, 1fr); gap: 16px; }
-  .fx-pm-side { grid-template-columns: 160px minmax(0, 1fr); }
-  .fx-pm-n { grid-column: 2; grid-row: 3; margin-top: 8px; }
-  .fx-pm-col { grid-template-columns: minmax(0, 1fr); gap: 8px; }
-  .fx-pm-h { grid-template-columns: 8px 20px auto 1fr; }
-  .fx-pm-h .num { justify-self: end; }
-}
-@media (max-width: 540px) {
-  .fx-pm-side { grid-template-columns: minmax(0, 1fr); gap: 8px; }
-  .fx-pm .fx-def, .fx-pm-n { grid-column: 1; grid-row: auto; }
-  .fx-pm-side .fx-k { margin-bottom: 0; }
 }
 /* stage + mechanism boxes: one row rhythm, both start at the same top line */
-.fx-phs, .fx-mechs { align-content: start; }
-.fx-phs { gap: 8px; }
-.fx-ph { grid-template-columns: 34px minmax(0, 1fr); }
-.fx-ph-s { row-gap: 6px; }
-.fx-mech { min-height: 26px; }
 .fx-in.is-on, .fx-out.is-on { transform: none; }
 /* stage rows spread so their first/last rows line up with M1/M7 */
-.fx-phs { align-content: space-between; }
 @media (max-width: 1180px) {
   .fx { gap: 32px; }
-  .fx-tax-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-  #fxDetail { grid-column: 1 / -1; }
 }
 @media (max-width: 860px) {
   .flow { grid-template-columns: 1fr 1fr; }
@@ -226,5 +143,47 @@
   .fx { grid-template-columns: minmax(0, 1fr); gap: 20px; }
   .fx-col:not(.fx-mid) { grid-template-rows: none; }
   .fx-wires { display: none; }
-  .fx-tax-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* 聚类: 环节 × 机制 in one grid; the axes are the taxonomy, a cell is its pattern count */
+.fx-g {
+  display: grid; grid-template-columns: 44px minmax(120px, 168px) repeat(var(--cols), minmax(0, 1fr)) 40px;
+  gap: 2px; align-items: stretch;
+}
+.fx-g-col, .fx-g-row {
+  display: flex; align-items: center; gap: 6px; min-width: 0; border-radius: var(--r-chip);
+  color: var(--ink-2); font-size: var(--fs-meta); text-align: left; transition: background var(--snap), color var(--snap);
+}
+.fx-g-col { justify-content: center; flex-direction: column; gap: 1px; padding: var(--sp-1) 2px var(--sp-2); text-align: center; line-height: 1.3; }
+.fx-g-row { padding: 0 var(--sp-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fx-g-col code, .fx-g-row code { font: var(--fs-micro) var(--mono); color: var(--faint); }
+.fx-g-col:hover, .fx-g-row:hover, .fx-g-col.is-hl, .fx-g-row.is-hl { background: var(--hover); color: var(--ink); }
+.fx-g-col.is-on, .fx-g-row.is-on { background: var(--ink); color: var(--card); }
+.fx-g-col.is-on code, .fx-g-row.is-on code { color: color-mix(in oklab, var(--card) 70%, transparent); }
+.fx-g-ph { display: flex; align-items: center; justify-content: center; border-radius: var(--r-chip); background: var(--well); color: var(--muted); font-size: var(--fs-meta); writing-mode: vertical-rl; letter-spacing: 0.1em; }
+.fx-g-sum { display: flex; align-items: center; justify-content: flex-end; padding-right: var(--sp-1); color: var(--muted); font-size: var(--fs-micro); }
+.fx-g-c {
+  height: 28px; border-radius: 4px; font-size: var(--fs-micro); color: var(--ink-2);
+  background: color-mix(in oklab, var(--accent) var(--a), var(--well));
+  animation: fx-in 420ms cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: calc(var(--d) * 6ms);
+  transition: transform var(--snap), box-shadow var(--snap), opacity var(--snap);
+}
+.fx-g-c.is-empty { background: var(--well); opacity: 0.5; animation: none; }
+button.fx-g-c:hover { transform: scale(1.08); box-shadow: 0 0 0 2px var(--card), 0 0 0 3px var(--accent); position: relative; z-index: 1; }
+button.fx-g-c.is-on { box-shadow: 0 0 0 1.5px var(--card), 0 0 0 3px var(--accent); color: var(--ink); font-weight: var(--w-medium); }
+.fx-pm { display: grid; gap: var(--sp-4); margin-top: var(--sp-5); padding-top: var(--sp-5); border-top: 1px solid var(--well-2); }
+.fx-pm-side { display: flex; align-items: baseline; gap: var(--sp-4); font-size: var(--fs-small); }
+.fx-pm-side b { font-weight: var(--w-medium); color: var(--ink); }
+.fx-pm-n { color: var(--muted); font-size: var(--fs-meta); }
+.fx-pm-items { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: var(--sp-2) var(--sp-6); }
+.fx-pat {
+  display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: var(--sp-3); align-items: baseline;
+  font-size: var(--fs-small); line-height: 1.5; color: var(--ink-2);
+  animation: fx-in 420ms cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: calc(min(var(--d), 30) * 14ms);
+}
+.fx-pat code { font-size: var(--fs-meta); font-family: var(--mono); color: var(--muted); }
+@media (max-width: 860px) {
+  .fx-g { grid-template-columns: 0 minmax(96px, 120px) repeat(var(--cols), minmax(0, 1fr)) 28px; overflow-x: auto; }
+  .fx-g-ph { visibility: hidden; }
+  .fx-g-col { font-size: var(--fs-micro); }
 }

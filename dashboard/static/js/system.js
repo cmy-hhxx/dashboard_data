@@ -64,10 +64,10 @@ export async function render(root, c) {
 
 /* ---------------------------------------------------------------- 评测体系: one mechanism diagram */
 const FX_IN = [
-  ["user", "用户提问", "原始问句与追问", "user"],
-  ["think", "模型思考", "推理、规划与自我修正", "llm"],
-  ["call", "工具调用", "参数、返回与报错", "tool"],
-  ["answer", "最终回答", "交给用户的结论", "final"],
+  ["user", "用户提问", "原始问句与追问"],
+  ["think", "模型思考", "推理、规划与自我修正"],
+  ["call", "工具调用", "参数、返回与报错"],
+  ["answer", "最终回答", "交给用户的结论"],
 ];
 const FX_STEPS = [["规划", "var(--t0)"], ["推理", "var(--t2)"], ["执行", "var(--accent)"], ["报错", "var(--sev-1)"], ["反思", "var(--t2)"], ["关键数据", "var(--t1)"], ["产物", "var(--t1)"]];
 const FX_OUT = [
@@ -78,7 +78,6 @@ const FX_OUT = [
 ];
 const taxoNum = (a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1));
 const patNum = (id) => id.split(".").map((x) => Number(x.replace(/\D/g, "")) || 0);
-const mechTint = (i, n) => `color-mix(in oklab, var(--accent) ${Math.round(n > 1 ? 88 - (i * 54) / (n - 1) : 88)}%, var(--card))`;
 
 /* Each stage's real volume for the current product, next to its name. */
 const fig = (text) => (text ? `<span class="fx-fig num">${text}</span>` : "");
@@ -93,39 +92,20 @@ function flowCard(tax, p) {
     return `<line x1="${x0}" y1="${y0}" x2="${x1}" y2="${y1}"${c ? ` class="c" style="--c:${c}"` : ""}/>`;
   }).join("");
   const tiles = [2, 9, 0, 9, 2, 9, 9, 4, 9].map((v) => `<i style="--c:${v < 5 ? `var(--sev-${v})` : "var(--sev-none)"}"></i>`).join("");
-  const ins = FX_IN.map(([k, t, sub, tag]) =>
-    `<div class="fx-box fx-in k-${k}" title="${sub}"><i class="fx-dot"></i><span class="fx-txt"><b>${t}</b></span><span class="fx-end">${tag}</span></div>`).join("");
+  const ins = FX_IN.map(([k, t, sub]) =>
+    `<div class="fx-box fx-in k-${k}" title="${sub}"><i class="fx-dot"></i><span class="fx-txt"><b>${t}</b></span></div>`).join("");
   const outs = FX_OUT.map(([t, sub, rule, c], i) => {
     // 定级's scale is a label; the other boxes keep their gloss in the title.
     const label = i === 1 ? `<small>${sub}</small>` : "";
     const ico = i === 1
       ? `<span class="fx-ico is-sev">${SEV.map((_, k) => `<i style="--c:${sevColor(k)};--k:${k}"></i>`).join("")}</span>`
       : `<span class="fx-ico"><i></i></span>`;
-    return `<div class="fx-box fx-out" style="--c:${c}" title="${sub} · ${rule}">${ico}<span class="fx-txt"><b>${t}</b>${label}</span><span class="fx-end num">0${i + 1}</span></div>`;
+    return `<div class="fx-box fx-out" style="--c:${c}" title="${sub} · ${rule}">${ico}<span class="fx-txt"><b>${t}</b>${label}</span></div>`;
   }).join("");
-  let taxHTML = "";
-  if (tax) {
-    const stages = tax.stages.slice().sort(taxoNum);
-    const mechs = tax.mechanisms.slice().sort(taxoNum);
-    const pids = Object.keys(tax.patterns).filter((id) => id.split(".").length === 3);
-    const count = (sid) => pids.filter((id) => id.startsWith(`${sid}.`)).length;
-    const first = stages.find((st) => count(st.id)) || stages[0];
-    const phases = tax.phases.map((ph) => {
-      const list = stages.filter((st) => st.phase === ph.id);
-      if (!list.length) return "";
-      return `<div class="fx-ph"><span class="fx-ph-n">${esc(ph.name)}</span><span class="fx-ph-s">${list.map((st) =>
-        `<button type="button" class="fx-stg" data-stage="${st.id}" aria-pressed="${st === first}" title="${esc(st.def || "")}"><code>${st.id}</code>${esc(st.name)}<span class="n num">${count(st.id)}</span></button>`).join("")}</span></div>`;
-    }).join("");
-    const mechRows = mechs.map((m, i) =>
-      `<span class="fx-mech" data-m="${m.id}" title="${esc(m.def || "")}"><i style="--c:${mechTint(i, mechs.length)}"></i><code>${m.id}</code><b>${esc(m.name)}</b></span>`).join("");
-    taxHTML = `<div class="fx-tax" id="fxTax">
+  const taxHTML = tax ? `<div class="fx-tax" id="fxTax">
       <div class="fx-label"><span class="num">04</span>聚类${fig(k && p.patterns && `${fmt(p.patterns.length)} 个模式 · 覆盖 ${pct(k.clustered, k.problems)} 问题`)}</div>
-      <div class="fx-tax-grid">
-        <div class="fx-box fx-stgbox"><span class="fx-k">环节</span><div class="fx-phs">${phases}</div></div>
-        <div class="fx-box fx-mechbox"><span class="fx-k">机制</span><div class="fx-mechs">${mechRows}</div></div>
-        <div class="fx-box fx-pm" id="fxDetail">${first ? patternMatrix(tax, first.id) : ""}</div>
-      </div></div>`;
-  }
+      ${taxGrid(tax)}
+      <div class="fx-pm" id="fxDetail"></div></div>` : "";
   return `<article class="card" style="--span:12">
     <header class="card-head"><h2>评测体系</h2></header>
     <div class="fx" id="fx"><svg class="fx-wires" aria-hidden="true"></svg>
@@ -133,37 +113,49 @@ function flowCard(tax, p) {
       <div class="fx-col fx-mid"><div class="fx-label"><span class="num">02</span>Compact 压缩${fig(k && `${fmt(k.compacted)} 条轨迹`)}</div>
         <div class="fx-hubwrap">
           <div class="fx-hub"><span class="fx-orbit"><i></i></span><svg class="fx-ring" viewBox="-80 -80 160 160" aria-hidden="true">${ticks}</svg><span class="fx-core"><span>${tiles}</span></span></div>
-          <div class="fx-steps">${FX_STEPS.map(([n, c]) => `<span style="--c:${c}"><i></i>${n}</span>`).join("")}</div>
         </div></div>
       <div class="fx-col"><div class="fx-label"><span class="num">03</span>归因${fig(k && `${fmt(k.problems)} 个问题 · ${pct(k.located, k.evidence)} 证据可定位`)}</div>${outs}</div>
     </div>${taxHTML}</article>`;
 }
 
-/* Every pattern of one stage, grouped by mechanism: stage × mechanism → pattern. */
-function patternMatrix(tax, sid) {
-  const st = tax.stages.find((x) => x.id === sid);
-  if (!st) return "";
+/* The taxonomy is one grid: 环节 (rows, grouped by phase) × 机制 (columns); a cell is the number
+   of L3 patterns filed there. A cell, a row head or a column head opens its patterns below. */
+const l3 = (tax) => Object.entries(tax.patterns).filter(([id]) => id.split(".").length === 3);
+function taxGrid(tax) {
+  const stages = tax.stages.slice().sort(taxoNum);
   const mechs = tax.mechanisms.slice().sort(taxoNum);
-  // The overview stops at L3; L4 sub-patterns drill in on the data page's cluster matrix.
-  const pats = Object.entries(tax.patterns)
-    .filter(([id]) => id.split(".").length === 3 && id.startsWith(`${sid}.`))
-    .sort((a, b) => { const pa = patNum(a[0]); const pb = patNum(b[0]); return pa[1] - pb[1] || pa[2] - pb[2]; });
-  const known = new Set(mechs.map((m) => m.id));
-  const groups = mechs.map((m, i) => [m.id, m.name, mechTint(i, mechs.length)]);
-  if (pats.some(([id]) => !known.has(id.split(".")[1]))) groups.push(["", "其他", "var(--t3)"]);
+  const pats = l3(tax);
+  const n = (sid, mid) => pats.filter(([id]) => id.startsWith(`${sid}.${mid}.`)).length;
+  const max = Math.max(1, ...stages.flatMap((st) => mechs.map((m) => n(st.id, m.id))));
+  const head = `<span class="fx-g-corner"></span><span></span>${mechs.map((m) =>
+    `<button type="button" class="fx-g-col" data-m="${m.id}" title="${esc(m.def || "")}"><code>${m.id}</code>${esc(m.name)}</button>`).join("")}<span class="fx-g-sum">合计</span>`;
   let d = 0;
-  const cols = groups.map(([mid, name, c]) => {
-    const list = pats.filter(([id]) => (mid ? id.split(".")[1] === mid : !known.has(id.split(".")[1])));
+  const body = tax.phases.map((ph) => {
+    const list = stages.filter((st) => st.phase === ph.id);
     if (!list.length) return "";
-    return `<div class="fx-pm-col" data-m="${mid}"><div class="fx-pm-h"><i style="--c:${c}"></i><code>${mid || "—"}</code><b>${esc(name)}</b><span class="num">${list.length}</span></div><div class="fx-pm-items">${
-      list.map(([id, pt]) => `<div class="fx-pat" style="--d:${d++}" title="${esc(pt.plain || "")}"><code>${id}</code><span>${esc(pt.name || id)}</span></div>`).join("")}</div></div>`;
+    return list.map((st, i) => {
+      const total = pats.filter(([id]) => id.startsWith(`${st.id}.`)).length;
+      return `${i === 0 ? `<span class="fx-g-ph" style="grid-row:span ${list.length}">${esc(ph.name)}</span>` : ""}<button type="button" class="fx-g-row" data-s="${st.id}" title="${esc(st.def || "")}"><code>${st.id}</code>${esc(st.name)}</button>${mechs.map((m) => {
+        const v = n(st.id, m.id);
+        return v
+          ? `<button type="button" class="fx-g-c" data-s="${st.id}" data-m="${m.id}" style="--a:${Math.round(14 + (70 * v) / max)}%;--d:${d++}" aria-label="${esc(`${st.name} × ${m.name}：${v} 个模式`)}">${v}</button>`
+          : `<span class="fx-g-c is-empty" data-s="${st.id}" data-m="${m.id}"></span>`;
+      }).join("")}<span class="fx-g-sum num">${total || ""}</span>`;
+    }).join("");
   }).join("");
-  const used = new Set(pats.map(([id]) => id.split(".")[1]));
-  return `<div class="fx-pm-side">
-      <p class="fx-def" title="${esc(st.def || "")}"><b>${esc(st.name)}</b></p>
-      <span class="fx-pm-n num">${pats.length} 个模式 · ${used.size} 种机制</span>
-    </div>
-    <div class="fx-pm-grid">${cols || '<span class="dim">该环节暂无模式</span>'}</div>`;
+  return `<div class="fx-g" style="--cols:${mechs.length}">${head}${body}</div>`;
+}
+
+/* The patterns behind the picked cell / row / column, each with its full code. */
+function patternList(tax, sid, mid) {
+  const st = sid && tax.stages.find((x) => x.id === sid);
+  const m = mid && tax.mechanisms.find((x) => x.id === mid);
+  const pats = l3(tax)
+    .filter(([id]) => (!sid || id.startsWith(`${sid}.`)) && (!mid || id.split(".")[1] === mid))
+    .sort((a, b) => { const pa = patNum(a[0]); const pb = patNum(b[0]); return pa[0] - pb[0] || pa[1] - pb[1] || pa[2] - pb[2]; });
+  const name = [st && st.name, m && m.name].filter(Boolean).join(" × ");
+  return `<div class="fx-pm-side"><b>${esc(name)}</b><span class="fx-pm-n num">${pats.length} 个模式</span></div>
+    <div class="fx-pm-items">${pats.map(([id, pt], i) => `<div class="fx-pat" style="--d:${i}" title="${esc(pt.plain || "")}"><code>${id}</code><span>${esc(pt.name || id)}</span></div>`).join("") || '<span class="dim">暂无模式</span>'}</div>`;
 }
 
 /* ---------------------------------------------------------------- evidence closure */
@@ -340,27 +332,27 @@ function wireFx(root, tax) {
 
   const tx = $("#fxTax", root);
   if (tx && tax) {
-    const pick = (sid) => {
-      $$(".fx-stg", tx).forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.stage === sid)));
-      $("#fxDetail", tx).innerHTML = patternMatrix(tax, sid);
-      const used = new Set(Object.keys(tax.patterns).filter((id) => id.startsWith(`${sid}.`)).map((id) => id.split(".")[1]));
-      $$(".fx-mech", tx).forEach((m) => m.classList.toggle("is-off", !used.has(m.dataset.m)));
-    };
-    const focus = (mid) => {
-      $$(".fx-pm-col", tx).forEach((c) => c.classList.toggle("is-dim", !!mid && c.dataset.m !== mid));
-      $$(".fx-mech", tx).forEach((c) => c.classList.toggle("is-hl", !!mid && c.dataset.m === mid));
+    const pick = (sid, mid) => {
+      $$(".fx-g-c, .fx-g-row, .fx-g-col", tx).forEach((x) => {
+        const on = (x.classList.contains("fx-g-row") ? !mid && x.dataset.s === sid
+          : x.classList.contains("fx-g-col") ? !sid && x.dataset.m === mid
+            : (!sid || x.dataset.s === sid) && (!mid || x.dataset.m === mid));
+        x.classList.toggle("is-on", on);
+      });
+      $("#fxDetail", tx).innerHTML = patternList(tax, sid, mid);
     };
     tx.addEventListener("click", (e) => {
-      const b = e.target.closest(".fx-stg");
-      if (b) pick(b.dataset.stage);
+      const b = e.target.closest("button.fx-g-c, .fx-g-row, .fx-g-col");
+      if (b) pick(b.dataset.s || null, b.dataset.m || null);
     });
+    // Hovering a cell lights its row and column heads, so the two axes read as one coordinate.
     tx.addEventListener("pointerover", (e) => {
-      const m = e.target.closest(".fx-mech, .fx-pm-col");
-      focus(m ? m.dataset.m : null);
+      const c = e.target.closest(".fx-g-c");
+      $$(".fx-g-row", tx).forEach((x) => x.classList.toggle("is-hl", !!c && x.dataset.s === c.dataset.s));
+      $$(".fx-g-col", tx).forEach((x) => x.classList.toggle("is-hl", !!c && x.dataset.m === c.dataset.m));
     });
-    tx.addEventListener("pointerleave", () => focus(null));
-    const cur = $('.fx-stg[aria-pressed="true"]', tx);
-    if (cur) pick(cur.dataset.stage);
+    const first = $("button.fx-g-c", tx);
+    if (first) pick(first.dataset.s, null);
   }
   if (REDUCED) return;
 
@@ -368,7 +360,6 @@ function wireFx(root, tax) {
   const outs = $$(".fx-out", box);
   const ring = $(".fx-ring", box);
   const tiles = $$(".fx-core i", box);
-  const steps = $$(".fx-steps span", box);
   const later = (fn, ms) => {
     const id = setTimeout(() => { E.fxT.delete(id); fn(); }, ms);
     E.fxT.add(id);
@@ -405,7 +396,6 @@ function wireFx(root, tax) {
       t.style.animationDelay = `${((k % 3) + Math.floor(k / 3)) * 35}ms`;
       restart(t, "pop");
     });
-    steps.forEach((s, k) => s.classList.toggle("is-on", k === step));
   };
   const land = (el) => {
     restart(el, "is-on");
