@@ -42,7 +42,7 @@ const SKELETON = {
   judge: [[12, 64], [4, 380], [4, 380], [4, 380], [12, 150], [7, 320], [5, 320]],
   bench: [[12, 64], [12, 560]],
   compare: [[12, 72], [12, 560]],
-  docs: [[12, 56], [4, 200], [4, 200], [4, 200]],
+  docs: [[4, 380], [4, 380], [4, 380]],
 };
 function skeletonHTML(view) {
   if (view === "samples" || view === "forecast") {
@@ -280,11 +280,17 @@ async function boot() {
   });
   // Back from the other product's server (bfcache): the knob moved before leaving; put it back.
   window.addEventListener("pageshow", (e) => e.persisted && productSeg.set(state.product, { silent: true }));
-  // 数据 tab already active on the evaluation-detail subpage: clicking it returns to the dashboard.
+  // 数据 / 文档 tab already active on a subpage: clicking it returns to the root index.
   $("#viewSwitch").addEventListener("click", (e) => {
-    const b = e.target.closest('button[data-value="data"]');
-    if (!b || !new URLSearchParams(location.search).get("detail")) return;
-    navigate({ view: "data", detail: null, ed: null, em: null, ep: null, edp: null });
+    const dataBtn = e.target.closest('button[data-value="data"]');
+    if (dataBtn && new URLSearchParams(location.search).get("detail")) {
+      navigate({ view: "data", detail: null, ed: null, em: null, ep: null, edp: null });
+      return;
+    }
+    const docsBtn = e.target.closest('button[data-value="docs"]');
+    if (docsBtn && new URLSearchParams(location.search).get("doc")) {
+      navigate({ view: "docs", doc: null });
+    }
   });
   // The theme switch is a pixel day/night toggle. Flipping it (click, drag or keyboard) grows the
   // new theme as a circle out of the knob; without view transitions every colour eases over.

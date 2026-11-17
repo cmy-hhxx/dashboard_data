@@ -1,6 +1,6 @@
 /* 评测容量说明 (doc=capacity): four views switched by the left TOC (概览 / 消耗 / 速度 / 观测).
    Uses the dashboard's shared tooltip (#tip via showTip / hideTip / bindTips) and counter formatting. */
-import { $, $$, fmt, compact, pct, showTip, hideTip, bindTips, runCounters } from "./core.js";
+import { $, $$, fmt, compact, pct, showTip, hideTip, bindTips, runCounters, copyBtnHTML } from "./core.js";
 
 const NS = "http://www.w3.org/2000/svg";
 
@@ -222,26 +222,29 @@ export function capacityDocHTML() {
   }).join("");
 
   const leverRows = LEVERS.map((l) => {
-    const cell = (d, b) => (!d ? '<td class="num faint">0</td>' : `<td class="num"><b class="cap-good">−${pct(Math.abs(d), b, 1)}</b></td>`);
+    const cell = (d, b) => (!d ? '<td class="num muted">0</td>' : `<td class="num"><b class="cap-good">−${pct(Math.abs(d), b, 1)}</b></td>`);
     return `<tr><td><b>${l.name}</b><span class="cap-sub">${l.detail}</span></td>${cell(l.attempts, CALIBRATION.attempts)}${cell(l.tokens, CALIBRATION.tokens)}${cell(l.modelSeconds, CALIBRATION.modelSeconds)}</tr>`;
   }).join("");
 
-  const rateFigures = LADDER.map((r) => `<div class="cap-fig"><b class="num">${pct(r.attribution, r.admitted, 0)}</b><small>${r.cases} 并发 · 归因 ${r.attribution} / ${r.admitted}</small></div>`).join("");
+  const rateFigures = LADDER.map((r) => {
+    const tag = r.cases === 64 ? '<span class="cap-prov" data-kind="measured">最快</span>' : r.cases === 128 ? '<span class="cap-prov" data-kind="warn">拥堵</span>' : "";
+    return `<div class="cap-fig">${tag}<b class="num">${pct(r.attribution, r.admitted, 0)}</b><small>${r.cases} 并发 · 归因 ${r.attribution} / ${r.admitted}</small></div>`;
+  }).join("");
 
-  const fixRows = FIXES.map((f) => `<tr><td><b>${f.title}</b><span class="cap-sub">${f.after}</span></td><td>${f.before}</td><td class="faint">${f.look}</td></tr>`).join("");
+  const fixRows = FIXES.map((f) => `<tr><td><b>${f.title}</b><span class="cap-sub">${f.after}</span></td><td>${f.before}</td><td class="muted">${f.look}</td></tr>`).join("");
 
   const engCells = ENGINEER_STRIP.map((e) => `<div class="cap-fig"><span class="cap-k">${e.k}</span><b class="num">${e.v}</b><small>${e.note}</small></div>`).join("");
 
-  const artRows = ARTIFACTS.map((a) => `<tr><td><b>${a.name}</b><span class="cap-sub"><code>${a.owner.replace(/</g, "&lt;")}</code></span></td><td>${a.use}</td><td class="faint">${a.limit}</td></tr>`).join("");
+  const artRows = ARTIFACTS.map((a) => `<tr><td><b>${a.name}</b><span class="cap-sub"><code>${a.owner.replace(/</g, "&lt;")}</code></span></td><td>${a.use}</td><td class="muted">${a.limit}</td></tr>`).join("");
 
   let lastEv = "";
   const fieldRows = FIELDS.map((f) => {
     const head = f.event !== lastEv ? `<tr class="cap-group"><td colspan="3">event = ${f.event}</td></tr>` : "";
     lastEv = f.event;
-    return `${head}<tr><td><code>${f.key}</code></td><td>${f.def}</td><td class="faint">${f.use}</td></tr>`;
+    return `${head}<tr><td><code>${f.key}</code></td><td>${f.def}</td><td class="muted">${f.use}</td></tr>`;
   }).join("");
 
-  const recipeItems = RECIPES.map((r, i) => `<li class="cap-recipe"><div class="cap-recipe-head"><span class="num">0${i + 1}</span><h3>${r.q}</h3></div><pre class="code">${r.cmd}</pre><p>${r.read}</p></li>`).join("");
+  const recipeItems = RECIPES.map((r, i) => `<li class="cap-recipe"><div class="cap-recipe-head"><span class="num">0${i + 1}</span><h3>${r.q}</h3>${copyBtnHTML("复制命令", { pre: true })}</div><pre class="code">${r.cmd}</pre><p>${r.read}</p></li>`).join("");
 
   const sampleWallCells = SAMPLE.walls.map((w) => `<div class="cap-fig"><b class="num">${w.seconds} s</b><small>整批墙钟 · ${w.label}</small></div>`).join("");
 
@@ -262,7 +265,7 @@ export function capacityDocHTML() {
     <b class="num">${f.p50.toFixed(1)} / ${f.p90.toFixed(1)} s</b>
   </div>`).join("");
 
-  const codeRows = SAMPLE.rejectCodes.map((c) => `<tr><td><code>${c.code}</code></td><td class="faint">${c.meaning}</td><td class="num">${c.count}</td></tr>`).join("");
+  const codeRows = SAMPLE.rejectCodes.map((c) => `<tr><td><code>${c.code}</code></td><td class="muted">${c.meaning}</td><td class="num">${c.count}</td></tr>`).join("");
 
   const metricRows = METRICS.map((m) => `<tr><td><b>${m.term}</b></td><td>${m.def}</td></tr>`).join("");
 
@@ -270,6 +273,9 @@ export function capacityDocHTML() {
 
   return `<div class="cap-shell">
     <aside class="cap-side">
+      <div class="dc-side-head">
+        <button type="button" class="dc-back" data-back><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>全部文档</button>
+      </div>
       <div class="cap-side-title">评测容量说明</div>
       <nav class="cap-toc" id="capToc" aria-label="容量章节">
         <button type="button" data-cap-view="overview" aria-pressed="true"><span class="num">01</span>概览</button>
@@ -290,6 +296,7 @@ export function capacityDocHTML() {
                   <span class="cap-prov" data-kind="measured">实测 · 2026-11-09</span>
                   <span class="cap-prov">AIME 2026-11-05</span>
                   <span class="cap-prov" data-kind="calibration">单条用量标定 200 条批次</span>
+                  ${copyBtnHTML("复制基准", { fn: "capHero" })}
                 </div>
                 <h2>一条归因 41.3 万 token · 17.7 次调用</h2>
                 <p>100 个 case 并发、200 个模型请求额度下，Runner 28 分钟读完输入产出 <b>138 行正式归因</b>，折合每小时 <b>292.8 行</b>。</p>
@@ -312,7 +319,7 @@ export function capacityDocHTML() {
           </article>
 
           <article class="card" style="--span:6">
-            <header class="card-head"><h2>速度公式</h2></header>
+            <header class="card-head"><h2>速度公式</h2>${copyBtnHTML("复制公式", { text: "行/h = 归因行 × 3600 ÷ 墙钟 = case 并发 × 3600 ÷ 单条墙钟（实测 292.8 行/h，100 并发 / 200 额度）" })}</header>
             <div class="cap-formula">
               <div><em>行/h</em> = 归因行 × 3600 ÷ 墙钟 = case 并发 × 3600 ÷ 单条墙钟</div>
               <div class="cap-formula-out"><b class="num">292.8</b><span>行/h（100 并发 / 200 额度）</span></div>
@@ -320,7 +327,7 @@ export function capacityDocHTML() {
           </article>
 
           <article class="card" style="--span:6">
-            <header class="card-head"><h2>消耗公式</h2></header>
+            <header class="card-head"><h2>消耗公式</h2>${copyBtnHTML("复制公式", { text: "token/条 = Σ 次数/条 × token/次 · 工时/条 = Σ 次数/条 × 单次秒数（标定 412,885 token/条，92% 缓存读写）" })}</header>
             <div class="cap-formula">
               <div><em>token/条</em> = Σ 次数/条 × token/次 · <em>工时/条</em> = Σ 次数/条 × 单次秒数</div>
               <div class="cap-formula-out"><b class="num">412,885</b><span>token/条（92% 缓存读写）</span></div>
@@ -374,9 +381,15 @@ export function capacityDocHTML() {
           </article>
 
           <article class="card" style="--span:12">
-            <header class="card-head"><h2>批量规划器</h2><span class="meta">按批量与目标速度折算资源消耗</span></header>
+            <header class="card-head"><h2>批量规划器</h2><span class="meta">按批量与目标速度折算资源消耗</span>${copyBtnHTML("复制测算", { fn: "capPlan" })}</header>
             <div class="cap-calc-grid">
               <div class="cap-controls">
+                <div class="cap-presets" role="group" aria-label="常用批量">
+                  <button type="button" data-plan-rows="500">500 条</button>
+                  <button type="button" data-plan-rows="1000" aria-pressed="true">1,000 条</button>
+                  <button type="button" data-plan-rows="5000">5,000 条</button>
+                  <button type="button" data-plan-rows="10000">10,000 条</button>
+                </div>
                 <label class="cap-range"><span>批量 <b class="num"><span id="capPlanRowsOut">1,000</span> 条</b></span><input id="capPlanRows" type="range" min="100" max="20000" step="100" value="1000"></label>
                 <label class="cap-range"><span>速度 <b class="num"><span id="capPlanRateOut">293</span> 条/h</b></span><input id="capPlanRate" type="range" min="150" max="400" step="1" value="293"></label>
               </div>
@@ -419,8 +432,13 @@ export function capacityDocHTML() {
           </article>
 
           <article class="card" style="--span:6">
-            <header class="card-head"><h2>并发与额度配比试算</h2></header>
+            <header class="card-head"><h2>并发与额度配比试算</h2>${copyBtnHTML("复制配置", { fn: "capShare" })}</header>
             <div class="cap-controls">
+              <div class="cap-presets" role="group" aria-label="常见配比">
+                <button type="button" data-share-preset="64,128" aria-pressed="true">推荐 64 / 128</button>
+                <button type="button" data-share-preset="100,200">100 / 200</button>
+                <button type="button" data-share-preset="128,128">过载 128 / 128</button>
+              </div>
               <label class="cap-range"><span>同时跑 case 数 <b class="num" id="capShareCasesOut">64</b></span><input id="capShareCases" type="range" min="8" max="256" step="8" value="64"></label>
               <label class="cap-range"><span>模型请求额度 <b class="num" id="capShareBudgetOut">128</b></span><input id="capShareBudget" type="range" min="32" max="512" step="32" value="128"></label>
             </div>
@@ -436,7 +454,7 @@ export function capacityDocHTML() {
           </article>
 
           <article class="card" style="--span:6">
-            <header class="card-head"><h2>目标速度反推并发流</h2><span class="cap-prov" data-kind="model">假设模型</span></header>
+            <header class="card-head"><h2>目标速度反推并发流</h2><span class="cap-prov" data-kind="model">假设模型</span>${copyBtnHTML("复制结果", { fn: "capTarget" })}</header>
             <div class="cap-controls">
               <label class="cap-range"><span>目标速度 <b class="num"><span id="capTargetRateOut">300</span> 行/h</b></span><input id="capTargetRate" type="range" min="100" max="600" step="5" value="300"></label>
               <label class="cap-range"><span>单条模型工时 <b class="num"><span id="capTargetWorkOut">1,200</span> s</b></span><input id="capTargetWork" type="range" min="400" max="2400" step="50" value="1200"></label>
@@ -471,6 +489,11 @@ export function capacityDocHTML() {
       <section class="cap-view" data-cap-panel="observability" aria-label="观测">
         <div class="bento">
           <article class="card" style="--span:12">
+            <header class="card-head"><h2>jq 排查配方</h2><span class="meta">耗时单位均为毫秒</span></header>
+            <ol class="cap-recipes">${recipeItems}</ol>
+          </article>
+
+          <article class="card" style="--span:12">
             <header class="card-head"><h2>Runner 产物职责</h2></header>
             <div class="cap-table-wrap">
               <table class="cap-table">
@@ -488,11 +511,6 @@ export function capacityDocHTML() {
                 <tbody>${fieldRows}</tbody>
               </table>
             </div>
-          </article>
-
-          <article class="card" style="--span:12">
-            <header class="card-head"><h2>jq 排查配方</h2><span class="meta">耗时单位均为毫秒</span></header>
-            <ol class="cap-recipes">${recipeItems}</ol>
           </article>
 
           <article class="card" style="--span:12">
@@ -690,13 +708,30 @@ export function wireCapacityDoc(root) {
     $("#capPlanWall", root).textContent = wallH >= 1 ? `${wallH.toFixed(1)} h` : `${Math.round(wallH * 60)} min`;
     $("#capPlanStreams", root).textContent = fmt(Math.round(streams));
   };
-  rowsIn?.addEventListener("input", syncPlan);
+  const syncPlanPresets = () => {
+    const cur = Number(rowsIn?.value || 0);
+    $$("[data-plan-rows]", root).forEach((b) => b.setAttribute("aria-pressed", String(Number(b.dataset.planRows) === cur)));
+  };
+  rowsIn?.addEventListener("input", () => { syncPlan(); syncPlanPresets(); });
   rateIn?.addEventListener("input", syncPlan);
+  $$("[data-plan-rows]", root).forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (!rowsIn) return;
+      rowsIn.value = btn.dataset.planRows;
+      syncPlan();
+      syncPlanPresets();
+    });
+  });
   syncPlan();
+  syncPlanPresets();
 
   // 并发与额度配比试算
   const casesIn = $("#capShareCases", root);
   const budgetIn = $("#capShareBudget", root);
+  const syncSharePresets = () => {
+    const key = `${casesIn?.value},${budgetIn?.value}`;
+    $$("[data-share-preset]", root).forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.sharePreset === key)));
+  };
   const syncShare = () => {
     if (!casesIn || !budgetIn) return;
     const cases = Number(casesIn.value);
@@ -716,9 +751,19 @@ export function wireCapacityDoc(root) {
         ? `<b>每条 ${share} 个在途请求</b><span>多组组件调查可并行推进，实测 64 并发 / 128 额度属于该区间。</span>`
         : `<b>每条仅 1 个在途请求</b><span>组件调查退化为串行排队，单条耗时显著拉长（128 并发 / 128 额度下完成度仅 5%）。</span>`;
     }
+    syncSharePresets();
   };
   casesIn?.addEventListener("input", syncShare);
   budgetIn?.addEventListener("input", syncShare);
+  $$("[data-share-preset]", root).forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (!casesIn || !budgetIn) return;
+      const [c, b] = btn.dataset.sharePreset.split(",");
+      casesIn.value = c;
+      budgetIn.value = b;
+      syncShare();
+    });
+  });
   syncShare();
 
   // 目标速度反推
@@ -743,4 +788,13 @@ export function wireCapacityDoc(root) {
   tRateIn?.addEventListener("input", syncTarget);
   tWorkIn?.addEventListener("input", syncTarget);
   syncTarget();
+}
+
+export function capacityCopyResolvers(root) {
+  return {
+    capHero: () => "292.8 行/h（100 并发 / 200 额度，138 行 / 1,697 s）｜单条 412,885 token（17.65 次调用，1,199 s 模型工时，92% 缓存）",
+    capPlan: () => `批量 ${$("#capPlanRowsOut", root)?.textContent} 条 @ ${$("#capPlanRateOut", root)?.textContent} 条/h → 预计 ${$("#capPlanTokens", root)?.textContent} token · ${$("#capPlanAttempts", root)?.textContent} 次调用 · 模型工时 ${$("#capPlanModel", root)?.textContent} · 墙钟 ${$("#capPlanWall", root)?.textContent} · 需并发流 ${$("#capPlanStreams", root)?.textContent} 条`,
+    capShare: () => `并发 ${$("#capShareCasesOut", root)?.textContent} / 额度 ${$("#capShareBudgetOut", root)?.textContent}（${$("#capShareRatio", root)?.textContent}）→ 每条上限 ${$("#capShareValue", root)?.textContent} 个 · 实际在用 ${$("#capShareStreams", root)?.textContent} 个 · ${$("#capShareVerdict b", root)?.textContent}`,
+    capTarget: () => `目标速度 ${$("#capTargetRateOut", root)?.textContent} 行/h · 单条模型工时 ${$("#capTargetWorkOut", root)?.textContent} s → 需常驻流 ${$("#capTargetStreams", root)?.textContent} 条（${$("#capTargetBadge", root)?.textContent}）`,
+  };
 }

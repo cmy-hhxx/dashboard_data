@@ -306,3 +306,86 @@ export function announce(text) {
   const el = document.getElementById("announcer");
   if (el) el.textContent = text;
 }
+
+/* Copy text reliably on both HTTPS and plain HTTP (navigator.clipboard is undefined on non-localhost HTTP). */
+export async function copyText(text) {
+  const s = String(text ?? "");
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(s);
+      return true;
+    }
+  } catch (err) {}
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = s;
+    ta.setAttribute("readonly", "");
+    ta.style.cssText = "position:fixed;top:0;left:-9999px;opacity:0";
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, s.length);
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  } catch (err) {
+    return false;
+  }
+}
+
+const COPY_SVG = '<svg class="dc-copy-ic" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="5.5" y="5.5" width="7.5" height="8" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M10.5 5.5V3.75A1.25 1.25 0 0 0 9.25 2.5h-5.5A1.25 1.25 0 0 0 2.5 3.75v6.5A1.25 1.25 0 0 0 3.75 11.5H5.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>';
+const CHECK_SVG = '<svg class="dc-copy-ic" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 8.5 6.5 11.5 12.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+export function copyBtnHTML(label = "复制", { text = "", fn = "", target = "", pre = false, aria = "" } = {}) {
+  const attrs = [
+    text ? `data-copy="${esc(text)}"` : "",
+    fn ? `data-copy-fn="${esc(fn)}"` : "",
+    target ? `data-copy-target="${esc(target)}"` : "",
+    pre ? "data-copy-pre" : "",
+    aria ? `aria-label="${esc(aria)}"` : "",
+  ].filter(Boolean).join(" ");
+  return `<button type="button" class="dc-copy" ${attrs}>${COPY_SVG}<span data-copy-label>${esc(label)}</span></button>`;
+}
+
+export function flashCopy(btn, ok, idleHTML) {
+  if (!btn) return;
+  if (!btn._idleHTML) btn._idleHTML = idleHTML ?? btn.innerHTML;
+  clearTimeout(btn._copyTimer);
+  const icon = btn.querySelector(".dc-copy-ic");
+  if (ok && icon) icon.outerHTML = CHECK_SVG;
+  const label = btn.querySelector("[data-copy-label]");
+  if (label) label.textContent = ok ? "已复制" : "复制失败";
+  else btn.textContent = ok ? "已复制" : "复制失败";
+  btn.classList.toggle("is-done", ok);
+  btn.classList.toggle("is-fail", !ok);
+  btn._copyTimer = setTimeout(() => {
+    btn.innerHTML = btn._idleHTML;
+    btn.classList.remove("is-done", "is-fail");
+  }, 1400);
+}
+
+export function wireCopy(root, resolvers = {}) {
+  if (!root) return;
+  root._copyResolvers = resolvers;
+  if (root._copyWired) return;
+  root._copyWired = true;
+  root.addEventListener("click", (e) => {
+    const btn = e.target.closest(".dc-copy,[data-copy],[data-copy-fn],[data-copy-target],[data-copy-pre]");
+    if (!btn || !root.contains(btn)) return;
+    const map = root._copyResolvers || {};
+    let text = null;
+    if (btn.dataset.copyFn && map[btn.dataset.copyFn]) {
+      text = map[btn.dataset.copyFn](btn);
+    } else if (btn.dataset.copy != null) {
+      text = btn.dataset.copy;
+    } else if (btn.dataset.copyTarget) {
+      const target = root.querySelector(btn.dataset.copyTarget) || document.querySelector(btn.dataset.copyTarget);
+      text = target ? target.textContent.trim() : null;
+    } else if (btn.hasAttribute("data-copy-pre")) {
+      const box = btn.closest(".dc-codebox") || btn.closest(".cap-recipe") || btn.parentElement;
+      const pre = box?.querySelector("pre");
+      text = pre ? pre.textContent.trim() : null;
+    }
+    if (text == null) return;
+    copyText(text).then((ok) => flashCopy(btn, ok));
+  });
+}

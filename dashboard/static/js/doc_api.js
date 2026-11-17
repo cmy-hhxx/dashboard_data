@@ -1,9 +1,40 @@
 /* 评测接口使用指南 (doc=api): 5003 供数接口 + 5002 页面接口 + 口径与增量同步规范. */
-import { $, $$ } from "./core.js";
+import { $, $$, esc, copyBtnHTML } from "./core.js";
+
+const API_ENVS = [
+  { id: "public", label: "外网直连", base: "http://10.217.219.2:2477/api/v1/analysis" },
+  { id: "cluster", label: "集群内网", base: "http://interactive-s3ynzadcvm9c:5003/api/v1/analysis" },
+  { id: "local", label: "本机调试", base: "http://127.0.0.1:5003/api/v1/analysis" },
+  { id: "var", label: "$API 变量", base: "$API" },
+];
+
+const PAGE_HOSTS = {
+  aime: { label: "AIME · 弗吉尼亚 :2476", base: "http://10.217.219.2:2476" },
+  wencai: { label: "问财 · 乌兰察布 :2833", base: "http://117.50.195.94:2833" },
+};
+
+function cmdBox(title, tpl) {
+  return `<div class="dc-codebox">
+    <div class="dc-codehead"><span>${esc(title)}</span>${copyBtnHTML("复制命令", { pre: true })}</div>
+    <pre class="code" data-api-tpl="${esc(tpl)}">${esc(tpl.replace(/\{\{API\}\}/g, API_ENVS[0].base))}</pre>
+  </div>`;
+}
+
+function envBarHTML() {
+  const btns = API_ENVS.map((env, i) => `<button type="button" data-api-env="${env.id}" aria-pressed="${i === 0}">${esc(env.label)}</button>`).join("");
+  return `<div class="api-env-bar">
+    <div class="api-env-pills" role="group" aria-label="调用地址">${btns}</div>
+    <code class="api-env-url num" data-api-base>${esc(API_ENVS[0].base)}</code>
+    ${copyBtnHTML("复制基址", { fn: "apiBase" })}
+  </div>`;
+}
 
 export function apiDocHTML() {
   return `<div class="cap-shell api-shell">
     <aside class="cap-side">
+      <div class="dc-side-head">
+        <button type="button" class="dc-back" data-back><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>全部文档</button>
+      </div>
       <div class="cap-side-title">评测接口指南</div>
       <nav class="cap-toc" id="apiToc" aria-label="接口章节">
         <button type="button" data-api-view="deploy" aria-pressed="true"><span class="num">01</span>部署与概念</button>
@@ -29,28 +60,41 @@ export function apiDocHTML() {
                 <p>先通过 <code>5003 /api/v1/analysis/traces</code> 检索 <code>trace_id / session_id</code>，再拼接 <code>case = split|model|session_id</code> 打开 <code>5002</code> 定位到会话中的具体轮次。</p>
               </div>
               <div class="api-flow-box">
-                <div><span class="cap-prov" data-kind="measured">5003</span><code>$API/traces → trace_id / session_id</code></div>
-                <div class="api-flow-arrow">↓ <code>case = split|model|session_id</code></div>
-                <div><span class="cap-prov" data-kind="derived">5002</span><code>$PAGE/?product=aime&amp;case=…&amp;trace=&lt;trace_id&gt;</code></div>
+                <div class="api-flow-row"><span class="cap-prov" data-kind="measured">5003</span><code>/traces → trace_id / session_id</code></div>
+                <div class="api-flow-row api-flow-arrow"><span></span><code>↓ case = split|model|session_id</code></div>
+                <div class="api-flow-row"><span class="cap-prov" data-kind="derived">5002</span><code>/?product=aime&amp;case=…&amp;trace=&lt;id&gt;</code></div>
               </div>
             </div>
           </article>
 
           <article class="card" style="--span:12">
-            <header class="card-head"><h2>两套部署与端口映射</h2><span class="meta">容器内固定：5001 看板 · 5002 页面 · 5003 供数</span></header>
+            <header class="card-head">
+              <h2>两套部署与端口映射</h2>
+              <span class="meta">容器内固定：5001 看板 · 5002 页面 · 5003 供数</span>
+              ${copyBtnHTML("复制环境变量", { text: 'export API="http://10.217.219.2:2477/api/v1/analysis"\nexport PAGE="http://10.217.219.2:2476"' })}
+            </header>
             <div class="cap-table-wrap">
               <table class="cap-table">
                 <thead><tr><th>部署环境</th><th>宿主机 IP</th><th>容器名称</th><th>数据目录</th><th class="num">5003 供数</th><th class="num">5002 页面</th><th class="num">5001 看板</th><th class="num">SSH</th></tr></thead>
                 <tbody>
                   <tr><td><b>弗吉尼亚（AIME）</b></td><td><code>10.217.219.2</code></td><td><code>interactive-s3ynzadcvm9c</code></td><td><code>/mnt/aime_eval_ssd</code></td><td class="num">2477</td><td class="num">2476</td><td class="num">2475</td><td class="num">2473</td></tr>
-                  <tr><td><b>乌兰察布（问财）</b></td><td><code>117.50.195.94</code></td><td><code>interactive-i6piqwvlnsr5</code></td><td><code>/mnt/fin_bench/...</code></td><td class="num faint">停用</td><td class="num">2833</td><td class="num">2768</td><td class="num">2834</td></tr>
+                  <tr><td><b>乌兰察布（问财）</b></td><td><code>117.50.195.94</code></td><td><code>interactive-i6piqwvlnsr5</code></td><td><code>/mnt/fin_bench/...</code></td><td class="num muted">停用</td><td class="num">2833</td><td class="num">2768</td><td class="num">2834</td></tr>
                 </tbody>
               </table>
             </div>
             <div class="api-vars">
-              <div><span>供数基址</span><code>$API = http://10.217.219.2:2477/api/v1/analysis</code></div>
-              <div><span>页面基址</span><code>$PAGE = http://10.217.219.2:2476</code></div>
-              <div><span>集群内直连</span><code>http://interactive-s3ynzadcvm9c:5003</code></div>
+              <div class="api-var">
+                <div class="api-var-head"><span>5003 供数基址</span>${copyBtnHTML("复制", { text: "http://10.217.219.2:2477/api/v1/analysis" })}</div>
+                <code>http://10.217.219.2:2477/api/v1/analysis</code>
+              </div>
+              <div class="api-var">
+                <div class="api-var-head"><span>5002 页面基址</span>${copyBtnHTML("复制", { text: "http://10.217.219.2:2476" })}</div>
+                <code>http://10.217.219.2:2476</code>
+              </div>
+              <div class="api-var">
+                <div class="api-var-head"><span>集群内直连</span>${copyBtnHTML("复制", { text: "http://interactive-s3ynzadcvm9c:5003/api/v1/analysis" })}</div>
+                <code>http://interactive-s3ynzadcvm9c:5003/api/v1/analysis</code>
+              </div>
             </div>
           </article>
 
@@ -78,8 +122,9 @@ export function apiDocHTML() {
       <section class="cap-view" data-api-panel="data" aria-label="5003 供数接口">
         <div class="bento">
           <article class="card" style="--span:12">
-            <header class="card-head"><h2>通用协议约定</h2><span class="meta">GET / POST 同语义 · dataset=aime_eval 必填</span></header>
-            <div class="cap-figs" style="--cols:4">
+            <header class="card-head"><h2>通用协议约定与调用地址</h2><span class="meta">GET / POST 同语义 · dataset=aime_eval 必填</span></header>
+            ${envBarHTML()}
+            <div class="cap-figs" style="--cols:4;margin-top:var(--sp-4)">
               <div class="cap-fig"><span class="cap-k">响应外包</span><b class="num">Schema 2.0</b><small><code>{request_id, schema_version:"2.0", data, meta}</code>，<code>meta.filters</code> 回显生效条件。</small></div>
               <div class="cap-fig"><span class="cap-k">游标分页</span><b class="num">30 min 有效</b><small><code>cursor</code> 过期返回 <code>410</code>；<code>/traces</code> 单页 ≤100（<code>ids_only=true</code> 时 ≤5000）。</small></div>
               <div class="cap-fig"><span class="cap-k">聚合与变更上限</span><b class="num">1,000 条</b><small><code>/summary</code>、<code>/severity</code> 的 <code>limit</code> ≤1000；<code>/changes</code> 的 <code>page_size</code> ≤1000。</small></div>
@@ -87,11 +132,11 @@ export function apiDocHTML() {
             </div>
           </article>
 
-          <article class="card" style="--span:6">
+          <article class="card api-ep-card" style="--span:6">
             <header class="card-head"><h2>1) P0–P4 分布：<code>/severity</code></h2></header>
-            <pre class="code">curl -s "$API/severity?dataset=aime_eval"
-curl -s "$API/severity?dataset=aime_eval&amp;group_by=app_version"</pre>
-            <div class="cap-table-wrap" style="margin-top:var(--sp-3)">
+            ${cmdBox("全局分布", 'curl -s "{{API}}/severity?dataset=aime_eval"')}
+            ${cmdBox("按版本分组", 'curl -s "{{API}}/severity?dataset=aime_eval&group_by=app_version"')}
+            <div class="cap-table-wrap">
               <table class="cap-table">
                 <tbody>
                   <tr><td><code>severity.Pn.problems</code></td><td>该等级问题条目数；总 <code>problems</code> = 各等级之和 + <code>unlabeled</code>。</td></tr>
@@ -102,11 +147,11 @@ curl -s "$API/severity?dataset=aime_eval&amp;group_by=app_version"</pre>
             </div>
           </article>
 
-          <article class="card" style="--span:6">
+          <article class="card api-ep-card" style="--span:6">
             <header class="card-head"><h2>2) 维度聚合：<code>/summary</code></h2></header>
-            <pre class="code">curl -s "$API/summary?dataset=aime_eval&amp;group_by=problem&amp;level=top"
-curl -s "$API/summary?dataset=aime_eval&amp;group_by=day"</pre>
-            <div class="cap-table-wrap" style="margin-top:var(--sp-3)">
+            ${cmdBox("按问题顶层分组", 'curl -s "{{API}}/summary?dataset=aime_eval&group_by=problem&level=top"')}
+            ${cmdBox("按美东日期分组", 'curl -s "{{API}}/summary?dataset=aime_eval&group_by=day"')}
+            <div class="cap-table-wrap">
               <table class="cap-table">
                 <tbody>
                   <tr><td><code>level</code></td><td><code>top</code>（环节）/ <code>leaf</code>（最细编码）/ <code>children</code>（下一层），仅作用于 <code>intent</code>、<code>problem</code>。</td></tr>
@@ -117,10 +162,11 @@ curl -s "$API/summary?dataset=aime_eval&amp;group_by=day"</pre>
             </div>
           </article>
 
-          <article class="card" style="--span:6">
+          <article class="card api-ep-card" style="--span:6">
             <header class="card-head"><h2>3) 检索列表：<code>/traces</code></h2></header>
-            <pre class="code">curl -s "$API/traces?dataset=aime_eval&amp;severity=P0&amp;page_size=2"</pre>
-            <div class="cap-table-wrap" style="margin-top:var(--sp-3)">
+            ${cmdBox("按严重度筛选", 'curl -s "{{API}}/traces?dataset=aime_eval&severity=P0&page_size=2"')}
+            ${cmdBox("仅导出 trace_id", 'curl -s "{{API}}/traces?dataset=aime_eval&severity=P0&ids_only=true&page_size=1000"')}
+            <div class="cap-table-wrap">
               <table class="cap-table">
                 <tbody>
                   <tr><td>常用筛选</td><td><code>source</code>、<code>start_day / end_day</code>、<code>intent</code>、<code>problem</code>、<code>severity</code>、<code>app_version</code>、<code>user_ids</code>、<code>q</code>。</td></tr>
@@ -131,16 +177,12 @@ curl -s "$API/summary?dataset=aime_eval&amp;group_by=day"</pre>
             </div>
           </article>
 
-          <article class="card" style="--span:6">
+          <article class="card api-ep-card" style="--span:6">
             <header class="card-head"><h2>4) 批量、单条详情、分类树</h2></header>
-            <pre class="code"># 批量查询（≤1000，仅 POST，保序返回）
-curl -s -X POST "$API/traces/batch" -H 'Content-Type: application/json' \\
-  -d '{"dataset":"aime_eval","trace_ids":["…","…"]}'
-
-# 单条详情（day 必填）与分类树
-curl -s "$API/traces/&lt;trace_id&gt;?dataset=aime_eval&amp;day=2026-11-11"
-curl -s "$API/taxonomy?kind=problem&amp;app_version=AIME-Atlas_expert"</pre>
-            <div class="cap-table-wrap" style="margin-top:var(--sp-3)">
+            ${cmdBox("批量查询（≤1000，仅 POST）", 'curl -s -X POST "{{API}}/traces/batch" -H \'Content-Type: application/json\' \\\n  -d \'{"dataset":"aime_eval","trace_ids":["<trace_id_1>","<trace_id_2>"]}\'')}
+            ${cmdBox("单条详情（day 必填）", 'curl -s "{{API}}/traces/<trace_id>?dataset=aime_eval&day=2026-11-11"')}
+            ${cmdBox("分类树", 'curl -s "{{API}}/taxonomy?kind=problem&app_version=AIME-Atlas_expert"')}
+            <div class="cap-table-wrap">
               <table class="cap-table">
                 <tbody>
                   <tr><td><code>/traces/batch</code></td><td>未知或未分析 id 返回 <code>status:"not_analyzed"</code>；同 id 多版本自动合并。</td></tr>
@@ -174,16 +216,12 @@ curl -s "$API/taxonomy?kind=problem&amp;app_version=AIME-Atlas_expert"</pre>
 
           <article class="card" style="--span:12">
             <header class="card-head"><h2>位点增量同步：<code>/changes</code></h2><span class="meta">禁止按时间窗口重拉（归因文件会补数或整份重写）</span></header>
-            <div class="cap-split">
-              <div>
-                <pre class="code"># 1. 首次全量：不传 since，按 next_cursor 翻页到底
-curl -s "$API/changes?dataset=aime_eval&amp;page_size=500"
-
-# 2. 增量拉取：保存上一轮末尾的 next_since，只拉变更
-curl -s "$API/changes?dataset=aime_eval&amp;since=&lt;next_since&gt;"
-
-# 3. 在线获取同步文档与客户端伪代码
-curl -s "$API/docs/incremental"</pre>
+            ${envBarHTML()}
+            <div class="cap-split" style="margin-top:var(--sp-4)">
+              <div class="api-sync-cmds">
+                ${cmdBox("1. 首次全量（不传 since，按 next_cursor 翻页）", 'curl -s "{{API}}/changes?dataset=aime_eval&page_size=500"')}
+                ${cmdBox("2. 增量拉取（传入上一轮末尾的 next_since）", 'curl -s "{{API}}/changes?dataset=aime_eval&since=<next_since>"')}
+                ${cmdBox("3. 获取在线完整同步文档与客户端伪代码", 'curl -s "{{API}}/docs/incremental"')}
               </div>
               <div class="cap-table-wrap">
                 <table class="cap-table">
@@ -204,18 +242,38 @@ curl -s "$API/docs/incremental"</pre>
       <section class="cap-view" data-api-panel="page" aria-label="5002 页面与排查">
         <div class="bento">
           <article class="card" style="--span:12">
-            <header class="card-head"><h2>5002 页面深链格式</h2><span class="meta">索引缓存 120 秒 · 跨产品访问返回 404</span></header>
-            <pre class="code">/?product=aime&amp;case=&lt;split&gt;|&lt;model&gt;|&lt;session_id&gt;&amp;trace=&lt;trace_id&gt;</pre>
-            <div class="cap-table-wrap" style="margin-top:var(--sp-3)">
-              <table class="cap-table">
-                <thead><tr><th style="width:24%">参数 / 路径</th><th>说明</th></tr></thead>
-                <tbody>
-                  <tr><td><code>product</code></td><td><code>aime</code>（弗吉尼亚 <code>:2476</code>）或 <code>wencai</code>（乌兰察布 <code>:2833</code>）。</td></tr>
-                  <tr><td><code>case</code> / <code>slug</code></td><td><code>&lt;split&gt;|&lt;model&gt;|&lt;session_id&gt;</code>（URL 中 <code>|</code> 编码为 <code>%7C</code>），也可直接传 10 位 <code>slug</code>。</td></tr>
-                  <tr><td><code>trace</code></td><td>可选；传入后直接展开并滚动定位到该轮对话。</td></tr>
-                  <tr><td>独立展示页</td><td><code>/matrix/?matrix=1</code>（独立聚类矩阵页）、<code>/compare/</code>（独立 A/B 版本对比页）。</td></tr>
-                </tbody>
-              </table>
+            <header class="card-head"><h2>5002 对话页面链接拼接器</h2><span class="meta">索引缓存 120 秒 · 跨产品访问返回 404</span></header>
+            <div class="api-builder">
+              <div class="api-builder-row">
+                <div class="api-env-pills" role="group" aria-label="选择产品">
+                  <button type="button" data-page-product="aime" aria-pressed="true">AIME（弗吉尼亚 :2476）</button>
+                  <button type="button" data-page-product="wencai" aria-pressed="false">问财（乌兰察布 :2833）</button>
+                </div>
+              </div>
+              <div class="api-builder-fields">
+                <label><span>split</span><input id="apiSplit" type="text" value="daily" placeholder="daily / lost" autocomplete="off" spellcheck="false"></label>
+                <label><span>model</span><input id="apiModel" type="text" value="aime_expert" placeholder="aime_expert" autocomplete="off" spellcheck="false"></label>
+                <label><span>session_id</span><input id="apiSession" type="text" value="thread_example_id" placeholder="thread_..." autocomplete="off" spellcheck="false"></label>
+                <label><span>trace_id（可选）</span><input id="apiTrace" type="text" value="" placeholder="定位到具体轮次" autocomplete="off" spellcheck="false"></label>
+              </div>
+              <div class="dc-codebox">
+                <div class="dc-codehead"><span>生成的 5002 直达链接（已自动编码 | 为 %7C）</span>${copyBtnHTML("复制链接", { pre: true })}</div>
+                <pre class="code" id="apiPageUrlOut"></pre>
+              </div>
+            </div>
+            <div class="api-vars" style="margin-top:var(--sp-4)">
+              <div class="api-var">
+                <div class="api-var-head"><span>独立聚类矩阵页</span>${copyBtnHTML("复制链接", { fn: "apiMatrixUrl" })}</div>
+                <code data-page-suffix="/matrix/?matrix=1">http://10.217.219.2:2476/matrix/?matrix=1</code>
+              </div>
+              <div class="api-var">
+                <div class="api-var-head"><span>独立版本对比页</span>${copyBtnHTML("复制链接", { fn: "apiCompareUrl" })}</div>
+                <code data-page-suffix="/compare/">http://10.217.219.2:2476/compare/</code>
+              </div>
+              <div class="api-var">
+                <div class="api-var-head"><span>10 位短 slug 写法</span>${copyBtnHTML("复制模板", { fn: "apiSlugUrl" })}</div>
+                <code data-page-slug>http://10.217.219.2:2476/?product=aime&amp;slug=&lt;10位slug&gt;</code>
+              </div>
             </div>
           </article>
 
@@ -242,11 +300,71 @@ curl -s "$API/docs/incremental"</pre>
 }
 
 export function wireApiDoc(root) {
-  $("#apiToc", root)?.addEventListener("click", (e) => {
+  const shell = $(".api-shell", root);
+  if (!shell) return;
+
+  $("#apiToc", shell)?.addEventListener("click", (e) => {
     const btn = e.target.closest("[data-api-view]");
     if (!btn) return;
     const name = btn.dataset.apiView;
-    $$("[data-api-panel]", root).forEach((p) => p.classList.toggle("is-active", p.dataset.apiPanel === name));
-    $$("#apiToc [data-api-view]", root).forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.apiView === name)));
+    $$("[data-api-panel]", shell).forEach((p) => p.classList.toggle("is-active", p.dataset.apiPanel === name));
+    $$("#apiToc [data-api-view]", shell).forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.apiView === name)));
   });
+
+  // 接入环境切换（外网 / 内网 / 本机 / $API），同步重写全部 curl 命令
+  const setEnv = (envId) => {
+    const env = API_ENVS.find((x) => x.id === envId) || API_ENVS[0];
+    $$("[data-api-env]", shell).forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.apiEnv === env.id)));
+    $$("[data-api-base]", shell).forEach((el) => { el.textContent = env.base; });
+    $$("[data-api-tpl]", shell).forEach((pre) => {
+      pre.textContent = pre.dataset.apiTpl.replace(/\{\{API\}\}/g, env.base);
+    });
+  };
+
+  // 5002 链接拼接器
+  let pageProd = "aime";
+  const splitIn = $("#apiSplit", shell);
+  const modelIn = $("#apiModel", shell);
+  const sessIn = $("#apiSession", shell);
+  const traceIn = $("#apiTrace", shell);
+  const urlOut = $("#apiPageUrlOut", shell);
+
+  const syncPageUrl = () => {
+    const host = PAGE_HOSTS[pageProd] || PAGE_HOSTS.aime;
+    const sp = (splitIn?.value || "daily").trim();
+    const md = (modelIn?.value || (pageProd === "aime" ? "aime_expert" : "wencai")).trim();
+    const sid = (sessIn?.value || "<session_id>").trim();
+    const tr = (traceIn?.value || "").trim();
+    const caseVal = `${sp}%7C${md}%7C${encodeURIComponent(sid)}`;
+    const url = `${host.base}/?product=${pageProd}&case=${caseVal}${tr ? `&trace=${encodeURIComponent(tr)}` : ""}`;
+    if (urlOut) urlOut.textContent = url;
+    $$("[data-page-suffix]", shell).forEach((el) => { el.textContent = `${host.base}${el.dataset.pageSuffix}`; });
+    const slugEl = $("[data-page-slug]", shell);
+    if (slugEl) slugEl.textContent = `${host.base}/?product=${pageProd}&slug=<10位slug>`;
+  };
+
+  shell.addEventListener("click", (e) => {
+    const envBtn = e.target.closest("[data-api-env]");
+    if (envBtn) { setEnv(envBtn.dataset.apiEnv); return; }
+    const pb = e.target.closest("[data-page-product]");
+    if (pb) {
+      pageProd = pb.dataset.pageProduct;
+      $$("[data-page-product]", shell).forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.pageProduct === pageProd)));
+      if (modelIn && (modelIn.value === "aime_expert" || modelIn.value === "wencai")) {
+        modelIn.value = pageProd === "aime" ? "aime_expert" : "wencai";
+      }
+      syncPageUrl();
+    }
+  });
+  [splitIn, modelIn, sessIn, traceIn].forEach((el) => el?.addEventListener("input", syncPageUrl));
+  syncPageUrl();
+}
+
+export function apiCopyResolvers(root) {
+  return {
+    apiBase: () => $("[data-api-base]", root)?.textContent.trim() || API_ENVS[0].base,
+    apiMatrixUrl: () => $("[data-page-suffix='/matrix/?matrix=1']", root)?.textContent.trim() || "",
+    apiCompareUrl: () => $("[data-page-suffix='/compare/']", root)?.textContent.trim() || "",
+    apiSlugUrl: () => $("[data-page-slug]", root)?.textContent.trim() || "",
+  };
 }

@@ -1,62 +1,114 @@
 /* 文档: three reference documents under ?view=docs (&doc=severity | capacity | api).
-   Index shows three liquid-flood cards; opening a card renders the full interactive document. */
-import { $, $$, esc, segmented } from "./core.js";
+   Index shows three equal liquid-flood cards; opening a card renders the full interactive document. */
+import { $, $$, esc, segmented, copyText, copyBtnHTML, flashCopy, wireCopy } from "./core.js";
 import { floodCards } from "./shader_flood.js";
-import { capacityDocHTML, wireCapacityDoc } from "./doc_capacity.js";
-import { apiDocHTML, wireApiDoc } from "./doc_api.js";
+import { capacityDocHTML, wireCapacityDoc, capacityCopyResolvers } from "./doc_capacity.js";
+import { apiDocHTML, wireApiDoc, apiCopyResolvers } from "./doc_api.js";
 
 const DOCS = [
   {
     id: "severity",
-    title: "P0–P4 口径定义与实例",
-    kicker: "定级",
-    meta: "5 档口径 · 75 个案例 · 205 条证据",
-    desc: "判级流程、五档严重度边界，以及问财与 AIME 的 75 个真实评测归因案例对照。",
+    num: "01",
+    tag: "定级标准",
+    title: "问题怎么定级（P0–P4）",
+    desc: "判级流程、五档严重度边界与 75 个真实对照案例",
+    foot: "5 档口径 · 75 例 · 205 条证据",
     palette: ["#3a0a0c", "#d2452f", "#ffd6c6"],
+    visual: `<span class="dc-visual dc-sev-scale" aria-hidden="true">
+      <span class="dc-sev-col"><i style="--c:var(--sev-0)"></i><b>P0</b><em>不可信</em></span>
+      <span class="dc-sev-col"><i style="--c:var(--sev-1)"></i><b>P1</b><em>需大改</em></span>
+      <span class="dc-sev-col"><i style="--c:var(--sev-2)"></i><b>P2</b><em>局部错</em></span>
+      <span class="dc-sev-col"><i style="--c:var(--sev-3)"></i><b>P3</b><em>表达偏</em></span>
+      <span class="dc-sev-col"><i style="--c:var(--sev-4)"></i><b>P4</b><em>未伤交付</em></span>
+    </span>`,
   },
   {
     id: "capacity",
-    title: "评测容量与性能说明",
-    kicker: "容量",
-    meta: "292.8 行/h · 41.3 万 token/条",
-    desc: "单条归因消耗拆解、五档并发容量阶梯、配比试算器，以及 runtime.log 排查配方。",
+    num: "02",
+    tag: "容量与性能",
+    title: "跑一批要多久、花多少",
+    desc: "单条消耗拆解、并发阶梯与实时配比试算工具",
+    foot: "3 个交互试算 · 5 条排查命令",
     palette: ["#0b2358", "#3a63f0", "#d4e0ff"],
+    visual: `<span class="dc-visual dc-cap-preview" aria-hidden="true">
+      <span class="dc-cap-kpi"><b class="num">292.8</b><em>行 / 小时</em></span>
+      <span class="dc-cap-pair">
+        <span><em>单条消耗</em><b class="num">41.3 万 token</b></span>
+        <span><em>最佳配比</em><b class="num">64 并发 / 128 额度</b></span>
+      </span>
+    </span>`,
   },
   {
     id: "api",
-    title: "评测接口使用指南",
-    kicker: "接口",
-    meta: "5003 供数 API · 5002 页面深链",
-    desc: "乌兰察布与弗吉尼亚部署映射、统一统计口径、5003 查询与增量同步、5002 页面定位。",
+    num: "03",
+    tag: "接口与深链",
+    title: "怎么调接口查数据",
+    desc: "5003 取数命令（可直接复制运行）与 5002 对话直达",
+    foot: "外网 / 内网一键切换 · 链接生成器",
     palette: ["#092e2a", "#1d7d72", "#c8f2ec"],
+    visual: `<span class="dc-visual dc-api-preview" aria-hidden="true">
+      <span class="dc-api-step"><em>5003 供数</em><code>/traces → trace_id</code></span>
+      <span class="dc-api-step"><em>5002 页面</em><code>/?case=…&amp;trace=…</code></span>
+      <span class="dc-api-chips"><code>/severity</code><code>/summary</code><code>/changes</code></span>
+    </span>`,
   },
 ];
-
-const BACK = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 let severityCache = null;
 
 function indexHTML() {
   return `<div class="dc">
-    <header class="dc-head"><span class="dc-k">文档</span><h1>评测体系文档</h1></header>
     <div class="dc-stage" id="dcStage">
       <div class="dc-grid" role="list">${DOCS.map((d, i) => `<a class="dc-card" role="listitem" href="?view=docs&amp;doc=${d.id}" data-flood data-doc="${d.id}" style="--dc-accent:${d.palette[1]};--i:${i}">
         <span class="dc-body">
-          <span class="dc-top"><small>${esc(d.kicker)}</small><em class="num">${esc(d.meta)}</em></span>
-          <b>${esc(d.title)}</b>
-          <span>${esc(d.desc)}</span>
+          <span class="dc-top"><span class="dc-tag">${esc(d.num)} · ${esc(d.tag)}</span><span class="dc-go" aria-hidden="true">进入 →</span></span>
+          <span class="dc-card-head">
+            <b class="dc-title">${esc(d.title)}</b>
+            <span class="dc-desc">${esc(d.desc)}</span>
+          </span>
+          ${d.visual}
+          <span class="dc-foot num">${esc(d.foot)}</span>
         </span>
       </a>`).join("")}</div>
     </div>
   </div>`;
 }
 
-function crumbHTML(d) {
-  const pills = DOCS.map((item) => `<button type="button" class="dc-switch-btn" data-doc-pick="${item.id}" aria-pressed="${item.id === d.id}">${esc(item.title)}</button>`).join("");
-  return `<nav class="dc-crumb" aria-label="文档导航">
-    <button type="button" class="dc-back" data-back>${BACK}全部文档</button>
-    <div class="dc-switch" role="group" aria-label="切换文档">${pills}</div>
-  </nav>`;
+function severityCopyResolvers(host) {
+  return {
+    sevOverview() {
+      const rows = $$("#overview tbody tr", host).map((tr) => {
+        const tds = $$("td", tr);
+        return `${tds[0]?.textContent.trim()}: ${tds[1]?.textContent.trim()} (${tds[2]?.textContent.trim()} 例)`;
+      });
+      return rows.join("\n");
+    },
+    sevLevel(btn) {
+      const sec = btn.closest(".level");
+      if (!sec) return "";
+      const code = $(".level-num", sec)?.textContent.trim() || "";
+      const title = $(".level-head h2", sec)?.textContent.trim() || "";
+      const def = $(".level-def", sec)?.textContent.trim() || "";
+      const cols = $$(".criteria > div", sec).map((box) => {
+        const h = $("h3", box)?.textContent.trim() || "";
+        const items = $$("li", box).map((li) => `- ${li.textContent.trim()}`).join("\n");
+        return `${h}:\n${items}`;
+      });
+      return [`${code} ${title}`, def, ...cols].filter(Boolean).join("\n\n");
+    },
+    sevCase(btn) {
+      const art = btn.closest(".case");
+      if (!art) return "";
+      const id = $(".case-id", art)?.textContent.trim() || "";
+      const src = $(".case-source", art)?.textContent.trim() || "";
+      const tag = $(".judgment-label .tag", art)?.textContent.trim() || "";
+      const title = $(".judgment-label > span:nth-child(2)", art)?.textContent.trim() || "";
+      const plain = $$(".plain > div", art).map((r) => `${$("dt", r)?.textContent.trim()}: ${$("dd", r)?.textContent.trim()}`).join("\n");
+      const why = $(".case-why", art)?.textContent.trim() || "";
+      const cite = $$(".cite-items > span", art).map((s) => s.textContent.trim()).join(" | ");
+      return [`${id} [${tag} · ${src}] ${title}`, plain, `定级依据: ${why}`, cite].filter(Boolean).join("\n");
+    },
+  };
 }
 
 function wireSeverityDoc(host) {
@@ -64,16 +116,39 @@ function wireSeverityDoc(host) {
   if (!shell) return;
   shell.dataset.trans = "on";
 
-  // 译文开关
-  const transBtn = $("#transToggle", shell);
-  transBtn?.addEventListener("click", () => {
-    const on = shell.dataset.trans !== "on";
-    shell.dataset.trans = on ? "on" : "off";
-    transBtn.setAttribute("aria-pressed", String(on));
-    transBtn.textContent = on ? "显示译文" : "隐藏译文";
+  // 注入复制按钮：五档速查、各档判据、每个案例与证据示例
+  const ovHead = $("#overview .card-head", shell);
+  if (ovHead && !$("[data-copy-fn='sevOverview']", ovHead)) {
+    ovHead.insertAdjacentHTML("beforeend", copyBtnHTML("复制五档速查", { fn: "sevOverview" }));
+  }
+  $$(".level", shell).forEach((sec) => {
+    const head = $(".level-head", sec);
+    if (head && !$("[data-copy-fn='sevLevel']", head)) {
+      head.insertAdjacentHTML("beforeend", copyBtnHTML("复制判据", { fn: "sevLevel" }));
+    }
   });
+  $$(".case", shell).forEach((art) => {
+    const jl = $(".judgment-label", art);
+    if (jl && !$("[data-copy-fn='sevCase']", jl)) {
+      jl.insertAdjacentHTML("beforeend", copyBtnHTML("复制案例", { fn: "sevCase" }));
+    }
+  });
+  const evHead = $("#evSampleBox .dc-codehead", shell);
+  if (evHead && !$("[data-copy-pre]", evHead)) {
+    evHead.insertAdjacentHTML("beforeend", copyBtnHTML("复制示例", { pre: true }));
+  }
+
+  // 译文开关
+  const transIn = $("#transToggle", shell);
+  const syncTrans = () => {
+    const on = Boolean(transIn?.checked);
+    shell.dataset.trans = on ? "on" : "off";
+  };
+  transIn?.addEventListener("change", syncTrans);
+  syncTrans();
 
   // 筛选、搜索、只看人话
+  const levels = $$(".level", shell);
   const cases = $$(".case", shell);
   const railLinks = $$(".rail-sub a", shell);
   const searchIn = $("#caseSearch", shell);
@@ -98,6 +173,10 @@ function wireSeverityDoc(host) {
       row.item.hidden = !visible;
       shown[row.item.id] = visible;
       if (visible) count++;
+    });
+    levels.forEach((sec) => {
+      const hasVisible = $$(".case", sec).some((c) => !c.hidden);
+      sec.hidden = !hasVisible;
     });
     railLinks.forEach((link) => {
       const id = (link.getAttribute("href") || "").slice(1);
@@ -132,40 +211,7 @@ function wireSeverityDoc(host) {
     shell.dataset.view = briefIn.checked ? "brief" : "full";
   });
 
-  // 复制引用
-  shell.addEventListener("click", (e) => {
-    const copyBtn = e.target.closest(".cite-copy");
-    if (copyBtn) {
-      const cite = copyBtn.closest(".case-cite");
-      if (!cite) return;
-      const text = $$(".cite-items > span", cite).map((s) => {
-        const em = $("em", s);
-        const k = em ? em.textContent.trim() : "file";
-        const v = em ? s.textContent.slice(em.textContent.length).trim() : s.textContent.trim();
-        return `${k}: ${v}`;
-      }).join("\n");
-      navigator.clipboard?.writeText(text).catch(() => {});
-      clearTimeout(copyBtn._t);
-      copyBtn.textContent = "已复制";
-      copyBtn.classList.add("is-done");
-      copyBtn._t = setTimeout(() => {
-        copyBtn.textContent = "复制";
-        copyBtn.classList.remove("is-done");
-      }, 1400);
-      return;
-    }
-
-    // 目录跳转（不污染路由）
-    const link = e.target.closest('.rail a[href^="#"]');
-    if (link) {
-      e.preventDefault();
-      const id = link.getAttribute("href").slice(1);
-      const target = document.getElementById(id);
-      if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  });
-
-  // 左侧目录折叠与滚动高亮
+  // 左侧目录折叠
   const groups = $$(".rail-group", shell);
   const toggleGroup = (group, open) => {
     const row = $(".rail-row", group);
@@ -183,6 +229,45 @@ function wireSeverityDoc(host) {
     });
   });
   if (groups[0]) toggleGroup(groups[0], true);
+
+  const jumpTo = (selector, expandGroup = true) => {
+    const target = document.getElementById(selector.replace(/^#/, ""));
+    if (!target) return;
+    if (expandGroup) {
+      const grp = groups.find((g) => g.dataset.level === target.id);
+      if (grp) groups.forEach((other) => toggleGroup(other, other === grp));
+    }
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  // 复制定位 & 跳转（flowchart / overview / 左侧目录）
+  shell.addEventListener("click", (e) => {
+    const copyBtn = e.target.closest(".cite-copy");
+    if (copyBtn) {
+      const cite = copyBtn.closest(".case-cite");
+      if (!cite) return;
+      const text = $$(".cite-items > span", cite).map((s) => {
+        const em = $("em", s);
+        const k = em ? em.textContent.trim() : "file";
+        const v = em ? s.textContent.slice(em.textContent.length).trim() : s.textContent.trim();
+        return `${k}: ${v}`;
+      }).join("\n");
+      copyText(text).then((ok) => flashCopy(copyBtn, ok));
+      return;
+    }
+
+    const jumpEl = e.target.closest("[data-jump]");
+    if (jumpEl) {
+      jumpTo(jumpEl.dataset.jump, true);
+      return;
+    }
+
+    const link = e.target.closest('.rail a[href^="#"]');
+    if (link) {
+      e.preventDefault();
+      jumpTo(link.getAttribute("href"), !link.classList.contains("rail-row"));
+    }
+  });
 }
 
 export async function render(root, c) {
@@ -200,11 +285,6 @@ export async function render(root, c) {
     root.addEventListener("click", (e) => {
       if (e.target.closest("[data-back]")) {
         root._nav?.({ view: "docs", doc: null });
-        return;
-      }
-      const pick = e.target.closest("[data-doc-pick]");
-      if (pick) {
-        root._nav?.({ view: "docs", doc: pick.dataset.docPick });
       }
     });
   }
@@ -215,26 +295,28 @@ export async function render(root, c) {
     const cards = [...stage.querySelectorAll("[data-flood]")];
     root._flood = floodCards(stage, cards, {
       palettes: DOCS.map((d) => d.palette),
-      radius: 20,
+      radius: 28,
       onOpen: (i) => c.navigate?.({ view: "docs", doc: DOCS[i].id }),
     });
     return;
   }
 
   if (doc.id === "capacity") {
-    root.innerHTML = `<div class="dc dc-doc">${crumbHTML(doc)}${capacityDocHTML()}</div>`;
+    root.innerHTML = `<div class="dc dc-doc">${capacityDocHTML()}</div>`;
     wireCapacityDoc(root);
+    wireCopy(root, capacityCopyResolvers(root));
     return;
   }
 
   if (doc.id === "api") {
-    root.innerHTML = `<div class="dc dc-doc">${crumbHTML(doc)}${apiDocHTML()}</div>`;
+    root.innerHTML = `<div class="dc dc-doc">${apiDocHTML()}</div>`;
     wireApiDoc(root);
+    wireCopy(root, apiCopyResolvers(root));
     return;
   }
 
   // doc.id === "severity"
-  root.innerHTML = `<div class="dc dc-doc">${crumbHTML(doc)}<div id="dcSeverityBody"><div class="card" style="padding:var(--sp-6)"><div class="empty">正在加载 P0–P4 口径与 75 个案例…</div></div></div></div>`;
+  root.innerHTML = `<div class="dc dc-doc"><div id="dcSeverityBody"><div class="card" style="padding:var(--sp-6)"><div class="empty">正在加载 P0–P4 口径与 75 个案例…</div></div></div></div>`;
   try {
     if (!severityCache) {
       const res = await fetch("docs/severity.html");
@@ -246,6 +328,7 @@ export async function render(root, c) {
     if (body) {
       body.innerHTML = severityCache;
       wireSeverityDoc(body);
+      wireCopy(root, severityCopyResolvers(body));
     }
   } catch (err) {
     const body = $("#dcSeverityBody", root);

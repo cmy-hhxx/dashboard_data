@@ -1,6 +1,9 @@
 <div class="p4-shell" id="p4Top">
 <aside class="rail">
-    <div class="rail-title">目录</div>
+    <div class="dc-side-head">
+      <button type="button" class="dc-back" data-back><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>全部文档</button>
+    </div>
+    <div class="cap-side-title">P0–P4 口径与实例<span class="p4-side-meta num">75 例 · 205 条证据</span></div>
     <nav class="rail-nav" aria-label="目录">
       <a href="#flow"><span class="rail-code">01</span><span class="rail-label">判级</span></a>
       <a href="#overview"><span class="rail-code">02</span><span class="rail-label">五个等级</span></a>
@@ -105,71 +108,76 @@
           <a href="#P4-15" title="多季度取数只返回最新单季"><span class="rail-sub-code">P4-15</span><span class="rail-sub-title">多季度取数只返回最新单季</span></a>
         </div>
       </div>
+      <div class="rail-sep"></div>
+      <a href="#edge"><span class="rail-code">03</span><span class="rail-label">边界</span></a>
+      <a href="#evidence"><span class="rail-code">04</span><span class="rail-label">证据</span></a>
+      <a href="#data"><span class="rail-code">05</span><span class="rail-label">数据</span></a>
     </nav>
-    <div class="rail-foot"><a href="#edge">边界</a><a href="#evidence">证据</a><a href="#data">数据</a></div>
   </aside>
 
-  <main class="doc" id="main">
-    <header class="p4-head">
-      <div class="p4-head-main">
-        <span class="dc-k">定级</span>
-        <h1>P0–P4 归因口径与实例</h1>
-        <span class="p4-head-meta num">75 例 · 205 条证据</span>
-      </div>
-      <button class="tl-pill p4-trans-btn" id="transToggle" type="button" aria-pressed="true" aria-label="隐藏问句中文翻译">显示译文</button>
-    </header>
-
-    <section class="section" id="flow">
-      <h2>判级</h2>
+  <main class="cap-main p4-main" id="main">
+    <div class="bento">
+    <section class="card section" id="flow" style="--span:12">
+      <header class="card-head"><h2>判级</h2></header>
       <svg class="decision" viewBox="0 0 1000 318" role="img" aria-label="判级流程：先问这个问题对最终交付有没有剩余影响。已证实没有，记 P4；说不清，不定级、先补证；已确认有，按影响大小从 P0 到 P3 取最先成立的一档。">
-        <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--faint)"></path></marker></defs>
+        <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--muted)"></path></marker></defs>
         <rect x="240" y="0" width="520" height="54" rx="7" fill="var(--accent)"></rect>
         <text x="500" y="33" text-anchor="middle" class="svg-title" fill="var(--card)">这个问题对最终交付还有影响吗？</text>
-        <path d="M500 54 V84" fill="none" stroke="var(--faint)" stroke-width="1.2"></path>
-        <path d="M130 84 H742" fill="none" stroke="var(--faint)" stroke-width="1.2"></path>
-        <path d="M130 84 V114" fill="none" stroke="var(--faint)" stroke-width="1.2" marker-end="url(#arrow)"></path>
-        <path d="M378 84 V114" fill="none" stroke="var(--faint)" stroke-width="1.2" marker-end="url(#arrow)"></path>
-        <path d="M742 84 V114" fill="none" stroke="var(--faint)" stroke-width="1.2" marker-end="url(#arrow)"></path>
+        <path d="M500 54 V84" fill="none" stroke="var(--muted)" stroke-width="1.2"></path>
+        <path d="M130 84 H742" fill="none" stroke="var(--muted)" stroke-width="1.2"></path>
+        <path d="M130 84 V114" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"></path>
+        <path d="M378 84 V114" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"></path>
+        <path d="M742 84 V114" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"></path>
         <rect x="10" y="120" width="240" height="46" rx="6" fill="var(--well)"></rect>
         <text x="130" y="148" text-anchor="middle" class="svg-box" fill="var(--ink-2)">已证实没有</text>
         <rect x="268" y="120" width="220" height="46" rx="6" fill="var(--well)"></rect>
         <text x="378" y="148" text-anchor="middle" class="svg-box" fill="var(--ink-2)">说不清</text>
         <rect x="622" y="120" width="240" height="46" rx="6" fill="var(--well)"></rect>
         <text x="742" y="148" text-anchor="middle" class="svg-box" fill="var(--ink-2)">已确认有</text>
-        <path d="M130 166 V210" fill="none" stroke="var(--faint)" stroke-width="1.2" marker-end="url(#arrow)"></path>
-        <path d="M378 166 V210" fill="none" stroke="var(--faint)" stroke-width="1.2" marker-end="url(#arrow)"></path>
-        <rect x="10" y="214" width="240" height="86" rx="6" fill="var(--well)"></rect>
-        <rect x="26" y="230" width="10" height="10" rx="2" fill="var(--sev-none)"></rect>
-        <text x="46" y="240" class="svg-level" fill="var(--muted)">P4</text>
-        <text x="78" y="239" class="svg-box" fill="var(--muted)">过程缺陷</text>
-        <text x="26" y="264" class="svg-small" fill="var(--muted)">终稿未采用、已替代或已修正</text>
-        <text x="26" y="284" class="svg-small" fill="var(--muted)">须有终稿或后续实际回执作证</text>
+        <path d="M130 166 V210" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"></path>
+        <path d="M378 166 V210" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"></path>
+        <g class="svg-node" data-jump="#p4">
+          <rect x="10" y="214" width="240" height="86" rx="6" fill="var(--well)"></rect>
+          <rect x="26" y="230" width="10" height="10" rx="2" fill="var(--sev-4)"></rect>
+          <text x="46" y="241" class="svg-level" fill="var(--ink)">P4</text>
+          <text x="82" y="240" class="svg-box" fill="var(--ink-2)">过程缺陷</text>
+          <text x="26" y="264" class="svg-small" fill="var(--muted)">终稿未采用、已替代或已修正</text>
+          <text x="26" y="284" class="svg-small" fill="var(--muted)">须有终稿或后续实际回执作证</text>
+        </g>
         <rect x="268" y="214" width="220" height="86" rx="6" fill="var(--well)"></rect>
         <text x="284" y="239" class="svg-box" fill="var(--ink)">不定级</text>
         <text x="284" y="264" class="svg-small" fill="var(--muted)">不能记 P4，也不能记 P0–P3</text>
         <text x="284" y="284" class="svg-small" fill="var(--muted)">先补证；异常记 uncertain</text>
-        <path d="M742 166 V188" fill="none" stroke="var(--faint)" stroke-width="1.2"></path>
-        <path d="M557 188 H927" fill="none" stroke="var(--faint)" stroke-width="1.2"></path>
-        <path d="M557 188 V210" fill="none" stroke="var(--faint)" stroke-width="1.2" marker-end="url(#arrow)"></path>
-        <path d="M680 188 V210" fill="none" stroke="var(--faint)" stroke-width="1.2" marker-end="url(#arrow)"></path>
-        <path d="M804 188 V210" fill="none" stroke="var(--faint)" stroke-width="1.2" marker-end="url(#arrow)"></path>
-        <path d="M927 188 V210" fill="none" stroke="var(--faint)" stroke-width="1.2" marker-end="url(#arrow)"></path>
-        <rect x="500" y="214" width="114" height="56" rx="6" fill="var(--well)"></rect>
-        <rect x="514" y="230" width="10" height="10" rx="2" fill="var(--sev-0)"></rect>
-        <text x="532" y="240" class="svg-level" fill="var(--ink)">P0</text>
-        <text x="532" y="257" class="svg-small" fill="var(--muted)">核心结论</text>
-        <rect x="623" y="214" width="114" height="56" rx="6" fill="var(--well)"></rect>
-        <rect x="637" y="230" width="10" height="10" rx="2" fill="var(--sev-1)"></rect>
-        <text x="655" y="240" class="svg-level" fill="var(--ink)">P1</text>
-        <text x="655" y="257" class="svg-small" fill="var(--muted)">重要内容</text>
-        <rect x="747" y="214" width="114" height="56" rx="6" fill="var(--well)"></rect>
-        <rect x="761" y="230" width="10" height="10" rx="2" fill="var(--sev-2)"></rect>
-        <text x="779" y="240" class="svg-level" fill="var(--ink)">P2</text>
-        <text x="779" y="257" class="svg-small" fill="var(--muted)">局部错误</text>
-        <rect x="870" y="214" width="114" height="56" rx="6" fill="var(--well)"></rect>
-        <rect x="884" y="230" width="10" height="10" rx="2" fill="var(--sev-3)"></rect>
-        <text x="902" y="240" class="svg-level" fill="var(--ink)">P3</text>
-        <text x="902" y="257" class="svg-small" fill="var(--muted)">表达偏差</text>
+        <path d="M742 166 V188" fill="none" stroke="var(--muted)" stroke-width="1.2"></path>
+        <path d="M557 188 H927" fill="none" stroke="var(--muted)" stroke-width="1.2"></path>
+        <path d="M557 188 V210" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"></path>
+        <path d="M680 188 V210" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"></path>
+        <path d="M804 188 V210" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"></path>
+        <path d="M927 188 V210" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"></path>
+        <g class="svg-node" data-jump="#p0">
+          <rect x="500" y="214" width="114" height="56" rx="6" fill="var(--well)"></rect>
+          <rect x="514" y="230" width="10" height="10" rx="2" fill="var(--sev-0)"></rect>
+          <text x="532" y="241" class="svg-level" fill="var(--ink)">P0</text>
+          <text x="532" y="258" class="svg-small" fill="var(--muted)">核心结论</text>
+        </g>
+        <g class="svg-node" data-jump="#p1">
+          <rect x="623" y="214" width="114" height="56" rx="6" fill="var(--well)"></rect>
+          <rect x="637" y="230" width="10" height="10" rx="2" fill="var(--sev-1)"></rect>
+          <text x="655" y="241" class="svg-level" fill="var(--ink)">P1</text>
+          <text x="655" y="258" class="svg-small" fill="var(--muted)">重要内容</text>
+        </g>
+        <g class="svg-node" data-jump="#p2">
+          <rect x="747" y="214" width="114" height="56" rx="6" fill="var(--well)"></rect>
+          <rect x="761" y="230" width="10" height="10" rx="2" fill="var(--sev-2)"></rect>
+          <text x="779" y="241" class="svg-level" fill="var(--ink)">P2</text>
+          <text x="779" y="258" class="svg-small" fill="var(--muted)">局部错误</text>
+        </g>
+        <g class="svg-node" data-jump="#p3">
+          <rect x="870" y="214" width="114" height="56" rx="6" fill="var(--well)"></rect>
+          <rect x="884" y="230" width="10" height="10" rx="2" fill="var(--sev-3)"></rect>
+          <text x="902" y="241" class="svg-level" fill="var(--ink)">P3</text>
+          <text x="902" y="258" class="svg-small" fill="var(--muted)">表达偏差</text>
+        </g>
         <text x="742" y="292" text-anchor="middle" class="svg-small" fill="var(--muted)">按剩余影响大小，从 P0 往下取最先成立的一档</text>
       </svg>
       <div class="decision-mobile" aria-hidden="true">
@@ -186,17 +194,20 @@
       </ul>
     </section>
 
-    <section class="section" id="overview">
-      <h2>五个等级</h2>
-      <table class="overview"><thead><tr><th>等级</th><th>口径（逐档问）</th><th>案例</th></tr></thead><tbody>
-        <tr><td>P0</td><td>核心结论错误，或关键依据虚构，整份回答不可采信？</td><td>15</td></tr>
-        <tr><td>P1</td><td>重要内容错误或缺失，需要实质修改才能使用？</td><td>15</td></tr>
-        <tr><td>P2</td><td>局部错误，修正后不改变主要结论？</td><td>15</td></tr>
-        <tr><td>P3</td><td>表达或展示偏差，已确认对交付有轻微影响？</td><td>15</td></tr>
-        <tr><td>P4</td><td>过程缺陷，已证实最终交付未受影响（答案合成除外）</td><td>15</td></tr>
-      </tbody></table>
+    <section class="card section" id="overview" style="--span:12">
+      <header class="card-head"><h2>五个等级</h2></header>
+      <div class="cap-table-wrap">
+        <table class="cap-table overview"><thead><tr><th>等级</th><th>口径（逐档问）</th><th class="num">案例</th></tr></thead><tbody>
+          <tr data-jump="#p0"><td><span class="tag p0"><i></i>P0</span></td><td>核心结论错误，或关键依据虚构，整份回答不可采信？</td><td class="num">15</td></tr>
+          <tr data-jump="#p1"><td><span class="tag p1"><i></i>P1</span></td><td>重要内容错误或缺失，需要实质修改才能使用？</td><td class="num">15</td></tr>
+          <tr data-jump="#p2"><td><span class="tag p2"><i></i>P2</span></td><td>局部错误，修正后不改变主要结论？</td><td class="num">15</td></tr>
+          <tr data-jump="#p3"><td><span class="tag p3"><i></i>P3</span></td><td>表达或展示偏差，已确认对交付有轻微影响？</td><td class="num">15</td></tr>
+          <tr data-jump="#p4"><td><span class="tag p4"><i></i>P4</span></td><td>过程缺陷，已证实最终交付未受影响（答案合成除外）</td><td class="num">15</td></tr>
+        </tbody></table>
+      </div>
     </section>
 
+    <section class="card p4-cases-card" id="p4CasesCard" style="--span:12">
     <div class="toolbar">
       <div class="seg" id="sourceSeg">
         <span class="seg-knob" aria-hidden="true"></span>
@@ -210,7 +221,8 @@
         <button class="search-clear" id="caseSearchClear" type="button" aria-label="清空搜索" hidden>×</button>
       </div>
       <label class="switch" for="briefToggle"><input id="briefToggle" type="checkbox"><span>只看人话</span></label>
-      <span class="toolbar-count" id="caseCount" aria-live="polite">75 例</span>
+      <label class="switch" for="transToggle"><input id="transToggle" type="checkbox" checked><span>显示译文</span></label>
+      <span class="toolbar-count num" id="caseCount" aria-live="polite">75 例</span>
     </div>
 
     <p class="empty" id="caseEmpty" hidden>没有匹配的案例，换个关键词或切回「全部」。</p>
@@ -8899,47 +8911,61 @@ Alert me when SNT reports Q3 results on November 6
     </article>
       </div>
     </section>
-
-    <section class="section" id="edge">
-      <h2>边界</h2>
-      <table class="edge"><thead><tr><th>对照</th><th>怎么分</th></tr></thead><tbody>
-        <tr><td>P0 / P1</td><td>整份回答还能不能采信？核心结论错或关键依据虚构，不能采信 → P0；还能用，但重要内容要实质修改 → P1。</td></tr>
-        <tr><td>P1 / P2</td><td>错的是重要内容（核心数据、关键段落、硬条件），还是局部？重要内容错或缺、需实质修改 → P1，即使主方向不变；局部错、修正后主要结论不变 → P2。</td></tr>
-        <tr><td>P2 / P3</td><td>错的是事实或数值，还是表达或展示？事实 / 数值 → P2；表达 / 展示且已确认有轻微影响 → P3。</td></tr>
-        <tr><td>P3 / P4</td><td>错的东西进没进终稿？进了且有轻微影响 → P3；没进、已替代或已修正，且有终稿或后续实际回执作证 → P4。</td></tr>
-        <tr><td>答案合成</td><td>终稿自身的问题一律影响交付，只定 P0–P3，不记 P4。上游回执已错、终稿只是沿用，记在上游，不另记终稿问题。</td></tr>
-        <tr><td>已恢复但有残余</td><td>按残余影响定 P0–P3，不记 P4。</td></tr>
-        <tr><td>影响未确认</td><td>不能记 P4，也不够 P0–P3。先补读终稿和后续回执；仍确认不了的工具异常记 uncertain，不关联问题。P4 不是兜底。</td></tr>
-        <tr><td>P4 的“已证实”</td><td>证实的是最终交付没受影响，不是每个枝节都核实过：终稿未采用、已替代或已修正后，某个次要细节仍未核实，照样可记 P4。</td></tr>
-        <tr><td>工具异常处置</td><td>unresolved_impact、recovered_impact → 按剩余影响定 P0–P3；recovered_no_impact（须引用报错之后的实际回执）、no_delivery_impact（须说明交付为何不受影响）→ P4；uncertain → 不关联问题。计划或终稿自述不能证明已恢复。</td></tr>
-        <tr><td>同一回答</td><td>可以同时有 P4 与 P0–P3；P4 不代表回答成功。</td></tr>
-        <tr><td>同类问题</td><td>不同回答可以有不同等级；只按本次已确认影响，不按异常类型、次数或修复难度。</td></tr>
-        <tr><td>不推测</td><td>未被采用的回执、已消除的检索偏差、空计划本身不证明终稿缺失；也不推测额度浪费。</td></tr>
-      </tbody></table>
     </section>
 
-    <section class="section" id="evidence">
-      <h2>证据</h2>
-      <pre class="sample"><code>{
+    <section class="card section" id="edge" style="--span:12">
+      <header class="card-head"><h2>边界</h2></header>
+      <div class="cap-table-wrap">
+        <table class="cap-table edge"><thead><tr><th style="width:20%">对照</th><th>怎么分</th></tr></thead><tbody>
+          <tr><td><b>P0 / P1</b></td><td>整份回答还能不能采信？核心结论错或关键依据虚构，不能采信 → P0；还能用，但重要内容要实质修改 → P1。</td></tr>
+          <tr><td><b>P1 / P2</b></td><td>错的是重要内容（核心数据、关键段落、硬条件），还是局部？重要内容错或缺、需实质修改 → P1，即使主方向不变；局部错、修正后主要结论不变 → P2。</td></tr>
+          <tr><td><b>P2 / P3</b></td><td>错的是事实或数值，还是表达或展示？事实 / 数值 → P2；表达 / 展示且已确认有轻微影响 → P3。</td></tr>
+          <tr><td><b>P3 / P4</b></td><td>错的东西进没进终稿？进了且有轻微影响 → P3；没进、已替代或已修正，且有终稿或后续实际回执作证 → P4。</td></tr>
+          <tr><td><b>答案合成</b></td><td>终稿自身的问题一律影响交付，只定 P0–P3，不记 P4。上游回执已错、终稿只是沿用，记在上游，不另记终稿问题。</td></tr>
+          <tr><td><b>已恢复但有残余</b></td><td>按残余影响定 P0–P3，不记 P4。</td></tr>
+          <tr><td><b>影响未确认</b></td><td>不能记 P4，也不够 P0–P3。先补读终稿和后续回执；仍确认不了的工具异常记 uncertain，不关联问题。P4 不是兜底。</td></tr>
+          <tr><td><b>P4 的“已证实”</b></td><td>证实的是最终交付没受影响，不是每个枝节都核实过：终稿未采用、已替代或已修正后，某个次要细节仍未核实，照样可记 P4。</td></tr>
+          <tr><td><b>工具异常处置</b></td><td>unresolved_impact、recovered_impact → 按剩余影响定 P0–P3；recovered_no_impact（须引用报错之后的实际回执）、no_delivery_impact（须说明交付为何不受影响）→ P4；uncertain → 不关联问题。计划或终稿自述不能证明已恢复。</td></tr>
+          <tr><td><b>同一回答</b></td><td>可以同时有 P4 与 P0–P3；P4 不代表回答成功。</td></tr>
+          <tr><td><b>同类问题</b></td><td>不同回答可以有不同等级；只按本次已确认影响，不按异常类型、次数或修复难度。</td></tr>
+          <tr><td><b>不推测</b></td><td>未被采用的回执、已消除的检索偏差、空计划本身不证明终稿缺失；也不推测额度浪费。</td></tr>
+        </tbody></table>
+      </div>
+    </section>
+
+    <section class="card section" id="evidence" style="--span:7">
+      <header class="card-head"><h2>证据</h2></header>
+      <div class="dc-codebox" id="evSampleBox">
+        <div class="dc-codehead"><span>证据字段结构示例</span></div>
+        <pre class="sample"><code>{
   &quot;position&quot;: &quot;trace_index 0 / message_index 17 / path /output/0/content / evidence_id ev_...&quot;,
   &quot;component&quot;: &quot;answer: 终稿生成轮&quot;,
   &quot;quote&quot;: &quot;……原文……&quot;,
   &quot;reason&quot;: &quot;这段原文直接证明了什么&quot;
 }</code></pre>
-      <table class="ev-table"><thead><tr><th>字段</th><th>作用</th></tr></thead><tbody>
-        <tr><td>position</td><td>原始轮次、消息、字段路径和 evidence_id；回到来源系统。</td></tr>
-        <tr><td>component</td><td>证据出处：question / material / tool_call / answer / model。</td></tr>
-        <tr><td>quote</td><td>精确连续原文，最长 400 字；只做 HTML 转义，不拼接、不改写。</td></tr>
-        <tr><td>reason</td><td>这段原文直接证明什么，不重复结论。</td></tr>
-      </tbody></table>
+      </div>
+      <div class="cap-table-wrap" style="margin-top:var(--sp-4)">
+        <table class="cap-table ev-table"><thead><tr><th style="width:24%">字段</th><th>作用</th></tr></thead><tbody>
+          <tr><td><code>position</code></td><td>原始轮次、消息、字段路径和 evidence_id；回到来源系统。</td></tr>
+          <tr><td><code>component</code></td><td>证据出处：question / material / tool_call / answer / model。</td></tr>
+          <tr><td><code>quote</code></td><td>精确连续原文，最长 400 字；只做 HTML 转义，不拼接、不改写。</td></tr>
+          <tr><td><code>reason</code></td><td>这段原文直接证明什么，不重复结论。</td></tr>
+        </tbody></table>
+      </div>
     </section>
 
-    <section class="section" id="data">
-      <h2>数据</h2>
-      <table class="data-table"><thead><tr><th>等级</th><th>问财</th><th>AIME</th><th>合计</th></tr></thead><tbody><tr><td>P0</td><td>3</td><td>12</td><td>15</td></tr><tr><td>P1</td><td>8</td><td>7</td><td>15</td></tr><tr><td>P2</td><td>8</td><td>7</td><td>15</td></tr><tr><td>P3</td><td>8</td><td>7</td><td>15</td></tr><tr><td>P4</td><td>8</td><td>7</td><td>15</td></tr></tbody></table>
-      
+    <section class="card section" id="data" style="--span:5">
+      <header class="card-head"><h2>数据</h2></header>
+      <div class="cap-table-wrap">
+        <table class="cap-table data-table"><thead><tr><th>等级</th><th class="num">问财</th><th class="num">AIME</th><th class="num">合计</th></tr></thead><tbody>
+          <tr><td><span class="tag p0"><i></i>P0</span></td><td class="num">3</td><td class="num">12</td><td class="num">15</td></tr>
+          <tr><td><span class="tag p1"><i></i>P1</span></td><td class="num">8</td><td class="num">7</td><td class="num">15</td></tr>
+          <tr><td><span class="tag p2"><i></i>P2</span></td><td class="num">8</td><td class="num">7</td><td class="num">15</td></tr>
+          <tr><td><span class="tag p3"><i></i>P3</span></td><td class="num">8</td><td class="num">7</td><td class="num">15</td></tr>
+          <tr><td><span class="tag p4"><i></i>P4</span></td><td class="num">8</td><td class="num">7</td><td class="num">15</td></tr>
+        </tbody></table>
+      </div>
     </section>
-
-    
+    </div>
   </main>
 </div>
