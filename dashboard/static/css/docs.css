@@ -1,59 +1,51 @@
 /* 文档: liquid flood cards on the index, a placeholder page per document */
-.dc { max-width: 1080px; margin: 0 auto; padding: var(--sp-6) 0 var(--sp-6); }
-.dc-head { display: grid; gap: var(--sp-2); margin: 0 0 var(--sp-6); padding: 0 var(--sp-2); }
-.dc-k { justify-self: start; padding: 2px var(--sp-2); border-radius: var(--r-chip); background: var(--well); color: var(--muted); font-size: var(--fs-meta); }
-.dc-head h1 { margin: 0; font-size: 28px; line-height: 1.25; font-weight: var(--w-title); letter-spacing: -0.01em; color: var(--ink); }
-.dc-head p { margin: 0; max-width: 60ch; color: var(--muted); font-size: var(--fs-body); line-height: 1.6; }
+.dc { max-width: 1080px; margin: 0 auto; padding: var(--sp-3) 0 var(--sp-5); }
+.dc-head { display: flex; align-items: center; gap: var(--sp-3); margin: 0 0 var(--sp-4); padding: 0; }
+.dc-k { padding: 2px var(--sp-2); border-radius: var(--r-chip); background: var(--well); color: var(--muted); font-size: var(--fs-meta); }
+.dc-head h1 { margin: 0; font-size: 20px; line-height: 1.3; font-weight: var(--w-title); letter-spacing: -0.01em; color: var(--ink); }
 
 /* the stage holds one canvas over every card: above the card fill, under the card's content */
 .dc-stage { position: relative; isolation: isolate; }
 .sf-canvas { position: absolute; inset: 0; z-index: 1; display: block; width: 100%; height: 100%; pointer-events: none; }
-.dc-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); }
+.dc-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-3); }
 .dc-card {
-  position: relative; display: flex; flex-direction: column; align-items: flex-start; min-width: 0; min-height: 280px; padding: 28px;
-  overflow: hidden; border-radius: 24px; background: var(--lift); color: var(--ink); text-decoration: none; text-align: left; cursor: pointer;
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ink) 9%, transparent), var(--shadow);
+  position: relative; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; min-width: 0; padding: 20px 24px;
+  overflow: hidden; border-radius: 18px; background: var(--lift); color: var(--ink); text-decoration: none; text-align: left; cursor: pointer;
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ink) 8%, transparent), var(--shadow);
   outline: none; -webkit-tap-highlight-color: transparent; touch-action: pan-y;
   /* backwards, not both: a filled transform would make each card its own stacking context and
      put the shared canvas over the card's text */
-  animation: rise 520ms cubic-bezier(0.16, 1, 0.3, 1) backwards; animation-delay: calc(var(--i) * 70ms);
+  animation: rise 420ms cubic-bezier(0.16, 1, 0.3, 1) backwards; animation-delay: calc(var(--i) * 60ms);
   transition: box-shadow var(--snap);
 }
 .dc-card:focus-visible { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px var(--ink-2); }
-.dc-icon, .dc-body { position: relative; z-index: 2; pointer-events: none; }
-.dc-icon {
-  display: grid; place-items: center; flex: none; width: 48px; height: 48px; border-radius: 16px;
-  background: var(--card); color: var(--dc-accent); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), inset 0 0 0 1px color-mix(in oklab, var(--ink) 9%, transparent);
-}
-.dc-icon svg { width: 24px; height: 24px; }
-.dc-body { display: grid; gap: var(--sp-2); margin-top: auto; padding-top: 40px; }
-.dc-body small { color: var(--muted); font-size: var(--fs-meta); letter-spacing: 0.04em; transition: color 0.2s; }
-.dc-body b { font-size: 24px; line-height: 32px; font-weight: var(--w-title); letter-spacing: -0.02em; transition: color 0.2s; }
-.dc-body span { max-width: 36ch; color: var(--muted); font-size: 15px; line-height: 24px; transition: color 0.2s; }
+.dc-body { position: relative; z-index: 2; pointer-events: none; display: grid; gap: 4px; }
+.dc-body small { justify-self: start; padding: 1px 7px; border-radius: var(--r-chip); background: var(--well); color: var(--muted); font-size: var(--fs-micro); letter-spacing: 0.04em; transition: color 0.2s, background 0.2s; }
+.dc-body b { font-size: 19px; line-height: 26px; font-weight: var(--w-title); letter-spacing: -0.015em; margin-top: 2px; transition: color 0.2s; }
+.dc-body span { max-width: 44ch; color: var(--muted); font-size: var(--fs-small); line-height: 1.55; transition: color 0.2s; }
 .dc-card[data-active="true"] .dc-body b { color: #fff; }
-.dc-card[data-active="true"] .dc-body span, .dc-card[data-active="true"] .dc-body small { color: rgba(255, 255, 255, 0.8); }
+.dc-card[data-active="true"] .dc-body span { color: rgba(255, 255, 255, 0.84); }
+.dc-card[data-active="true"] .dc-body small { background: rgba(255, 255, 255, 0.16); color: rgba(255, 255, 255, 0.9); }
 
 /* a document: breadcrumb, header, and a placeholder until it is written */
-.dc-crumb { display: flex; align-items: center; gap: var(--sp-2); margin: 0 0 var(--sp-4); color: var(--faint); font-size: var(--fs-small); }
+.dc-crumb { display: flex; align-items: center; gap: var(--sp-2); margin: 0 0 var(--sp-3); color: var(--faint); font-size: var(--fs-small); }
 .dc-back { display: inline-flex; align-items: center; gap: 2px; height: 28px; padding: 0 var(--sp-2) 0 var(--sp-1); border-radius: var(--r-chip); color: var(--muted); }
 .dc-back:hover { background: var(--hover); color: var(--ink); }
 .dc-back svg { width: 15px; height: 15px; }
-.dc-page { padding: var(--sp-6); animation: rise 420ms cubic-bezier(0.16, 1, 0.3, 1) both; }
-.dc-page-head { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--sp-5); align-items: start; padding-bottom: var(--sp-5); border-bottom: 1px solid var(--well-2); }
+.dc-page { padding: var(--sp-5); animation: rise 360ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+.dc-page-head { display: grid; gap: 4px; padding-bottom: var(--sp-4); border-bottom: 1px solid var(--well-2); }
 .dc-page-head small { color: var(--muted); font-size: var(--fs-meta); }
-.dc-page-head h1 { margin: 2px 0 var(--sp-2); font-size: 24px; font-weight: var(--w-title); }
-.dc-page-head p { margin: 0; color: var(--muted); line-height: 1.6; }
-.dc-empty { display: grid; gap: var(--sp-2); padding: var(--sp-6) 0 var(--sp-2); }
-.dc-empty b { font-weight: var(--w-medium); }
-.dc-empty > span { color: var(--muted); font-size: var(--fs-small); }
-.dc-lines { display: grid; gap: var(--sp-3); margin-top: var(--sp-5); }
-.dc-lines i { height: 10px; border-radius: 5px; background: var(--well); }
+.dc-page-head h1 { margin: 0; font-size: 20px; font-weight: var(--w-title); }
+.dc-empty { display: grid; gap: var(--sp-2); padding: var(--sp-4) 0 var(--sp-1); }
+.dc-empty b { font-weight: var(--w-medium); font-size: var(--fs-small); color: var(--muted); }
+.dc-lines { display: grid; gap: var(--sp-2); margin-top: var(--sp-3); }
+.dc-lines i { height: 9px; border-radius: 5px; background: var(--well); }
 
 @media (max-width: 860px) {
-  .dc { padding-top: var(--sp-4); }
+  .dc { padding-top: var(--sp-2); }
   .dc-grid { grid-template-columns: minmax(0, 1fr); }
-  .dc-card { min-height: 240px; padding: 24px; }
-  .dc-page { padding: var(--sp-5); }
+  .dc-card { padding: 18px 20px; }
+  .dc-page { padding: var(--sp-4); }
 }
 @media (prefers-reduced-motion: reduce) {
   .dc-card, .dc-page { animation: none; }

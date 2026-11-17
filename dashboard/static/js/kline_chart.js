@@ -1,6 +1,6 @@
-/* K 线图：看板里所有趋势都画成它——日期横轴、蜡烛、底部评测量能、发版竖线。
+/* K 线图：看板里所有趋势都画成它——日期横轴、蜡烛、底部评测量能、发版竖线（只在大图上画）。
    按天采样的序列聚合成日/周/月/年蜡烛，不画均线；compact 模式给卡片里的小图用
-   （无图例、无坐标轴、不响应拖拽缩放）。
+   （无图例、无坐标轴、无发版线、不响应拖拽缩放）。
    基于 TradingView 的 lightweight-charts（Apache-2.0，vendor 在 static/vendor）；不自绘 Canvas。
    数据口径由调用方给全量 rows；这里只负责聚合和绘制，不做任何筛选。 */
 import { createChart, CandlestickSeries, HistogramSeries, LineSeries, AreaSeries, ColorType } from "../vendor/lightweight-charts.production.js";
@@ -263,7 +263,8 @@ export function createKlineChart(host, spec = {}) {
   host.innerHTML = `${legend}<div class="kl-canvas"></div><div class="kl-tip" hidden></div>`;
   const canvas = host.querySelector(".kl-canvas");
   const tip = host.querySelector(".kl-tip");
-  if (compact) tip.classList.add("is-compact");
+  // One reading style for every K-line: the full-size chart's tip matches the card charts'.
+  tip.classList.add("is-compact");
 
   const chart = createChart(canvas, {
     width: Math.max(1, canvas.clientWidth),
@@ -304,17 +305,19 @@ export function createKlineChart(host, spec = {}) {
     priceLineVisible: false,
     lastValueVisible: !compact,
   }, 0);
-  const pads = releasePads(candles.map((c) => c.time), spec.releases);
+  // Release lines only read on a full-size chart; on a card-sized one they were bare red strokes
+  // with no room for the version name, so compact charts leave them out.
+  const releaseSpec = compact ? [] : spec.releases;
+  const pads = releasePads(candles.map((c) => c.time), releaseSpec);
   candleSeries.setData([
     ...candles.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })),
     ...pads.map((time) => ({ time })),
   ].sort((a, b) => (String(a.time) < String(b.time) ? -1 : 1)));
 
   const releases = typeof candles[0]?.time === "string"
-    ? releaseItems([...candles.map((c) => c.time), ...pads], spec.releases) : [];
+    ? releaseItems([...candles.map((c) => c.time), ...pads], releaseSpec) : [];
   const releaseLines = releases.length
-    ? releaseLinePrimitive(chart, compact ? releases.map((r) => ({ ...r, label: "" })) : releases,
-      colors.release, getComputedStyle(document.body).fontFamily, colors.card)
+    ? releaseLinePrimitive(chart, releases, colors.release, getComputedStyle(document.body).fontFamily, colors.card)
     : null;
   if (releaseLines) candleSeries.attachPrimitive(releaseLines);
 
@@ -360,8 +363,7 @@ export function createKlineChart(host, spec = {}) {
       return;
     }
     const when = typeof spec.tipTime === "function" ? spec.tipTime(candle) : String(candle.time);
-    const span = period === "day" || period === "intraday" ? "" : ` · ${candle.from.slice(5)}~${candle.to.slice(5)}`;
-    const unit = typeof spec.tipPeriod === "function" ? spec.tipPeriod(candle) : `${PERIOD_NAME[period]}${span}`;
+    const span = period === "day" || period === "intraday" || !candle.from ? "" : `${candle.from.slice(5)} ~ ${candle.to.slice(5)}`;
     const openValue = spec.openValue == null
       ? candle.open
       : (typeof spec.openValue === "function" ? spec.openValue(candle) : spec.openValue);
@@ -369,18 +371,16 @@ export function createKlineChart(host, spec = {}) {
     const extra = typeof spec.tipExtra === "function" ? spec.tipExtra(candle) : "";
     const volumeRow = spec.volumeLabel ? `<div class="kl-tip-row"><span>${esc(spec.volumeLabel)}</span><b class="num">${fmt(candle.volume)}</b></div>` : "";
     const releaseRow = released ? `<div class="kl-tip-row kl-tip-rel"><span>发版</span><b>${esc(released)}</b></div>` : "";
-    // The card-sized chart reads the same candle in fewer rows: the close with its move, then
-    // whatever the caller adds; a bare date + number told too little.
+    // Every K-line reads the same way, card or full size: the date, the value with its move against
+    // the candle before, then whatever the caller adds — no open/close jargon. A caller whose
+    // "before" has a plain meaning of its own (an A/B round's 发版前) names it with openLabel.
     const move = candle.close - openValue;
     const moveText = Number.isFinite(move) && move !== 0
       ? `<small class="kl-tip-move ${move > 0 ? "is-up" : "is-down"}">${move > 0 ? "▲" : "▼"}${esc(number(Math.abs(move)))}</small>` : "";
-    tip.innerHTML = compact
-      ? `<div class="kl-tip-head"><b class="num">${esc(when)}</b></div>
-      <div class="kl-tip-row"><span>${esc(spec.closeLabel || "收盘")}</span><b class="num">${esc(number(candle.close))}${moveText}</b></div>
-      ${volumeRow}${extra}${releaseRow}`
-      : `<div class="kl-tip-head"><b class="num">${esc(when)}</b><span>${esc(unit)}</span></div>
-      <div class="kl-tip-row"><span>${esc(spec.openLabel || "开盘")}</span><b class="num">${number(openValue)}</b></div>
-      <div class="kl-tip-row"><span>${esc(spec.closeLabel || "收盘")}</span><b class="num">${number(candle.close)}</b></div>
+    const openRow = !compact && spec.openLabel
+      ? `<div class="kl-tip-row"><span>${esc(spec.openLabel)}</span><b class="num">${esc(number(openValue))}</b></div>` : "";
+    tip.innerHTML = `<div class="kl-tip-head"><b class="num">${esc(when)}</b>${span ? `<span class="num">${esc(span)}</span>` : ""}</div>
+      ${openRow}<div class="kl-tip-row"><span>${esc(spec.closeLabel || "数值")}</span><b class="num">${esc(number(candle.close))}${openRow ? "" : moveText}</b></div>
       ${volumeRow}${extra}${releaseRow}`;
     tip.hidden = false;
     hideTip();

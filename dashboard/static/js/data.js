@@ -1634,12 +1634,11 @@ const KLINE_NAME = Object.fromEntries(KLINE_PERIODS);
 const CLOCK = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit", hour12: false });
 const clockOf = (time) => (typeof time === "number" ? CLOCK.format(new Date(time * 1000)) : String(time));
 
-function rateLabels(period) {
-  if (period === "intraday") return { open: "开盘（5分钟前）", close: "收盘（5分钟后）" };
-  if (period === "week") return { open: "开盘（前一周）", close: "收盘（本周）" };
-  if (period === "month") return { open: "开盘（前一月）", close: "收盘（本月）" };
-  if (period === "year") return { open: "开盘（前一年）", close: "收盘（本年）" };
-  return { open: "开盘（前一日）", close: "收盘（当日）" };
+/* Plain names for the tip rows: the picked levels' Trace count and the evaluated Trace volume. */
+function rateLabels(period, levels = []) {
+  const picked = levels.map((name) => SEV_NAME[name] || name).join("+") || "所选等级";
+  if (period === "intraday") return { close: `${picked} 累计 Trace`, volume: "本时段评测 Trace" };
+  return { close: `${picked} Trace`, volume: "评测 Trace" };
 }
 
 /* 行情蜡烛按 5 分钟槽累计今天的问题数；点开时把该槽命中最多的一级交给样本抽屉。 */
@@ -1820,21 +1819,23 @@ function wireMatrixAnalysis(panel, model, state, trend) {
         chartHost.style.opacity = "";
         return;
       }
-      const labels = rateLabels(period);
+      const labels = rateLabels(period, state.analysisLevels);
+      // Release lines (v1106, v1112 …) need the room of the full-screen chart; the panel-sized one
+      // stays clean.
+      const full = !!panel.querySelector(".mxp-lens")?.classList.contains("is-full");
       chartHost._kline = createKlineChart(chartHost, {
         rows: isIntraday ? [] : mxRateKlineRows(model, state.analysisLevels),
         candles: isIntraday ? candles : undefined,
         period,
         height: analysisChartHeight(panel, chartHost),
         volumeName: "Trace",
-        releases: isIntraday ? [] : trend.releases,
+        releases: isIntraday || !full ? [] : trend.releases,
         wheelZoom: () => !!state.analysisZoom,
         emptyText: "暂无已评测 Trace",
-        openLabel: labels.open,
         closeLabel: labels.close,
+        volumeLabel: labels.volume,
         tickText: isIntraday ? (time) => clockOf(time) : undefined,
         tipTime: isIntraday ? (candle) => `${intraday.date} ${candle.label}` : undefined,
-        tipPeriod: isIntraday ? () => "日内行情" : undefined,
         onPick: (candle) => drawer.open(isIntraday
           ? mxIntradayPick(intraday, model, candle, state.analysisLevels)
           : mxRatePick(model, candle, state.analysisLevels, period)),

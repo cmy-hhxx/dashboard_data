@@ -53,7 +53,7 @@ test("each category uses only its dated observations, without empty leading or t
   assert.deepEqual(single.map((row) => [row.date, row.value]), [["2026-10-10", 15]]);
 });
 
-test("card charts are compact day K-lines with release lines; the expanded chart opens samples", () => {
+test("card charts are compact day K-lines (release lines only drawn full size); the expanded chart opens samples", () => {
   const model = buildProblemTrendModel({ ...trend, releases: [{ date: "2026-10-02", label: "v1002" }] });
   const node = model.byId.get("S9");
   const card = problemKlineSpec(model, node, [0, 1, 2]);

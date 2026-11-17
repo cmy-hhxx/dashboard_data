@@ -89,7 +89,7 @@ export function problemKlineSpec(model, node, idx, expanded = false, onPick = nu
   return {
     rows, period: "day", compact: !expanded, height: expanded ? DETAIL_CHART_H : CARD_CHART_H,
     releases: model.releases, valueFormat: rateText, volumeName: "评测会话",
-    openLabel: "前一观测日", closeLabel: "发生率", volumeLabel: "评测会话",
+    closeLabel: "发生率", volumeLabel: "评测会话",
     // The hover reads the whole day for this branch: how many problems and sessions it hit, its
     // share of the level above, and the leading child, so a card can be read without opening it.
     tipExtra: (candle) => {

@@ -12,17 +12,14 @@ const STEPS = [
   ["推导出的现象", "从这些原文推出的现象，和它归入的聚类模式"],
 ];
 const ROLE = { planning: "规划", request_generation: "请求生成", tool: "工具执行", script: "脚本执行", skill: "技能装载", delivery: "交付" };
-const PLAY_MS = 2400;
 const ICON = {
   close: '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
   prev: '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 4L6 8l4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   next: '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-  play: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.5v9l7.5-4.5z" fill="currentColor"/></svg>',
-  pause: '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="3.5" width="2.6" height="9" rx="1" fill="currentColor"/><rect x="9.4" y="3.5" width="2.6" height="9" rx="1" fill="currentColor"/></svg>',
   go: '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 };
 
-const T = { el: null, cases: [], ci: 0, pi: 0, step: 0, playing: false, timer: 0, raf: 0, opts: null, back: null, obs: null };
+const T = { el: null, cases: [], ci: 0, pi: 0, step: 0, raf: 0, opts: null, back: null, obs: null };
 
 const sevChip = (s) => `<span class="et-sev" style="--c:${sevColor(s)}"><i></i>${esc(s || "—")}${SEV_NAME[s] && SEV_NAME[s] !== s ? `<small>${esc(SEV_NAME[s])}</small>` : ""}</span>`;
 const order = (ps) => ps.slice().sort((a, b) => SEV.indexOf(a.sev) - SEV.indexOf(b.sev));
@@ -159,11 +156,10 @@ function shellHTML() {
     <footer class="et-ctl">
       <div class="et-ctl-l"><span class="et-pos" id="etPos"></span></div>
       <div class="et-ctl-m">
-        <button type="button" class="et-icon" data-act="prev" aria-label="上一步（←）" title="上一步（←）">${ICON.prev}</button>
-        <button type="button" class="et-play" data-act="play" id="etPlay"></button>
-        <button type="button" class="et-icon" data-act="next" aria-label="下一步（→）" title="下一步（→）">${ICON.next}</button>
+        <button type="button" class="et-step is-prev" data-act="prev" id="etPrev" aria-label="上一步（←）">${ICON.prev}<span>上一步</span></button>
+        <button type="button" class="et-play" data-act="next" id="etNext"><span>下一步</span>${ICON.next}</button>
       </div>
-      <div class="et-ctl-r"><span class="et-keys"><kbd>←</kbd><kbd>→</kbd> 逐步 · <kbd>↑</kbd><kbd>↓</kbd> 换问题 · <kbd>空格</kbd> 播放 · <kbd>Esc</kbd> 关闭</span>
+      <div class="et-ctl-r"><span class="et-keys"><kbd>←</kbd><kbd>→</kbd> 逐步 · <kbd>↑</kbd><kbd>↓</kbd> 换问题 · <kbd>Esc</kbd> 关闭</span>
         <button type="button" class="et-link" data-act="trace" id="etTrace">完整轨迹${ICON.go}</button></div>
     </footer>
   </div>`;
@@ -195,7 +191,7 @@ function paint(fresh) {
   $("#etChain", el).innerHTML = chainHTML(a, p, x);
   $("#etPos", el).innerHTML = `问题 <b class="num">${T.pi + 1}</b> / ${probs.length} · 第 <b class="num">${T.step + 1}</b> 步 ${STEPS[T.step][0]}`;
   $("#etTrace", el).hidden = !(a.slug && T.opts.nav);
-  playButton();
+  stepButtons(probs);
   if (T.step >= 2) {
     const first = $(".et-msg.is-cited", rail);
     if (first) first.scrollIntoView({ block: "center", behavior: REDUCED ? "auto" : "smooth" });
@@ -204,11 +200,17 @@ function paint(fresh) {
   wires(T.step === 2);
 }
 
-function playButton() {
-  const b = $("#etPlay", T.el);
-  b.innerHTML = `${T.playing ? ICON.pause : ICON.play}<span>${T.playing ? "暂停" : "自动播放"}</span>`;
-  b.setAttribute("aria-pressed", String(T.playing));
-  b.setAttribute("aria-label", T.playing ? "暂停（空格）" : "自动播放（空格）");
+function stepButtons(probs) {
+  const prevBtn = $("#etPrev", T.el);
+  const nextBtn = $("#etNext", T.el);
+  const atStart = T.step === 0 && T.pi === 0;
+  const atLastStep = T.step === STEPS.length - 1;
+  const atEnd = atLastStep && T.pi >= probs.length - 1;
+  if (prevBtn) prevBtn.disabled = atStart;
+  if (nextBtn) {
+    const label = atEnd ? "重新推导" : atLastStep ? "下一个问题" : `下一步 · ${STEPS[T.step + 1][0]}`;
+    nextBtn.innerHTML = `<span>${label}</span>${ICON.next}`;
+  }
 }
 
 /* A line from each quote to the sentence it came from. Both columns scroll on their own, so the
@@ -266,27 +268,12 @@ function next() {
   const { probs } = current();
   if (T.step < STEPS.length - 1) return go(T.step + 1);
   if (T.pi < probs.length - 1) return go(0, T.pi + 1);
-  stop();
-  return null;
+  return go(0, 0);
 }
 function prev() {
   if (T.step > 0) return go(T.step - 1);
   if (T.pi > 0) return go(STEPS.length - 1, T.pi - 1);
   return null;
-}
-function stop() {
-  T.playing = false;
-  clearInterval(T.timer);
-  if (T.el) playButton();
-}
-function play() {
-  if (REDUCED) return;
-  const { probs } = current();
-  if (T.step === STEPS.length - 1 && T.pi === probs.length - 1) go(0, 0);
-  T.playing = true;
-  clearInterval(T.timer);
-  T.timer = setInterval(next, PLAY_MS);
-  playButton();
 }
 
 /* ---------------------------------------------------------------- open / close */
@@ -302,18 +289,18 @@ function onKey(e) {
     return;
   }
   const { probs } = current();
-  const k = { ArrowRight: () => { stop(); next(); }, ArrowLeft: () => { stop(); prev(); },
-    ArrowDown: () => { stop(); go(0, Math.min(probs.length - 1, T.pi + 1)); }, ArrowUp: () => { stop(); go(0, Math.max(0, T.pi - 1)); },
-    " ": () => (T.playing ? stop() : play()) }[e.key];
-  if (k && !e.target.closest("input, textarea")) { e.preventDefault(); k(); }
+  const k = { ArrowRight: () => next(), ArrowLeft: () => prev(),
+    ArrowDown: () => go(0, Math.min(probs.length - 1, T.pi + 1)), ArrowUp: () => go(0, Math.max(0, T.pi - 1)),
+    " ": () => next() }[e.key];
+  if (k && !e.target.closest("input, textarea, button")) { e.preventDefault(); k(); }
 }
 
 function onClick(e) {
   if (e.target.closest("[data-close]")) return close();
   const pb = e.target.closest("[data-pi]");
-  if (pb) { stop(); return go(0, Number(pb.dataset.pi)); }
+  if (pb) return go(0, Number(pb.dataset.pi));
   const node = e.target.closest(".et-node.is-next, .et-node.is-done");
-  if (node && !e.target.closest("button")) { stop(); return go(Number(node.dataset.step)); }
+  if (node && !e.target.closest("button")) return go(Number(node.dataset.step));
   const hop = e.target.closest("[data-jump]");
   if (hop) {
     const msg = $(`.et-msg[data-m="${hop.dataset.jump}"]`, T.el);
@@ -325,11 +312,9 @@ function onClick(e) {
   }
   const act = e.target.closest("[data-act]")?.dataset.act;
   if (!act) return null;
-  if (act === "prev") { stop(); return prev(); }
-  if (act === "next") { stop(); return next(); }
-  if (act === "play") return T.playing ? stop() : play();
+  if (act === "prev") return prev();
+  if (act === "next") return next();
   if (act === "case-prev" || act === "case-next") {
-    stop();
     const n = T.cases.length;
     return go(0, 0, (T.ci + (act === "case-next" ? 1 : n - 1)) % n);
   }
@@ -346,7 +331,6 @@ export function closeTheater() { close(); }
 
 function close() {
   if (!T.el) return;
-  stop();
   cancelAnimationFrame(T.raf);
   T.obs?.disconnect();
   document.removeEventListener("keydown", onKey, true);
@@ -392,6 +376,5 @@ export function openTheater(opts) {
   const pi = Math.max(0, probs.findIndex((p) => String(p.id) === String(opts.problem)));
   T.ci = -1;
   go(0, pi, ci);
-  $(".et-top [data-close]", el).focus({ preventScroll: true });
-  if (!REDUCED) play();
+  $("#etNext", el)?.focus({ preventScroll: true });
 }

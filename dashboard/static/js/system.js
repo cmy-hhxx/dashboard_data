@@ -69,7 +69,7 @@ export async function render(root, c) {
   wireGoldens(root);
   renderMeta(root, E.goldens[E.index]);
   wireAnatomy(root, E.goldens[E.index]);
-  wireFx(root, d.taxonomy, clusterExamples(d.taxonomy, E.goldens));
+  wireFx(root, d.taxonomy);
   // The page builds itself under a dozen cursors on the first visit of the session; afterwards it
   // simply appears, and the player in the corner can replay the build on request.
   buildPage(root, { key: "sys", targets: buildTargets(root) });
@@ -80,7 +80,7 @@ function buildTargets(root) {
   return $$(".bento > .card", root).flatMap((card) => [
     { el: card, kind: "frame", label: "Card" },
     { el: $(".card-head h2", card), kind: "text", label: "Heading" },
-    ...$$(".fx-col > .fx-label, .fx-box, .fx-hub, .fx-cl-side, .fx-g, .fx-pm, .echo-tabs, .anatomy .rail, .anatomy .aprobs", card)
+    ...$$(".fx-col > .fx-label, .fx-box, .fx-hub, .fx-g, .echo-tabs, .anatomy .rail, .anatomy .aprobs", card)
       .map((el) => ({ el, kind: el.matches(".fx-label") ? "text" : el.matches(".fx-g, .rail, .aprobs") ? "grid" : "block",
         label: el.matches(".fx-g") ? "Heatmap" : el.matches(".rail") ? "Messages" : el.matches(".aprobs") ? "Problems" : el.matches(".fx-label") ? "Label" : el.matches(".fx-hub") ? "Hub" : "Block" })),
   ].filter((t) => t.el));
@@ -123,15 +123,8 @@ function flowCard(tax, pd) {
     return `<div class="fx-box fx-out" style="--c:${c}" title="${sub} · ${rule}">${ico}<span class="fx-txt"><b>${t}</b>${label}</span></div>`;
   }).join("");
   const taxHTML = tax ? `<div class="fx-tax" id="fxTax">
-      <div class="fx-label"><span class="num">04</span>聚类<span class="fx-tap">${TAP_ICON}点矩阵里的格子、行或列，看它归了哪些模式</span></div>
-      <div class="fx-cl">
-        <div class="fx-cl-side">
-          <div class="fx-cl-prob" id="fxProb"></div>
-          <ol class="fx-cl-seq">${["环节", "机制", "模式"].map((t, i) => `<li data-step="${i + 1}"><span class="num">${i + 1}</span><b>${t}</b><em id="fxStep${i + 1}"></em></li>`).join("")}</ol>
-        </div>
-        ${taxGrid(tax, pd)}
-      </div>
-      <div class="fx-pm" id="fxDetail"></div></div>` : "";
+      <div class="fx-label"><span class="num">04</span>聚类</div>
+      <div class="fx-cl">${taxGrid(tax, pd)}</div></div>` : "";
   return `<article class="card" style="--span:12">
     <header class="card-head"><h2>评测体系</h2></header>
     <div class="fx" id="fx"><svg class="fx-wires" aria-hidden="true"></svg>
@@ -149,7 +142,6 @@ function flowCard(tax, pd) {
    cluster matrix's own count); without one it is how many L3 patterns the pair defines. The shade
    follows the number on a square-root scale so one huge cell does not wash the rest out. */
 const l3 = (tax) => Object.entries(tax.patterns).filter(([id]) => id.split(".").length === 3);
-const TAP_ICON = `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6.5 8.5V3.8a1.2 1.2 0 0 1 2.4 0v3.4l3 .6a1.4 1.4 0 0 1 1.1 1.6l-.5 3a2 2 0 0 1-2 1.6H8.3a2 2 0 0 1-1.6-.8L4.4 10a1.1 1.1 0 0 1 1.7-1.4z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>`;
 function cellCounts(tax, pd) {
   const pats = l3(tax);
   const byPattern = (sid, mid) => pats.filter(([id]) => id.startsWith(`${sid}.${mid}.`)).length;
@@ -168,71 +160,63 @@ function taxGrid(tax, pd) {
   stages.forEach((st) => mechs.forEach((m) => { max = Math.max(max, n(st.id, m.id)); }));
   const heat = (v) => (max ? Math.sqrt(v / max) : 0).toFixed(3);
   const head = `<span class="fx-g-corner"></span><span></span>${mechs.map((m) =>
-    `<button type="button" class="fx-g-col" data-m="${m.id}" title="${esc(m.def || "")}"><code>${m.id}</code>${esc(m.name)}</button>`).join("")}`;
+    `<span class="fx-g-col" data-m="${m.id}" data-tip="m"><code>${m.id}</code>${esc(m.name)}</span>`).join("")}`;
   const body = tax.phases.map((ph) => {
     const list = stages.filter((st) => st.phase === ph.id);
     if (!list.length) return "";
-    return list.map((st, i) => `${i === 0 ? `<span class="fx-g-ph" style="grid-row:span ${list.length}">${esc(ph.name)}</span>` : ""}<button type="button" class="fx-g-row" data-s="${st.id}" title="${esc(st.def || "")}"><code>${st.id}</code>${esc(st.name)}</button>${mechs.map((m) => {
+    return list.map((st, i) => `${i === 0 ? `<span class="fx-g-ph" style="grid-row:span ${list.length}">${esc(ph.name)}</span>` : ""}<span class="fx-g-row" data-s="${st.id}" data-tip="s"><code>${st.id}</code>${esc(st.name)}</span>${mechs.map((m) => {
       const v = n(st.id, m.id);
       return v || cc.has(st.id, m.id)
-        ? `<button type="button" class="fx-g-c${Number(heat(v)) > 0.62 ? " is-hot" : ""}" data-s="${st.id}" data-m="${m.id}" style="--h:${heat(v)}" aria-label="${esc(`${st.name} × ${m.name}：${fmt(v)} 个${cc.unit}`)}" title="${esc(`${st.name} × ${m.name} · ${fmt(v)} 个${cc.unit}`)}"><b class="num">${v ? fmt(v) : "·"}</b></button>`
+        ? `<span class="fx-g-c${Number(heat(v)) > 0.62 ? " is-hot" : ""}" data-s="${st.id}" data-m="${m.id}" data-n="${v}" data-tip="c" style="--h:${heat(v)}" aria-label="${esc(`${st.name} × ${m.name}：${fmt(v)} 个${cc.unit}`)}"><b class="num">${v ? fmt(v) : "·"}</b></span>`
         : `<span class="fx-g-c is-empty" data-s="${st.id}" data-m="${m.id}"></span>`;
     }).join("")}`).join("");
   }).join("");
-  const legend = `<div class="fx-g-key"><span>格内数字：${cc.unit === "问题" ? "本批次归入该格的问题数" : "该格定义的聚类模式数（暂无批次数据）"}</span>
-    <span class="fx-g-ramp"><small class="num">0</small><i></i><small class="num">${fmt(max)}</small></span></div>`;
-  return `<div class="fx-gw"><div class="fx-g" style="--cols:${mechs.length}">${head}${body}</div>${legend}</div>`;
+  return `<div class="fx-gw" data-unit="${cc.unit}"><div class="fx-g" style="--cols:${mechs.length}">${head}${body}</div></div>`;
 }
 
-/* Problems to walk through the grid: the golden cases' own clustered problems first, else one
-   example per pattern from the taxonomy's plain-language gloss. */
-function clusterExamples(tax, goldens) {
-  if (!tax) return [];
-  const known = new Set(l3(tax).map(([id]) => id));
-  const real = goldens.flatMap((g) => (g.problems || [])
-    .filter((p) => p.path && known.has(p.path))
-    .map((p) => ({ path: p.path, sev: p.sev, label: p.label, q: g.question })));
-  if (real.length) return real;
-  return l3(tax).filter((_, i) => i % 7 === 0).slice(0, 12)
-    .map(([id, pt], i) => ({ path: id, sev: SEV[(i * 2 + 1) % SEV.length], label: pt.plain || pt.name || id, q: "" }));
-}
-
-/* The patterns behind the picked cell / row / column, each with its full code. */
-function patternList(tax, sid, mid, hot = null) {
+/* The hover over a cell, a row or a column names it, gives its count and lists the patterns that
+   live there — what the old pattern list below the grid said, without taking the room. */
+function taxTip(tax, el) {
+  const sid = el.dataset.s || null;
+  const mid = el.dataset.m || null;
   const st = sid && tax.stages.find((x) => x.id === sid);
   const m = mid && tax.mechanisms.find((x) => x.id === mid);
   const pats = l3(tax)
     .filter(([id]) => (!sid || id.startsWith(`${sid}.`)) && (!mid || id.split(".")[1] === mid))
     .sort((a, b) => { const pa = patNum(a[0]); const pb = patNum(b[0]); return pa[0] - pb[0] || pa[1] - pb[1] || pa[2] - pb[2]; });
   const name = [st && st.name, m && m.name].filter(Boolean).join(" × ");
-  return `<div class="fx-pm-side"><b>${esc(name)}</b><span class="fx-pm-n num">${pats.length} 个模式</span></div>
-    <div class="fx-pm-items">${pats.map(([id, pt], i) => `<div class="fx-pat${id === hot ? " is-hot" : ""}" style="--d:${i}" title="${esc(pt.plain || "")}"><code>${id}</code><span>${esc(pt.name || id)}</span></div>`).join("") || '<span class="dim">暂无模式</span>'}</div>`;
+  const unit = el.closest(".fx-gw")?.dataset.unit || "问题";
+  const count = el.dataset.n != null && unit === "问题"
+    ? `<div class="t-row">问题<b class="num">${fmt(Number(el.dataset.n))}</b></div>` : "";
+  const MAX = 8;
+  const list = pats.slice(0, MAX).map(([id, pt]) => `<div class="fx-tip-pat"><code>${id}</code><span>${esc(pt.name || id)}</span></div>`).join("");
+  return `<div class="t-head">${esc(name)}</div>${count}<div class="t-row">模式<b class="num">${pats.length}</b></div>${list ? `<div class="fx-tip-pats">${list}${pats.length > MAX ? `<div class="fx-tip-more">… 另 ${pats.length - MAX} 个</div>` : ""}</div>` : ""}`;
 }
 
 /* ---------------------------------------------------------------- evidence closure */
 
-const PLAY_ICON = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.5v9l7.5-4.5z" fill="currentColor"/></svg>`;
-const ICON_OPEN = `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const ICON_PREV = `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 4L6 8l4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const ICON_NEXT = `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
-/* Concrete cases as tabs; the picked case reads as messages ← threads → problems, and every
-   message and problem opens in place: a message to its full text, a problem to its evidence. */
+/* Concrete cases stepped through by a compact player bar; the picked case reads as
+   messages ← threads → problems, and clicking any problem opens the full-screen derivation. */
 function goldenCard(cases, index) {
   const a = cases[index];
-  const tabs = cases.length > 1
-    ? `<div class="echo-tabs" id="eTabs" role="tablist" aria-label="案例">${cases.map((g, i) => {
-      const worst = (g.problems || []).map((p) => p.sev).sort((x, y) => SEV.indexOf(x) - SEV.indexOf(y))[0];
-      return `<button type="button" role="tab" data-i="${i}" aria-selected="${i === index}" title="${esc(g.question || "")}"><i style="--c:${sevColor(worst)}"></i><span>${esc(g.question || g.slug)}</span></button>`;
-    }).join("")}</div>`
+  const worst = a && (a.problems || []).map((p) => p.sev).sort((x, y) => SEV.indexOf(x) - SEV.indexOf(y))[0];
+  const player = cases.length
+    ? `<div class="echo-tabs" id="eTabs" role="group" aria-label="切换案例">
+        <button type="button" class="echo-step" data-step="-1" aria-label="上一个案例"${cases.length <= 1 ? " hidden" : ""}>${ICON_PREV}</button>
+        <span class="echo-now" id="eNow" title="${esc((a && a.question) || "")}"><i style="--c:${sevColor(worst)}"></i><b>${esc((a && (a.question || a.slug)) || "—")}</b></span>
+        <span class="echo-idx num" id="eIdx"${cases.length <= 1 ? " hidden" : ""}>${index + 1} / ${cases.length}</span>
+        <button type="button" class="echo-step" data-step="1" aria-label="下一个案例"${cases.length <= 1 ? " hidden" : ""}>${ICON_NEXT}</button>
+        <span class="echo-dots" role="tablist">${cases.length > 1 ? cases.map((g, i) => {
+          const w = (g.problems || []).map((p) => p.sev).sort((x, y) => SEV.indexOf(x) - SEV.indexOf(y))[0];
+          return `<button type="button" role="tab" data-i="${i}" aria-selected="${i === index}" style="--c:${sevColor(w)}" title="${esc(g.question || g.slug)}" aria-label="${esc(`案例 ${i + 1}：${g.question || g.slug}`)}"></button>`;
+        }).join("") : ""}</span>
+      </div>`
     : "";
   return `<article class="card" style="--span:12">
-    <header class="card-head"><h2>证据闭环</h2><span class="meta" id="eMeta"></span>
-      <span class="meta-end end">
-        <button type="button" class="echo-btn is-primary" id="eTheater">${PLAY_ICON}逐步看证据闭环</button>
-        <button type="button" class="echo-btn" id="eExpand" aria-pressed="false">展开全部消息</button>
-        <button type="button" class="echo-btn is-link" id="eOpen" hidden>完整轨迹${ICON_OPEN}</button>
-      </span></header>
-    ${tabs}
-    <p class="echo-hint">左边是这道 case 的消息轨迹，右边是评测器找到的问题，连线是证据。点任一问题，进入全屏一步步看它怎样从原文推出来。</p>
+    <header class="card-head"><h2>证据闭环</h2><span class="meta" id="eMeta"></span>${player}</header>
     ${a ? `<div class="echo"><div class="echo-main"><div id="anatomyBody">${anatomyBody(a)}</div></div></div>` : `<div class="empty">暂无 golden case。</div>`}
   </article>`;
 }
@@ -267,8 +251,6 @@ const roleName = (r) => ROLE[r] || r || "—";
 
 function renderMeta(root, a) {
   const el = $("#eMeta", root);
-  const open = $("#eOpen", root);
-  if (open) open.hidden = !(a && a.slug && E.nav);
   if (!el) return;
   if (!a || a.empty || !(a.messages || []).length) {
     el.textContent = "";
@@ -288,10 +270,15 @@ function showCase(root) {
   body.scrollTop = 0;
   renderMeta(root, a);
   wireAnatomy(root, a);
+  const worst = (a.problems || []).map((p) => p.sev).sort((x, y) => SEV.indexOf(x) - SEV.indexOf(y))[0];
+  const now = $("#eNow", root);
+  if (now) {
+    now.title = a.question || "";
+    now.innerHTML = `<i style="--c:${sevColor(worst)}"></i><b>${esc(a.question || a.slug)}</b>`;
+  }
+  const idx = $("#eIdx", root);
+  if (idx) idx.textContent = `${E.index + 1} / ${E.goldens.length}`;
   $$("#eTabs [data-i]", root).forEach((t) => t.setAttribute("aria-selected", String(Number(t.dataset.i) === E.index)));
-  $(`#eTabs [data-i="${E.index}"]`, root)?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  const all = $("#eExpand", root);
-  if (all) all.setAttribute("aria-pressed", "false");
 }
 
 /* The full-screen walk-through; it reads the uncompacted case (every message) and pulls the case's
@@ -306,25 +293,17 @@ function theater(from, problem) {
 }
 
 function wireGoldens(root) {
-  $("#eTheater", root)?.addEventListener("click", (e) => theater(e.currentTarget, null));
   $("#eTabs", root)?.addEventListener("click", (e) => {
+    const step = e.target.closest("[data-step]");
+    if (step && E.goldens.length > 1) {
+      E.index = (E.index + Number(step.dataset.step) + E.goldens.length) % E.goldens.length;
+      showCase(root);
+      return;
+    }
     const t = e.target.closest("[data-i]");
     if (!t || Number(t.dataset.i) === E.index) return;
     E.index = Number(t.dataset.i);
     showCase(root);
-  });
-  $("#eExpand", root)?.addEventListener("click", (e) => {
-    const on = e.currentTarget.getAttribute("aria-pressed") !== "true";
-    e.currentTarget.setAttribute("aria-pressed", String(on));
-    e.currentTarget.textContent = on ? "收起全部消息" : "展开全部消息";
-    $$("#anatomyBody .rail-msg.has-more", root).forEach((m) => {
-      m.classList.toggle("is-open", on);
-      m.setAttribute("aria-expanded", String(on));
-    });
-  });
-  $("#eOpen", root)?.addEventListener("click", () => {
-    const a = E.goldens[E.index];
-    if (a && a.slug && E.nav) E.nav({ view: "samples", product: E.product, case: a.slug, p: null, w: null, trace: null });
   });
 }
 
@@ -404,79 +383,23 @@ function wireAnatomy(root, a) {
   });
 }
 
-/* ---------------------------------------------------------------- 聚类: a problem walked through the grid */
+/* ---------------------------------------------------------------- 聚类: the grid as a reference */
 
-/* The grid is a reference, not a slideshow. It opens still, with a prompt saying what to click;
-   a cell, a row or a column lists what lives there, and 「看一个例子」 walks one real problem
-   through 环节 → 机制 → 模式 — once per click, never on its own. */
-function wireCluster(tx, tax, examples) {
-  const stageOf = (id) => tax.stages.find((x) => x.id === id);
-  const mechOf = (id) => tax.mechanisms.find((x) => x.id === id);
-  const mark = (sid, mid, cell) => {
-    $$(".fx-g-c, .fx-g-row, .fx-g-col", tx).forEach((x) => {
-      const on = x.classList.contains("fx-g-row") ? !!sid && x.dataset.s === sid && !mid
-        : x.classList.contains("fx-g-col") ? !!mid && x.dataset.m === mid && !sid
-          : cell ? x.dataset.s === sid && x.dataset.m === mid
-            : (!!sid || !!mid) && (!sid || x.dataset.s === sid) && (!mid || x.dataset.m === mid);
-      x.classList.toggle("is-on", on);
-      x.classList.toggle("is-hl", (x.classList.contains("fx-g-row") && !!sid && x.dataset.s === sid)
-        || (x.classList.contains("fx-g-col") && !!mid && x.dataset.m === mid));
-    });
-  };
-  const step = (k, html) => {
-    const li = $(`.fx-cl-seq li[data-step="${k}"]`, tx);
-    li?.classList.toggle("is-done", !!html);
-    const em = $(`#fxStep${k}`, tx);
-    if (em) em.innerHTML = html || "";
-  };
-  const detail = $("#fxDetail", tx);
-  const prob = $("#fxProb", tx);
-  const pick = (sid, mid, hot = null) => {
-    mark(sid, mid, !!(sid && mid));
-    detail.innerHTML = patternList(tax, sid, mid, hot);
-  };
-  const show = (ex) => {
-    const [sid, mid] = ex.path.split(".");
-    const st = stageOf(sid);
-    const m = mechOf(mid);
-    const pt = tax.patterns[ex.path] || {};
-    prob.innerHTML = `<span class="sev-badge" style="--c:${sevColor(ex.sev)}">${esc(ex.sev)}</span><b>${esc(ex.label)}</b>${ex.q ? `<small>${esc(ex.q)}</small>` : ""}`;
-    step(1, `<code>${sid}</code>${esc(st ? st.name : sid)}`);
-    step(2, `<code>${mid}</code>${esc(m ? m.name : mid)}`);
-    step(3, `<code>${ex.path}</code>${esc(pt.name || ex.path)}`);
-    pick(sid, mid, ex.path);
-  };
-
-  let shown = -1;
-  const guide = () => {
-    prob.innerHTML = `<span class="fx-guide">${TAP_ICON}</span><b>点矩阵里任意一格、一行或一列</b><small>下方会列出它归入的全部聚类模式${examples.length ? "；也可以先看一个真实问题怎样被归类" : ""}</small>${examples.length ? '<button type="button" class="fx-ex" data-ex>看一个例子</button>' : ""}`;
-    detail.innerHTML = '<p class="fx-pm-empty">还没有选中格子。矩阵颜色越深，归到这里的越多。</p>';
-  };
-  tx.addEventListener("click", (e) => {
-    if (e.target.closest("[data-ex]")) {
-      shown = (shown + 1) % examples.length;
-      show(examples[shown]);
-      prob.insertAdjacentHTML("beforeend", `<button type="button" class="fx-ex" data-ex>${examples.length > 1 ? `换一个例子 <span class="num">${shown + 1}/${examples.length}</span>` : "再看一次"}</button>`);
-      return;
-    }
-    const b = e.target.closest("button.fx-g-c, .fx-g-row, .fx-g-col");
-    if (!b) return;
-    [1, 2, 3].forEach((k) => step(k, ""));
-    prob.innerHTML = "";
-    pick(b.dataset.s || null, b.dataset.m || null);
-  });
-  // Hovering a cell lights its row and column heads, so the two axes read as one coordinate.
+/* The grid reads on hover: a cell lights its row and column heads so the two axes read as one
+   coordinate, and its tip names the pair, its count and the patterns that live there. */
+function wireCluster(tx, tax) {
+  bindTips(tx, (el) => (el.closest(".fx-g") ? taxTip(tax, el) : null));
   tx.addEventListener("pointerover", (e) => {
-    const c = e.target.closest(".fx-g-c");
+    const c = e.target.closest(".fx-g-c:not(.is-empty)");
     $$(".fx-g-row", tx).forEach((x) => x.classList.toggle("is-hl", !!c && x.dataset.s === c.dataset.s));
     $$(".fx-g-col", tx).forEach((x) => x.classList.toggle("is-hl", !!c && x.dataset.m === c.dataset.m));
   });
-  guide();
+  tx.addEventListener("pointerleave", () => $$(".is-hl", tx).forEach((x) => x.classList.remove("is-hl")));
 }
 
 /* ---------------------------------------------------------------- 评测体系 wiring: wires, pulses */
 
-function wireFx(root, tax, examples = []) {
+function wireFx(root, tax) {
   clearInterval(E.fxTimer);
   if (E.fxT) E.fxT.forEach(clearTimeout);
   E.fxT = new Set();
@@ -511,7 +434,7 @@ function wireFx(root, tax, examples = []) {
   E.fxObs.observe(box);
 
   const tx = $("#fxTax", root);
-  if (tx && tax) wireCluster(tx, tax, examples);
+  if (tx && tax) wireCluster(tx, tax);
   if (REDUCED) return;
 
   const ins = $$(".fx-in", box);

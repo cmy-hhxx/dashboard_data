@@ -87,7 +87,7 @@ export function abTrendKline(rounds, values, metric, label) {
     releases: rounds.map((rnd, i) => ({ date: roundDate(rnd), label: roundLabel(rnd, i) })).filter((r) => r.date),
     openLabel: metric === "paired" ? "发版前" : "上一轮", closeLabel: metric === "paired" ? "发版后同题" : label,
     volumeName: "固定题", volumeLabel: "固定题", emptyText: "该格没有带发版日期的轮次",
-    tipTime: (candle) => `${candle.label} · ${candle.time}`, tipPeriod: () => "问题数",
+    tipTime: (candle) => `${candle.label} · ${candle.time}`,
   };
   return { spec, picks };
 }
