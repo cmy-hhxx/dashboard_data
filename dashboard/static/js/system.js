@@ -8,6 +8,7 @@ import {
 import { threadFlow } from "./particles.js";
 import { openTheater } from "./evidence_theater.js";
 import { buildPage } from "./builder.js";
+import { timelineCardHTML, wireTimeline } from "./system_timeline.js";
 
 let shown = null;
 
@@ -61,6 +62,7 @@ export async function render(root, c) {
   root.innerHTML = `<div class="bento">
     ${flowCard(d.taxonomy, pd)}
     ${goldenCard(E.goldens, E.index)}
+    ${timelineCardHTML()}
   </div>`;
   if (!root._sysTips) {
     root._sysTips = true;
@@ -70,6 +72,7 @@ export async function render(root, c) {
   renderMeta(root, E.goldens[E.index]);
   wireAnatomy(root, E.goldens[E.index]);
   wireFx(root, d.taxonomy);
+  wireTimeline(root);
   // The page builds itself under a dozen cursors on the first visit of the session; afterwards it
   // simply appears, and the player in the corner can replay the build on request.
   buildPage(root, { key: "sys", targets: buildTargets(root) });

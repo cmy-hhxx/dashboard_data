@@ -42,7 +42,7 @@ const SKELETON = {
   judge: [[12, 64], [4, 380], [4, 380], [4, 380], [12, 150], [7, 320], [5, 320]],
   bench: [[12, 64], [12, 560]],
   compare: [[12, 72], [12, 560]],
-  docs: [[12, 120], [6, 280], [6, 280]],
+  docs: [[12, 56], [4, 200], [4, 200], [4, 200]],
 };
 function skeletonHTML(view) {
   if (view === "samples" || view === "forecast") {
