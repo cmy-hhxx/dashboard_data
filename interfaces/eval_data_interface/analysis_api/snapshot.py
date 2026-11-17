@@ -721,6 +721,140 @@ def severity(snap: Snapshot, filters: Filters, group_by=(), level="top", sort=No
     }
 
 
+# --------------------------------------------------------------------------- /users
+
+USER_SORTS = ("severity", "problems", "traces", "recent")
+
+
+def _user_row(uid):
+    return {
+        "user_id": uid,
+        "analyzed": 0,
+        "traces": 0,
+        "problem_traces": 0,
+        "problems": 0,
+        "severity": {level: {"problems": 0, "traces": 0} for level in config.SEVERITIES},
+        "first_day": None,
+        "last_day": None,
+        "app_versions": set(),
+        "sample_trace_id": None,
+        "sample_session_id": None,
+        "sample_at": "",
+    }
+
+
+def _user_sort_key(row, sort):
+    """排序键统一成 (数值元组, user_id)：数值元组保证 cursor 可比较。"""
+    if sort == "severity":
+        head = tuple(-row["severity"][level]["traces"] for level in config.SEVERITIES)
+    elif sort == "problems":
+        head = (-row["problems"],)
+    elif sort == "traces":
+        head = (-row["traces"],)
+    else:  # recent：最近一天靠前
+        day = (row["last_day"] or "0000-00-00").replace("-", "")
+        head = (-int(day),)
+    return head, (row["user_id"] or "")
+
+
+def user_summary(snap: Snapshot, filters: Filters, sort=None, limit=100, cursor=None):
+    """按 user_id 聚合：谁有 Px 问题、多少条、什么时间、哪个模型。
+
+    直接回答「有 Px 问题的 trace 是哪些用户」：带 severity / problem 筛选进来即可，
+    返回里每个用户自带 P0–P4 明细和一个 sample_trace_id（可直接去打详情）。
+    """
+    if limit < 1 or limit > 1000:
+        raise errors.invalid("limit 必须在 1..1000 之间", "limit")
+    if sort is None:
+        sort = "severity"
+    elif sort not in USER_SORTS:
+        raise errors.unknown_value("sort", sort, list(USER_SORTS))
+
+    matcher = Matcher(snap, filters)
+    base = [t for t in snap.traces if matcher.match(t, with_problem=False)]
+    selected = [t for t in base if matcher.match(t, with_problem=True)]
+
+    # 分母（analyzed）按用户单独统计：命中筛选的用户才出行，但分母仍是该用户的全部 trace
+    analyzed_by_user: dict = {}
+    for trace in base:
+        analyzed_by_user[trace.user_id] = analyzed_by_user.get(trace.user_id, 0) + 1
+    rows: dict = {}
+    for trace in selected:
+        row = rows.setdefault(trace.user_id, _user_row(trace.user_id))
+        row["analyzed"] = analyzed_by_user.get(trace.user_id, 0)
+        row["traces"] += 1
+        row["problems"] += trace.problem_count
+        if trace.problem_count:
+            row["problem_traces"] += 1
+        for level, count in trace.severity.items():
+            if level in row["severity"]:
+                row["severity"][level]["problems"] += int(count or 0)
+                row["severity"][level]["traces"] += 1
+        if trace.day:
+            if row["first_day"] is None or trace.day < row["first_day"]:
+                row["first_day"] = trace.day
+            if row["last_day"] is None or trace.day > row["last_day"]:
+                row["last_day"] = trace.day
+        row["app_versions"].add(trace.app_version)
+        asked_at = trace.asked_at or ""
+        if asked_at >= row["sample_at"]:
+            row["sample_at"] = asked_at
+            row["sample_trace_id"] = trace.trace_id
+            row["sample_session_id"] = trace.session_id
+
+    total = {
+        "analyzed": len(base),
+        "traces": len(selected),
+        "users": len(rows),
+        "problem_traces": sum(1 for t in selected if t.problem_count),
+        "problems": sum(t.problem_count for t in selected),
+        "severity": {
+            level: {
+                "problems": sum(r["severity"][level]["problems"] for r in rows.values()),
+                "traces": sum(r["severity"][level]["traces"] for r in rows.values()),
+            }
+            for level in config.SEVERITIES
+        },
+    }
+
+    ordered = sorted(rows.values(), key=lambda row: _user_sort_key(row, sort))
+    filter_key = filters.cache_key() + "|users|" + sort
+    if cursor:
+        try:
+            body = cursors.decode(cursor, "users", filter_key)
+        except cursors.CursorError as exc:
+            raise errors.cursor_expired(str(exc)) if exc.expired else errors.invalid(str(exc), "cursor")
+        last = body.get("c") or [[], ""]
+        last_key = (tuple(last[0] or ()), last[1] if len(last) > 1 else "")
+        ordered = [row for row in ordered if _user_sort_key(row, sort) > last_key]
+
+    page = ordered[:limit]
+    has_more = len(ordered) > len(page)
+    next_cursor = None
+    if has_more and page:
+        head, uid = _user_sort_key(page[-1], sort)
+        next_cursor = cursors.encode("users", filter_key, limit, [list(head), uid])
+
+    items = []
+    for row in page:
+        items.append(
+            {
+                "user_id": row["user_id"],
+                "analyzed": row["analyzed"],
+                "traces": row["traces"],
+                "problem_traces": row["problem_traces"],
+                "problems": row["problems"],
+                "severity": row["severity"],
+                "first_day": row["first_day"],
+                "last_day": row["last_day"],
+                "app_versions": sorted(row["app_versions"]),
+                "sample_trace_id": row["sample_trace_id"],
+                "sample_session_id": row["sample_session_id"],
+            }
+        )
+    return {"items": items, "total": total, "next_cursor": next_cursor, "has_more": has_more}
+
+
 # --------------------------------------------------------------------------- /traces
 
 def _item(snap: Snapshot, trace: Trace):

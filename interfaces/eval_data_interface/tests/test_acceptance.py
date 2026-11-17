@@ -238,6 +238,45 @@ def check_unknown_code(client, dataset):
         raise AssertionError(f"未知严重度应返回 422：{status} {payload}")
 
 
+def check_users(client, dataset):
+    """Px → user_id：用户聚合要与 /traces 同条件对得上，能翻页，sample 能回查。"""
+    data = expect(*client.get(f"{API}/users", dataset=dataset, severity="P0"))["data"]
+    total = data["total"]
+    listing = expect(*client.get(f"{API}/traces", dataset=dataset, severity="P0", page_size=1))["data"]
+    if total["traces"] != listing["total"]:
+        raise AssertionError(f"/users traces={total['traces']} 与 /traces total={listing['total']} 不一致")
+    severity = expect(*client.get(f"{API}/severity", dataset=dataset, severity="P0"))["data"]["total"]
+    if total["severity"]["P0"]["traces"] != severity["severity"]["P0"]["traces"]:
+        raise AssertionError("/users 的 P0 trace 数与 /severity 不一致")
+    if not data["items"]:
+        raise AssertionError("/users 未返回任何用户")
+    first = data["items"][0]
+    for key in ("user_id", "analyzed", "traces", "problems", "severity", "first_day", "last_day", "sample_trace_id"):
+        if key not in first:
+            raise AssertionError(f"/users 条目缺字段 {key}")
+    if first["analyzed"] < first["traces"] or first["severity"]["P0"]["traces"] <= 0:
+        raise AssertionError(f"/users 首条计数异常：{first}")
+    # sample_trace_id 必须属于这个用户（batch 不需要 day，顺手回查）
+    if first["sample_trace_id"]:
+        item = expect(
+            *client.post(f"{API}/traces/batch", {"dataset": dataset, "trace_ids": [first["sample_trace_id"]]})
+        )["data"]["items"][0]
+        if item["user_id"] != first["user_id"]:
+            raise AssertionError("sample_trace_id 的 user_id 与聚合行不一致")
+    if total["users"] != len(data["items"]) and not data["has_more"]:
+        raise AssertionError(f"/users 的 users 总数 {total['users']} 与返回条数 {len(data['items'])} 不一致")
+    # 翻页不重复（样本数据只有一个 P0 用户时不适用）
+    if total["users"] > 1:
+        page1 = expect(*client.get(f"{API}/users", dataset=dataset, severity="P0", limit=1))["data"]
+        if not page1["has_more"]:
+            raise AssertionError("/users 应有多于一页")
+        page2 = expect(
+            *client.get(f"{API}/users", dataset=dataset, severity="P0", limit=1, cursor=page1["next_cursor"])
+        )["data"]
+        if page2["items"][0]["user_id"] == page1["items"][0]["user_id"]:
+            raise AssertionError("/users 翻页重复返回同一用户")
+
+
 def check_batch(client, dataset, real_id, fake_id):
     payload = expect(
         *client.post(f"{API}/traces/batch", {"dataset": dataset, "trace_ids": [real_id, fake_id]})
@@ -678,6 +717,7 @@ def run_fixture_cases(workdir: Path):
         ("17 cursor 过期", lambda: check_cursor_expired(client, dataset)),
         ("18 增量同步", lambda: check_changes(client, dataset)),
         ("19 接口文档", lambda: check_docs(client)),
+        ("20 用户聚合(Px→user_id)", lambda: check_users(client, dataset)),
     ]
     return _run_cases(cases, process, log)
 
@@ -797,6 +837,7 @@ def run_real_cases(base, history_trace=None, history_day=None):
         ("14 导出", lambda: check_ids_only(client, dataset)),
         ("15 用户筛选", lambda: check_user_ids(client, dataset, limit=5000)),
         ("16 详情", _detail),
+        ("17 用户聚合(Px→user_id)", lambda: check_users(client, dataset)),
     ]
     return _run_cases(cases, process, log)
 

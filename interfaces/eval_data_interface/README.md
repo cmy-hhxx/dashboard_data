@@ -92,6 +92,7 @@ trace 的 `problems` 问题数组与 P0–P4 严重度，并新增 `GET /severit
 | `GET\|POST /summary` | 聚合，`group_by` 支持 1–2 个维度（`intent`、`problem`、`day`、`user`、`app_version`、`source`） |
 | `GET\|POST /severity` | P0–P4 统计：问题条目数 + trace 数，可分组；`group_by` 可省略 |
 | `GET\|POST /traces` | trace 列表，固定 `(asked_at DESC, trace_id DESC)`，cursor 翻页；`severity` 筛选 |
+| `GET\|POST /users` | **按用户聚合**：谁有 Px 问题、每人的 P0–P4 明细、`analyzed` 分母、`sample_trace_id`；cursor 翻页 |
 | `POST /traces/batch` | 按一批 trace_id 取摘要（≤1000） |
 | `GET\|POST /changes?dataset=…[&since=…]` | **增量同步**：按服务端变更序号发新增/变更/删除；不传 `since` 即全量。见 `docs/incremental.md` |
 | `GET /traces/{trace_id}?dataset=…&day=…` | 单条 trace：`eval_input` 整行 + trace 对象 + 完整问题条目 + 历史版本 |

@@ -384,6 +384,8 @@ class Handler(BaseHTTPRequestHandler):
             self._severity(params)
         elif tail == "/traces":
             self._traces(params)
+        elif tail == "/users":
+            self._users(params)
         elif tail == "/traces/batch":
             self._batch(params)
         elif tail == "/changes":
@@ -477,6 +479,18 @@ class Handler(BaseHTTPRequestHandler):
             page_size=page_size,
             cursor=(params.get("cursor") or None),
             ids_only=ids_only,
+        )
+        _json_response(self, 200, self._envelope(data, filters.echo, snap))
+
+    def _users(self, params):
+        snap = self._snapshot()
+        filters = snapshot.parse_filters(params, snap)
+        data = snapshot.user_summary(
+            snap,
+            filters,
+            sort=(params.get("sort") or "").strip() or None,
+            limit=_int_param(params, "limit", 100),
+            cursor=(params.get("cursor") or None),
         )
         _json_response(self, 200, self._envelope(data, filters.echo, snap))
 
