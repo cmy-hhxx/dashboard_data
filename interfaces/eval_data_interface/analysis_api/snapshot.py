@@ -126,15 +126,15 @@ def load(conn, intent_tree, problem_trees, build_summary=None) -> Snapshot:
                 offset=row[20] or 0,
             )
         )
-    # 供数接口不提供测试用户的问句：测试账号的 trace 整条不进入快照，
+    # 供数接口不提供测试账号的问句：测试账号的 trace 整条不进入快照，
     # 否则详情里的 session / trace / evidence 仍会把问句带出去。
+    # 口径：真实 userid = 纯数字且 ≤10 位，其余都算测试账号（见 users.py）。
     rules = users.load(config.datasets_root())
-    stats = rules.question_stats((trace.user_id, trace.question) for trace in traces)
     kept = []
     hidden = set()
     excluded = 0
     for trace in traces:
-        if rules.is_test(trace.user_id, stats):
+        if rules.is_test(trace.user_id):
             excluded += 1
             hidden.add((trace.trace_id, trace.day, trace.app_version))
         else:
@@ -878,6 +878,8 @@ def _item(snap: Snapshot, trace: Trace):
         "problems": _current_problems(snap, trace),
         "analysis_id": trace.analysis_id,
         "analyzed_at": trace.analyzed_at,
+        # 该 trace 各等级的问题条目数：列表页不必再逐条数 problems[]
+        "severity": dict(trace.severity),
     }
 
 

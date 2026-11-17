@@ -37,7 +37,7 @@ def trace():
         app_version="AIME-Atlas_expert",
         asked_at="2026-11-10T00:00:00Z",
         source="prelaunch",
-        user_id="u1",
+        user_id="1000000001",
         question="q",
         session_id="s1",
         intent_code=None,

@@ -80,9 +80,17 @@ trace 的 `problems` 问题数组与 P0–P4 严重度，并新增 `GET /severit
    `taxonomy/intent_2026-10.json` 固定；出现表外的新 label 时该 trace 的 `intent_code` 为 `null`。
 8. **trace 与 session**：trace 是统计单位，`trace_id` 取每个 `traces[].meta.trace_id`；外层
    `meta.session_id` 只作 `session_id`。同一 session 的多轮各算一条 trace。
-9. **测试用户不供数**：按 `<datasets>/user_rules.json`（`EVAL_USER_RULES` 可覆盖）识别测试账号，
-   其 trace 整条不进入 5003 快照，因此问句、详情正文与证据都不会返回；`/healthz` 的
-   `build.test_excluded` 给出被排除条数。
+9. **测试账号不供数**：口径是「真实 userid = 纯数字且 ≤10 位」（业务方 2026-11-17），
+   其余（英文名、内部号、≥11 位数字）整条不进 5003 快照，问句 / 详情 / 证据都不会返回；
+   位数上限在 `<datasets>/user_rules.json` 的 `heuristics.real_user_id_max_digits`，
+   `test.ids`/`test.patterns` 可显式指定、`real.ids`/`real.patterns` 可捞回。
+   `/healthz` 的 `build.test_excluded` 给出本轮排除条数。
+
+## 自检
+
+发布后跑一遍 `scripts/audit_analysis_api.py <base>`：把每个端点、参数上下限、错误码、
+`/users` 与 `/traces`、`/severity` 的计数一致性、测试账号不可见、gzip、cursor 翻页都检查一遍，
+只读、退出码非 0 即有失败项。
 
 ## 接口
 

@@ -11,17 +11,17 @@ AIME 的评测数据、看板、页面接口和供数接口都在弗吉尼亚这
 
 | 项 | 值 |
 |---|---|
-| 主机 | `10.217.219.2`，SSH 对外端口 `2225`（容器 22），用户 `root` |
-| 容器 | `interactive-npasm9ch66eb`；6 核、约 2 TB 内存、根盘 1.7 TB |
+| 主机 | `10.217.219.2`，SSH 对外端口 `2473`（容器 22），用户 `root` |
+| 容器 | `interactive-s3ynzadcvm9c`（2026-11-16 容器重置后改名，旧名 `interactive-npasm9ch66eb` 作废）；6 核、约 2 TB 内存、根盘 1.7 TB |
 | 连接方式 | 必须复用 SSH 长连接（`ControlMaster auto` + `ControlPersist`），频繁新建连接会被拒，见 dashboard-deployment.md |
 
 | 容器端口 | 对外端口 | 角色 | 部署目录 |
 |---|---|---|---|
-| 5001 | 2221 | 看板（生产） | `/opt/eval_dashboard` |
-| 5002 | 2222 | 页面接口（样本详情 / 版本对比 / 问题矩阵，反代 5001） | `/opt/page_service` |
-| 5003 | 2224 | 供数接口（`/api/v1/analysis/*`） | `/opt/eval_analysis` |
-| 5004 | 2228 | 开发调试（看板预发，`STATS_WORKER=0`） | `/opt/eval_dashboard_2` |
-| 5005 | 2243 | 备用（临时静态服务） | — |
+| 5001 | 2475 | 看板（生产） | `/opt/eval_dashboard` |
+| 5002 | 2476 | 页面接口（样本详情 / 版本对比 / 问题矩阵，反代 5001） | `/opt/page_service` |
+| 5003 | 2477 | 供数接口（`/api/v1/analysis/*`） | `/opt/eval_analysis` |
+| 5004 | 2478 | 开发调试（看板预发，`STATS_WORKER=0`） | `/opt/eval_dashboard_2` |
+| 5005 | 2479 | 备用（临时静态服务） | — |
 
 守护：`/opt/eval_supervisor.sh` 按 `/opt/eval_services.conf`（每行 `name|health_url|workdir|start_cmd`）
 每 30 s 探活，`/healthz` 不应答才重启；`/opt/eval_supervisor.pause` 存在时跳过检查（维护窗口用，用完要删）。
@@ -133,6 +133,9 @@ round.json                         {"released_at", "label", "title"}
 
 ## 7. 常见坑
 
+- **容器重置后缺 `tzdata`**：新容器没有 `/usr/share/zoneinfo`，`daytime.py` 里 `ZoneInfo("America/New_York")` 会抛
+  `ZoneInfoNotFoundError`，`server.py` 与 `stats_worker.py` 启动即崩、只有 `backup_stats.py` 活着（它不 import daytime）。
+  `dashboard/deploy.sh` 现在会在重启前探测并 `pip install tzdata`；手工救急：`python3 -m pip install tzdata` 后 `./start.sh`。
 - **SSH 被拒**：没有复用长连接、或私钥权限不是 600。
 - **ceph / SSD 上的 rglob 很慢**：全量列输入文件要 20 s 以上；服务启动时后台预热文件清单，别在请求线程里扫。
 - **mtime 与时钟**：文件 mtime 取内核粗粒度时钟，可能比 `time.time_ns()` 落后一个 tick（4–10 ms）。
@@ -144,5 +147,6 @@ round.json                         {"released_at", "label", "title"}
   5003 索引按 `question or question_text` 取值；只读 `question` 会让 `query_preview` 变空串，还会把空问句算成同一条重复问句、误判测试用户。
 - **改了 5003 的入库解析逻辑，要让已有归因文件重扫**：删掉对应 `files` 行再重启构建，只重扫这些文件：
   `DELETE FROM files WHERE kind='attribution' AND path IN (...)`。不要清 `traces`（`ensure_schema` 那套会丢掉旧状态，变更流会把全量当新增重放）。
+- **供数口径：真实 userid = 纯数字 ≤10 位**（2026-11-17 起）。英文名 / 内部号 / ≥11 位数字都算测试账号，整条 trace 不出现在 5003。位数上限在 `user_rules.json` 的 `heuristics.real_user_id_max_digits`；改口径后重启服务重建一次，用 `/healthz` 的 `build.test_excluded` 核对条数。
 - **部署记录**：生产上的 `logs/deployed-revision.json` 是一次手工发布留下的（仓库脚本不写它），2026-11-13 时仍停在 a3a559c，
   而实际代码已与 main 一致；判断线上版本请比对文件哈希。

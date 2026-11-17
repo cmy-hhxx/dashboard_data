@@ -1,13 +1,19 @@
-"""测试用户判定：供数接口不对外提供测试账号的问句数据。
+"""测试账号判定：供数接口不对外提供测试账号的问句数据。
 
-规则与看板 `dashboard/user_rules.py` 保持同一口径，规则文件放在
-``<datasets>/user_rules.json``（``EVAL_USER_RULES`` 可覆盖）：
+口径（业务方 2026-11-17）：**真实 userid 是纯数字且不超过 10 位**。
+其余（英文名 / 内部号 / 11 位及以上的数字）一律按测试账号处理，整条 trace 不供数。
 
-- 名单 / 正则命中 test → 测试用户；
-- 纯数字 ID 长度达到 ``numeric_test_min_digits``（默认 11）→ 测试用户；
-- 同一 uid 的重复问句占比达到阈值 → 测试用户。
+规则放在 ``<datasets>/user_rules.json``（``EVAL_USER_RULES`` 可覆盖路径），改口径只改这个文件::
 
-供数侧只关心「是否测试用户」；internal / real / unknown 都保留。
+    {
+      "updated_at": "2026-11-17",
+      "test": {"ids": [], "patterns": []},   # 显式测试名单 / 正则，优先级最高
+      "real": {"ids": [], "patterns": []},   # 显式真实名单，可把某个号从测试里捞回来
+      "heuristics": {"real_user_id_max_digits": 10}
+    }
+
+判定顺序：test 名单 > real 名单 > 「纯数字且位数 ≤ 上限」判真实 > 其余都算测试。
+旧文件里的 ``numeric_test_min_digits``（默认 11）仍认：等价于 ``max = min_digits - 1``。
 """
 from __future__ import annotations
 
@@ -17,14 +23,10 @@ import re
 from pathlib import Path
 
 NUMERIC = re.compile(r"^\d+$")
-SPACES = re.compile(r"[\s\u3000]+")
-SENTENCE_PUNCT = re.compile(r"[，。！？；：、·…—\-－（）()\[\]【】《》\"'“”‘’,.!?;:]+")
 
 DEFAULT_HEURISTICS = {
-    "numeric_test_min_digits": 11,
-    "dup_min": 3,
-    "dup_ratio": 0.5,
-    "min_samples": 10,
+    # 真实用户 id 的位数上限：10 位及以内的纯数字才是真实用户（业务方 2026-11-17 口径）。
+    "real_user_id_max_digits": 10,
 }
 
 
@@ -33,13 +35,6 @@ def rules_path(datasets_root) -> Path:
     if env:
         return Path(env).expanduser()
     return Path(datasets_root) / "user_rules.json"
-
-
-def normalize_question(question) -> str:
-    if not question:
-        return ""
-    text = SPACES.sub("", str(question).lower())
-    return SENTENCE_PUNCT.sub("", text)[:300]
 
 
 def _int(value, fallback):
@@ -67,45 +62,36 @@ class Rules:
     def __init__(self, data=None):
         data = data if isinstance(data, dict) else {}
         self.test_ids, self.test_patterns = _section(data, "test")
+        self.real_ids, self.real_patterns = _section(data, "real")
         heuristics = data.get("heuristics") if isinstance(data.get("heuristics"), dict) else {}
         self.heuristics = {**DEFAULT_HEURISTICS, **heuristics}
-        self.min_digits = _int(self.heuristics.get("numeric_test_min_digits"), 11)
-        self.dup_min = _int(self.heuristics.get("dup_min"), 3)
-        self.min_samples = _int(self.heuristics.get("min_samples"), 10)
-        try:
-            self.dup_ratio = float(self.heuristics.get("dup_ratio", 0.5))
-        except (TypeError, ValueError):
-            self.dup_ratio = 0.5
+        max_digits = self.heuristics.get("real_user_id_max_digits")
+        if max_digits is None and "numeric_test_min_digits" in self.heuristics:
+            # 旧口径：>= N 位算测试用户，等价于真实用户最多 N-1 位
+            max_digits = _int(self.heuristics.get("numeric_test_min_digits"), 11) - 1
+        self.max_digits = _int(max_digits, DEFAULT_HEURISTICS["real_user_id_max_digits"])
 
-    def is_test(self, uid, stats=None) -> bool:
-        if uid in (None, ""):
+    def is_real(self, uid) -> bool:
+        """显式 real 名单优先，其次「纯数字且位数不超过上限」。"""
+        if uid is None:
             return False
-        uid = str(uid)
+        uid = str(uid).strip()
+        if not uid:
+            return False
+        if uid in self.real_ids or any(pattern.search(uid) for pattern in self.real_patterns):
+            return True
+        return bool(NUMERIC.match(uid)) and len(uid) <= self.max_digits
+
+    def is_test(self, uid) -> bool:
+        """test 名单命中即测试；否则「不是真实用户」就是测试账号。空 uid 不判测试。"""
+        if uid is None:
+            return False
+        uid = str(uid).strip()
+        if not uid:
+            return False
         if uid in self.test_ids or any(pattern.search(uid) for pattern in self.test_patterns):
             return True
-        if NUMERIC.match(uid) and len(uid) >= self.min_digits:
-            return True
-        return self._dup_test(uid, stats.get(uid) if stats else None)
-
-    def _dup_test(self, uid, stat) -> bool:
-        if not stat:
-            return False
-        samples, duplicated = stat
-        return samples >= self.min_samples and samples > 0 and duplicated / samples >= self.dup_ratio
-
-    def question_stats(self, pairs) -> dict:
-        counts = {}
-        for uid, question in pairs:
-            if uid in (None, ""):
-                continue
-            key = normalize_question(question)
-            per_user = counts.setdefault(str(uid), {})
-            per_user[key] = per_user.get(key, 0) + 1
-        out = {}
-        for uid, per_user in counts.items():
-            total = sum(per_user.values())
-            out[uid] = (total, sum(n for n in per_user.values() if n >= self.dup_min))
-        return out
+        return not self.is_real(uid)
 
 
 def load(datasets_root) -> Rules:

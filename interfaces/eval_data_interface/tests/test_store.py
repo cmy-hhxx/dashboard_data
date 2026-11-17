@@ -92,11 +92,11 @@ class StoreTest(unittest.TestCase):
         # 美东 10-19 的问句，落在按文件名 10-20 的输入文件里：day 口径天然对不上
         stamp = "2026-10-20T02:00:00.000Z"
         _append(attr, fixtures._session("thread_t", "trace_hit", stamp, "事件解读", "行情事件解读",
-                                        "u7", "AIME-Atlas", [], question="目标问句"))
-        decoy = fixtures._input_record("thread_d", "trace_decoy", stamp, "u7", "AIME-Atlas", question="别人的问句")
+                                        "1000000007", "AIME-Atlas", [], question="目标问句"))
+        decoy = fixtures._input_record("thread_d", "trace_decoy", stamp, "1000000007", "AIME-Atlas", question="别人的问句")
         decoy["traces"][0]["message_pool"] = [{"note": "ref", "trace_id": "trace_hit"}]
         _append(self.input, decoy)
-        _append(self.input, fixtures._input_record("thread_t", "trace_hit", stamp, "u7", "AIME-Atlas",
+        _append(self.input, fixtures._input_record("thread_t", "trace_hit", stamp, "1000000007", "AIME-Atlas",
                                                    question="目标问句"))
         store.build(self.root)
         data = snapshot.detail(self._snapshot(), config.db_path(), "aime_eval", "trace_hit", "2026-10-19")
@@ -127,14 +127,14 @@ class StoreTest(unittest.TestCase):
             before = db.execute("SELECT trace_id, offset, line FROM input_index WHERE path = ?",
                                 (str(self.input),)).fetchall()
 
-        record = fixtures._input_record("thread_e", "trace_epsilon", "2026-10-20T06:00:00.000Z", "u4", "AIME-Atlas")
+        record = fixtures._input_record("thread_e", "trace_epsilon", "2026-10-20T06:00:00.000Z", "1000000004", "AIME-Atlas")
         _append(self.input, record, newline=False)  # 写到一半：末行还没有换行
         partial = store.build(self.root)
         self.assertEqual(partial["resumed_input"], 1)
         with self.input.open("a", encoding="utf-8") as handle:
             handle.write("\n")
         _append(self.input, fixtures._input_record("thread_f", "trace_zeta", "2026-10-20T07:00:00.000Z",
-                                                   "u5", "AIME-Atlas"))
+                                                   "1000000005", "AIME-Atlas"))
         resumed = store.build(self.root)
         self.assertEqual(resumed["resumed_input"], 1)
 
@@ -260,7 +260,7 @@ class StoreTest(unittest.TestCase):
         # 新增一条 trace：只发这一条
         _append(attr, fixtures._session(
             "thread_new", "trace_new", "2026-10-21T02:00:00.000Z", "投教问答",
-            "金融术语与指标释义", "u7", "AIME-Atlas", [], question="新增问句",
+            "金融术语与指标释义", "1000000007", "AIME-Atlas", [], question="新增问句",
         ))
         summary = store.build(self.root)
         self.assertEqual(summary["changes_emitted"], 1)
@@ -273,7 +273,7 @@ class StoreTest(unittest.TestCase):
 
         # 重跑改内容：同一个 key 再来一条 upsert
         _append(attr, fixtures._session(
-            "thread_a", "trace_alpha", "2026-10-20T12:00:00.000Z", "事件解读", "行情事件解读", "u1",
+            "thread_a", "trace_alpha", "2026-10-20T12:00:00.000Z", "事件解读", "行情事件解读", "1000000001",
             "AIME-Atlas", [fixtures._problem("空查询参数重试", "P0")], question="英伟达今天为什么跌",
         ))
         self.assertEqual(store.build(self.root)["changes_emitted"], 1)

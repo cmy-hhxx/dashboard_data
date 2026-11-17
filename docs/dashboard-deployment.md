@@ -7,8 +7,8 @@
 | 项 | 乌兰察布 | 弗吉尼亚 |
 |---|---|---|
 | 外部 IP | `117.50.195.94` | `10.217.219.2` |
-| 容器名（集群内部） | `interactive-i6piqwvlnsr5` | `interactive-npasm9ch66eb` |
-| SSH 别名 / 对外端口 | `eval_data` / `2834` | `aime_rsi_data` / `2225` |
+| 容器名（集群内部） | `interactive-i6piqwvlnsr5` | `interactive-s3ynzadcvm9c` |
+| SSH 别名 / 对外端口 | `eval_data` / `2834` | `aime_rsi_data` / `2473` |
 | 数据 | 问财（wencai，只构建 `0_wencai`） | AIME（只构建 `1_aime`） |
 | 看板数据根 | `/mnt/fin_bench/code_and_clean_data/datasets` | `/mnt/aime_eval_ssd`（产品目录 `1_aime`；旧 HDD `/mnt/fin_bench/aime_rsi_data` 仅作冷数据） |
 
@@ -21,12 +21,12 @@
 
 | 容器端口 | 角色 | 乌兰察布对外 | 弗吉尼亚对外 |
 |---|---|---|---|
-| `5001` | 展示（看板生产） | `2768` | `2221` |
-| `5002` | 页面接口（样本详情页 / JSON API） | `2833` | `2222` |
-| `5003` | 供数（数据接口，对话分析查询接口 v2） | 已停用（问财暂未实现） | `2224` |
-| `5004` | 开发调试 | `3336` | `2228` |
-| `5005` | 备用 | `3337` | `2243` |
-| `22` | SSH | `2834` | `2225` |
+| `5001` | 展示（看板生产） | `2768` | `2475` |
+| `5002` | 页面接口（样本详情页 / JSON API） | `2833` | `2476` |
+| `5003` | 供数（数据接口，对话分析查询接口 v2） | 已停用（问财暂未实现） | `2477` |
+| `5004` | 开发调试 | `3336` | `2478` |
+| `5005` | 备用 | `3337` | `2479` |
+| `22` | SSH | `2834` | `2473` |
 
 - 页面接口（`5002`）对外有两种入口：DSW 代理和直连 IP。代理基址按产品分开
   （平台会剥掉路径前缀，转发到对应容器的 5002）：
@@ -45,13 +45,13 @@
 ```bash
 # 问财 → 乌兰察布 5001（对外 2768），数据 datasets/0_wencai，只构建问财
 EVAL_DATASETS=/mnt/fin_bench/code_and_clean_data/datasets EVAL_PRODUCTS=wencai ./dashboard/deploy.sh
-# AIME → 弗吉尼亚 5001（对外 2221），数据根 /mnt/aime_eval_ssd（产品目录 1_aime）
+# AIME → 弗吉尼亚 5001（对外 2475），数据根 /mnt/aime_eval_ssd（产品目录 1_aime）
 EVAL_DEPLOY_HOST=aime_rsi_data EVAL_DATASETS=/mnt/aime_eval_ssd EVAL_PRODUCTS=aime ./dashboard/deploy.sh
 # 预发调试副本（乌兰 5004 对外 3336）
 EVAL_DEPLOY_REMOTE=/opt/eval_dashboard_2 PORT=5004 STATS_WORKER=0 \
   EVAL_DATASETS=/mnt/fin_bench/code_and_clean_data/datasets EVAL_PRODUCTS=wencai ./dashboard/deploy.sh
 curl -s http://117.50.195.94:2768/healthz | jq
-curl -s http://10.217.219.2:2221/healthz | jq
+curl -s http://10.217.219.2:2475/healthz | jq
 ```
 
 命令里设置的变量会写进远端 `deploy.env`，之后的定时构建、`start.sh`、手动重启都读它；不带变量重新部署
@@ -76,7 +76,7 @@ curl -s http://10.217.219.2:2221/healthz | jq
 
 ### 弗吉尼亚 SSH 必须用长连接
 
-弗吉尼亚（`10.217.219.2:2225`）的 SSH 边缘会间歇性拒绝新连接：短命令成功，但连续 `ssh` / `rsync`
+弗吉尼亚（`10.217.219.2:2473`）的 SSH 边缘会间歇性拒绝新连接：短命令成功，但连续 `ssh` / `rsync`
 很容易在几次后被拒。**对弗吉尼亚的所有远程操作都复用同一条长连接**，不要在循环里反复新建连接。
 
 本机 `~/.ssh/config` 加：
@@ -85,7 +85,7 @@ curl -s http://10.217.219.2:2221/healthz | jq
 Host aime_rsi_data
   HostName 10.217.219.2
   User root
-  Port 2225
+  Port 2473
   IdentityFile <本机私钥路径>
   IdentitiesOnly yes
   ServerAliveInterval 30
