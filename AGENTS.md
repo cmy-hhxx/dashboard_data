@@ -10,6 +10,7 @@
 - 页面打不开 / ERR_CONNECTION_REFUSED 的根因与排查：`docs/connection-refused.md`
 - 弗吉尼亚数据服务器的目录、字段、构建刷新与常见坑：`docs/data-server.md`
 - AIME 数据存量盘点（待瘦身 / 待评测 / 已评测）的口径与一条命令：`docs/aime-data-inventory-sop.md`
+- 弗吉尼亚容器重建后拉齐三个服务：`scripts/virginia/bringup.sh`，说明见 `docs/virginia-restart.md`
 - 跑全部测试：`scripts/run_tests.sh`（在服务器上跑）
 - 各服务的发布脚本：`interfaces/eval_data_interface/deploy.sh`、`page_service/sample_details/deploy.sh`、
   `dashboard/deploy.sh`
