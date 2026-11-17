@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS input_index(
     path TEXT NOT NULL,
     offset INTEGER NOT NULL,
     line INTEGER,
-    PRIMARY KEY (trace_id, day)
+    PRIMARY KEY (trace_id, day, path, offset)
 );
 CREATE INDEX IF NOT EXISTS input_index_path ON input_index(path);
 CREATE TABLE IF NOT EXISTS problem_codes(
@@ -177,6 +177,38 @@ def ensure_schema(conn, log=None) -> bool:
 
 # ceph-fuse 上小块读的往返代价很高；与看板 build_store 一样用 8 MB 缓冲
 READ_BUFFER = 8 << 20
+
+# input_index 结构版本：v1 的主键 (trace_id, day) 只留一行候选，先入为主；
+# 同一个 trace_id 可能先出现在别的轮次记录的正文里，detail 就被绑到不含它的那一行。
+INPUT_INDEX_VERSION = 2
+
+
+def ensure_input_index(conn, log=None) -> bool:
+    """v1 → v2：主键加上 (path, offset)，保留全部候选行，由详情侧校验行内是否真有这个 trace。"""
+    row = conn.execute("SELECT value FROM meta WHERE key = 'input_index_version'").fetchone()
+    if row and str(row[0]) == str(INPUT_INDEX_VERSION):
+        return False
+    (log or (lambda message: None))(
+        f"[index] 输入索引升级 v{INPUT_INDEX_VERSION}，重建 input_index 并重扫输入文件"
+    )
+    conn.execute("DROP TABLE IF EXISTS input_index")
+    conn.execute(
+        "CREATE TABLE input_index("
+        "trace_id TEXT NOT NULL, day TEXT NOT NULL, app_version TEXT, "
+        "path TEXT NOT NULL, offset INTEGER NOT NULL, line INTEGER, "
+        "PRIMARY KEY (trace_id, day, path, offset))"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS input_index_path ON input_index(path)")
+    # 签名一起清掉，下一轮构建才会真的重扫输入文件（否则 sig 命中直接跳过）
+    conn.execute("DELETE FROM files WHERE kind = 'input'")
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES ('input_index_version', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (str(INPUT_INDEX_VERSION),),
+    )
+    conn.commit()
+    return True
+
 
 
 def _lines(path: Path):
@@ -816,6 +848,7 @@ def build(root: Path | None = None, log=None) -> dict:
     conn = connect(config.db_path())
     try:
         ensure_schema(conn, log)
+        ensure_input_index(conn, log)
         intent_tree = None
         try:
             from .taxonomy import load_intent

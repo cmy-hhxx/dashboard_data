@@ -981,14 +981,14 @@ def detail(snap: Snapshot, db_path, dataset: str, trace_id: str, day: str | None
 
     candidates = [t for t in snap.by_id.get(trace_id, []) if t.day == day]
     if not candidates:
-        raise errors.not_found("trace 不存在或未分析", trace_id=trace_id, day=day)
+        raise _detail_not_found(snap, db_path, trace_id, day)
     trace = max(candidates, key=lambda t: (t.analyzed_at or "", t.line))
 
     attribution = _read_offset_line(trace.file, trace.offset)
     turn = _pick_turn(attribution, trace_id) if attribution else None
 
-    # 编码、原始输入位置、历史版本：一个只读连接查完
-    codes, input_ref, history = {}, None, []
+    # 编码、原始输入、历史版本：一个只读连接查完
+    codes, input_row, history = {}, None, []
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     except sqlite3.Error:
@@ -996,7 +996,7 @@ def detail(snap: Snapshot, db_path, dataset: str, trace_id: str, day: str | None
     if conn is not None:
         try:
             codes = _problem_codes(conn, trace_id, day, trace.app_version)
-            input_ref = _input_ref(conn, trace_id, day)
+            input_row = _resolve_input(conn, trace)
             history = _history(conn, trace_id, day, trace.app_version)
         except sqlite3.Error:
             pass
@@ -1018,8 +1018,6 @@ def detail(snap: Snapshot, db_path, dataset: str, trace_id: str, day: str | None
             for code in trace.problem_codes
         ]
     problems = _current_problems(snap, trace, problems)
-
-    input_row = _read_offset_line(*input_ref) if input_ref else None
 
     return {
         "trace_id": trace.trace_id,
@@ -1082,15 +1080,70 @@ def _find_trace_object(record, trace_id):
     return None
 
 
-def _input_ref(conn, trace_id, day):
-    row = conn.execute(
-        "SELECT path, offset FROM input_index WHERE trace_id = ? AND day = ?", (trace_id, day)
-    ).fetchone()
-    if not row:
-        row = conn.execute(
-            "SELECT path, offset FROM input_index WHERE trace_id = ? LIMIT 1", (trace_id,)
-        ).fetchone()
-    return tuple(row) if row else None
+def _detail_not_found(snap: Snapshot, db_path, trace_id, day):
+    """404 要能自解释：是测试账号口径挡掉、day 传错，还是确实没分析。"""
+    reason = "not_analyzed"
+    if any(key[0] == trace_id and key[1] == day for key in snap.hidden):
+        reason = "test_user_excluded"
+    days = []
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        conn = None
+    if conn is not None:
+        try:
+            days = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT DISTINCT day FROM traces WHERE trace_id = ? ORDER BY day", (trace_id,)
+                )
+            ]
+        except sqlite3.Error:
+            days = []
+        finally:
+            conn.close()
+    extra = {"available_days": days} if days else {}
+    if days and reason == "not_analyzed":
+        reason = "day_mismatch"
+    message = {
+        "test_user_excluded": "trace 属于测试账号，按供数口径不返回",
+        "day_mismatch": "day 与索引不一致，用 available_days 里的日期重试",
+        "not_analyzed": "trace 不存在或未分析",
+    }[reason]
+    return errors.not_found(message, trace_id=trace_id, day=day, reason=reason, **extra)
+
+
+# 一条 trace 的输入候选行上限：正常 1 行，id 在别处正文里出现过时会有几行
+_INPUT_CANDIDATES = 8
+
+
+def _resolve_input(conn, trace):
+    """找这条 trace 的输入行：候选全部读一遍，只认 traces[] 里真的有它的那行。
+
+    input_index 是按行扫描建的，同一个 trace_id 可能先出现在别的轮次记录的正文里；
+    旧实现遇到这种情况直接 LIMIT 1，于是把别人的会话当成本条返回（错配）。
+    """
+    if conn is None:
+        return None
+    rows = conn.execute(
+        "SELECT path, offset FROM input_index WHERE trace_id = ? "
+        "ORDER BY CASE WHEN day = ? THEN 0 ELSE 1 END, line LIMIT ?",
+        (trace.trace_id, trace.day, _INPUT_CANDIDATES),
+    ).fetchall()
+    fallback = None
+    for path, offset in rows:
+        record = _read_offset_line(path, offset)
+        if not record:
+            continue
+        obj = _find_trace_object(record, trace.trace_id)
+        if obj is None:
+            continue
+        stamp = timeutil.utc_rfc3339(timeutil.parse_iso((obj.get("meta") or {}).get("timestamp")))
+        if trace.asked_at and stamp == trace.asked_at:
+            return record
+        if fallback is None:
+            fallback = record
+    return fallback
 
 
 def _history(conn, trace_id, day, app_version):

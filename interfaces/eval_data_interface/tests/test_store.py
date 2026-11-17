@@ -17,7 +17,7 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "tests"))
 
 import fixtures  # noqa: E402
-from analysis_api import config, snapshot, store  # noqa: E402
+from analysis_api import config, errors, snapshot, store  # noqa: E402
 
 
 def _append(path: Path, row, newline=True):
@@ -85,6 +85,40 @@ class StoreTest(unittest.TestCase):
         item = snapshot._item(snap, snap.by_id["trace_textq"][0])
         self.assertEqual(item["query_preview"], question[: config.QUERY_PREVIEW_CHARS])
         self.assertEqual(len(item["query_preview"]), config.QUERY_PREVIEW_CHARS)
+
+    def test_detail_picks_the_input_line_that_really_has_the_trace(self):
+        """trace_id 先出现在别人记录里时，详情要挑真正含它的那行，不能张冠李戴。"""
+        attr = self.aime / "eval_output" / "0_daily_eval" / "aime_expert" / f"aime_expert_attribution-{fixtures.DAY}.jsonl"
+        # 美东 10-19 的问句，落在按文件名 10-20 的输入文件里：day 口径天然对不上
+        stamp = "2026-10-20T02:00:00.000Z"
+        _append(attr, fixtures._session("thread_t", "trace_hit", stamp, "事件解读", "行情事件解读",
+                                        "u7", "AIME-Atlas", [], question="目标问句"))
+        decoy = fixtures._input_record("thread_d", "trace_decoy", stamp, "u7", "AIME-Atlas", question="别人的问句")
+        decoy["traces"][0]["message_pool"] = [{"note": "ref", "trace_id": "trace_hit"}]
+        _append(self.input, decoy)
+        _append(self.input, fixtures._input_record("thread_t", "trace_hit", stamp, "u7", "AIME-Atlas",
+                                                   question="目标问句"))
+        store.build(self.root)
+        data = snapshot.detail(self._snapshot(), config.db_path(), "aime_eval", "trace_hit", "2026-10-19")
+        self.assertEqual(data["session"]["meta"]["question"], "目标问句")
+        self.assertEqual(data["trace"]["meta"]["trace_id"], "trace_hit")
+
+    def test_detail_404_explains_why(self):
+        store.build(self.root)
+        snap = self._snapshot()
+        with self.assertRaises(errors.ApiError) as mismatch:
+            snapshot.detail(snap, config.db_path(), "aime_eval", "trace_alpha", "2026-10-01")
+        self.assertEqual(mismatch.exception.status, 404)
+        self.assertEqual(mismatch.exception.details["reason"], "day_mismatch")
+        self.assertEqual(mismatch.exception.details["available_days"], [fixtures.DAY])
+
+        with self.assertRaises(errors.ApiError) as hidden:
+            snapshot.detail(snap, config.db_path(), "aime_eval", "trace_test", fixtures.DAY)
+        self.assertEqual(hidden.exception.details["reason"], "test_user_excluded")
+
+        with self.assertRaises(errors.ApiError) as missing:
+            snapshot.detail(snap, config.db_path(), "aime_eval", "trace_nope", fixtures.DAY)
+        self.assertEqual(missing.exception.details["reason"], "not_analyzed")
 
     def test_input_append_resumes(self):
         first = store.build(self.root)
