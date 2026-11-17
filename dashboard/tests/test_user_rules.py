@@ -19,8 +19,9 @@ class RulesTests(unittest.TestCase):
         self.assertEqual(rules.classify("1843531608"), "real")
         self.assertEqual(rules.classify("10000000000"), "test")
         self.assertEqual(rules.classify("805517693996534533"), "test")
-        # 非数字 ID 是内部员工账号；空 ID 未知。
-        self.assertEqual(rules.classify("duansiyuan"), "internal")
+        # 非数字 ID 一律按测试账号（业务方 2026-11-17 口径）；空 ID 未知。
+        self.assertEqual(rules.classify("duansiyuan"), "test")
+        self.assertEqual(rules.classify("cache-platform"), "test")
         self.assertEqual(rules.classify(None), "unknown")
         self.assertEqual(rules.classify(""), "unknown")
 
@@ -36,24 +37,24 @@ class RulesTests(unittest.TestCase):
         self.assertTrue(rules.is_lost("598960105"))
         self.assertFalse(rules.is_lost("1843531608"))
 
-    def test_duplicate_question_heuristic(self):
+    def test_repeated_questions_stay_real(self):
+        """重复问句不再改判：真实账号复核/重试同一问句是正常行为。"""
         rules = user_rules.Rules({})
-        pairs = [("589407152", "同样的问句")] * 8 + [
-            ("589407152", "另一个问句"),
-            ("589407152", "再一个问句"),
-        ]
-        stats = rules.question_stats(pairs)
-        # 10 条样本里 8 条是同一问句 -> 重复占比 0.8，判测试。
-        self.assertEqual(rules.classify("589407152", stats), "test")
-        # 样本数不足 min_samples 时不触发。
-        small = rules.question_stats([("589407152", "同一个问句")] * 5 + [("589407152", "别的")] * 2)
-        self.assertEqual(rules.classify("589407152", small), "real")
+        self.assertEqual(rules.classify("589407152"), "real")
+
+    def test_real_list_can_rescue_an_account(self):
+        rules = user_rules.Rules({"real": {"ids": ["xutianhao"], "patterns": ["^svc_"]}})
+        self.assertEqual(rules.classify("xutianhao"), "real")
+        self.assertEqual(rules.classify("svc_agent"), "real")
+        self.assertEqual(rules.classify("duansiyuan"), "test")
 
     def test_config_heuristics_are_configurable(self):
-        rules = user_rules.Rules({"heuristics": {"numeric_test_min_digits": 12}})
+        rules = user_rules.Rules({"heuristics": {"real_user_id_max_digits": 12}})
         self.assertEqual(rules.classify("1843531608"), "real")
         self.assertEqual(rules.classify("10000000000"), "real")
         self.assertEqual(rules.classify("805517693996534533"), "test")
+        legacy = user_rules.Rules({"heuristics": {"numeric_test_min_digits": 12}})
+        self.assertEqual(legacy.max_digits, 11)
 
     def test_load_uses_file_and_signature_changes(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -3515,11 +3515,9 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
         timers["samples"] = round(time.time() - t0, 1)
 
         # 用户类型在样本缓存之后统一打标：规则/名单变了不用重读输入，也能让每个样本拿到新类型。
-        all_rows = [row for rows in samples.values() for _, _, row, _ in rows]
-        user_stats = rules.question_stats((row.get("uid"), row.get("q")) for row in all_rows)
         for rows in samples.values():
             for _, _, row, _ in rows:
-                row["ut"] = rules.classify(row.get("uid"), user_stats)
+                row["ut"] = rules.classify(row.get("uid"))
                 if row["sp"] == "lost" or rules.is_lost(row.get("uid")):
                     row["ul"] = 1
                 else:

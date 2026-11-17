@@ -329,8 +329,10 @@ labels:["…",…]}`，与 `rows[]` 同长度、同顺序；前端首屏后再�
 与 5002 的透传接口都不再含 `lb`，业务方按行号配对（见 `docs/接口使用指南.md` 第 6 节「变更记录」）。
 
 用户类型由 `dashboard/user_rules.py` 判定，规则/名单放在 `<datasets>/user_rules.json`
-（`EVAL_USER_RULES` 可覆盖）：名单优先，然后「超过十位（11 位及以上）的数字 ID = 测试用户、十位及以内 = 真实用户」、
-非数字 = 内部用户，重复问句占比高再改判测试；流失 = uid 命中 `lost.ids` 名单（旧目录仅兼容）。规则 hash 进构建完成标记，
+（`EVAL_USER_RULES` 可覆盖）：**真实 userid = 纯数字且 ≤10 位**（业务方 2026-11-17），
+其余（英文名 / 内部号 / ≥11 位数字）都算测试账号，看板标 `ut=test`、5003 整条不供数；
+`test.ids` 可显式指定，`real.ids` 可把某个号捞回，位数上限是 `heuristics.real_user_id_max_digits`（默认 10）。
+流失 = uid 命中 `lost.ids` 名单（旧目录仅兼容）。规则 hash 进构建完成标记，
 改名单后下一次构建自动重建，不需要改代码。
 
 选中样本后再请求 `/samples/<slug>.json`（由 `detail_builder.py` 按需生成并缓存），主要字段：

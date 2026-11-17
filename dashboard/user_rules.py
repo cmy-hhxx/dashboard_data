@@ -1,26 +1,21 @@
 """样本页的用户类型规则：真实用户 / 测试用户 / 内部用户 / 未知，外加流失标记。
 
-规则放在 ``<datasets>/user_rules.json``（``EVAL_USER_RULES`` 可覆盖路径），名单更新只改这个文件，
-不用改代码。构建会把规则内容的 hash 写进完成标记，规则变了下一次构建会自动重建。
-
-规则文件格式（缺省字段按内置默认值）：:
+口径（业务方 2026-11-17，与 5003 供数一致）：**真实 userid = 纯数字且不超过 10 位**；
+其余（英文名、内部号、11 位及以上的数字）都算测试账号。规则放在 ``<datasets>/user_rules.json``
+（``EVAL_USER_RULES`` 可覆盖路径），改口径只改这个文件，不用改代码；构建会把规则内容的 hash
+写进完成标记，规则变了下一次构建会自动重建。::
 
     {
-      "updated_at": "2026-11-06",
-      "internal": {"ids": [], "patterns": ["^[A-Za-z]"]},
-      "test":     {"ids": ["694137811"], "patterns": []},
+      "updated_at": "2026-11-17",
+      "internal": {"ids": [], "patterns": []},   # 显式内部账号（可选，默认不再走英文名）
+      "test":     {"ids": [], "patterns": []},   # 显式测试账号，优先级最高
+      "real":     {"ids": [], "patterns": []},   # 显式真实账号，可把某个号捞回
       "lost":     {"ids": []},
-      "heuristics": {
-        "numeric_test_min_digits": 11,
-        "dup_min": 3,
-        "dup_ratio": 0.5,
-        "min_samples": 10
-      }
+      "heuristics": {"real_user_id_max_digits": 10}
     }
 
-判定优先级：test 名单 > internal 名单 > 数字位数规则 > 兜底 >
-重复问句启发式（命中则改判测试用户）。流失是独立标记：uid 在 ``lost.ids`` 名单里即为流失，
-数据统一在 daily，不再依赖目录名。
+判定顺序：test 名单 > internal 名单 > real 名单 > 「纯数字且位数 ≤ 上限」判真实 > 其余都算测试。
+旧文件里的 ``numeric_test_min_digits`` 仍认，等价于上限 = 它 − 1。
 """
 from __future__ import annotations
 
@@ -36,13 +31,8 @@ SPACES = re.compile(r"[\s\u3000]+")
 SENTENCE_PUNCT = re.compile(r"[，。！？；：、·…—\-－（）()\[\]【】《》\"'“”‘’,.!?;:]+")
 
 DEFAULT_HEURISTICS = {
-    # 超过十位（11 位及以上）的数字 ID 是测试用户，十位及以内才是真实用户（业务方 2026-11-06 口径）。
-    "numeric_test_min_digits": 11,
-    # 同一 uid 的样本里，同一问句至少出现 dup_min 次，且重复占比 >= dup_ratio、样本数 >= min_samples
-    # 时判为测试用户；用于抓“回放题/模板题”的测试账号。
-    "dup_min": 3,
-    "dup_ratio": 0.5,
-    "min_samples": 10,
+    # 真实用户 id 的位数上限：10 位及以内的纯数字才是真实用户（业务方 2026-11-17 口径）。
+    "real_user_id_max_digits": 10,
 }
 
 
@@ -82,16 +72,18 @@ class Rules:
         self.path = path
         self.internal_ids, self.internal_patterns = _section(data, "internal")
         self.test_ids, self.test_patterns = _section(data, "test")
+        self.real_ids, self.real_patterns = _section(data, "real")
         self.lost_ids, self.lost_patterns = _section(data, "lost")
         heuristics = data.get("heuristics") if isinstance(data.get("heuristics"), dict) else {}
         self.heuristics = {**DEFAULT_HEURISTICS, **heuristics}
-        self.min_digits = _int(self.heuristics.get("numeric_test_min_digits"), 11)
-        self.dup_min = _int(self.heuristics.get("dup_min"), 3)
-        self.min_samples = _int(self.heuristics.get("min_samples"), 10)
-        try:
-            self.dup_ratio = float(self.heuristics.get("dup_ratio", 0.5))
-        except (TypeError, ValueError):
-            self.dup_ratio = 0.5
+        if "real_user_id_max_digits" in heuristics:
+            max_digits = heuristics["real_user_id_max_digits"]
+        elif "numeric_test_min_digits" in heuristics:
+            # 旧口径：>= N 位算测试用户，等价于真实用户最多 N-1 位
+            max_digits = _int(heuristics.get("numeric_test_min_digits"), 11) - 1
+        else:
+            max_digits = DEFAULT_HEURISTICS["real_user_id_max_digits"]
+        self.max_digits = _int(max_digits, DEFAULT_HEURISTICS["real_user_id_max_digits"])
 
     # ---------------------------------------------------------------- rules
     def _hit(self, ids, patterns, uid):
@@ -102,44 +94,29 @@ class Rules:
             return False
         return self._hit(self.lost_ids, self.lost_patterns, str(uid))
 
-    def classify(self, uid, stats=None):
-        """返回 real / test / internal / unknown；stats 是 question_stats() 的结果。"""
+    def is_real(self, uid):
+        """显式 real 名单优先，其次「纯数字且位数不超过上限」。"""
+        if uid is None:
+            return False
+        uid = str(uid).strip()
+        if not uid:
+            return False
+        if self._hit(self.real_ids, self.real_patterns, uid):
+            return True
+        return bool(NUMERIC.match(uid)) and len(uid) <= self.max_digits
+
+    def classify(self, uid):
+        """返回 real / test / internal / unknown：不是真实用户就是测试账号。"""
         if uid in (None, ""):
             return "unknown"
-        uid = str(uid)
+        uid = str(uid).strip()
+        if not uid:
+            return "unknown"
         if self._hit(self.test_ids, self.test_patterns, uid):
             return "test"
         if self._hit(self.internal_ids, self.internal_patterns, uid):
             return "internal"
-        if NUMERIC.match(uid):
-            base = "test" if len(uid) >= self.min_digits else "real"
-        else:
-            base = "internal"
-        if stats and self._dup_test(uid, stats.get(uid)):
-            return "test"
-        return base
-
-    def _dup_test(self, uid, stat):
-        """同一 uid 重复问句占比过高 -> 测试用户（回放/模板题账号）。"""
-        if not stat:
-            return False
-        samples, duplicated = stat
-        return samples >= self.min_samples and samples > 0 and duplicated / samples >= self.dup_ratio
-
-    def question_stats(self, pairs):
-        """``(uid, question)`` 流 -> {uid: (样本数, 重复问句样本数)}。"""
-        counts = {}
-        for uid, question in pairs:
-            if uid in (None, ""):
-                continue
-            key = normalize_question(question)
-            per_user = counts.setdefault(str(uid), {})
-            per_user[key] = per_user.get(key, 0) + 1
-        out = {}
-        for uid, per_user in counts.items():
-            total = sum(per_user.values())
-            out[uid] = (total, sum(n for n in per_user.values() if n >= self.dup_min))
-        return out
+        return "real" if self.is_real(uid) else "test"
 
     # ---------------------------------------------------------------- cache
     def signature(self):
@@ -150,12 +127,9 @@ class Rules:
             "test_patterns": [p.pattern for p in self.test_patterns],
             "lost": sorted(self.lost_ids),
             "lost_patterns": [p.pattern for p in self.lost_patterns],
-            "heuristics": {
-                "numeric_test_min_digits": self.min_digits,
-                "dup_min": self.dup_min,
-                "dup_ratio": self.dup_ratio,
-                "min_samples": self.min_samples,
-            },
+            "real": sorted(self.real_ids),
+            "real_patterns": [p.pattern for p in self.real_patterns],
+            "heuristics": {"real_user_id_max_digits": self.max_digits},
         }
         raw = json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
