@@ -31,7 +31,7 @@ const DEFAULT_MECH_NAMES = {
 };
 const MECH_SHORT = {
   M1: "未执行", M2: "目标错配", M3: "执行失败", M4: "结果失效",
-  M5: "加工计算", M6: "无据断言", M7: "交付不符", NA: "未分类",
+  M5: "加工计算", M6: "无据断言", M7: "交付不符",
 };
 const KIND_LABEL = {
   user_question: "用户提问",
@@ -98,23 +98,23 @@ export function roundBucketKey(turn, rnd) {
 }
 
 function stageLabel(s, names) {
-  if (!s || s === "NA") return "未分类";
+  if (!s || s === "NA") return "";
   return names?.[s] || DEFAULT_STAGE_NAMES[s] || s;
 }
 
 function mechLabel(m, names, short = false) {
-  if (!m || m === "NA") return "未分类";
+  if (!m || m === "NA") return "";
   if (short && MECH_SHORT[m]) return MECH_SHORT[m];
   return names?.[m] || DEFAULT_MECH_NAMES[m] || m;
 }
 
 export function patternDisplayName(code, rowBucket, patNames, stageNames, mechNames) {
-  if (!code || code === "NA") return "未分类";
-  const mapped = (patNames && patNames[code]) || (rowBucket && rowBucket !== code ? rowBucket : "");
+  if (!code || code === "NA") return "";
+  const mapped = (patNames && patNames[code]) || (rowBucket && rowBucket !== code && rowBucket !== "NA" ? rowBucket : "");
   if (mapped) return mapped;
   const parts = String(code).split(".");
   if (parts.length >= 2) {
-    return `${stageLabel(parts[0], stageNames)} · ${mechLabel(parts[1], mechNames)}`;
+    return [stageLabel(parts[0], stageNames), mechLabel(parts[1], mechNames)].filter(Boolean).join(" · ");
   }
   return stageLabel(code, stageNames);
 }
@@ -151,18 +151,17 @@ export function deriveTierFromCases(cases, tierN, poolStats, params, taxonomy) {
   const actual = cases.length;
   const poolSize = Number(poolStats?.pool_size || 0);
   const stageMap = new Map();
-  (taxonomy?.stages || []).forEach((s) => { if (s.id) stageMap.set(s.id, s.name); });
+  (taxonomy?.stages || []).forEach((s) => { if (s.id && s.id !== "NA") stageMap.set(s.id, s.name); });
   Object.entries(DEFAULT_STAGE_NAMES).forEach(([id, name]) => { if (!stageMap.has(id)) stageMap.set(id, name); });
-  stageMap.set("NA", "未分类");
 
-  const mechIds = [...MECH_ORDER, "NA"];
+  const mechIds = [...MECH_ORDER];
   const sevActual = Object.fromEntries(SEVS_ALL.map((s) => [s, 0]));
   const turnActual = { single: 0, multi: 0 };
   const stageActual = {};
   const mechActual = {};
   const ctRows = {};
   const sevCells = {};
-  const ctTotals = { ...Object.fromEntries(mechIds.map((m) => [m, 0])), bench_total: actual, pool_total: poolSize };
+  const ctTotals = { ...Object.fromEntries(mechIds.map((m) => [m, 0])), bench_total: 0, pool_total: poolSize };
 
   for (const [sid] of stageMap) {
     ctRows[sid] = { ...Object.fromEntries(mechIds.map((m) => [m, 0])), bench_total: 0, pool_total: 0 };
@@ -184,16 +183,21 @@ export function deriveTierFromCases(cases, tierN, poolStats, params, taxonomy) {
     sevActual[sev] = (sevActual[sev] || 0) + 1;
     const t = c.turn === "multi" ? "multi" : "single";
     turnActual[t] += 1;
-    const l1 = c.primary?.l1 || "NA";
-    const l2 = c.primary?.l2 || "NA";
-    stageActual[l1] = (stageActual[l1] || 0) + 1;
-    mechActual[l2] = (mechActual[l2] || 0) + 1;
-
-    if (!ctRows[l1]) ctRows[l1] = { ...Object.fromEntries(mechIds.map((m) => [m, 0])), bench_total: 0, pool_total: 0 };
-    ctRows[l1][l2] = (ctRows[l1][l2] || 0) + 1;
-    ctRows[l1].bench_total += 1;
-    ctTotals[l2] = (ctTotals[l2] || 0) + 1;
-    if (sev === "P0" || sev === "P1") {
+    const l1 = c.primary?.l1 && c.primary.l1 !== "NA" ? c.primary.l1 : "";
+    const l2 = c.primary?.l2 && c.primary.l2 !== "NA" ? c.primary.l2 : "";
+    const l3 = c.primary?.l3 && c.primary.l3 !== "NA" ? c.primary.l3 : "";
+    if (l1) {
+      stageActual[l1] = (stageActual[l1] || 0) + 1;
+      if (!ctRows[l1]) ctRows[l1] = { ...Object.fromEntries(mechIds.map((m) => [m, 0])), bench_total: 0, pool_total: 0 };
+      if (l2) {
+        ctRows[l1][l2] = (ctRows[l1][l2] || 0) + 1;
+        ctRows[l1].bench_total += 1;
+        ctTotals[l2] = (ctTotals[l2] || 0) + 1;
+        ctTotals.bench_total += 1;
+      }
+    }
+    if (l2) mechActual[l2] = (mechActual[l2] || 0) + 1;
+    if (l1 && l2 && (sev === "P0" || sev === "P1")) {
       const ck = `${l1}.${l2}`;
       if (!sevCells[ck]) sevCells[ck] = { P0: 0, P1: 0 };
       sevCells[ck][sev] += 1;
@@ -207,9 +211,9 @@ export function deriveTierFromCases(cases, tierN, poolStats, params, taxonomy) {
 
     incDim("severity", sev);
     incDim("turn_type", t);
-    incDim("stage", l1);
-    incDim("mechanism", l2);
-    incDim("pattern", c.primary?.l3 || "NA");
+    if (l1) incDim("stage", l1);
+    if (l2) incDim("mechanism", l2);
+    if (l3) incDim("pattern", l3);
     incDim("day", c.day || "");
     incDim("tokens", tokBucketKey(totalTok));
     incDim("round", roundBucketKey(t, c.session_round));
@@ -229,8 +233,9 @@ export function deriveTierFromCases(cases, tierN, poolStats, params, taxonomy) {
     const keys = poolList.length
       ? [...new Set([...poolList.map((r) => r.key), ...cmap.keys()])]
       : [...cmap.entries()].sort((a, b) => b[1] - a[1]).map(([k]) => k);
+    const skipNA = dim === "stage" || dim === "mechanism" || dim === "pattern";
 
-    dims[dim] = keys.filter((k) => k !== "").map((k) => {
+    dims[dim] = keys.filter((k) => k !== "" && (!skipNA || k !== "NA")).map((k) => {
       const pr = poolByKey.get(k);
       const cnt = cmap.get(k) || 0;
       const sb = actual ? cnt / actual : 0;
@@ -422,7 +427,10 @@ export function sortBenchCases(cases, sortBy = "rank") {
 export function groupFieldCases(cases, by = "l1", stageNames = {}) {
   const groups = new Map();
   const keyOf = (c) => {
-    if (by === "l1") return c.severity === "GOLD" && (!c.primary?.l1 || c.primary?.l1 === "NA") ? "GOLD" : (c.primary?.l1 || "NA");
+    if (by === "l1") {
+      if (c.severity === "GOLD") return "GOLD";
+      return c.primary?.l1 && c.primary.l1 !== "NA" ? c.primary.l1 : "";
+    }
     if (by === "min_tier") return c.bench?.long_tier ? `长对话 ${c.bench.long_tier}` : `常规 ${c.bench?.min_tier || c.bench?.tier || "?"}`;
     return c.severity || "GOLD";
   };
@@ -433,6 +441,7 @@ export function groupFieldCases(cases, by = "l1", stageNames = {}) {
   };
   cases.forEach((c) => {
     const k = keyOf(c);
+    if (!k) return;
     if (!groups.has(k)) groups.set(k, { key: k, label: labelOf(k), items: [] });
     groups.get(k).items.push(c);
   });
@@ -468,15 +477,15 @@ export function buildSunburstTree(tierData, cases, taxonomy, stageNames, mechNam
   patDim.forEach((p) => {
     const key = String(p.key || "");
     const parts = key.split(".");
-    if (parts.length < 2 || !p.count) return;
+    if (parts.length < 2 || !p.count || parts[0] === "NA" || parts[1] === "NA") return;
     const cm = `${parts[0]}.${parts[1]}`;
     if (!patChildren.has(cm)) patChildren.set(cm, []);
     const pName = patternDisplayName(key, p.bucket, patNames, stageNames, mechNames);
     patChildren.get(cm).push({ id: `b/${key}`, name: pName, n: p.count });
   });
 
-  const sIds = (ct.stages?.length ? ct.stages : Object.keys(rows)).filter((s) => s !== "NA");
-  const mIds = (ct.mechanisms?.length ? ct.mechanisms : MECH_ORDER).filter((m) => m !== "NA");
+  const sIds = (ct.stages?.length ? ct.stages : Object.keys(rows)).filter((s) => s && s !== "NA");
+  const mIds = (ct.mechanisms?.length ? ct.mechanisms : MECH_ORDER).filter((m) => m && m !== "NA");
 
   let rootP0 = 0;
   let rootP1 = 0;
@@ -516,15 +525,10 @@ export function buildSunburstTree(tierData, cases, taxonomy, stageNames, mechNam
     }
   });
 
-  const naTotal = Number(rows.NA?.bench_total || 0);
-  if (naTotal > 0) {
-    stageNodes.push({ id: "b/NA", name: "goldencase / 未分类", n: naTotal, other: true });
-  }
-
   return {
     id: "b",
     name: "全部",
-    n: Number(ct.totals?.bench_total || tierData?.actual || sum(stageNodes.map((x) => x.n))),
+    n: sum(stageNodes.map((x) => x.n)),
     sev: { P0: rootP0, P1: rootP1 },
     children: stageNodes,
   };
@@ -672,8 +676,6 @@ export async function render(root, ctx) {
       S.sunburstState = { focus: `b/${S.f.l1}.${S.f.l2}`, open: null };
     } else if (S.f.l1 && S.f.l1 !== "NA") {
       S.sunburstState = { focus: `b/${S.f.l1}`, open: null };
-    } else if (S.f.l1 === "NA") {
-      S.sunburstState = { focus: "b", open: "b/NA" };
     } else {
       S.sunburstState = { focus: "b", open: null };
     }
@@ -913,7 +915,8 @@ export async function render(root, ctx) {
     const designMeta = DIM_META.filter((d) => !d.audit);
     const activeMeta = DIM_META.find((d) => d.key === S.dim) || DIM_META[0];
     const activeCov = covByDim[S.dim] || { max_abs_delta_pp: 0, by_design: !activeMeta.audit, ok: true, tolerance_pp: params.tolerance_pp };
-    const rows = tierData.dims?.[S.dim] || [];
+    const isTaxDim = S.dim === "stage" || S.dim === "mechanism" || S.dim === "pattern";
+    const rows = (tierData.dims?.[S.dim] || []).filter((r) => r.key && (!isTaxDim || r.key !== "NA"));
     const tol = Number(activeCov.tolerance_pp || params.tolerance_pp || 10);
     const isAudit = !activeCov.by_design;
 
@@ -1062,8 +1065,8 @@ export async function render(root, ctx) {
     const ct = tierData.crosstab || {};
     const rows = ct.rows || {};
     const totals = ct.totals || {};
-    const sIds = ct.stages?.length ? ct.stages : Object.keys(rows);
-    const mIds = ct.mechanisms?.length ? ct.mechanisms : [...MECH_ORDER, "NA"];
+    const sIds = (ct.stages?.length ? ct.stages : Object.keys(rows)).filter((s) => s && s !== "NA");
+    const mIds = (ct.mechanisms?.length ? ct.mechanisms : MECH_ORDER).filter((m) => m && m !== "NA");
 
     const maxCell = Math.max(1, ...sIds.flatMap((s) => mIds.map((m) => {
       const b = Number(rows[s]?.[m] || 0);
@@ -1073,8 +1076,10 @@ export async function render(root, ctx) {
       }
       return b;
     })));
-    const maxRow = Math.max(1, ...sIds.map((s) => Number(rows[s]?.bench_total || 0)));
-    const totalPool = Number(totals.pool_total || sum(sIds.map((s) => Number(rows[s]?.pool_total || 0))) || 0);
+    const rowTot = (s) => sum(mIds.map((m) => Number(rows[s]?.[m] || 0)));
+    const colTot = (m) => sum(sIds.map((s) => Number(rows[s]?.[m] || 0)));
+    const grandTot = sum(sIds.map(rowTot));
+    const totalPool = sum(sIds.map((s) => Number(rows[s]?.pool_total || 0))) || Number(totals.pool_total || 0);
 
     return `<section class="card bn-mx-card">
       <div class="card-head">
@@ -1089,10 +1094,9 @@ export async function render(root, ctx) {
         <div class="mx-rows">
           <div class="mx-corner">环节</div>
           ${sIds.map((s) => {
-            const name = ct.stage_names?.[s] && ct.stage_names[s] !== "NA" ? ct.stage_names[s] : stageLabel(s, stageNames);
+            const label = ct.stage_names?.[s] && ct.stage_names[s] !== "NA" ? ct.stage_names[s] : stageLabel(s, stageNames);
             const hl = S.f.l1 === s;
-            const label = s === "NA" ? "goldencase" : name;
-            const tip = `${label} · 已选 ${fmt(rows[s]?.bench_total || 0)} · 候选池 ${fmt(rows[s]?.pool_total || 0)}`;
+            const tip = `${label} · 已选 ${fmt(rowTot(s))} · 候选池 ${fmt(rows[s]?.pool_total || 0)}`;
             return `<button type="button" class="rh ${hl ? "is-hl" : ""}" data-mxs="${esc(s)}" data-tip="${esc(tip)}">
               <span class="mx-lab">${esc(label)}</span>
               <i class="mx-caret" aria-hidden="true"></i>
@@ -1107,7 +1111,7 @@ export async function render(root, ctx) {
               const hl = S.f.l2 === m;
               const fullLbl = mechLabel(m, mechNames);
               const shortLbl = mechLabel(m, mechNames, true);
-              const tip = `${fullLbl} · 已选 ${fmt(totals[m] || 0)} 条`;
+              const tip = `${fullLbl} · 已选 ${fmt(colTot(m))} 条`;
               return `<button type="button" class="mh ${hl ? "is-hl" : ""}" data-mxm="${esc(m)}" data-tip="${esc(tip)}">
                 <span>${esc(shortLbl)}</span>
               </button>`;
@@ -1122,7 +1126,7 @@ export async function render(root, ctx) {
               const cur = S.f.l1 === s && S.f.l2 === m;
               const bg = b ? `background: color-mix(in oklab, var(--accent) ${mix}%, var(--well))` : "";
               const display = !b ? "·" : S.mxMode === "share" ? (pt ? `${((b / pt) * 100).toFixed(1)}%` : fmt(b)) : fmt(b);
-              const sLbl = s === "NA" ? "goldencase / 未分类" : (ct.stage_names?.[s] || stageLabel(s, stageNames));
+              const sLbl = ct.stage_names?.[s] || stageLabel(s, stageNames);
               const mLbl = mechLabel(m, mechNames);
               const tip = `${sLbl} × ${mLbl} · 已选 ${fmt(b)} 条 · 环节候选池 ${fmt(pt)}`;
               return `<button type="button" class="cell ${b ? "" : "is-empty"} ${cur ? "is-cur" : ""} ${ratio > 0.68 ? "hot" : ""}" style="${bg}" data-mxs="${esc(s)}" data-mxm="${esc(m)}" ${b ? `data-tip="${esc(tip)}"` : "disabled"}>
@@ -1131,7 +1135,7 @@ export async function render(root, ctx) {
             }).join("")).join("")}
 
             ${mIds.map((m) => {
-              const tot = Number(totals[m] || 0);
+              const tot = colTot(m);
               const hl = S.f.l2 === m;
               return `<button type="button" class="coltot ${hl ? "is-hl" : ""}" data-mxm="${esc(m)}">${fmt(tot)}</button>`;
             }).join("")}
@@ -1139,17 +1143,15 @@ export async function render(root, ctx) {
         </div>
 
         <div class="mx-tots">
-          <div class="rowtot-head">已选 / 池</div>
+          <div class="rowtot-head"><span>已选</span><span>池</span></div>
           ${sIds.map((s) => {
-            const bt = Number(rows[s]?.bench_total || 0);
+            const bt = rowTot(s);
             const pt = Number(rows[s]?.pool_total || 0);
-            const w = Math.round((bt / maxRow) * 100);
             return `<button type="button" class="rowtot ${S.f.l1 === s ? "is-hl" : ""}" data-mxs="${esc(s)}" data-tip="已选 ${fmt(bt)} · 候选池 ${fmt(pt)}">
               <b>${fmt(bt)}</b><small class="bn-pool-n">${compact(pt)}</small>
-              <span class="rowtot-bar"><i style="width:${w}%"></i></span>
             </button>`;
           }).join("")}
-          <div class="rowtot-foot"><b>${fmt(totals.bench_total || 0)}</b><small class="bn-pool-n">${compact(totalPool)}</small></div>
+          <div class="rowtot-foot"><b>${fmt(grandTot)}</b><small class="bn-pool-n">${compact(totalPool)}</small></div>
         </div>
       </div>
     </section>`;
@@ -1211,7 +1213,7 @@ export async function render(root, ctx) {
     fieldGroupsCache = isField ? groupFieldCases(filteredCases, S.groupBy, stageNames) : [];
 
     const optList = (dimKey, label, curVal) => {
-      const list = (tierData.dims?.[dimKey] || []).filter((r) => (r.count || 0) > 0);
+      const list = (tierData.dims?.[dimKey] || []).filter((r) => (r.count || 0) > 0 && r.key && r.key !== "NA");
       return `<select class="bn-sel ${curVal ? "is-on" : ""}" data-fsel="${dimKey}" aria-label="${label}">
         <option value="">${label}</option>
         ${list.map((r) => `<option value="${esc(r.key)}" ${curVal === r.key ? "selected" : ""}>${esc(bucketLabel(dimKey, r, maps))} (${fmt(r.count)})</option>`).join("")}
@@ -1492,7 +1494,7 @@ export async function render(root, ctx) {
                 stageLabel(p.l1, stageNames),
                 mechLabel(p.l2, mechNames),
                 patternDisplayName(pCode, "", patNames, stageNames, mechNames),
-              ].filter((x, idx2, arr) => x && x !== "未分类" && arr.indexOf(x) === idx2).join(" › ");
+              ].filter((x, idx2, arr) => x && arr.indexOf(x) === idx2).join(" › ");
               return `<div class="bn-prob-card" style="--c:${pc}">
                 <div class="bn-prob-top">
                   <span class="bn-sev-tag" style="--c:${pc}">${esc(sevLabel(p.severity || full.severity))}</span>
@@ -1810,6 +1812,7 @@ export async function render(root, ctx) {
       sunburst(sbHost, tree, {
         unit: "样本",
         sort: true,
+        fold: false,
         state: S.sunburstState,
         onChange: (focus, open) => {
           const resetBtn = $("#bn-sb-reset", root);
@@ -1823,10 +1826,6 @@ export async function render(root, ctx) {
             S.f.l1 = oParts[0] || "";
             S.f.l2 = oParts[1] || "";
             S.f.l3 = oCode;
-          } else if (focus.id === "b" && open?.id === "b/NA") {
-            S.f.l1 = "NA";
-            S.f.l2 = "";
-            S.f.l3 = "";
           } else {
             S.f.l1 = fParts[0] || "";
             S.f.l2 = fParts[1] || "";

@@ -29,7 +29,7 @@ const lerp = (a, b, t) => a + (b - a) * t;
 const tint = (i, n) => `color-mix(in oklab, var(--accent) ${Math.round(n > 1 ? 92 - (i * 56) / (n - 1) : 92)}%, var(--card))`;
 
 /* Fold the smallest children beyond KEEP into one "其他" leaf, keeping the given order. */
-function prep(node, parent) {
+function prep(node, parent, fold = true) {
   node.parent = parent;
   let kids = (node.children || []).filter((c) => c.n > 0);
   const childLost = kids.reduce((s, c) => s + (c.lost || 0), 0);
@@ -39,7 +39,7 @@ function prep(node, parent) {
     const sev = sumSev(kids);
     if (sev.P0 || sev.P1) node.sev = sev;
   }
-  if (kids.length > KEEP + 1) {
+  if (fold && kids.length > KEEP + 1) {
     const small = new Set([...kids].sort((a, b) => b.n - a.n).slice(KEEP));
     const rest = kids.filter((c) => small.has(c));
     kids = kids.filter((c) => !small.has(c));
@@ -48,7 +48,7 @@ function prep(node, parent) {
       ...(rest.some((c) => c.ev != null) ? { ev: rest.reduce((s, c) => s + (c.ev || 0), 0) } : {}) });
   }
   node.children = kids.length ? kids : null;
-  if (node.children) node.children.forEach((c) => prep(c, node));
+  if (node.children) node.children.forEach((c) => prep(c, node, fold));
   return node;
 }
 const biggest = (n, skip) => (n.children || []).filter((c) => !c.other && !(skip && skip(c))).reduce((a, b) => (!a || b.n > a.n ? b : a), null);
@@ -67,8 +67,8 @@ const byVolume = (a, b) => b.n - a.n || String(a.name).localeCompare(String(b.na
 const PINNED = "c/~un";
 const byList = (a, b) => (a.id === PINNED ? 1 : 0) - (b.id === PINNED ? 1 : 0) || byVolume(a, b);
 
-export function sunburst(host, tree, { unit = "", sort = false, state = null, animate = true, onChange = null, inert = null } = {}) {
-  const root = prep(tree, null);
+export function sunburst(host, tree, { unit = "", sort = false, fold = true, state = null, animate = true, onChange = null, inert = null } = {}) {
+  const root = prep(tree, null, fold);
   const byId = new Map();
   const index = (n) => {
     byId.set(n.id, n);

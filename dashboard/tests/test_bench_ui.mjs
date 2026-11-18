@@ -118,7 +118,7 @@ test("severity and taxonomy labels stay in clean Chinese or goldencase without r
     "未按技能拆分阈值与资产类别");
   assert.equal(benchMod.patternDisplayName("S9.M2.999", "", maps.patNames, maps.stageNames, maps.mechNames),
     "答案合成 · 目标错配");
-  assert.equal(benchMod.bucketLabel("stage", { key: "NA" }, maps), "未分类");
+  assert.equal(benchMod.bucketLabel("stage", { key: "NA" }, maps), "");
   assert.equal(benchMod.bucketLabel("tokens", { key: "unknown" }, maps), "未记录长度");
 });
 
@@ -128,6 +128,8 @@ test("filterBenchCases, sortBenchCases, groupFieldCases, deriveTierFromCases and
   assert.equal(derived.actual, 2);
   assert.equal(derived.coverage.length, 9);
   assert.ok(!derived.coverage.some((c) => c.dim === "difficulty" || c.dim === "group" || c.dim === "recalled_from"));
+  assert.ok(!derived.crosstab.stages.includes("NA"));
+  assert.ok(!derived.crosstab.mechanisms.includes("NA"));
   assert.equal(derived.extra.known_tokens_p50, 72000);
 
   assert.equal(benchMod.filterBenchCases(SAMPLE_CASES, { sev: "P0" }).length, 1);
@@ -145,8 +147,8 @@ test("filterBenchCases, sortBenchCases, groupFieldCases, deriveTierFromCases and
 
   const tree = benchMod.buildSunburstTree(derived, SAMPLE_CASES, null, norm.stageNames, norm.mechNames, norm.patNames);
   assert.equal(tree.id, "b");
-  assert.equal(tree.n, 2);
-  assert.ok(tree.children.every((c) => !c.name.includes("未归因")));
+  assert.equal(tree.n, 1);
+  assert.ok(tree.children.every((c) => !c.name.includes("未归因") && !c.name.includes("未分类") && c.id !== "b/NA"));
   const s10 = tree.children.find((c) => c.id === "b/S10");
   assert.ok(s10 && s10.children.some((m) => m.id === "b/S10.M2"));
 });
@@ -162,6 +164,8 @@ test("bench view forbids mock data, difficulty, 未归因, and obscure English j
   assert.ok(!src.includes("bench_mock"), "must not reference deleted mock module");
   assert.ok(!src.includes("示例模板"), "must not include mock badge");
   assert.ok(!src.includes("未归因"), "must not use banned 未归因 wording");
+  assert.ok(!src.includes("未分类"), "must not expose 未分类 wording in bench view");
+  assert.ok(src.includes("fold: false"), "bench sunburst must disable folding into 其他");
   assert.ok(!src.includes("难度"), "must not expose removed difficulty dimension");
   assert.ok(!src.includes("Join "), "must not expose raw English Join label");
   assert.ok(!/>\s*Tier\b/.test(src), "must not expose raw English Tier label");
