@@ -119,7 +119,7 @@ server.py（标准库 HTTP，:5001，定时 build）──> app.js
 | 路由 | 模块 | 内容 |
 |---|---|---|
 | `?view=data&product=wencai\|aime` | `data.js` | 会话场、聚类矩阵、数据量、评测量、归因、聚类、预测；所有下钻都在页内 |
-| `?view=speed&product=…` | `speed.js` | AIME 评测速度与实时调度：输入/输出进度、Chunk 队列与在跑锁、实时 RPM / 网关探活 / `.parts` 吞吐、聚类进度与日期分布 |
+| `?view=speed&product=…` | `speed.js` | AIME 评测速度与实时调度：输入/输出进度、Chunk 队列与在跑锁、实时 RPM / 网关探活 / `.parts` 吞吐、聚类进度与日期分布。**只有弗吉尼亚（AIME）接入了这条流水线**：问财节点的 `/speed.json` 返回 `available:false`，前端转发到 AIME 站点并在卡头标明「AIME · 实时」+「本节点暂未接入评测速度」 |
 | `?view=system&product=…` | `system.js` | 评测体系机制图（输入 → 压缩 → 归因 → 聚类热力矩阵）、证据闭环；点问题进入全屏逐步推导（`evidence_theater.js`）；每个标签页会话首次进入时多光标搭建一遍（`builder.js`，sessionStorage `eval-build:sys`） |
 | `?view=docs[&doc=severity\|capacity]` | `docs.js` | 文档：液体注入卡片（`shader_flood.js`，WebGL，2D canvas 兜底）；文档页暂为占位 |
 | `?view=samples&product=…&case=…&trace=…` | `samples.js` | 具体数据两栏：问句列表 | 同卡上方轨迹概览 + 三列（轨迹 / 对话 / 归因）；证据连线在对话与归因之间；`trace` 定位到会话里的某一轮 |

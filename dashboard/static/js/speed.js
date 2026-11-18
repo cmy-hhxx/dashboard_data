@@ -21,6 +21,7 @@ const S = {
   rangeSeg: null,
   modeSeg: null,
   sourceUrl: "speed.json",
+  remote: false,
   root: null,
   ctx: null,
 };
@@ -82,6 +83,7 @@ function shellHTML() {
       <header class="card-head">
         <h2>评测输入与总进度</h2>
         <span class="sp-conn" id="spConn"><i></i><span id="spConnText">读取中</span></span>
+        <span class="meta" id="spSource"></span>
         <span class="meta num" id="spInputUpdated"></span>
         <time class="meta num end" id="spUpdated">—</time>
       </header>
@@ -944,8 +946,10 @@ function applyData(root, data) {
   const conn = $("#spConn", root);
   if (conn) {
     conn.className = `sp-conn ${data.ok ? "is-ok" : "is-bad"}`;
-    setText(root, "spConnText", data.ok ? "实时 · 15s" : "连接异常");
+    // 只有 AIME（弗吉尼亚）接入了评测速度；问财节点转发过来时必须写明数据来源。
+    setText(root, "spConnText", data.ok ? (S.remote ? "AIME · 实时 15s" : "实时 · 15s") : "连接异常");
   }
+  setText(root, "spSource", S.remote ? "本节点暂未接入评测速度，以下为 AIME（弗吉尼亚）实时数据" : "");
   setText(root, "spUpdated", data.ok
     ? `更新 ${clock(data.updated_at)}`
     : (data.last_success ? `最后成功 ${clock(data.last_success)}` : "等待首次统计…"));
@@ -1071,6 +1075,7 @@ async function fetchSpeed() {
         const remoteData = await fetchQuietJSON(remoteUrl);
         if (remoteData && remoteData.available !== false) {
           S.sourceUrl = remoteUrl;
+          S.remote = true;
           data = remoteData;
         }
       }
