@@ -120,22 +120,20 @@ test("severity and taxonomy labels stay in clean Chinese or goldencase without r
     "答案合成 · 目标错配");
   assert.equal(benchMod.bucketLabel("stage", { key: "NA" }, maps), "未分类");
   assert.equal(benchMod.bucketLabel("tokens", { key: "unknown" }, maps), "未记录长度");
-  assert.equal(benchMod.bucketLabel("group", { key: "0_daily_eval" }, maps), "日常评测");
 });
 
 test("filterBenchCases, sortBenchCases, groupFieldCases, deriveTierFromCases and buildSunburstTree work seamlessly", () => {
   const norm = benchMod.normalizeBenchPayload(SAMPLE_RAW, null);
   const derived = benchMod.deriveTierFromCases(SAMPLE_CASES, 500, norm.models.aime_expert.pool_stats, norm.manifest.params, null);
   assert.equal(derived.actual, 2);
-  assert.equal(derived.coverage.length, 11);
-  assert.ok(!derived.coverage.some((c) => c.dim === "difficulty"));
+  assert.equal(derived.coverage.length, 9);
+  assert.ok(!derived.coverage.some((c) => c.dim === "difficulty" || c.dim === "group" || c.dim === "recalled_from"));
   assert.equal(derived.extra.known_tokens_p50, 72000);
 
   assert.equal(benchMod.filterBenchCases(SAMPLE_CASES, { sev: "P0" }).length, 1);
   assert.equal(benchMod.filterBenchCases(SAMPLE_CASES, { tok: "unknown" }).length, 1);
   assert.equal(benchMod.filterBenchCases(SAMPLE_CASES, { tok: "64-128k" }).length, 1);
   assert.equal(benchMod.filterBenchCases(SAMPLE_CASES, { rnd: "4-10" }).length, 1);
-  assert.equal(benchMod.filterBenchCases(SAMPLE_CASES, { rec: "lost_user" }).length, 1);
   assert.equal(benchMod.filterBenchCases(SAMPLE_CASES, { dupOnly: true }).length, 1);
   assert.equal(benchMod.filterBenchCases(SAMPLE_CASES, { q: "finquery" }).length, 1);
 
@@ -169,7 +167,10 @@ test("bench view forbids mock data, difficulty, 未归因, and obscure English j
   assert.ok(!src.includes("bn-badges"), "must not render bn-badges");
   assert.ok(!src.includes("bn-explorer-top"), "must not render bn-explorer-top");
   assert.ok(!src.includes('class="meta"'), "must not render secondary gray meta subtitles");
-  assert.ok(src.includes("fieldSize"), "field view must paginate large datasets");
+  assert.ok(!src.includes("业务分组") && !src.includes("召回来源"), "must not filter by group or recall");
+  assert.ok(src.includes("paintBenchField") && src.includes("bn-field-pager"), "field view must mirror 会话场 per-group pagination");
+  const css = fs.readFileSync(path.resolve(HERE, "../static/css/bench.css"), "utf8");
+  assert.ok(!/\.bn-prob-card\s*\{[^}]*border-left/.test(css), "bn-prob-card must not use border-left");
 });
 
 test("index.html #viewSwitch exposes 4 main tabs and 5 overflow items in + menu", () => {

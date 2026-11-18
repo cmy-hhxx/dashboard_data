@@ -11,8 +11,6 @@ const DIM_META = [
   { key: "day", label: "按天分布", audit: true },
   { key: "tokens", label: "对话长度", audit: true },
   { key: "round", label: "对话轮数", audit: true },
-  { key: "group", label: "业务分组", audit: true },
-  { key: "recalled_from", label: "召回来源", audit: true },
   { key: "stage", label: "问题环节", audit: false },
   { key: "mechanism", label: "问题机制", audit: false },
   { key: "pattern", label: "具体问题", audit: false },
@@ -65,20 +63,12 @@ const ROUND_LABELS = {
   "4-10": "4–10 轮",
   "11+": "11 轮以上",
 };
-const GROUP_LABELS = {
-  "0_daily_eval": "日常评测",
-  "2_task_eval/0_lost_user_back_test": "流失用户回测",
-};
-const RECALL_LABELS = {
-  lost_user: "流失用户召回",
-  unknown: "常规来源",
-};
 const POOL_ROLE_LABEL = { user: "用户", assistant: "助手", tool: "工具", system: "系统" };
 const MECH_ORDER = ["M1", "M2", "M3", "M4", "M5", "M6", "M7"];
 
 const EMPTY_FILTER = () => ({
   sev: "", l1: "", l2: "", l3: "", turn: "", tok: "", rnd: "",
-  day: "", grp: "", rec: "", psrc: "", dupOnly: false, longOnly: false, q: "",
+  day: "", psrc: "", dupOnly: false, longOnly: false, q: "",
 });
 
 export const sevTone = (key) => (key === "GOLD" || key === "none" ? "var(--loc-ulq)" : sevColor(key));
@@ -139,8 +129,6 @@ export function bucketLabel(dim, row, maps = {}) {
   if (dim === "turn_type") return k === "multi" ? "多轮对话" : "单轮对话";
   if (dim === "tokens") return TOK_LABELS[k] || raw || k;
   if (dim === "round") return ROUND_LABELS[k] || raw || k;
-  if (dim === "group") return GROUP_LABELS[k] || raw || k;
-  if (dim === "recalled_from") return RECALL_LABELS[k] || raw || k;
   if (dim === "pattern_source") return PATH_SRC_LABEL[k] || raw || k;
   return raw || k;
 }
@@ -225,8 +213,6 @@ export function deriveTierFromCases(cases, tierN, poolStats, params, taxonomy) {
     incDim("day", c.day || "");
     incDim("tokens", tokBucketKey(totalTok));
     incDim("round", roundBucketKey(t, c.session_round));
-    incDim("group", c.group || "NA");
-    incDim("recalled_from", c.meta?.recalled_from || "unknown");
     incDim("pattern_source", c.primary?.path_source || "none");
   });
 
@@ -379,15 +365,13 @@ export function caseMatchesFilter(c, f, longThreshold = 65536) {
   if (f.tok && tokBucketKey(st.total_tokens) !== f.tok) return false;
   if (f.rnd && roundBucketKey(c.turn, c.session_round) !== f.rnd) return false;
   if (f.day && c.day !== f.day) return false;
-  if (f.grp && c.group !== f.grp) return false;
-  if (f.rec && (mt.recalled_from || "unknown") !== f.rec) return false;
   if (f.psrc && (p.path_source || "none") !== f.psrc) return false;
   if (f.dupOnly && (st.dup_question || 1) < 2) return false;
   if (f.longOnly && (st.total_tokens || 0) < longThreshold) return false;
   if (f.q) {
     const q = f.q.toLowerCase();
     const hay = [
-      c.question, c.trace_id, c.session_id, p.label, p.path, c.group,
+      c.question, c.trace_id, c.session_id, p.label, p.path,
       ...(mt.tool_names || []),
       c.probs_search || ((c.problems || []).map((x) => `${x.label || ""} ${x.path || ""}`).join(" ")),
     ].filter(Boolean).join(" ").toLowerCase();
@@ -440,13 +424,11 @@ export function groupFieldCases(cases, by = "l1", stageNames = {}) {
   const keyOf = (c) => {
     if (by === "l1") return c.severity === "GOLD" && (!c.primary?.l1 || c.primary?.l1 === "NA") ? "GOLD" : (c.primary?.l1 || "NA");
     if (by === "min_tier") return c.bench?.long_tier ? `长对话 ${c.bench.long_tier}` : `常规 ${c.bench?.min_tier || c.bench?.tier || "?"}`;
-    if (by === "group") return c.group || "NA";
     return c.severity || "GOLD";
   };
   const labelOf = (k) => {
     if (by === "l1") return k === "GOLD" ? "goldencase" : stageLabel(k, stageNames);
     if (by === "sev") return sevLabel(k);
-    if (by === "group") return GROUP_LABELS[k] || k;
     return k;
   };
   cases.forEach((c) => {
@@ -567,8 +549,6 @@ function activeFilterPills(f, maps) {
   if (f.tok) add("tok", `长度 ${TOK_LABELS[f.tok] || f.tok}`);
   if (f.rnd) add("rnd", `轮次 ${ROUND_LABELS[f.rnd] || f.rnd}`);
   if (f.day) add("day", `日期 ${f.day}`);
-  if (f.grp) add("grp", `分组 ${GROUP_LABELS[f.grp] || f.grp}`);
-  if (f.rec) add("rec", `召回 ${RECALL_LABELS[f.rec] || f.rec}`);
   if (f.psrc) add("psrc", `来源 ${PATH_SRC_LABEL[f.psrc] || f.psrc}`);
   if (f.dupOnly) add("dupOnly", "高频重问 ≥2");
   if (f.longOnly) add("longOnly", "长对话 ≥64K");
@@ -631,7 +611,8 @@ export async function render(root, ctx) {
     sort: "rank",
     page: 1,
     size: 25,
-    fieldSize: 500,
+    fieldPages: {},
+    moreOpen: false,
     mxMode: "bench",
     f: EMPTY_FILTER(),
     trace: urlInit.trace,
@@ -701,6 +682,7 @@ export async function render(root, ctx) {
       if (k === "l1" || k === "l2" || k === "l3") syncSunburstFromFilter();
     }
     S.page = 1;
+    S.fieldPages = {};
     repaint();
   };
 
@@ -930,7 +912,7 @@ export async function render(root, ctx) {
 
     const filterKeyForDim = {
       day: "day", tokens: "tok", round: "rnd",
-      group: "grp", recalled_from: "rec", stage: "l1", mechanism: "l2",
+      stage: "l1", mechanism: "l2",
       pattern: "l3", turn_type: "turn", pattern_source: "psrc", severity: "sev",
     }[S.dim];
 
@@ -1162,15 +1144,60 @@ export async function render(root, ctx) {
     </section>`;
   }
 
+  let fieldGroupsCache = [];
+  let fieldResizeObs = null;
+
+  function paintBenchField(card) {
+    const fieldEl = $(".bn-field", card);
+    if (!fieldEl || !fieldGroupsCache.length) return;
+    const grpEls = $$(".bn-fgrp", fieldEl);
+    if (!grpEls.length) return;
+    const cols = Math.max(1, getComputedStyle(fieldEl).gridTemplateColumns.split(" ").filter(Boolean).length);
+    const groupRows = Math.max(1, Math.ceil(fieldGroupsCache.length / cols));
+    const FIELD_ROWS = 16;
+    const FIELD_TILE = 13; // 11px tile + 2px gap
+    const rows = Math.max(4, Math.floor(FIELD_ROWS / groupRows));
+
+    fieldGroupsCache.forEach((g, gi) => {
+      const grpEl = grpEls[gi];
+      const tilesEl = grpEl && $(".bn-ftiles", grpEl);
+      const pagerEl = grpEl && $(".bn-field-pager", grpEl);
+      if (!tilesEl) return;
+      const perRow = Math.max(1, Math.floor((tilesEl.clientWidth + 2) / FIELD_TILE));
+      const capacity = Math.max(1, perRow * rows);
+      const pages = Math.max(1, Math.ceil(g.items.length / capacity));
+      const cur = Math.min(Math.max(1, S.fieldPages[g.key] || 1), pages);
+      S.fieldPages[g.key] = cur;
+      const usedRows = Math.min(rows, Math.ceil(g.items.length / perRow));
+      tilesEl.style.minHeight = `${Math.max(0, usedRows * FIELD_TILE - 2)}px`;
+      const slice = g.items.slice((cur - 1) * capacity, cur * capacity);
+      tilesEl.innerHTML = slice.map((c) => {
+        const col = sevTone(c.severity);
+        const pLbl = c.primary?.label || (c.severity === "GOLD" ? "goldencase" : stageLabel(c.primary?.l1, stageNames));
+        const tip = `${sevLabel(c.severity)} · ${pLbl} · ${compact(c.stats?.total_tokens || 0)}\n${c.question}`;
+        return `<button type="button" class="bn-ftile ${(c.stats?.dup_question || 1) >= 2 ? "is-dup" : ""}" data-trace="${esc(c.trace_id)}" aria-current="${S.trace === c.trace_id}" style="--c:${col}" data-tip="${esc(tip)}"></button>`;
+      }).join("");
+      if (!pagerEl) return;
+      pagerEl.hidden = pages <= 1;
+      if (pages > 1) {
+        pagerEl.innerHTML = `<button type="button" data-fg="${esc(g.key)}" data-fdir="prev" ${cur <= 1 ? "disabled" : ""}>上一页</button>
+          <span class="bn-fpager-info">第 <b class="num">${cur}</b> / ${pages} 页 · ${fmt(g.items.length)} 条</span>
+          <button type="button" data-fg="${esc(g.key)}" data-fdir="next" ${cur >= pages ? "disabled" : ""}>下一页</button>`;
+      } else {
+        pagerEl.innerHTML = "";
+      }
+    });
+  }
+
   function renderCasesHTML(allCases, filteredCases, tierData) {
     const chips = activeFilterPills(S.f, maps);
     const total = filteredCases.length;
     const isField = S.view === "field";
-    const pageSize = isField ? S.fieldSize : S.size;
-    const pages = Math.max(1, Math.ceil(total / pageSize));
+    const pages = Math.max(1, Math.ceil(total / S.size));
     S.page = Math.max(1, Math.min(pages, S.page));
-    const slice = filteredCases.slice((S.page - 1) * pageSize, S.page * pageSize);
-    const sizeOpts = isField ? [200, 500, 1000] : [25, 50, 100];
+    const slice = isField ? [] : filteredCases.slice((S.page - 1) * S.size, S.page * S.size);
+    const moreCount = [S.f.l1, S.f.l2, S.f.turn, S.f.tok, S.f.dupOnly ? "1" : ""].filter(Boolean).length;
+    fieldGroupsCache = isField ? groupFieldCases(filteredCases, S.groupBy, stageNames) : [];
 
     const optList = (dimKey, label, curVal) => {
       const list = (tierData.dims?.[dimKey] || []).filter((r) => (r.count || 0) > 0);
@@ -1180,7 +1207,7 @@ export async function render(root, ctx) {
       </select>`;
     };
 
-    const pagerHTML = total ? `<div class="bn-pager">
+    const pagerHTML = !isField && total ? `<div class="bn-pager">
       <div class="bn-pager-btns">
         <button type="button" data-page="first" ${S.page <= 1 ? "disabled" : ""}>首页</button>
         <button type="button" data-page="prev" ${S.page <= 1 ? "disabled" : ""}>上一页</button>
@@ -1189,9 +1216,9 @@ export async function render(root, ctx) {
         <button type="button" data-page="last" ${S.page >= pages ? "disabled" : ""}>末页</button>
       </div>
       <div class="bn-pager-btns">
-        <span class="bn-pager-info">${fmt((S.page - 1) * pageSize + 1)}–${fmt(Math.min(S.page * pageSize, total))} / ${fmt(total)} 条</span>
+        <span class="bn-pager-info">${fmt((S.page - 1) * S.size + 1)}–${fmt(Math.min(S.page * S.size, total))} / ${fmt(total)} 条</span>
         <select class="bn-sel" id="bn-pagesize" aria-label="每页条数">
-          ${sizeOpts.map((n) => `<option value="${n}" ${pageSize === n ? "selected" : ""}>${n} 条/页</option>`).join("")}
+          ${[25, 50, 100].map((n) => `<option value="${n}" ${S.size === n ? "selected" : ""}>${n} 条/页</option>`).join("")}
         </select>
       </div>
     </div>` : "";
@@ -1199,20 +1226,13 @@ export async function render(root, ctx) {
     const bodyHTML = !filteredCases.length
       ? `<div class="bn-empty">暂无匹配问句</div>`
       : isField
-        ? `<div class="bn-field">
-            ${groupFieldCases(slice, S.groupBy, stageNames).map((g) => `<div class="bn-fgrp">
-              <div class="bn-fgrp-head"><strong>${esc(g.label)}</strong><span>${fmt(g.items.length)}</span></div>
-              <div class="bn-ftiles">
-                ${g.items.map((c) => {
-                  const col = sevTone(c.severity);
-                  const pLbl = c.primary?.label || (c.severity === "GOLD" ? "goldencase" : stageLabel(c.primary?.l1, stageNames));
-                  const tip = `${sevLabel(c.severity)} · ${pLbl} · ${compact(c.stats?.total_tokens || 0)}\n${c.question}`;
-                  return `<button type="button" class="bn-ftile ${(c.stats?.dup_question || 1) >= 2 ? "is-dup" : ""}" data-trace="${esc(c.trace_id)}" aria-current="${S.trace === c.trace_id}" style="--c:${col}" data-tip="${esc(tip)}"></button>`;
-                }).join("")}
-              </div>
+        ? `<div class="bn-field field-groups">
+            ${fieldGroupsCache.map((g) => `<div class="bn-fgrp fgroup" data-fkey="${esc(g.key)}">
+              <div class="fgroup-head"><b>${esc(g.label)}</b><span class="num">${fmt(g.items.length)} 条</span></div>
+              <div class="bn-ftiles tiles"></div>
+              <div class="bn-field-pager field-pager" hidden></div>
             </div>`).join("")}
-          </div>
-          ${pagerHTML}`
+          </div>`
         : `<div class="bn-list">
             <div class="bn-lhead"><span>等级</span><span>问句内容与问题定位</span><span>对话形态</span><span>规模与耗时</span><span style="text-align:right">基准档位</span></div>
             ${slice.map((c) => {
@@ -1238,7 +1258,6 @@ export async function render(root, ctx) {
                     ${pCount > 1 ? `<span class="bn-mtag">+${pCount - 1} 问题</span>` : ""}
                     ${(st.dup_question || 1) >= 2 ? `<span class="bn-mtag is-dup">×${st.dup_question} 重问</span>` : ""}
                     ${isLongCase ? `<span class="bn-mtag is-long">≥64K</span>` : ""}
-                    ${c.group ? `<span class="bn-mtag">${esc(GROUP_LABELS[c.group] || c.group)}</span>` : ""}
                   </span>
                 </div>
                 <span class="bn-cell-meta">${turnTxt}</span>
@@ -1261,12 +1280,25 @@ export async function render(root, ctx) {
           <button type="button" class="bn-sev-pill" data-fsev="" aria-pressed="${!S.f.sev}">全部</button>
           ${SEVS_ALL.map((s) => `<button type="button" class="bn-sev-pill" data-fsev="${s}" aria-pressed="${S.f.sev === s}" style="--c:${sevTone(s)}"><i></i>${sevLabel(s)}</button>`).join("")}
         </div>
-        ${optList("stage", "环节", S.f.l1)}
-        ${optList("mechanism", "机制", S.f.l2)}
-        ${optList("turn_type", "形态", S.f.turn)}
-        ${optList("tokens", "长度", S.f.tok)}
-        ${optList("group", "分组", S.f.grp)}
-        <button type="button" class="bn-toggle-pill" id="bn-tog-dup" aria-pressed="${S.f.dupOnly}">重问 ≥2</button>
+        <div class="bn-more-wrap ${S.moreOpen ? "is-open" : ""}" id="bn-more-wrap">
+          <button type="button" class="bn-more-toggle ${moreCount ? "has-active" : ""}" id="bn-more-toggle" aria-haspopup="true" aria-expanded="${S.moreOpen}">
+            <span class="bn-more-plus" aria-hidden="true"></span>
+            <span>更多筛选</span>
+            ${moreCount ? `<span class="bn-more-badge">${moreCount}</span>` : ""}
+          </button>
+          <div class="bn-more-pop ${S.moreOpen ? "is-open" : ""}" id="bn-more-pop" ${S.moreOpen ? "" : "inert"}>
+            <div class="bn-more-grid">
+              <label class="bn-more-field"><span>问题环节</span>${optList("stage", "全部环节", S.f.l1)}</label>
+              <label class="bn-more-field"><span>问题机制</span>${optList("mechanism", "全部机制", S.f.l2)}</label>
+              <label class="bn-more-field"><span>对话形态</span>${optList("turn_type", "全部形态", S.f.turn)}</label>
+              <label class="bn-more-field"><span>文本长度</span>${optList("tokens", "全部长度", S.f.tok)}</label>
+            </div>
+            <div class="bn-more-foot">
+              <button type="button" class="bn-toggle-pill" id="bn-tog-dup" aria-pressed="${S.f.dupOnly}">仅看高频重问 ≥2</button>
+              ${moreCount ? `<button type="button" class="bn-chip-clear" id="bn-more-clr">清空筛选</button>` : ""}
+            </div>
+          </div>
+        </div>
         <div class="bn-fbar-end">
           <div class="seg" id="bn-seg-view" role="group" aria-label="展示方式">
             <span class="seg-knob" aria-hidden="true"></span>
@@ -1277,7 +1309,6 @@ export async function render(root, ctx) {
             <option value="l1" ${S.groupBy === "l1" ? "selected" : ""}>按环节</option>
             <option value="sev" ${S.groupBy === "sev" ? "selected" : ""}>按等级</option>
             <option value="min_tier" ${S.groupBy === "min_tier" ? "selected" : ""}>按档位</option>
-            <option value="group" ${S.groupBy === "group" ? "selected" : ""}>按分组</option>
           </select>` : ""}
           <select class="bn-sel" id="bn-sort" aria-label="排序方式">
             <option value="rank" ${S.sort === "rank" ? "selected" : ""}>抽样序</option>
@@ -1301,39 +1332,60 @@ export async function render(root, ctx) {
   }
 
   /* ---- Slide-over Trace Scene Workbench ---- */
+  function foldLong(html, rawText, threshold = 900) {
+    const s = String(rawText || "");
+    if (s.length <= threshold) return html;
+    const prev = s.replace(/\s+/g, " ").trim().slice(0, 140);
+    return `<details class="bn-fold">
+      <summary>
+        <span class="bn-fold-prev">${esc(prev)}${s.length > 140 ? "…" : ""}</span>
+        <span class="bn-fold-tag">展开 ${compact(s.length)} 字</span>
+      </summary>
+      <div class="bn-fold-body">${html}</div>
+    </details>`;
+  }
+
   function renderStepBody(m) {
     const t = m.type;
     if (t === "llm_turn" && Array.isArray(m.output)) {
       return m.output.map((o) => {
         const parts = [];
         if (o.reasoning_content) {
-          parts.push(`<details class="bn-think"><summary>思考过程 (${fmt(String(o.reasoning_content).length)} 字)</summary><div>${renderContent(String(o.reasoning_content), "text")}</div></details>`);
+          parts.push(`<details class="bn-think"><summary>思考过程 (${fmt(String(o.reasoning_content).length)} 字)</summary><div class="bn-fold-body">${renderContent(String(o.reasoning_content), "text")}</div></details>`);
         }
-        if (o.content) parts.push(`<div class="bn-msg-body">${renderContent(String(o.content), "md")}</div>`);
+        if (o.content) {
+          const raw = String(o.content);
+          parts.push(`<div class="bn-msg-body">${foldLong(renderContent(raw, "md"), raw, 1800)}</div>`);
+        }
         (o.tool_calls || []).forEach((tc) => {
           const fn = tc?.function || {};
-          parts.push(`<div class="bn-msg-body"><pre>${esc(`${fn.name || "tool"}(${typeof fn.arguments === "string" ? fn.arguments : JSON.stringify(fn.arguments || {})})`)}</pre></div>`);
+          const callStr = `${fn.name || "tool"}(${typeof fn.arguments === "string" ? fn.arguments : JSON.stringify(fn.arguments || {})})`;
+          parts.push(`<div class="bn-msg-body">${foldLong(`<pre>${esc(callStr)}</pre>`, callStr, 700)}</div>`);
         });
         return parts.join("");
       }).join("");
     }
     if (t === "tool_call") {
       const txt = typeof m.input === "string" ? m.input : JSON.stringify(m.input || {}, null, 2);
-      return `<div class="bn-msg-body"><pre>${esc(txt)}</pre></div>`;
+      return `<div class="bn-msg-body">${foldLong(`<pre>${esc(txt)}</pre>`, txt, 700)}</div>`;
     }
     if (t === "tool_result") {
       const rawOut = m.output ?? m.content ?? "";
       const txt = typeof rawOut === "string" ? rawOut : JSON.stringify(rawOut, null, 2);
-      return `<div class="bn-msg-body">${renderContent(txt, txt.trim().startsWith("{") || txt.trim().startsWith("[") ? "json" : "md")}</div>`;
+      const mode = txt.trim().startsWith("{") || txt.trim().startsWith("[") ? "json" : "md";
+      return `<div class="bn-msg-body">${foldLong(renderContent(txt, mode), txt, 800)}</div>`;
     }
     if (t === "final_answer") {
-      return `<div class="bn-msg-body">${renderContent(String(m.content || ""), "md")}</div>`;
+      return `<div class="bn-msg-body is-final">${renderContent(String(m.content || ""), "md")}</div>`;
     }
     if (Array.isArray(m.blocks)) {
-      return m.blocks.map((b) => `<div class="bn-msg-body">${renderContent((b.x || []).join(""), b.f || "text")}</div>`).join("");
+      return m.blocks.map((b) => {
+        const raw = (b.x || []).join("");
+        return `<div class="bn-msg-body">${foldLong(renderContent(raw, b.f || "text"), raw, 1200)}</div>`;
+      }).join("");
     }
     const content = typeof m.content === "string" ? m.content : JSON.stringify(m.content || "", null, 2);
-    return `<div class="bn-msg-body">${renderContent(content, t === "user_question" ? "text" : "md")}</div>`;
+    return `<div class="bn-msg-body">${foldLong(renderContent(content, t === "user_question" ? "text" : "md"), content, 1200)}</div>`;
   }
 
   async function paintSheet() {
@@ -1399,10 +1451,10 @@ export async function render(root, ctx) {
 
       <div class="bn-sh-scroll">
         <div class="bn-sh-qbox">
-          <div class="bn-sh-q">${esc(full.question)}</div>
-          ${full.question_full && full.question_full !== full.question ? `<div class="bn-sh-qfull">
-            <button type="button" class="bn-btn" id="bn-sh-qfull" style="margin-bottom:8px">${S.showFullQ ? "收起完整输入" : "查看完整输入上下文"}</button>
-            ${S.showFullQ ? `<pre>${esc(full.question_full)}</pre>` : ""}
+          <div class="bn-sh-q ${!S.showFullQ && String(full.question || "").length > 220 ? "is-clamped" : ""}">${esc(full.question)}</div>
+          ${(String(full.question || "").length > 220 || (full.question_full && full.question_full !== full.question)) ? `<div class="bn-sh-qfull">
+            <button type="button" class="bn-btn" id="bn-sh-qfull">${S.showFullQ ? "收起完整输入" : "展开完整输入"}</button>
+            ${S.showFullQ && full.question_full && full.question_full !== full.question ? `<pre>${esc(full.question_full)}</pre>` : ""}
           </div>` : ""}
           <div class="bn-sh-kvgrid">
             <span class="bn-sh-kv"><span>轨迹编号</span><code>${esc(full.trace_id)}</code></span>
@@ -1412,8 +1464,6 @@ export async function render(root, ctx) {
             <span class="bn-sh-kv"><span>文本长度</span><b>${st.total_tokens ? `${fmt(st.total_tokens)} (${fmt(st.input_tokens || 0)} + ${fmt(mt.output_tokens || Math.max(0, (st.total_tokens || 0) - (st.input_tokens || 0)))})` : "未记录"}</b></span>
             <span class="bn-sh-kv"><span>耗时</span><b>${st.latency || 0}s</b></span>
             <span class="bn-sh-kv"><span>工具调用</span><b>${st.tool_count || 0} 次</b></span>
-            ${full.group ? `<span class="bn-sh-kv"><span>业务分组</span><b>${esc(GROUP_LABELS[full.group] || full.group)}</b></span>` : ""}
-            ${mt.recalled_from ? `<span class="bn-sh-kv"><span>召回来源</span><b>${esc(RECALL_LABELS[mt.recalled_from] || mt.recalled_from)}</b></span>` : ""}
             ${mt.comefrom ? `<span class="bn-sh-kv"><span>产品入口</span><b>${esc(mt.comefrom)}</b></span>` : ""}
             ${(st.dup_question || 1) >= 2 ? `<span class="bn-sh-kv"><span>同问复现</span><b>×${st.dup_question}</b></span>` : ""}
           </div>
@@ -1463,7 +1513,10 @@ export async function render(root, ctx) {
             ${poolMsgs.length ? `<details class="bn-pool-acc">
               <summary><span>历史多轮对话上下文</span><span class="bn-mtag">${poolMsgs.length} 条记录</span></summary>
               <div class="bn-pool-list">
-                ${poolMsgs.map((pm) => `<div class="bn-pool-msg"><span class="bn-pool-role">${esc(POOL_ROLE_LABEL[pm.role] || pm.role || "消息")}</span>${esc(typeof pm.content === "string" ? pm.content : JSON.stringify(pm.content || ""))}</div>`).join("")}
+                ${poolMsgs.map((pm) => {
+                  const ptxt = typeof pm.content === "string" ? pm.content : JSON.stringify(pm.content || "");
+                  return `<div class="bn-pool-msg"><span class="bn-pool-role">${esc(POOL_ROLE_LABEL[pm.role] || pm.role || "消息")}</span>${foldLong(`<span>${esc(ptxt)}</span>`, ptxt, 260)}</div>`;
+                }).join("")}
               </div>
             </details>` : ""}
 
@@ -1774,6 +1827,26 @@ export async function render(root, ctx) {
   function wireCases(filtered) {
     const card = $(".bn-cases-card", root);
     if (!card) return;
+    fieldResizeObs?.disconnect();
+    fieldResizeObs = null;
+
+    if (S.view === "field") {
+      paintBenchField(card);
+      const fieldEl = $(".bn-field", card);
+      if (fieldEl) {
+        fieldResizeObs = new ResizeObserver(() => paintBenchField(card));
+        fieldResizeObs.observe(fieldEl);
+      }
+      card.addEventListener("click", (e) => {
+        const pBtn = e.target.closest("[data-fg][data-fdir]");
+        if (!pBtn) return;
+        const k = pBtn.dataset.fg;
+        const dir = pBtn.dataset.fdir;
+        S.fieldPages[k] = (S.fieldPages[k] || 1) + (dir === "next" ? 1 : -1);
+        paintBenchField(card);
+      });
+    }
+
     const segV = $("#bn-seg-view", card);
     if (segV) {
       const ctl = segmented(segV, (v) => {
@@ -1794,36 +1867,87 @@ export async function render(root, ctx) {
       srch.addEventListener("input", (e) => {
         S.f.q = e.target.value.trim();
         S.page = 1;
+        S.fieldPages = {};
         focusSearchAfterRender = true;
         searchPos = e.target.selectionStart;
         repaint({ rebuildSummary: false });
       });
     }
-    $$("[data-fsev]", card).forEach((b) => b.addEventListener("click", () => toggleFilter("sev", b.dataset.fsev)));
+    $$("[data-fsev]", card).forEach((b) => b.addEventListener("click", () => { S.fieldPages = {}; toggleFilter("sev", b.dataset.fsev); }));
+
+    const moreWrap = $("#bn-more-wrap", card);
+    const moreBtn = $("#bn-more-toggle", card);
+    const morePop = $("#bn-more-pop", card);
+    const setMoreOpen = (open) => {
+      S.moreOpen = Boolean(open);
+      if (moreWrap) moreWrap.classList.toggle("is-open", S.moreOpen);
+      if (morePop) {
+        morePop.classList.toggle("is-open", S.moreOpen);
+        morePop.inert = !S.moreOpen;
+      }
+      if (moreBtn) moreBtn.setAttribute("aria-expanded", String(S.moreOpen));
+    };
+    if (moreBtn) {
+      moreBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        setMoreOpen(!S.moreOpen);
+      });
+    }
+    const moreClr = $("#bn-more-clr", card);
+    if (moreClr) {
+      moreClr.addEventListener("click", () => {
+        S.f.l1 = "";
+        S.f.l2 = "";
+        S.f.l3 = "";
+        S.f.turn = "";
+        S.f.tok = "";
+        S.f.dupOnly = false;
+        S.sunburstState = { focus: "b", open: null };
+        S.page = 1;
+        S.fieldPages = {};
+        repaint();
+      });
+    }
+    root._bnMoreDocCleanup?.();
+    const onMoreDocDown = (e) => {
+      if (S.moreOpen && moreWrap && !moreWrap.contains(e.target)) setMoreOpen(false);
+    };
+    const onMoreKey = (e) => {
+      if (e.key === "Escape" && S.moreOpen) {
+        setMoreOpen(false);
+        moreBtn?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", onMoreDocDown);
+    document.addEventListener("keydown", onMoreKey);
+    root._bnMoreDocCleanup = () => {
+      document.removeEventListener("pointerdown", onMoreDocDown);
+      document.removeEventListener("keydown", onMoreKey);
+    };
+
     $$("[data-fsel]", card).forEach((sel) => sel.addEventListener("change", (e) => {
       const key = {
-        stage: "l1", mechanism: "l2", turn_type: "turn", tokens: "tok", group: "grp",
+        stage: "l1", mechanism: "l2", turn_type: "turn", tokens: "tok",
       }[sel.dataset.fsel];
       if (!key) return;
       S.f[key] = e.target.value;
       if (key === "l1" && !e.target.value) S.f.l3 = "";
       syncSunburstFromFilter();
       S.page = 1;
+      S.fieldPages = {};
       repaint();
     }));
     const togDup = $("#bn-tog-dup", card);
-    if (togDup) togDup.onclick = () => { S.f.dupOnly = !S.f.dupOnly; S.page = 1; repaint(); };
+    if (togDup) togDup.onclick = () => { S.f.dupOnly = !S.f.dupOnly; S.page = 1; S.fieldPages = {}; repaint(); };
 
     const sortEl = $("#bn-sort", card);
-    if (sortEl) sortEl.onchange = (e) => { S.sort = e.target.value; repaint({ rebuildSummary: false }); };
+    if (sortEl) sortEl.onchange = (e) => { S.sort = e.target.value; S.page = 1; S.fieldPages = {}; repaint({ rebuildSummary: false }); };
     const grpEl = $("#bn-groupby", card);
-    if (grpEl) grpEl.onchange = (e) => { S.groupBy = e.target.value; repaint({ rebuildSummary: false }); };
+    if (grpEl) grpEl.onchange = (e) => { S.groupBy = e.target.value; S.fieldPages = {}; repaint({ rebuildSummary: false }); };
     const psEl = $("#bn-pagesize", card);
     if (psEl) {
       psEl.onchange = (e) => {
-        const val = Number(e.target.value);
-        if (S.view === "field") S.fieldSize = val;
-        else S.size = val;
+        S.size = Number(e.target.value);
         S.page = 1;
         repaint({ rebuildSummary: false });
       };
@@ -1835,6 +1959,7 @@ export async function render(root, ctx) {
       if (k === "l1") S.f.l3 = "";
       syncSunburstFromFilter();
       S.page = 1;
+      S.fieldPages = {};
       repaint();
     }));
     const clrAll = $("#bn-clr-all", card);
@@ -1843,13 +1968,13 @@ export async function render(root, ctx) {
         S.f = EMPTY_FILTER();
         S.sunburstState = { focus: "b", open: null };
         S.page = 1;
+        S.fieldPages = {};
         repaint();
       };
     }
 
     $$("[data-page]", card).forEach((b) => b.addEventListener("click", () => {
-      const pageSize = S.view === "field" ? S.fieldSize : S.size;
-      const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+      const pages = Math.max(1, Math.ceil(filtered.length / S.size));
       if (b.dataset.page === "first") S.page = 1;
       else if (b.dataset.page === "prev") S.page -= 1;
       else if (b.dataset.page === "next") S.page += 1;
@@ -1881,7 +2006,12 @@ export async function render(root, ctx) {
     }
   };
   document.addEventListener("keydown", onKeyDown);
-  root._bnCleanup = () => document.removeEventListener("keydown", onKeyDown);
+  root._bnCleanup = () => {
+    document.removeEventListener("keydown", onKeyDown);
+    root._bnMoreDocCleanup?.();
+    fieldResizeObs?.disconnect();
+    fieldResizeObs = null;
+  };
 
   await repaint();
   announce("Bench 页面已加载");
