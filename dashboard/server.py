@@ -764,7 +764,8 @@ def main():
         print(f"[serve] input lister disabled: {exc}", flush=True)
     try:
         import speed_monitor
-        if speed_monitor.start(CACHE):
+        from build import default_datasets
+        if speed_monitor.start(CACHE, persist_path=os.path.join(str(default_datasets()), "speed_stats.json")):
             print("[serve] speed monitor enabled", flush=True)
     except Exception as exc:  # noqa: BLE001 - speed monitor is optional
         print(f"[serve] speed monitor disabled: {exc}", flush=True)

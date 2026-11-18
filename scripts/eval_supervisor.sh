@@ -18,6 +18,9 @@ CONF=${1:-/opt/eval_services.conf}
 LOG=${LOG:-/opt/eval_supervisor.log}
 INTERVAL=${INTERVAL:-30}
 PAUSE=${PAUSE:-/opt/eval_supervisor.pause}
+# 定时快照（每 2 小时一份到持久盘，只留 12 份）：丢了就拉起来，脚本自己 flock 单实例。
+SNAPSHOT_LOOP=${SNAPSHOT_LOOP:-/mnt/aime_eval_ssd/.service_backup/snapshot_loop.sh}
+SNAPSHOT_LOG=${SNAPSHOT_LOG:-/opt/eval_snapshot.log}
 
 log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$LOG"; }
 
@@ -48,7 +51,9 @@ while true; do
       continue
     fi
     log "$name down ($url), start: (cd $dir && $cmd)"
-    ( cd "$dir" && timeout 300 bash -c "$cmd" ) >> "$LOG" 2>&1
+    # 9>&-: the lock fd must not leak into the service, or the flock stays held after
+    # this supervisor dies and the next one refuses to start ("another instance is running").
+    ( cd "$dir" && timeout 300 bash -c "$cmd" ) 9>&- >> "$LOG" 2>&1
     sleep 5
     if curl -fsS -m 8 -o /dev/null "$url" 2>/dev/null; then
       log "$name recovered"
@@ -57,5 +62,9 @@ while true; do
       log "$name start failed (consecutive $n)"
     fi
   done < "$CONF"
+  if [ -f "$SNAPSHOT_LOOP" ] && ! pgrep -f '[s]napshot_loop\.sh' >/dev/null 2>&1; then
+    log "snapshot loop missing, starting $SNAPSHOT_LOOP"
+    nohup bash "$SNAPSHOT_LOOP" >> "$SNAPSHOT_LOG" 2>&1 &
+  fi
   sleep "$INTERVAL"
 done

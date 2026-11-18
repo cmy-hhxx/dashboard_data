@@ -18,6 +18,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import threading
 import time
@@ -50,6 +51,11 @@ DEFAULTS = {
 _LOCK = threading.Lock()
 _STARTED = False
 _CACHE_FILE: Path | None = None
+# Mirror of the cache on the persistent datasets disk: /opt is rolled back when the
+# container is rebuilt, and losing the cache means re-reading (and JSON-parsing) the
+# whole 55 GB input tree just to show the counts again.
+_PERSIST_FILE: Path | None = None
+_MIRROR_AT = 0.0
 _CONFIG: dict = dict(DEFAULTS)
 _CONTROL_SOCKET = Path("/tmp/eval-dash-speed-%C")
 
@@ -811,37 +817,37 @@ def _collect_local_input_meta(cfg: dict) -> dict[str, dict]:
 def _count_local_input_files(items: list[tuple[str, int]]) -> dict[str, dict]:
     counts: dict[str, dict] = {}
     for path, offset in items:
+        lines = traces = bad = used = 0
+        sessions: set[str] = set()
         try:
+            # Line-by-line: a cold start walks the whole input tree (55 GB), and slurping
+            # each file kept ~1 GB per file resident for no reason.
             with open(path, "rb") as fh:
                 fh.seek(offset)
-                data = fh.read()
+                while True:
+                    raw = fh.readline()
+                    if not raw or not raw.endswith(b"\n"):
+                        break  # a half-written line stays for the next run
+                    used += len(raw)
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        row = json.loads(raw)
+                    except Exception:
+                        bad += 1
+                        continue
+                    lines += 1
+                    meta = row.get("meta") or {}
+                    sid = meta.get("session_id")
+                    if sid:
+                        sessions.add(str(sid))
+                    traces += len(row.get("traces") or [])
         except OSError:
             continue
-        end = data.rfind(b"\n")
-        if end < 0:
-            counts[path] = {"lines": 0, "used": 0, "bad": 0, "sessions": [], "traces": 0}
-            continue
-        complete = data[:end + 1]
-        lines = traces = bad = 0
-        sessions: set[str] = set()
-        for raw in complete.split(b"\n"):
-            raw = raw.strip()
-            if not raw:
-                continue
-            try:
-                row = json.loads(raw)
-            except Exception:
-                bad += 1
-                continue
-            lines += 1
-            meta = row.get("meta") or {}
-            sid = meta.get("session_id")
-            if sid:
-                sessions.add(str(sid))
-            traces += len(row.get("traces") or [])
         counts[path] = {
             "lines": lines,
-            "used": len(complete),
+            "used": used,
             "bad": bad,
             "sessions": sorted(sessions),
             "traces": traces,
@@ -1250,6 +1256,24 @@ def _update_output_cache(old: dict[str, dict], meta: dict[str, dict], counts: di
     return new
 
 
+def _mirror_stats(text: str) -> None:
+    """Copy the cache to the persistent disk every few minutes (survives container rebuild)."""
+    global _MIRROR_AT
+    if not _PERSIST_FILE:
+        return
+    now = time.time()
+    if now - _MIRROR_AT < 300:
+        return
+    try:
+        _PERSIST_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _PERSIST_FILE.with_suffix(".tmp")
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(_PERSIST_FILE)
+        _MIRROR_AT = now
+    except OSError:
+        pass
+
+
 def _load_stats() -> bool:
     if not _CACHE_FILE or not _CACHE_FILE.is_file():
         return False
@@ -1333,9 +1357,11 @@ def _save_stats() -> None:
                 "saved_at": time.time(),
             }
         _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        text = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
         tmp = _CACHE_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        tmp.write_text(text, encoding="utf-8")
         tmp.replace(_CACHE_FILE)
+        _mirror_stats(text)
     except OSError:
         pass
 
@@ -1535,22 +1561,31 @@ def refresh_inputs() -> None:
         if not meta:
             raise RuntimeError("没有读到 daily 输入")
         with _LOCK:
-            old = dict(_STATE["input_files"])
+            files = dict(_STATE["input_files"])
         changed = []
         for path, rec in meta.items():
-            prev = old.get(path)
+            prev = files.get(path)
             size = int(rec["size"])
             if prev is None or int(prev.get("size", 0)) != size:
                 offset = int(prev.get("offset", 0)) if prev and size > int(prev.get("offset", 0)) else 0
                 changed.append((path, offset))
-        counts = _count_local_input_files(changed) if changed else {}
-        new_files = _update_input_cache(old, meta, counts)
-        with _LOCK:
-            _STATE["input_files"] = new_files
-            _rebuild_input_locked()
-            _STATE["input_error"] = ""
-            _STATE["input_updated_at"] = time.time()
-        _save_stats()
+        # Newest first, and publish after every file: a cold start (cache lost with /opt)
+        # has to re-read 55 GB, and waiting for the whole batch left the page at all zeros
+        # for half an hour.
+        changed.sort(key=lambda item: meta[item[0]]["date"], reverse=True)
+        for path, offset in changed:
+            counts = _count_local_input_files([(path, offset)])
+            with _LOCK:
+                files = _update_input_cache(files, meta, counts)
+                _STATE["input_files"] = files
+                _rebuild_input_locked()
+                _STATE["input_error"] = ""
+                _STATE["input_updated_at"] = time.time()
+            _save_stats()
+        if not changed:
+            with _LOCK:
+                _STATE["input_error"] = ""
+                _STATE["input_updated_at"] = time.time()
     except Exception as exc:  # noqa: BLE001
         with _LOCK:
             _STATE["input_error"] = str(exc)[:240]
@@ -1887,9 +1922,10 @@ def payload() -> dict:
     }
 
 
-def start(cache_dir: str | Path, overrides: dict | None = None) -> bool:
+def start(cache_dir: str | Path, overrides: dict | None = None,
+          persist_path: str | Path | None = None) -> bool:
     """Configure and launch background speed polling if the AIME pipeline is reachable."""
-    global _STARTED, _CACHE_FILE, _CONFIG
+    global _STARTED, _CACHE_FILE, _PERSIST_FILE, _CONFIG
     with _LOCK:
         if _STARTED:
             return _STATE["available"]
@@ -1900,8 +1936,17 @@ def start(cache_dir: str | Path, overrides: dict | None = None) -> bool:
         _STATE["available"] = available
         _STATE["error"] = "" if available else reason
         _CACHE_FILE = Path(cache_dir) / "speed_stats.json"
+        _PERSIST_FILE = Path(persist_path) if persist_path else None
     if not available:
         return False
+    if (_PERSIST_FILE and _PERSIST_FILE.is_file() and not _CACHE_FILE.is_file()):
+        # Container rebuilt: /opt went back to an image without the cache, so take the
+        # copy we keep on the persistent disk instead of rescanning every input file.
+        try:
+            _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(_PERSIST_FILE, _CACHE_FILE)
+        except OSError:
+            pass
     _load_stats()
     threading.Thread(target=_output_loop, name="speed-output", daemon=True).start()
     threading.Thread(target=_input_loop, name="speed-input", daemon=True).start()

@@ -597,73 +597,6 @@ function syncUrl(patch) {
   history.replaceState(null, "", url);
 }
 
-/* ---------------------------------------------------------------- Legacy schema:1 fallback */
-async function renderLegacy(root, ctx, first) {
-  const pageSize = 25;
-  let kind = first.kinds?.golden?.total ? "golden" : "bad";
-  let sev = "";
-  let page = 1;
-  let cur = first;
-
-  const paint = () => {
-    const gk = cur.kinds?.golden || { total: 0 };
-    const bk = cur.kinds?.bad || { total: 0, severity: {} };
-    root.innerHTML = `<div class="bento bn-bento">
-      <section class="card bn-legacy-card" style="--span:12">
-        <div class="card-head">
-          <h2>Bench</h2>
-          <span class="meta">goldencase ${fmt(gk.total)} · badcase ${fmt(bk.total)}</span>
-          <div class="seg end" id="bn-leg-kind" role="group">
-            <span class="seg-knob" aria-hidden="true"></span>
-            <button type="button" data-value="golden" aria-pressed="${kind === "golden"}">goldencase (${fmt(gk.total)})</button>
-            <button type="button" data-value="bad" aria-pressed="${kind === "bad"}">badcase (${fmt(bk.total)})</button>
-          </div>
-        </div>
-        ${kind === "bad" ? `<div class="bn-sev-pills">${["", "P0", "P1"].map((s) => `<button type="button" class="bn-sev-pill" data-sev="${s}" aria-pressed="${sev === s}" style="--c:${s ? sevColor(s) : "var(--ink)"}">${s ? `<i></i>${s}` : "全部"}</button>`).join("")}</div>` : ""}
-        <div class="bn-list">
-          ${(cur.rows || []).map((r) => {
-            const c = sevTone(r.w === "none" ? "GOLD" : r.w);
-            const href = r.s ? `?view=samples&product=${encodeURIComponent(ctx.product)}&case=${encodeURIComponent(r.s)}` : "";
-            return `<${href ? `a href="${href}"` : "div"} class="bn-lrow" style="--c:${c}">
-              <span class="bn-sev-tag" style="--c:${c}">${esc(sevLabel(r.w))}</span>
-              <div class="bn-lq"><span class="bn-lq-txt">${esc(r.q)}</span><span class="bn-lq-tags">${r.m ? `<span class="bn-mtag">${esc(r.m)}</span>` : ""}${r.d ? `<span class="bn-mtag">${esc(r.d)}</span>` : ""}</span></div>
-              <span class="bn-cell-meta">${r.n ? `${r.n} 问题` : "—"}</span>
-              <span class="bn-cell-meta">${esc(r.sid || "")}</span>
-              <span class="bn-tier-col">${r.s ? '<span class="bn-loc-dot"></span><span>查看样本 ↗</span>' : ""}</span>
-            </${href ? "a" : "div"}>`;
-          }).join("") || '<div class="bn-empty">暂无样本</div>'}
-        </div>
-        <div class="bn-pager">
-          <div class="bn-pager-btns">
-            <button type="button" data-p="-1" ${cur.page <= 1 ? "disabled" : ""}>上一页</button>
-            <span class="bn-pager-info">${cur.page || 1} / ${cur.pages || 1}</span>
-            <button type="button" data-p="1" ${cur.page >= cur.pages ? "disabled" : ""}>下一页</button>
-          </div>
-          <span class="bn-pager-info">共 ${fmt(cur.total || 0)} 条</span>
-        </div>
-      </section>
-    </div>`;
-
-    const seg = segmented($("#bn-leg-kind", root), (v) => {
-      kind = v;
-      sev = "";
-      page = 1;
-      load();
-    });
-    seg.set(kind, { silent: true });
-    $$("[data-sev]", root).forEach((b) => b.addEventListener("click", () => { sev = b.dataset.sev; page = 1; load(); }));
-    $$("[data-p]", root).forEach((b) => b.addEventListener("click", () => { page += Number(b.dataset.p); load(); }));
-  };
-
-  const load = async () => {
-    const q = new URLSearchParams({ kind, page: String(page), size: String(pageSize) });
-    if (kind === "bad" && sev) q.set("sev", sev);
-    cur = await getJSON(`/bench/${ctx.product}.json?${q}`);
-    paint();
-  };
-  paint();
-}
-
 /* ---------------------------------------------------------------- Main Schema:2 Bench View */
 export async function render(root, ctx) {
   const urlInit = queryFromUrl();
@@ -676,12 +609,11 @@ export async function render(root, ctx) {
     raw = null;
   }
 
-  if (!raw) {
-    root.innerHTML = `<div class="bento bn-bento"><section class="card" style="--span:12"><div class="bn-empty">暂无 Bench 数据</div></section></div>`;
+  if (!raw || raw.schema !== 2) {
+    // Only the dynamic (3_dynamic_bench) bench is supported: a golden/bad summary is not
+    // another layout, it is missing data. Never fall back to the retired list view.
+    root.innerHTML = `<div class="bento bn-bento"><section class="card" style="--span:12"><div class="bn-empty">${raw ? "Bench 数据构建中…" : "暂无 Bench 数据"}</div></section></div>`;
     return;
-  }
-  if (raw.schema !== 2) {
-    return renderLegacy(root, ctx, raw);
   }
 
   const data = normalizeBenchPayload(raw, taxonomy);

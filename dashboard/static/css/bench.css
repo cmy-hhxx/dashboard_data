@@ -625,8 +625,6 @@ button.bn-scell[aria-pressed="true"] { background: var(--accent-soft); }
 .bn-think summary { cursor: pointer; font-size: var(--fs-meta); color: var(--muted); font-weight: var(--w-medium); }
 
 /* Legacy schema:1 fallback layout */
-.bn-legacy-card { --span: 12; display: grid; gap: var(--sp-4); }
-
 /* ---- Responsive ---- */
 @media (max-width: 1180px) {
   .bn-quota-card { --span: 12; }

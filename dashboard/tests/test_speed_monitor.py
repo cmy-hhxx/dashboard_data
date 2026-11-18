@@ -17,6 +17,32 @@ import speed_monitor  # noqa: E402
 import server  # noqa: E402
 
 
+class InputCountTests(unittest.TestCase):
+    """Counting must stop at the last complete line and keep sessions distinct."""
+
+    def test_counts_only_complete_lines(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "2026-11-18.jsonl"
+            rows = [
+                {"meta": {"session_id": "s1"}, "traces": [{"a": 1}, {"b": 2}]},
+                {"meta": {"session_id": "s1"}, "traces": [{"c": 3}]},
+                {"meta": {"session_id": "s2"}, "traces": [{"d": 4}]},
+            ]
+            complete = "".join(json.dumps(r) + "\n" for r in rows).encode()
+            path.write_bytes(complete + b'{"meta": {"session_id": "s3"')
+            counts = speed_monitor._count_local_input_files([(str(path), 0)])[str(path)]
+            self.assertEqual(counts["lines"], 3)
+            self.assertEqual(counts["traces"], 4)
+            self.assertEqual(counts["sessions"], ["s1", "s2"])
+            self.assertEqual(counts["used"], len(complete))
+            # Appending the rest counts only the new part.
+            path.write_bytes(complete + b'{"meta": {"session_id": "s3"}, "traces": []}\n')
+            more = speed_monitor._count_local_input_files([(str(path), counts["used"])])[str(path)]
+            self.assertEqual(more["lines"], 1)
+            self.assertEqual(more["sessions"], ["s3"])
+            self.assertEqual(more["used"], len(b'{"meta": {"session_id": "s3"}, "traces": []}\n'))
+
+
 class _MockGateway(BaseHTTPRequestHandler):
     def do_GET(self):
         auth = self.headers.get("Authorization")

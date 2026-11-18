@@ -6,10 +6,15 @@ SSH：`ssh aime_rsi_data`（10.217.219.2:2473），持久盘 `/mnt/aime_eval_ssd
 
 ## 结论先说
 
-- **数据不会丢**：`/mnt/aime_eval_ssd` 是 Ceph 持久盘，重启后由平台重新挂载。
-- **`/opt` 可能回滚**：守护脚本、`deploy.env`、看板前端产物、5003 索引都在 `/opt`。
+- **只有 `/mnt/aime_eval_ssd` 会活下来**：其它（`/opt`、`/run`、`/tmp`）容器一重建就回滚，
+  守护脚本、`deploy.env`、看板前端产物、`cache/`（`build.sqlite3` + `samples.pkl`）、5003 索引全在其列。
   回滚后服务不会自动起（容器启动命令里只有 jupyter，没有 `eval_boot.sh`）。
-- **代码不会丢**：`/opt` 下的代码与本地仓库逐文件一致，丢了用各自的 `deploy.sh` 重发。
+- **每 2 小时自动快照**：`/mnt/aime_eval_ssd/.service_backup/snapshot-<ts>/opt/` 是整棵 `/opt`
+  （代码 + `deploy.env` + 产物 + cache + 5003 索引），只保留最近 12 份，相邻快照用硬链接共享没变的文件
+  （增量约 100–200 MB/次）。`build.sqlite3` 用 sqlite backup API 导出，避免拷到写一半的库。
+  守护链：`eval_supervisor.sh` 每轮检查 `snapshot_loop.sh` 是否在跑，不跑就拉起来。
+- **拉起只要一条命令**：`./scripts/virginia/bringup.sh` 从最新快照 rsync 回 `/opt/`，再起三个服务，
+  **不用重新 deploy，也不用冷构建**（`cache/` 一起恢复）。
 
 ## 重启后一条命令
 
@@ -21,13 +26,11 @@ SSH：`ssh aime_rsi_data`（10.217.219.2:2473），持久盘 `/mnt/aime_eval_ssd
 脚本行为：
 1. 轮询 SSH（最多 5 分钟）；不通就报「等平台拉起容器 / SSH 端口映射变了」。
 2. 检查 `/mnt/aime_eval_ssd/1_aime` 是否挂上。
-3. 逐项检查 `/opt`（守护脚本、deploy.env、三份代码、看板产物、5003 索引），列出缺失。
-4. 只回填缺的，源是 `/mnt/aime_eval_ssd/.service_backup/snapshot-*` 最新一份：
-   - `config/` → `/opt/*.sh`、`/opt/eval_services.conf`、两处 `deploy.env`
-   - `dashboard-static/` → `/opt/eval_dashboard/static/`（169M，省一次冷构建）
-   - `analysis-state/` → `/opt/eval_analysis/state/`（484M，保住 `latest_seq`）
-   - 用 `rsync --update`，服务自己生成的新文件不会被旧快照覆盖。
-5. 代码整个目录没了才跑三个 `deploy.sh`（dashboard / 5002 / 5003）。
+3. 逐项检查 `/opt`（守护脚本、deploy.env、三份代码、看板产物、cache、5003 索引），列出缺失。
+4. 缺了就从最新快照回填整棵 `/opt`：`rsync -a --update snapshot-<ts>/opt/ /opt/`
+   （`--update` 保证服务自己生成的新文件不会被旧快照覆盖）。老布局快照
+   （`config/` + `dashboard-static/` + `analysis-state/`）仍兼容。
+5. 回填后代码仍缺（快照里也没有）才跑三个 `deploy.sh`（dashboard / 5002 / 5003）。
 6. 依次起 5001 → 5002 → 5003，轮询 `/healthz` 到 200（5001 冷构建要几分钟，预热期返回 503）。
 7. 拉起 `/opt/eval_supervisor.sh`（30s 巡检、掉线自动重启）。
 8. 冒烟：三个容器内 `/healthz` + 5003 `/severity`，再验对外 2475 / 2476 / 2477。
@@ -35,14 +38,17 @@ SSH：`ssh aime_rsi_data`（10.217.219.2:2473），持久盘 `/mnt/aime_eval_ssd
 ## 备份在哪、怎么更新
 
 ```bash
-# 重新做一份快照（服务运行时也能跑，只读 /opt）
+# 立即做一份快照（服务运行时也能跑，只读 /opt）
 ssh aime_rsi_data /mnt/aime_eval_ssd/.service_backup/snapshot_remote.sh
-# 本地同一份脚本：scripts/virginia/snapshot_remote.sh，保留最近 3 份
+# 定时循环：每 2 小时一份，保留 12 份（滚动删最旧）
+ssh aime_rsi_data 'nohup bash /mnt/aime_eval_ssd/.service_backup/snapshot_loop.sh >> /opt/eval_snapshot.log 2>&1 &'
+# 本地同一份脚本：scripts/virginia/snapshot_remote.sh + snapshot_loop.sh
 ```
 
-一份快照 630M / 458 个文件，含 `MANIFEST.tsv`（大小 + mtime + 路径），重启后可直接对比丢了什么。
-**没备份的是 `dashboard/cache`（6.1G）**：`build.sqlite3` / `samples.pkl` 是纯缓存，
-丢了只是下一次构建慢一点，产物恢复后页面立刻可用，故不做 6G 的在线 sqlite 复制。
+一份快照约 1G / 2000 个文件（`cache/` 随构建涨到 6G），含 `MANIFEST.tsv`（大小 + mtime + 路径），
+重启后可直接对比丢了什么。相邻快照 `--link-dest` 硬链接，实测第二份只多 140M / 22 秒。
+`build.sqlite3` 走 sqlite backup API（直接 rsync 一个正在写的库会拷到坏文件）；
+`logs/`、`*.pid`、`__pycache__`、`cache/*.tmp`、`build.lock` 不进快照。
 
 ## 常见坑
 

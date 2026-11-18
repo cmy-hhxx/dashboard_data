@@ -44,6 +44,7 @@ check_mount() {
 
 # 输出一行一个缺失项，空表示啥都没丢
 assess() {
+  # 容器重建后 /opt 整目录回滚：代码、deploy.env、看板产物、cache/、5003 索引全没了。
   sshx '
     missing=""
     for f in /opt/eval_supervisor.sh /opt/eval_boot.sh /opt/eval_services.conf \
@@ -55,6 +56,8 @@ assess() {
     [ -f /opt/page_service/sample_details/server.py ] || missing="$missing code:/opt/page_service"
     [ -s /opt/eval_dashboard/static/data-aime.json ]  || missing="$missing payload:dashboard-static"
     [ -s /opt/eval_analysis/state/index.sqlite ]      || missing="$missing payload:analysis-state"
+    [ -s /opt/eval_dashboard/cache/samples.pkl ]      || missing="$missing cache:samples"
+    [ -s /opt/eval_dashboard/cache/build.sqlite3 ]    || missing="$missing cache:build"
     printf "%s\n" "$missing"
   '
 }
@@ -65,7 +68,13 @@ latest_snapshot() {
 
 restore() {
   local snap="$1" items="$2"
-  log "从 $snap 回填："
+  if sshx "test -d '$snap/opt'"; then
+    # 整棵 /opt（代码 + deploy.env + 产物 + cache + 5003 索引），--update 只补缺的/旧的
+    log "从 $snap/opt 回填 /opt（缺失：$items）"
+    sshx "rsync -a --update '$snap/opt/' /opt/ && echo '[restore] opt tree ok'"
+    return 0
+  fi
+  log "从 $snap 回填（旧版快照布局）："
   case "$items" in *config:*)  log "  - 守护脚本与 deploy.env" ;; esac
   case "$items" in *payload:dashboard-static*) log "  - 看板前端产物（static/，省一次冷构建）" ;; esac
   case "$items" in *payload:analysis-state*)   log "  - 5003 索引与变更流位点（保住 latest_seq）" ;; esac
@@ -83,6 +92,25 @@ rsync -a --update "$SNAP/dashboard-static/" /opt/eval_dashboard/static/
 rsync -a --update "$SNAP/analysis-state/"   /opt/eval_analysis/state/
 echo "[restore] ok"
 REMOTE
+}
+
+install_scripts() {
+  # 快照/守护脚本放在持久盘（容器重建只回滚 /opt），再拷一份到 /opt 供 supervisor 启动。
+  log "同步快照与守护脚本"
+  rsync -a -e "ssh ${SSH_OPTS[*]}" \
+    "$ROOT/scripts/virginia/snapshot_remote.sh" "$ROOT/scripts/virginia/snapshot_loop.sh" \
+    "$ROOT/scripts/eval_supervisor.sh" "$ROOT/scripts/eval_boot.sh" \
+    "$HOST:$SNAP_ROOT/" || log "脚本同步失败（继续）"
+  sshx 'cp /mnt/aime_eval_ssd/.service_backup/snapshot_remote.sh /opt/ 2>/dev/null
+    cp /mnt/aime_eval_ssd/.service_backup/eval_supervisor.sh /opt/ 2>/dev/null
+    cp /mnt/aime_eval_ssd/.service_backup/eval_boot.sh /opt/ 2>/dev/null
+    chmod +x /opt/snapshot_remote.sh /opt/eval_supervisor.sh /opt/eval_boot.sh 2>/dev/null; true'
+}
+
+start_snapshot_loop() {
+  log "拉起定时快照（每 2 小时一份，保留 12 份）"
+  sshx 'nohup bash /mnt/aime_eval_ssd/.service_backup/snapshot_loop.sh >> /opt/eval_snapshot.log 2>&1 & sleep 1
+    pgrep -f "[s]napshot_loop\.sh" | head -1' || log "定时快照没起来（supervisor 会再拉）"
 }
 
 deploy_code() {
@@ -173,6 +201,10 @@ main() {
   fi
   [ "$STATUS_ONLY" = "1" ] && { sshx 'for p in 5001 5002 5003; do printf "  :%s " $p; curl -s -m 5 -o /dev/null -w "%{http_code}\n" http://127.0.0.1:$p/healthz; done'; exit 0; }
 
+  install_scripts
+  # 快照里已有代码就不再 deploy（省时间）；回填后仍缺才走远端重发。
+  missing=$(assess)
+  [ -n "$missing" ] && log "回填后仍缺：$missing"
   case "$missing" in
     *code:*) deploy_code ;;
   esac
@@ -180,6 +212,7 @@ main() {
   local rc=0
   wait_health || rc=1
   supervisor
+  start_snapshot_loop
   slim_publish
   smoke
   log "===== 完成（wait_health rc=${rc}）====="
