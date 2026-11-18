@@ -211,6 +211,9 @@ class SpeedMonitorTests(unittest.TestCase):
 
                 gw_block = data["gateways"]
                 self.assertEqual((gw_block["count"], gw_block["healthy"], gw_block["rpm_limit"]), (1, 1, 500))
+                # 限额必须标成来自 key 的实时值，而不是 harness 的 rpm-limit.json 缓存。
+                self.assertEqual(gw_block["rpm_source"], "key")
+                self.assertEqual(gw_block["items"][0]["rpm_source"], "key")
                 self.assertGreater(gw_block["realtime_rpm"], 0)
                 self.assertGreater(gw_block["parts_attr_rate"], 0)
                 self.assertGreater(gw_block["parts_compact_rate"], 0)

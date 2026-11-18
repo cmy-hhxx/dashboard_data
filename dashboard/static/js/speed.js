@@ -21,7 +21,6 @@ const S = {
   rangeSeg: null,
   modeSeg: null,
   sourceUrl: "speed.json",
-  remote: false,
   root: null,
   ctx: null,
 };
@@ -83,7 +82,6 @@ function shellHTML() {
       <header class="card-head">
         <h2>评测输入与总进度</h2>
         <span class="sp-conn" id="spConn"><i></i><span id="spConnText">读取中</span></span>
-        <span class="meta" id="spSource"></span>
         <span class="meta num" id="spInputUpdated"></span>
         <time class="meta num end" id="spUpdated">—</time>
       </header>
@@ -358,8 +356,11 @@ function renderGateways(root, gw) {
     : (items[0]?.rpm_window || "—"));
 
   setText(root, "spGwRpm", liveRpm == null ? "—" : rate(liveRpm));
+  // 限额默认来自网关 /key/info（实时）；显示「缓存」时说明这个数字是 harness 的
+  // rpm-limit.json，key 没回来，别当成实时额度。
+  const limitSrc = g.rpm_source === "key" ? "" : g.rpm_source === "runtime" ? "（缓存值）" : "";
   setText(root, "spGwRpmSub", limit
-    ? `限额 ${num(limit)} RPM · 利用率 ${liveRpm == null ? "—" : pct(liveRpm, limit, 1)}`
+    ? `限额 ${num(limit)} RPM${limitSrc} · 利用率 ${liveRpm == null ? "—" : pct(liveRpm, limit, 1)}`
     : "限额 —");
   const meter = $("#spGwMeter", root);
   const meterFill = $("#spGwMeterFill", root);
@@ -396,7 +397,7 @@ function renderGateways(root, gw) {
     const modelsText = (item.models || []).length ? item.models.join(", ") : "—";
     const urlShort = String(item.url || "").replace(/^https?:\/\//, "").replace(/\/v1\/?$/, "");
     const rpmCell = item.rpm != null
-      ? `${rate(item.rpm)}${item.rpm_limit ? `<span class="faint"> / ${num(item.rpm_limit)}</span>` : ""}`
+      ? `${rate(item.rpm)}${item.rpm_limit ? `<span class="faint"> / ${num(item.rpm_limit)}${item.rpm_source === "key" ? "" : item.rpm_limit ? "（缓存值）" : ""}</span>` : ""}`
       : (item.rpm_limit ? `—<span class="faint"> / ${num(item.rpm_limit)}</span>` : "—");
     const permitCell = item.permits != null
       ? `${num(item.permits)}${item.concurrency != null ? `<span class="faint"> / ${num(item.concurrency)}</span>` : ""}`
@@ -728,7 +729,7 @@ function drawChart(root) {
 
   if (legend) {
     legend.innerHTML = isRpm
-      ? `<span style="--c:var(--accent)"><i></i>实时请求 (RPM)</span>${quota ? `<span class="is-dashed" style="--c:var(--sev-2)"><i></i>限额 ${num(quota)} RPM</span>` : ""}`
+      ? `<span style="--c:var(--accent)"><i></i>实时请求 (RPM)</span>${quota ? `<span class="is-dashed" style="--c:var(--sev-2)"><i></i>限额 ${num(quota)} RPM${S.data?.gateways?.rpm_source === "key" ? "" : "（缓存值）"}</span>` : ""}`
       : `<span style="--c:var(--accent)"><i></i>Attribution</span><span style="--c:var(--loc-vir)"><i></i>Compact</span>`;
   }
 
@@ -946,10 +947,8 @@ function applyData(root, data) {
   const conn = $("#spConn", root);
   if (conn) {
     conn.className = `sp-conn ${data.ok ? "is-ok" : "is-bad"}`;
-    // 只有 AIME（弗吉尼亚）接入了评测速度；问财节点转发过来时必须写明数据来源。
-    setText(root, "spConnText", data.ok ? (S.remote ? "AIME · 实时 15s" : "实时 · 15s") : "连接异常");
+    setText(root, "spConnText", data.ok ? "实时 · 15s" : "连接异常");
   }
-  setText(root, "spSource", S.remote ? "本节点暂未接入评测速度，以下为 AIME（弗吉尼亚）实时数据" : "");
   setText(root, "spUpdated", data.ok
     ? `更新 ${clock(data.updated_at)}`
     : (data.last_success ? `最后成功 ${clock(data.last_success)}` : "等待首次统计…"));
@@ -1047,39 +1046,18 @@ function wireControls(root) {
   });
 }
 
-async function fetchQuietJSON(url, timeoutMs = 3000) {
-  const ac = typeof AbortController === "function" ? new AbortController() : null;
-  const timer = ac ? setTimeout(() => ac.abort(), timeoutMs) : 0;
-  try {
-    const res = await fetch(url, { cache: "no-store", signal: ac ? ac.signal : undefined });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
 async function fetchSpeed() {
   if (S.inflight || document.hidden || document.documentElement.dataset.view !== "speed") return;
   S.inflight = true;
   try {
-    let data = S.sourceUrl === "speed.json"
-      ? await getJSON(S.sourceUrl, { retries: 1 })
-      : await fetchQuietJSON(S.sourceUrl);
-    if (data && data.available === false && S.sourceUrl === "speed.json") {
-      const aimeUrl = sitesMap().aime?.url;
-      if (aimeUrl) {
-        const remoteUrl = `${aimeUrl.replace(/\/+$/, "")}/speed.json`;
-        const remoteData = await fetchQuietJSON(remoteUrl);
-        if (remoteData && remoteData.available !== false) {
-          S.sourceUrl = remoteUrl;
-          S.remote = true;
-          data = remoteData;
-        }
-      }
+    // 评测速度只有 AIME（弗吉尼亚）接入：其它节点不转发、不借用别人的数据，直接显示暂无。
+    const data = await getJSON(S.sourceUrl, { retries: 1 });
+    if (data && data.available === false) {
+      S.unavailable = true;
+      if (S.root) showEmpty(S.root);
+      return;
     }
+    S.unavailable = false;
     if (S.root && data) applyData(S.root, data);
   } catch (err) {
     if (S.root) {
@@ -1094,10 +1072,19 @@ async function fetchSpeed() {
   }
 }
 
+function showEmpty(root) {
+  if (!$("#spEmpty", root)) {
+    root.innerHTML = `<div class="bento sp-bento"><article class="card" style="--span:12">
+      <header class="card-head"><h2>评测输入与总进度</h2></header>
+      <div class="sp-empty" id="spEmpty">暂无</div>
+    </article></div>`;
+  }
+}
+
 export async function render(root, c) {
   S.root = root;
   S.ctx = c;
-  if (!root.firstChild || !$("#spProgress", root)) {
+  if (!root.firstChild || (!$("#spProgress", root) && !$("#spEmpty", root))) {
     root.innerHTML = shellHTML();
     wireControls(root);
   }

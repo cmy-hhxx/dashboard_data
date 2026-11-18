@@ -150,3 +150,9 @@
   .sp-grid-4, .sp-gw-kpis, .sp-grid-2 { grid-template-columns: minmax(0, 1fr); }
   .sp-date-head .pager { margin-left: 0; width: 100%; justify-content: space-between; }
 }
+
+/* 该节点未接入 AIME 评测流水线时的空态（评测速度暂无） */
+.sp-empty {
+  display: grid; place-items: center; min-height: 220px; border-radius: var(--r-well);
+  background: var(--well); color: var(--muted); font-size: var(--fs-small);
+}

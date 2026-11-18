@@ -384,6 +384,9 @@ def collect_gateway_local(cfg: dict) -> tuple[dict, dict, dict]:
                 pass
 
         rpm_limit = rpm_limit_info.get("rpm") if isinstance(rpm_limit_info.get("rpm"), int) else None
+        # Where the number came from: the key itself (authoritative), the harness's cached
+        # rpm-limit.json, or nothing. The UI shows it so a stale cache is never read as real.
+        rpm_source = "runtime" if rpm_limit else "none"
         rpm_window = None
         workload = None
         last_active = None
@@ -401,6 +404,7 @@ def collect_gateway_local(cfg: dict) -> tuple[dict, dict, dict]:
                     q_rpm, q_win, q_work, q_models = _extract_maas_rpm(ki, pref_models or models_list)
                     if q_rpm is not None:
                         rpm_limit = q_rpm
+                        rpm_source = "key"
                     rpm_window = q_win
                     workload = q_work
                     if q_models:
@@ -441,6 +445,7 @@ def collect_gateway_local(cfg: dict) -> tuple[dict, dict, dict]:
             "models": models_list,
             "workload": workload,
             "rpm_limit": rpm_limit,
+            "rpm_source": rpm_source,
             "rpm_window": rpm_window,
             "tpm_limit": tpm_limit,
             "last_active": last_active,
@@ -1302,7 +1307,8 @@ def _load_stats() -> bool:
                     continue
                 pa = round(max(0.0, (float(cur.get("a") or 0) - float(base.get("a") or 0)) / span * 60.0), 1)
                 pc = round(max(0.0, (float(cur.get("c") or 0) - float(base.get("c") or 0)) / span * 60.0), 1)
-                rpm_hist.append({"t": t, "rpm": round(min(500.0, pa * 13.0 + pc * 14.0), 1), "pa": pa, "pc": pc})
+                # No cap here: the real ceiling is whatever the key reports, not a hardcoded 500.
+                rpm_hist.append({"t": t, "rpm": round(pa * 13.0 + pc * 14.0, 1), "pa": pa, "pc": pc})
         with _LOCK:
             _STATE["input_files"] = payload_data.get("input_files") or {}
             _STATE["output_files"] = payload_data.get("output_files") or {}
@@ -1722,6 +1728,12 @@ def payload() -> dict:
     now = time.time()
     rpm_limits = [g["rpm_limit"] for g in gateway_rows.values() if isinstance(g.get("rpm_limit"), int) and g["rpm_limit"] > 0]
     total_rpm_limit = sum(rpm_limits) if rpm_limits else (rpm_limit_info.get("rpm") if isinstance(rpm_limit_info.get("rpm"), int) else None)
+    # "key" only when every gateway with a ceiling got it from /key/info; otherwise the total
+    # leans on the harness cache and the UI says so.
+    rpm_sources = [g.get("rpm_source") for g in gateway_rows.values()
+                   if isinstance(g.get("rpm_limit"), int) and g["rpm_limit"] > 0]
+    total_rpm_source = "key" if rpm_sources and all(x == "key" for x in rpm_sources) else (
+        "runtime" if total_rpm_limit else "none")
     parts_attr_rate, parts_compact_rate, _, parts_span = _parts_rates(
         part_events, meta["parts_seeded_at"], now, int(_CONFIG["rate_window_seconds"]), total_rpm_limit,
     )
@@ -1799,6 +1811,7 @@ def payload() -> dict:
             "workload": row.get("workload"),
             "rpm": item_rpm,
             "rpm_limit": item_rpm_limit,
+            "rpm_source": row.get("rpm_source") or ("none" if not item_rpm_limit else "runtime"),
             "rpm_window": row.get("rpm_window"),
             "tpm_limit": row.get("tpm_limit"),
             "permits": permits or None,
@@ -1892,6 +1905,7 @@ def payload() -> dict:
             "healthy": healthy_count,
             "realtime_rpm": realtime_rpm,
             "rpm_limit": total_rpm_limit,
+            "rpm_source": total_rpm_source,
             "rpm_utilization": rpm_util,
             "parts_attr_rate": parts_attr_rate,
             "parts_compact_rate": parts_compact_rate,
@@ -1910,6 +1924,7 @@ def payload() -> dict:
                 "paused": bool(control.get("paused", False)),
                 "auto_tune_at": rpm_limit_info.get("updated_at"),
                 "rpm_limit": rpm_limit_info.get("rpm"),
+                "rpm_source": "runtime" if rpm_limit_info.get("rpm") else "none",
                 "permits": rpm_limit_info.get("permits"),
             },
             "running": running_sum,
