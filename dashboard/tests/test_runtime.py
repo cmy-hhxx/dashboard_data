@@ -197,5 +197,23 @@ class AssetVersionTests(unittest.TestCase):
         self.assertEqual(server.asset_version(), version)
 
 
+class SampleWorkerMemoryTests(unittest.TestCase):
+    """A forked pool must stay inside the container's memory limit."""
+
+    MB = 1 << 20
+
+    def test_unbounded_container_keeps_the_requested_workers(self):
+        self.assertEqual(build.capped_workers(4, headroom=None, rss=9_600 * self.MB), 4)
+        self.assertEqual(build.capped_workers(1, headroom=0, rss=9_600 * self.MB), 1)
+
+    def test_no_headroom_for_a_second_heap_goes_serial(self):
+        # AIME: 9.6 GB parent, 2.4 GB left -> forking duplicating pages OOMs the cgroup.
+        self.assertEqual(build.capped_workers(4, headroom=2_400 * self.MB, rss=9_600 * self.MB), 1)
+
+    def test_middle_ground_keeps_the_largest_pool_that_fits(self):
+        self.assertEqual(build.capped_workers(4, headroom=5_000 * self.MB, rss=2_000 * self.MB), 3)
+        self.assertEqual(build.capped_workers(4, headroom=4_100 * self.MB, rss=2_000 * self.MB), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

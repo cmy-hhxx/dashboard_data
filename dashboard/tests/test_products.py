@@ -34,6 +34,41 @@ def build(datasets, static, **env):
     return json.loads((static / "data.json").read_text())
 
 
+class MatrixTraceTests(unittest.TestCase):
+    def test_matrix_cross_counts_every_evaluated_trace(self):
+        """聚类矩阵按 trace 口径：场景合计 == 完成 trace；干净 trace 只进分母。"""
+        with tempfile.TemporaryDirectory() as folder:
+            datasets, static = Path(folder) / "datasets", Path(folder) / "static"
+            seed(datasets)
+            inp = datasets / "0_wencai/eval_input/a_fast/2026-11-01.jsonl"
+            second = json.loads(inp.read_text())
+            second.update(trace_id="t2", request_time="2026-11-01 11:00:00")
+            second["meta"] = {**second["meta"], "request_time": "2026-11-01 11:00:00",
+                              "question": "茅台今日成交量"}
+            with inp.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(second, ensure_ascii=False) + "\n")
+            out = datasets / "0_wencai/eval_output/0_daily_eval/a_fast/a_fast_attribution-2026-11-01.jsonl"
+            clean = json.loads(out.read_text())
+            clean["session_meta"] = {**clean["session_meta"], "request_time": "2026-11-01 11:00:00"}
+            clean["session_summary"] = ""
+            clean["turns"] = [{**clean["turns"][0], "summary": "", "is_correct": True, "problem": []}]
+            with out.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(clean, ensure_ascii=False) + "\n")
+            # 只有归因、没有输入 trace 的记录（tr=0）：进样本，但不进矩阵的 trace 合计。
+            orphan = json.loads(out.read_text().splitlines()[0])
+            orphan["session_meta"] = {**orphan["session_meta"], "request_time": "2026-11-01 12:00:00"}
+            with out.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(orphan, ensure_ascii=False) + "\n")
+
+            build(datasets, static)
+            product = json.loads((static / "data-wencai.json").read_text())["products"]["wencai"]
+            cross = product["cross"]
+            self.assertEqual((product["kpi"]["sessions"], product["kpi"]["traces"]), (3, 2))
+            self.assertEqual(len(cross), 2)
+            self.assertEqual(sum(int(row[3]) for row in cross), product["kpi"]["traces"])
+            self.assertTrue(all(not row[2] for row in cross))  # 没有聚类树：只验证分母口径
+
+
 class ProductSplitTests(unittest.TestCase):
     def test_eval_products_limits_a_copy_to_its_product(self):
         with tempfile.TemporaryDirectory() as folder:

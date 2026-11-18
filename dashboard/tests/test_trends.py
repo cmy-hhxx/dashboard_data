@@ -357,6 +357,27 @@ class TrendPayloadUnitTests(unittest.TestCase):
             self.assertTrue(all(h <= base[(c[0], c[1], c[3], c[4])] for h in c[10:16]), c)
 
 
+class TraceCountingTests(unittest.TestCase):
+    def test_base_counts_traces_and_drops_rows_without_a_trace(self):
+        import build
+
+        def one(slug, tr, problems=()):
+            detail = {"meta": {}, "question": slug, "attribution": {"problems": [
+                {"sev": sev, "cl": {"path": path}} for sev, path in problems]}}
+            return (slug, detail, {"d": "2026-11-03", "m": "a_fast", "ut": "real", "tr": tr}, {})
+
+        payload = build.trend_payload("wencai", [
+            one("a", 1, [("P1", "S1.M2")]),
+            one("b", 0, [("P1", "S1.M2")]),  # 无输入 trace：不进分母，也不进命中
+            one("c", 1),                     # 干净 trace：只进分母
+        ])
+        base = {(c[0], c[1], c[2], c[3]): c[4] for c in payload["base"]}
+        self.assertEqual(sum(base.values()), 2)
+        nodes = payload["nodes"]
+        s1 = nodes.index("S1")
+        self.assertEqual([c[15] for c in payload["cells"] if c[2] == s1], [1])
+
+
 class OutputsReadyTests(unittest.TestCase):
     def test_server_waits_for_each_products_trends_file(self):
         import server
@@ -365,7 +386,8 @@ class OutputsReadyTests(unittest.TestCase):
             (static / "samples").mkdir()
             (static / "data.json").write_text(json.dumps({"products": {"wencai": {}}}), encoding="utf-8")
             (static / "samples.json").write_text(json.dumps({"products": {"wencai": {}}}), encoding="utf-8")
-            for name in ("data-wencai.json", "samples-wencai.json", "labels-wencai.json", "recall-wencai.json"):
+            for name in ("data-wencai.json", "samples-wencai.json", "labels-wencai.json",
+                         "recall-wencai.json", "bench-wencai.json"):
                 (static / name).write_text("{}", encoding="utf-8")
             outputs = [str(static / "data.json"), str(static / "samples.json"), str(static / "samples")]
             with mock.patch.object(server, "STATIC", str(static)), \

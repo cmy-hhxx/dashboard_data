@@ -77,7 +77,7 @@ INPUT_INDEX_VERSION = "2026-11-12.1"
 # Bump when pairing semantics change (cache keys are not otherwise versioned).
 PAIRING_VERSION = "2026-11-13.1"
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-16.1"
+PAYLOAD_VERSION = "2026-11-18.1"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 3
 
@@ -503,6 +503,8 @@ def scan_inputs(datasets: Path, top: Path, product: str, store: bs.BuildStore, j
                      bs.split_from_rel(rel), bs.model_from_rel(rel), lost_ids, lost_sig))
     if todo:
         workers = jobs or (min(4, os.cpu_count() or 1) if len(todo) >= 4 else 1)
+        if workers > 1:
+            workers = capped_workers(workers)
         debug(f"scan {product}: {len(todo)}/{len(files)} files, workers={workers}")
         if workers > 1:
             with ProcessPoolExecutor(max_workers=workers) as pool:
@@ -1937,16 +1939,17 @@ def aggregate(product, samples, taxonomy):
         for t in sorted(tags.values(), key=lambda x: -len(x["sessions"]))
     ]
 
-    # 聚类矩阵: one entry per session that has clustered problems. The frontend pivots
-    # these against the scenario tree (task → subtask) and the cluster tree
-    # (stage → mechanism → pattern), so every drill state uses the same raw rows.
+    # 聚类矩阵: one entry per evaluated Trace, clean ones included, so a scene's
+    # trace total is the same number as the eval card's completed-Trace count.
+    # ``pats`` is empty for a clean Trace: it only feeds the denominator, never a cell.
+    # A row without an input Trace (tr == 0) has no Trace to count and is skipped.
     cross = []
     for slug, detail, row, facts in samples:
-        pats = Counter(p["cl"]["path"] for p in detail["attribution"]["problems"] if p["cl"])
-        if not pats:
+        if row.get("tr", 1) <= 0:
             continue
+        pats = Counter(p["cl"]["path"] for p in detail["attribution"]["problems"] if p["cl"])
         cross.append([scene_of(detail, scene), detail["meta"].get("subtask") or "",
-                      [[pid, n] for pid, n in pats.most_common()], row["tr"]])
+                      [[pid, n] for pid, n in pats.most_common()], row.get("tr", 1)])
 
     # Input profile.
     msgs = [s[3]["messages"] for s in samples]
@@ -2212,7 +2215,7 @@ def trend_payload(product, samples, releases=(), generated=None):
         uts.add(ut)
         models.add(row["m"])
         scenes.add(pair)
-        base[(row["d"], pair, row["m"], ut)] += 1
+        base[(row["d"], pair, row["m"], ut)] += row.get("tr", 1)
     dates = sorted(dates)
     uts = [ut for ut in UT_ORDER if ut in uts] + sorted(uts - set(UT_ORDER))
     preferred = PRODUCTS[product]["models"] if product in PRODUCTS else []
@@ -2238,6 +2241,8 @@ def trend_payload(product, samples, releases=(), generated=None):
     # redundant.
     cells = {}
     for slug, detail, row, facts, pair in prepared:
+        if row.get("tr", 1) <= 0:
+            continue
         day, scene_i = day_idx[row["d"]], scene_idx[pair]
         model, ut = model_idx[row["m"]], ut_idx[row.get("ut") or "unknown"]
         for p in detail["attribution"]["problems"]:
@@ -2274,6 +2279,8 @@ def trend_payload(product, samples, releases=(), generated=None):
     intraday_buckets = defaultdict(lambda: defaultdict(lambda: [0] * 6))
     intraday_totals = defaultdict(lambda: [0] * 6)
     for slug, detail, row, _, _pair in prepared:
+        if row.get("tr", 1) <= 0:
+            continue
         trace = detail.get("trace_severity") or trace_severity(detail, include_refs=True)
         for level, count in enumerate(trace["counts"]):
             trace_days[day_idx[row["d"]]][level] += count
@@ -2975,6 +2982,58 @@ SAMPLE_DELTA = "samples-delta.pkl"
 SAMPLE_COMPACT_ROWS = 8000
 
 
+def cgroup_headroom() -> int | None:
+    """Bytes the container's memory limit still allows, or None when unbounded."""
+    pairs = (
+        ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory.current"),
+        ("/sys/fs/cgroup/memory/memory.limit_in_bytes",
+         "/sys/fs/cgroup/memory/memory.usage_in_bytes"),
+    )
+    for limit_path, used_path in pairs:
+        try:
+            limit = int(Path(limit_path).read_text().split()[0])
+            used = int(Path(used_path).read_text().split()[0])
+        except (OSError, ValueError, IndexError):
+            continue
+        if limit > (1 << 40):  # cgroup v1 reports a huge number for "no limit"
+            return None
+        return max(0, limit - used)
+    return None
+
+
+def rss_bytes() -> int:
+    try:
+        with open("/proc/self/statm", encoding="ascii") as fh:
+            pages = int(fh.read().split()[1])
+        return pages * os.sysconf("SC_PAGE_SIZE")
+    except (OSError, ValueError, IndexError, AttributeError):
+        return 0
+
+
+def capped_workers(wanted: int, headroom: int | None = None, rss: int = 0) -> int:
+    """Keep a forked pool inside the container's memory limit.
+
+    Every worker inherits the parent's heap and privatises the pages it touches
+    (refcounts alone copy them).  AIME's build parent holds ~9.6 GB in a 16 GB
+    cgroup; four workers pushed the container over, the OOM killer took one, and
+    the parent then blocked forever writing a task into that worker's pipe (its
+    siblings still held the read end) — the board froze for hours.  Use fewer
+    workers, or none (the serial path), when the headroom cannot pay for them.
+    """
+    if wanted <= 1:
+        return wanted
+    if headroom is None:
+        headroom = cgroup_headroom()
+    if rss <= 0:
+        rss = rss_bytes()
+    if headroom is None or rss <= 0:
+        return wanted
+    for workers in range(wanted, 1, -1):
+        if headroom >= rss + (rss * workers) // 2:
+            return workers
+    return 1
+
+
 def load_sample_pickle(path: Path):
     try:
         with open(path, "rb") as fh:
@@ -3098,7 +3157,11 @@ def build_samples(pairs, root, out_dir, store, reader, cluster_index, cluster_si
         tasks = list(by_input.items())
         if no_input:
             tasks.append((None, no_input))
-        workers = jobs or min(4, os.cpu_count() or 1)
+        wanted = jobs or min(4, os.cpu_count() or 1)
+        workers = capped_workers(wanted)
+        if workers < wanted:
+            debug("sample pool %d -> %d workers (rss=%dMB headroom=%dMB)" % (
+                wanted, workers, rss_bytes() >> 20, (cgroup_headroom() or 0) >> 20))
         batches = None
         if workers > 1 and len(misses) >= 128 and len(tasks) > 1:
             ctx = {

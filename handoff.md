@@ -88,6 +88,13 @@ server.py（标准库 HTTP，:5001，定时 build）──> app.js
   `place()`，否则第 2 条 trace 起的 compact 证据会越界或错位。
 - `server.py` 启动时缺数据会构建，之后默认每 10 分钟刷新（`REFRESH_SECONDS`，默认 600，可在 `deploy.env` 覆盖；同一时间只跑一个构建，见 `cache/build.lock`），页面每 2 分钟条件请求检查并就地刷新；`/healthz`
   返回最近一次构建摘要。
+- **构建内存（2026-11-18）**：弗吉尼亚容器 cgroup 上限 16 GiB，AIME 全量构建的父进程峰值约
+  10–12 GB（14 万条样本摘要常驻）。样本阶段的 fork 池会复制页，4 个 worker 足以把容器顶到 OOM；
+  OOM 杀掉一个 worker 后，父进程会永远卡在向死管道写任务（兄弟 worker 仍持有读端），构建不退出、
+  一直占着 `cache/build.lock`，之后每次定时构建都超时，看板的 `generated_at` 就此停住（2026-11-17
+  16:15–11-18 02:29 的停更就是它）。`build.py` 现在按 cgroup 余量把池降到放得下的数量，放不下就
+  串行（`capped_workers`）；串行峰值约 15.2 GB / 16 GiB，余量很小，扩容到 24–32 GiB 之前不要再用
+  `--jobs >1` 并跑其它重型进程。卡住的构建可以 `pkill -f eval_dashboard/build.py` 后立即重建。
 - 前端无框架、无打包器；原生 ES modules + SVG + 手写 CSS，唯一第三方库是内置的 `static/vendor/lightweight-charts`（K 线 / 趋势图）。
 - 生产由 `deploy.sh` 同步代码到远端，在远端构建数据、预压缩并重启；不要手改远端目录。
 
@@ -449,6 +456,12 @@ attribution / compact」的日期，并给出聚类落点缺口与 A/B 轮次、
   或在非根焦点下选中叶子）时自动展开，评测量 / 归因 / 预测由点击触发；同一行其它卡加 `.is-compact` 只留 `.compact` 关键数字。
   宽度动画是 FLIP + WAAPI（量旧盒子 → 切布局 → 从旧盒子播到新盒子），只在 ≥ 1181px；861–1180px 展开卡占整行，手机星图在图表下方。
   星图数据来自 `samples-<product>.json`（按需加载），索引行的 `r`（归因环节）和预测 payload 的 `items` 都是为它加的。
+- **聚类矩阵是 trace 口径（2026-11-18）**：`products[<p>].cross` 一行一条已评测 trace（含无问题
+  trace；没有输入 trace 的记录不进），所以各场景行合计 = `kpi.traces`（Σ`tr`）。格子主数字 = 命中该
+  聚类的 trace 数（同一条 trace 命中同一列的多个叶子只算一次），占比 = 命中 trace ÷ 该场景全部
+  trace（≤100%）；问题条数只留在「问题合计」列和悬浮说明里。`trends-<product>.json` 的 `base` 同样
+  按 trace 计数，`h*` 是按 trace 去重；改这类 payload 形状必须 bump `PAYLOAD_VERSION`，否则
+  `reused` 构建不会重写旧数据。
 - **就地刷新**：`app.js` 每 2 分钟条件请求 `data.json`，`generated_at` 变了才换 payload 并带 `refresh: true` 重画；
   数据页的筛选/翻页/下钻/页签/推拉状态在 `data.js` 的 `UI[product]` 里，样本页靠 URL，重画时都会保留。
 - **样本页消息对齐**：用户消息不再做右侧气泡，和模型/调用/返回/回答共用同一条左边线与 12px 文字内边距，只用底色区分。

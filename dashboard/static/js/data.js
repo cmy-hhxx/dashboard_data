@@ -1496,17 +1496,17 @@ const byNum = (a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1));
 
 function sceneTree(p) {
   const tasks = new Map();
-  (p.cross || []).forEach(([task, sub, pats]) => {
+  (p.cross || []).forEach(([task, sub, pats, tr]) => {
     const n = sum(pats.map((x) => x[1]));
     let t = tasks.get(task);
-    if (!t) tasks.set(task, (t = { name: task, n: 0, sessions: 0, subs: new Map() }));
+    if (!t) tasks.set(task, (t = { name: task, n: 0, traces: 0, subs: new Map() }));
     t.n += n;
-    t.sessions += 1;
+    t.traces += Number(tr) || 0;
     if (sub) {
       let s = t.subs.get(sub);
-      if (!s) t.subs.set(sub, (s = { name: sub, n: 0, sessions: 0 }));
+      if (!s) t.subs.set(sub, (s = { name: sub, n: 0, traces: 0 }));
       s.n += n;
-      s.sessions += 1;
+      s.traces += Number(tr) || 0;
     }
   });
   return [...tasks.values()]
@@ -1514,9 +1514,9 @@ function sceneTree(p) {
     .map((t) => {
       const subs = [...t.subs.values()].sort((a, b) => b.n - a.n || a.name.localeCompare(b.name));
       return {
-        name: t.name, task: t.name, n: t.n, sessions: t.sessions, tasks: [t.name],
+        name: t.name, task: t.name, n: t.n, traces: t.traces, tasks: [t.name],
         children: subs.length
-          ? subs.map((s) => ({ name: s.name, task: t.name, sub: s.name, n: s.n, sessions: s.sessions, children: [] }))
+          ? subs.map((s) => ({ name: s.name, task: t.name, sub: s.name, n: s.n, traces: s.traces, children: [] }))
           : [],
       };
     });
@@ -1529,7 +1529,7 @@ function capScenes(nodes) {
   return [
     ...nodes.slice(0, MX_HEAD),
     {
-      name: "其他场景", group: true, n: sum(rest.map((x) => x.n)), sessions: sum(rest.map((x) => x.sessions)),
+      name: "其他场景", group: true, n: sum(rest.map((x) => x.n)), traces: sum(rest.map((x) => x.traces)),
       tasks: rest.flatMap((x) => x.tasks || [x.task]), children: rest,
     },
   ];
@@ -1563,7 +1563,9 @@ function clusterTree(p, tax) {
 const clusterMatches = (node, pid) => !node.prefix || pid === node.prefix || pid.startsWith(`${node.prefix}.`);
 
 function matrixView(p, rows, cols) {
-  const cells = rows.map(() => cols.map(() => ({ n: 0, sessions: 0, pats: new Map() })));
+  // 一格 = 命中该聚类的 Trace 数（同一条 Trace 命中同一列的多个叶子只算一次），
+  // 分母 = 该场景全部已评测 Trace（含无问题），所以占比不会超过 100%。
+  const cells = rows.map(() => cols.map(() => ({ n: 0, hits: 0, pats: new Map() })));
   const traces = rows.map(() => 0);
   (p.cross || []).forEach(([task, sub, pats, tr]) => {
     const ri = rows.findIndex((r) => sceneMatches(r, task, sub));
@@ -1577,7 +1579,7 @@ function matrixView(p, rows, cols) {
       cell.n += n;
       cell.pats.set(pid, (cell.pats.get(pid) || 0) + n);
       if (!hit.has(ci)) {
-        cell.sessions += 1;
+        cell.hits += 1;
         hit.add(ci);
       }
     });
@@ -1588,15 +1590,16 @@ function matrixView(p, rows, cols) {
 function matrixTable(view) {
   const { rows, cols, cells, traces } = view;
   if (!rows.length || !cols.length) return `<div class="empty">暂无聚类数据</div>`;
-  let max = 1;
+  let maxHits = 1;
   const totals = rows.map((_, ri) => sum(cells[ri].map((x) => x.n)));
+  const colHits = cols.map((_, ci) => sum(rows.map((_, ri) => cells[ri][ci].hits)));
   const colTotals = cols.map((_, ci) => sum(rows.map((_, ri) => cells[ri][ci].n)));
   const grand = sum(colTotals);
   const grandTraces = sum(traces) || 0;
-  cells.forEach((row) => row.forEach((x) => (max = Math.max(max, x.n))));
-  // The scene's trace total lives once on its row label; a cell only carries its problem count
-  // and that scene's rate.
-  const cellData = (n, den) => `<span class="cell-data"><span class="cell-main"><b>${fmt(n)}</b></span><span class="cell-pct">${pct(n, den, 1)}</span></span>`;
+  cells.forEach((row) => row.forEach((x) => (maxHits = Math.max(maxHits, x.hits))));
+  // 格子主数字是命中 Trace 数，占比 = 命中 Trace ÷ 该场景全部已评测 Trace；
+  // 问题条数只留在悬浮说明和「问题合计」列里。
+  const cellData = (hits, den) => `<span class="cell-data"><span class="cell-main"><b>${fmt(hits)}</b></span><span class="cell-pct">${pct(hits, den, 1)}</span></span>`;
   const heads = cols
     .map((c, ci) => {
       const title = `${c.id ? `${c.id} · ` : ""}${c.name}`;
@@ -1615,14 +1618,14 @@ function matrixTable(view) {
       : `<span class="rh" title="${esc(r.name)}">${label}</span>`;
     cols.forEach((c, ci) => {
       const cell = cells[ri][ci];
-      const v = cell.n ? 0.08 + 0.72 * Math.sqrt(cell.n / max) : 0;
-      gridCells += cell.n
-        ? `<span class="cell num${v > 0.5 ? " hot" : ""}" style="--v:${v.toFixed(3)}" data-mx="${ri}:${ci}" title="${esc(r.name)} · ${esc(c.name)}：${fmt(cell.n)} 个问题 · ${fmt(traces[ri])} 条 Trace · ${pct(cell.n, traces[ri], 1)}">${cellData(cell.n, traces[ri])}</span>`
+      const v = cell.hits ? 0.08 + 0.72 * Math.sqrt(cell.hits / maxHits) : 0;
+      gridCells += cell.hits
+        ? `<span class="cell num${v > 0.5 ? " hot" : ""}" style="--v:${v.toFixed(3)}" data-mx="${ri}:${ci}" title="${esc(r.name)} · ${esc(c.name)}：${fmt(cell.hits)} 条 Trace 命中 · ${fmt(cell.n)} 个问题 · 场景 ${fmt(traces[ri])} 条 Trace">${cellData(cell.hits, traces[ri])}</span>`
         : `<span class="cell is-empty" data-mx="${ri}:${ci}"></span>`;
     });
     tots += `<span class="rowtot num">${fmt(totals[ri])}</span>`;
   });
-  const foot = cols.map((c, ci) => `<button type="button" class="cell coltot" style="--v:0.08" data-mx="${rows.length}:${ci}" title="全部场景 · ${esc(c.name)}：${fmt(colTotals[ci])} 个问题 / ${fmt(grandTraces)} 条 Trace · ${pct(colTotals[ci], grandTraces, 1)}">${cellData(colTotals[ci], grandTraces)}</button>`).join("");
+  const foot = cols.map((c, ci) => `<button type="button" class="cell coltot" style="--v:0.08" data-mx="${rows.length}:${ci}" title="全部场景 · ${esc(c.name)}：${fmt(colHits[ci])} 条 Trace 命中 / ${fmt(grandTraces)} 条 Trace · ${pct(colHits[ci], grandTraces, 1)}（共 ${fmt(colTotals[ci])} 个问题）">${cellData(colHits[ci], grandTraces)}</button>`).join("");
   return `<div class="matrix mx-swap-panel" style="--cols:${cols.length};--rows:${rows.length}">
     <div class="mx-rows"><span class="mx-corner" aria-hidden="true"></span>${rowLabels}<span class="rh"><span class="mx-lab mx-total-lab">场景合计<em class="mx-vol num">${fmt(grandTraces)}</em></span></span></div>
     <div class="mx-scroll"><div class="mx-grid">${heads}${gridCells}${foot}</div></div>
@@ -2108,7 +2111,7 @@ function swapShell(shell, html, animate, source, done = null) {
 
 /* ---------------------------------------------------------------- 聚类矩阵格子: 就地 P0-P4 时间趋势
    点格子不再跳具体数据：同一个「场景 × 问题聚类」在一张按时间轴的多折线图上看 P0-P4 的
-   出现数或出现比例（当日同场景会话里出现该等级问题的会话占比），发版日期画成竖线。
+   出现数或出现比例（当日同场景已评测 Trace 中命中该等级问题的 Trace 占比），发版日期画成竖线。
    四层聚类都能点：列节点的任何前缀都在 payload 的 nodes 里。
    口径 / 时间 / 场景是单选；来源 / 模型 / 等级是多选，每条线 = 三个多选值的一组组合：
    颜色 = 等级、虚线 = 模型、明度 = 来源，右侧端点直接标最新值，同等级的两个模型之间
@@ -2292,7 +2295,7 @@ function trendSeries(trend, spec) {
         } else if (s.levelIdxs.length === 1) {
           hits = h[s.levelIdxs[0]] || 0;
         } else {
-          // 旧 schema 没有 mask 直方图：多等级命中会话取逐级和与 all-level 并集的较小值近似。
+          // 旧 schema 没有 mask 直方图：多等级命中 Trace 取逐级和与 all-level 并集的较小值近似。
           hits = Math.min(any, s.levelIdxs.reduce((sum, k) => sum + (h[k] || 0), 0));
         }
         s.hits[wi] += hits;
@@ -2359,7 +2362,7 @@ function trendLinesHTML(lines, data, active) {
 
 const TREND_SEG_LABEL = { measure: "口径", scope: "场景范围" };
 const TREND_SEG_TITLE = {
-  measure: "出现数 = 该聚类 P0/P1/P2 问题条数；出现比例 = 命中会话占比：当日同场景会话中，出现该聚类该等级问题的会话占比",
+  measure: "出现数 = 该聚类的问题条数；出现比例 = 命中 Trace 占比：当日同场景已评测 Trace 中，命中该聚类该等级问题的 Trace 占比",
   scope: "本场景 = 点进来的这一行；全部场景 = 整个产品，不按场景拆分",
 };
 

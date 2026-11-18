@@ -135,6 +135,13 @@ supervisor() {
     || log "supervisor 没起来（不影响服务，只是少了自愈）"
 }
 
+slim_publish() {
+  # 瘦身流水线不在 /opt，代码和状态都在持久盘；start.sh 自带 loop + watchdog 单实例保护。
+  log "拉起瘦身流水线（loop + watchdog）"
+  sshx 'bash /mnt/aime_eval_ssd/code/3_scripts/1_slim_publish/start.sh' \
+    || log "瘦身流水线没起来（不影响看板/接口，稍后手动 start.sh）"
+}
+
 smoke() {
   log "冒烟"
   sshx '
@@ -173,6 +180,7 @@ main() {
   local rc=0
   wait_health || rc=1
   supervisor
+  slim_publish
   smoke
   log "===== 完成（wait_health rc=${rc}）====="
 }
