@@ -34,7 +34,7 @@
 }
 #viewSwitch .seg-knob.is-swept::after { animation: knob-sweep 720ms cubic-bezier(0.3, 0, 0.2, 1); }
 @keyframes knob-sweep { to { transform: translateX(110%); } }
-#viewSwitch button { transition: color var(--snap), transform var(--spring); }
+#viewSwitch button { padding: 0 12px; transition: color var(--snap), transform var(--spring); }
 #viewSwitch button:active { transform: scale(0.96); }
 #viewSwitch button[aria-pressed="true"] { animation: seg-lift 420ms cubic-bezier(0.16, 1, 0.3, 1); }
 @keyframes seg-lift { from { transform: translateY(2px); opacity: 0.6; } }
@@ -139,7 +139,7 @@ html[data-view="samples"] main, html[data-view="forecast"] main { max-width: non
   padding: var(--sp-3) var(--sp-4); font-size: var(--fs-meta); line-height: 1.6;
 }
 .tip {
-  position: fixed; z-index: var(--z-tip); pointer-events: none; max-width: 300px;
+  position: fixed; z-index: var(--z-tip); pointer-events: none; width: max-content; max-width: calc(100vw - 16px);
   opacity: 0; transform: translateY(3px); transition: opacity var(--snap), transform var(--snap);
 }
 .tip.is-on { opacity: 1; transform: none; }
@@ -147,6 +147,7 @@ html[data-view="samples"] main, html[data-view="forecast"] main { max-width: non
   margin-bottom: var(--sp-2); color: var(--ink); font-size: var(--fs-small); font-weight: var(--w-medium);
   line-height: 1.45; white-space: normal; overflow-wrap: anywhere;
 }
+.t-head, .t-note { max-width: 300px; }
 .t-row, .kl-tip-row { display: flex; align-items: baseline; gap: var(--sp-3); white-space: nowrap; }
 .t-row b, .kl-tip-row b {
   margin-left: auto; color: var(--ink); font-weight: var(--w-medium); font-variant-numeric: tabular-nums;
@@ -182,12 +183,10 @@ button.cell[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px 
   .card { grid-column: span min(var(--span, 4) * 2, 12); }
   .card.keep { grid-column: span var(--span); }
 }
-/* With 文档 the switch is one tab wider: between 1180 and 1360px the clock would slide under it,
-   so it steps aside there (it is hidden below 1180 anyway). */
-@media (max-width: 1360px) { .stamp { display: none; } }
-/* The page switch plus its mark needs the bar's whole width before the two side groups fit; below
-   that the switch takes a second row instead of sliding under the clock and product switch. */
-@media (max-width: 1180px) {
+/* With 评测速度 the switch is one tab wider: step the clock aside before 1440px, and move the
+   switch onto its own row before it reaches the product switch. */
+@media (max-width: 1440px) { .stamp { display: none; } }
+@media (max-width: 1240px) {
   .top { grid-template-columns: auto minmax(0, 1fr); gap: 10px; }
   .top-end { gap: 10px; }
   .top-mid { display: contents; }
@@ -200,5 +199,8 @@ button.cell[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px 
   :root { --card-px: var(--sp-5); --card-py: var(--sp-5); }
   .card, .card.keep { grid-column: 1 / -1; }
   .big { font-size: var(--fs-num-l); }
+}
+@media (max-width: 520px) {
+  .t-row { white-space: normal; flex-wrap: wrap; }
 }
 .t-hint { max-width: 280px; color: var(--ink-2); font-size: var(--fs-small); line-height: 1.55; white-space: normal; overflow-wrap: anywhere; }

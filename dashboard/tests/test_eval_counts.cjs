@@ -5,9 +5,23 @@ const path = require("node:path");
 
 // Run the actual card calculations without requiring a browser or copying the formulas.
 const source = fs.readFileSync(path.join(__dirname, "../static/js/data.js"), "utf8");
-const context = vm.createContext({ sum: (xs) => xs.reduce((a, b) => a + b, 0) });
-vm.runInContext(source.slice(source.indexOf("const dayCount ="), source.indexOf("function evalStats(")) +
-  "\nglobalThis.calc = (p, range, model = 'all') => { EV.range = range; EV.model = model; EV.year = null; return evalTotals(p); }; globalThis.families = (p) => evalModels(p); globalThis.defaultRange = EV.range;", context);
+const compact = (n) => {
+  const v = Number(n);
+  const s = Math.abs(v);
+  const [b, u, d] = s >= 1e9 ? [1e9, "B", 2] : s >= 1e6 ? [1e6, "M", 1] : s >= 1e3 ? [1e3, "K", 1] : [];
+  return b ? (v / b).toFixed(d).replace(/\.0+$/, "") + u : String(v);
+};
+const context = vm.createContext({
+  sum: (xs) => xs.reduce((a, b) => a + b, 0),
+  esc: (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]),
+  fmt: (n, d = 0) => Number(n).toFixed(d),
+  pct: (a, b, d = 0) => (b ? `${((100 * a) / b).toFixed(d)}%` : "—"),
+  compact,
+  counter: (v) => String(v),
+  stats: () => "",
+});
+vm.runInContext(source.slice(source.indexOf("const dayCount ="), source.indexOf("function evalCard(")) +
+  "\nglobalThis.calc = (p, range, model = 'all') => { EV.range = range; EV.model = model; EV.year = null; return evalTotals(p); }; globalThis.families = (p) => evalModels(p); globalThis.defaultRange = EV.range; globalThis.chartHTML = (p, range, model = 'all') => { EV.range = range; EV.model = model; EV.year = null; return evalChart(p); }; globalThis.legendHTML = () => evalLegend();", context);
 
 const p = {
   kpi: { unique_sessions: 2, traces: 5, tokens: 150 },
@@ -66,4 +80,20 @@ const aime = {
 };
 assert.deepEqual(plain(context.families(aime)).map((m) => m.label), ["全部", "Fast", "Expert"]);
 assert.deepEqual(plain(context.calc(aime, "all", "aime_expert")).traces, [5, 6]);
+
+// Eval chart bars & hover tips use Trace counts with K/M/B units, not record counts.
+const traceBarSample = {
+  kpi: { unique_sessions: 10, traces: 2599, tokens: 0 },
+  input: { sessions: 10, traces: 3798, models: { aime_fast: { sessions: 10, traces: 3798 } } },
+  daily: [
+    { d: "2026-11-14", m: "aime_fast", sp: "daily", inputs: 1500, input_traces: 3798, evaluated: 1000, traces: 2599, tokens: 0, sessions: 10, sids: [0], in_sessions: 10, in_sids: [0] },
+  ],
+};
+const html = context.chartHTML(traceBarSample, "7");
+assert.match(html, /输入 3\.8K 条 Trace · 已完成 2\.6K 条 Trace · 68\.4%/);
+assert.match(html, /<b class="num">2\.6K<\/b><small class="num">3\.8K<\/small>/);
+assert.doesNotMatch(html, /条记录/);
+const legend = context.legendHTML();
+assert.match(legend, /已完成 Trace/);
+assert.match(legend, /评测输入 Trace/);
 console.log("PASS: full default, time/model filters, trace units, cross-day session deduplication, model families");

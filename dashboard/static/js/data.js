@@ -447,18 +447,26 @@ function evalWindow(p) {
    点某年再回到那一年的月份。近 7/30 天保持按天，和以前一样。 */
 function evalBuckets(days) {
   if (EV.range !== "all") {
-    return days.map((x) => ({ ...x, label: x.d.slice(5), tip: x.d }));
+    return days.map((x) => ({
+      ...x,
+      inTraces: x.hasTraces ? x.inTraces : x.inputs,
+      label: x.d.slice(5),
+      tip: x.d,
+    }));
   }
   const months = new Map();
   days.forEach((x) => {
-    if (!x.inputs && !x.evaluated) return;
+    const inTr = x.hasTraces ? x.inTraces : x.inputs;
+    if (!x.inputs && !x.evaluated && !inTr && !x.traces) return;
     const key = x.d.slice(0, 7);
     let b = months.get(key);
-    if (!b) months.set(key, (b = { d: x.d, d0: x.d, d1: x.d, inputs: 0, evaluated: 0 }));
+    if (!b) months.set(key, (b = { d: x.d, d0: x.d, d1: x.d, inputs: 0, evaluated: 0, inTraces: 0, traces: 0 }));
     b.d0 = b.d0 < x.d ? b.d0 : x.d;
     b.d1 = b.d1 > x.d ? b.d1 : x.d;
     b.inputs += x.inputs;
     b.evaluated += x.evaluated;
+    b.inTraces += inTr;
+    b.traces += x.traces;
   });
   const keys = [...months.keys()].sort();
   const monthBar = (k) => ({ ...months.get(k), label: `${Number(k.slice(5))}月`, tip: k });
@@ -470,9 +478,11 @@ function evalBuckets(days) {
     const y = k.slice(0, 4);
     const m = months.get(k);
     let b = years.get(y);
-    if (!b) years.set(y, (b = { year: y, d: `${y}-01-01`, d0: `${y}-01-01`, d1: `${y}-12-31`, inputs: 0, evaluated: 0 }));
+    if (!b) years.set(y, (b = { year: y, d: `${y}-01-01`, d0: `${y}-01-01`, d1: `${y}-12-31`, inputs: 0, evaluated: 0, inTraces: 0, traces: 0 }));
     b.inputs += m.inputs;
     b.evaluated += m.evaluated;
+    b.inTraces += m.inTraces;
+    b.traces += m.traces;
   });
   return [...years.keys()].sort().map((y) => ({ ...years.get(y), label: y, tip: y }));
 }
@@ -480,18 +490,18 @@ function evalBuckets(days) {
 function evalChart(p) {
   const bars = evalBuckets(evalWindow(p).days);
   if (!bars.length) return `<div class="empty">暂无评测日期</div>`;
-  const max = Math.max(1, ...bars.map((x) => Math.max(x.inputs, x.evaluated)));
+  const max = Math.max(1, ...bars.map((x) => Math.max(x.inTraces, x.traces)));
   const rows = [];
   for (let i = 0; i < bars.length; i += EV_PER_ROW) rows.push(bars.slice(i, i + EV_PER_ROW));
   const barH = rows.length === 1 ? 160 : 44;
   return `<div class="evrows${EV.range === "all" ? " is-buckets" : ` is-days${EV.range === "7" ? " is-week" : ""}`}" style="--bar-h:${barH}px">${rows
     .map((row) => `<div class="evrow" style="--n:${row.length}">${row
       .map((x) => {
-        const total = Math.max(x.inputs, x.evaluated, 1);
+        const total = Math.max(x.inTraces, x.traces, 1);
         const height = Math.max(3, (barH * total) / max);
-        const done = x.evaluated ? Math.min(100, (100 * x.evaluated) / Math.max(x.inputs, x.evaluated)) : 0;
-        const tip = `${x.tip || x.d}|输入 ${fmt(x.inputs)} 条记录 · 已完成 ${fmt(x.evaluated)} 条记录 · ${pct(x.evaluated, x.inputs, 1)}`;
-        return `<div class="evday${x.evaluated ? " is-live" : ""}${x.year ? " is-drill" : ""}"${x.year ? ` data-year="${esc(x.year)}"` : ""} data-d0="${x.d0 || x.d}" data-d1="${x.d1 || x.d}"><div class="evnums"><b class="num">${compact(x.evaluated)}</b><small class="num">${compact(x.inputs)}</small></div>
+        const done = x.traces ? Math.min(100, (100 * x.traces) / Math.max(x.inTraces, x.traces)) : 0;
+        const tip = `${x.tip || x.d}|输入 ${compact(x.inTraces)} 条 Trace · 已完成 ${compact(x.traces)} 条 Trace · ${pct(x.traces, x.inTraces, 1)}`;
+        return `<div class="evday${x.traces ? " is-live" : ""}${x.year ? " is-drill" : ""}"${x.year ? ` data-year="${esc(x.year)}"` : ""} data-d0="${x.d0 || x.d}" data-d1="${x.d1 || x.d}"><div class="evnums"><b class="num">${compact(x.traces)}</b><small class="num">${compact(x.inTraces)}</small></div>
           <div class="evbar" style="height:${height}px" data-tip="${esc(tip)}"><i style="height:${done}%"></i></div>
           <small class="evdate num">${esc(x.label)}</small></div>`;
       })
@@ -540,7 +550,7 @@ function evalLegend() {
   const back = EV.range === "all" && EV.year
     ? `<button type="button" class="link ev-back" id="evYearBack" aria-label="返回全部年份">‹ ${esc(EV.year)} 年</button>`
     : "";
-  return `<div class="ev-legend"><span><i class="ev-done"></i>已完成记录</span><span><i class="ev-in"></i>评测输入记录</span>${back}</div>`;
+  return `<div class="ev-legend"><span><i class="ev-done"></i>已完成 Trace</span><span><i class="ev-in"></i>评测输入 Trace</span>${back}</div>`;
 }
 
 function evalCard(p) {
@@ -580,7 +590,7 @@ function evalCompact(p) {
   const w = evalWindow(p);
   const days = evalBuckets(w.days).slice(-12);
   // The folded card keeps the day chart it had open, scaled into whatever height the versions leave.
-  const cols = miniCols(days.map((x) => ({ done: x.evaluated || 0, all: Math.max(x.inputs || 0, x.evaluated || 0) })));
+  const cols = miniCols(days.map((x) => ({ done: x.traces || 0, all: Math.max(x.inTraces || 0, x.traces || 0) })));
   const ends = days.length > 1 ? [days[0], days[days.length - 1]] : days;
   const foot = days.length ? `<div class="cx-days">${cols}<span>${ends.map((x) => `<small>${esc(x.label)}</small>`).join("")}</span></div>` : "";
   // Per version over the same window: done / inputs, the bar is the version's completion.
@@ -592,14 +602,14 @@ function evalCompact(p) {
       const family = modelFamily(r.m);
       if (!family) return;
       const x = by.get(family) || { m: family, inputs: 0, done: 0 };
-      x.inputs += r.inputs || 0;
-      x.done += r.evaluated || 0;
+      x.inputs += r.input_traces ?? r.inputs ?? 0;
+      x.done += r.traces ?? r.evaluated ?? 0;
       by.set(family, x);
     });
   const rank = [...by.values()]
     .sort((a, b) => b.done - a.done || b.inputs - a.inputs)
     .slice(0, 8)
-    .map((x) => ({ name: x.m === "all" ? "全部" : modelName(p, x.m), value: `${fmt(x.done)}<span class="stat-of"> / ${fmt(x.inputs)}</span>`, share: x.inputs ? x.done / x.inputs : 0 }));
+    .map((x) => ({ name: x.m === "all" ? "全部" : modelName(p, x.m), value: `${compact(x.done)}<span class="stat-of"> / ${compact(x.inputs)}</span>`, share: x.inputs ? x.done / x.inputs : 0 }));
   // 图和展开态一样按窗口/模型走；底部三个数也跟 ev-range 同一口径。
   const t = evalTotals(p);
   const ratio = ([a, b]) => `${compact(a)}${b == null ? "" : `<span class="stat-of"> / ${compact(b)}</span>`}`;

@@ -2,9 +2,9 @@
 import { $, $$, esc, segmented, getJSON, announce, installTips, importRetry, onNetwork, REDUCED } from "./core.js";
 import { pixelToggle } from "./pixel_toggle.js";
 
-const VIEWS = ["data", "system", "judge", "bench", "samples", "forecast", "compare", "docs"];
+const VIEWS = ["data", "speed", "system", "judge", "bench", "samples", "forecast", "compare", "docs"];
 const PRODUCTS = ["wencai", "aime"];
-const VIEW_NAME = { data: "数据看板", system: "评测体系", judge: "评测评测", bench: "Bench", samples: "具体数据", forecast: "预测数据", compare: "版本对比", docs: "文档" };
+const VIEW_NAME = { data: "数据看板", speed: "评测速度", system: "评测体系", judge: "评测评测", bench: "Bench", samples: "具体数据", forecast: "预测数据", compare: "版本对比", docs: "文档" };
 // Sample params (case / trace / filters) and compare params (pair / round / online) never leak
 // across views, or a stale deep link would reopen the previous drill on the next page.
 const SAMPLE_PARAMS = {
@@ -29,7 +29,7 @@ const state = { view: "data", product: "wencai", data: null, indexes: {}, indexP
 const modules = {};
 // Each view module loads on first visit; a refused connection retries instead of breaking the view.
 const loaders = Object.fromEntries([
-  ["data", () => import("./data.js")], ["system", () => import("./system.js")], ["judge", () => import("./judge.js")],
+  ["data", () => import("./data.js")], ["speed", () => import("./speed.js")], ["system", () => import("./system.js")], ["judge", () => import("./judge.js")],
   ["bench", () => import("./bench.js")], ["samples", () => import("./samples.js")], ["forecast", () => import("./forecast.js")],
   ["compare", () => import("./compare.js")], ["docs", () => import("./docs.js")],
 ].map(([view, load]) => [view, () => importRetry(load, `./${view}.js`)]));
@@ -38,6 +38,7 @@ const loaders = Object.fromEntries([
    so the page never flashes empty; the view's render replaces it. */
 const SKELETON = {
   data: [[3, 132], [3, 132], [3, 132], [3, 132], [8, 360], [4, 360], [12, 420]],
+  speed: [[12, 168], [12, 168], [4, 124], [4, 124], [4, 124], [12, 280], [12, 240]],
   system: [[12, 420], [12, 520]],
   judge: [[12, 64], [4, 380], [4, 380], [4, 380], [12, 150], [7, 320], [5, 320]],
   bench: [[12, 64], [12, 560]],

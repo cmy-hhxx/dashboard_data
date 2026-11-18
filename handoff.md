@@ -103,6 +103,7 @@ server.py（标准库 HTTP，:5001，定时 build）──> app.js
 | 路由 | 模块 | 内容 |
 |---|---|---|
 | `?view=data&product=wencai\|aime` | `data.js` | 会话场、聚类矩阵、数据量、评测量、归因、聚类、预测；所有下钻都在页内 |
+| `?view=speed&product=…` | `speed.js` | AIME 评测速度与实时调度：输入/输出进度、Chunk 队列与在跑锁、实时 RPM / 网关探活 / `.parts` 吞吐、聚类进度与日期分布 |
 | `?view=system&product=…` | `system.js` | 评测体系机制图（输入 → 压缩 → 归因 → 聚类热力矩阵）、证据闭环；点问题进入全屏逐步推导（`evidence_theater.js`）；每个标签页会话首次进入时多光标搭建一遍（`builder.js`，sessionStorage `eval-build:sys`） |
 | `?view=docs[&doc=severity\|capacity]` | `docs.js` | 文档：液体注入卡片（`shader_flood.js`，WebGL，2D canvas 兜底）；文档页暂为占位 |
 | `?view=samples&product=…&case=…&trace=…` | `samples.js` | 具体数据两栏：问句列表 | 同卡上方轨迹概览 + 三列（轨迹 / 对话 / 归因）；证据连线在对话与归因之间；`trace` 定位到会话里的某一轮 |
@@ -172,10 +173,12 @@ A/B 面板里的样本入口（旭日图叶子样本、矩阵格趋势的样本�
 | `dashboard/stats_worker.py` | 独立输入统计旁路，写 `datasets/stats.json` | 统计字段、刷新间隔 |
 | `dashboard/detail_builder.py` | 样本详情按需生成、cluster 映射重载与磁盘缓存 | 详情格式、懒加载 |
 | `dashboard/json_compat.py` | 可选 `orjson` 快路径，标准库兜底 | JSON 兼容性 |
-| `dashboard/server.py` | 静态服务、gzip、定时构建、`/healthz` | 服务行为、缓存、刷新 |
+| `dashboard/server.py` | 静态服务、gzip、定时构建、`/healthz`、`/speed.json` | 服务行为、缓存、刷新 |
+| `dashboard/speed_monitor.py` | AIME 评测速度、Chunk 队列、`.parts` 实时吞吐与网关 RPM/探活采集 | 实时监控口径、网关探测 |
 | `dashboard/static/js/app.js` | 路由、主题、产品切换、模块懒加载、错误兜底 | 页面级状态 |
 | `dashboard/static/js/core.js` | 共享格式化、数字动画、`segmented`、提示等 | 通用交互 |
 | `dashboard/static/js/data.js` | 数据页各卡片、评测量详情、聚类矩阵与格子里的趋势图 | 数据页排版、下钻、趋势 |
+| `dashboard/static/js/speed.js` + `css/speed.css` | 评测速度页：15s 轮询 `/speed.json`，展示进度、队列、RPM 趋势与网关实时调度 | 评测速度与网关展示 |
 | `dashboard/static/js/trend_chart.js` | 共享趋势图：折线/面积、问题聚类点、发版红线、格子趋势几何 | 趋势图形状、坐标轴、发版标注 |
 | `dashboard/static/js/kline_data.js` | K 线聚合：日内行情 5 分钟 / 日/周/月/年 OHLCV，纯函数 | 周期口径、聚合规则 |
 | `dashboard/static/js/kline_chart.js` | 基于 vendor 的 lightweight-charts 画蜡烛、量能与悬浮读数；`createTrendChart` 为聚类矩阵的多线趋势（面积叠加、Trace 量能、发版红线、解锁按钮控制滚轮缩放） | 图表交互、配色、图例 |

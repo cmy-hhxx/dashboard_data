@@ -226,6 +226,8 @@ class Handler(SimpleHTTPRequestHandler):
         if not policy:
             policy = "no-store" if self.path.startswith("/healthz") else "no-cache"
         self.send_header("Cache-Control", policy)
+        if getattr(self, "_cors_any", False):
+            self.send_header("Access-Control-Allow-Origin", "*")
         super().end_headers()
 
     def _send_body(self, status, body, ctype, etag=None):
@@ -392,6 +394,7 @@ class Handler(SimpleHTTPRequestHandler):
         # Per request, for every method: a HEAD on a keep-alive connection must not
         # inherit the policy the previous GET chose.
         self._cache_policy = None
+        self._cors_any = False
         try:
             super().handle_one_request()
         finally:
@@ -478,6 +481,13 @@ class Handler(SimpleHTTPRequestHandler):
                 "build": _state["build"],
             }).encode()
             self._send_body(200, body, "application/json")
+            return
+        if path_only in ("/speed.json", "/api/metrics"):
+            import speed_monitor
+            self._cache_policy = "no-store"
+            self._cors_any = True
+            body = json.dumps(speed_monitor.payload(), ensure_ascii=False, separators=(",", ":")).encode()
+            self._send_body(200, body, "application/json; charset=utf-8")
             return
         if _lister and (path_only == "/inputs.json" or (path_only.startswith("/inputs/") and path_only.endswith(".json"))):
             if self._serve_inputs(path_only):
@@ -648,6 +658,12 @@ def main():
         threading.Thread(target=warm_input_lister, daemon=True).start()
     except Exception as exc:  # noqa: BLE001 - 输入清单不可用时第三级退回旧行为
         print(f"[serve] input lister disabled: {exc}", flush=True)
+    try:
+        import speed_monitor
+        if speed_monitor.start(CACHE):
+            print("[serve] speed monitor enabled", flush=True)
+    except Exception as exc:  # noqa: BLE001 - speed monitor is optional
+        print(f"[serve] speed monitor disabled: {exc}", flush=True)
     if not outputs_ready():
         print("[serve] payloads missing, building once before serving", flush=True)
         refresh_once()
