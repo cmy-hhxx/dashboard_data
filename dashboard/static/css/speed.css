@@ -34,8 +34,8 @@
 
 /* 3-up speed cards */
 .sp-rate-card .sp-rate { display: flex; align-items: baseline; gap: 4px; }
-.sp-rate-card.is-attr .big { color: var(--accent); }
-.sp-rate-card.is-compact .big { color: var(--loc-vir); }
+.sp-rate-card.is-rate-attr .big { color: var(--accent); }
+.sp-rate-card.is-rate-comp .big { color: var(--loc-vir); }
 .sp-rate-sub { color: var(--muted); font-size: var(--fs-meta); margin-top: 10px; }
 .sp-rate-sub b { color: var(--ink-2); font-weight: var(--w-medium); }
 
@@ -49,19 +49,21 @@
 .sp-legend i { width: 14px; height: 2px; border-radius: 2px; background: var(--c); }
 .sp-legend .is-dashed i { background: repeating-linear-gradient(90deg, var(--c) 0 4px, transparent 4px 7px); }
 .sp-chart-wrap { position: relative; margin-top: 4px; }
-.sp-chart { display: block; width: 100%; height: 220px; overflow: visible; cursor: crosshair; }
-.sp-chart .grid line { stroke: var(--well-2); stroke-width: 1; }
-.sp-chart .axis text { fill: var(--muted); font-size: 11px; font-family: var(--font); }
-.sp-chart .line { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
-.sp-chart .line.attr { stroke: var(--accent); }
-.sp-chart .line.compact { stroke: var(--loc-vir); }
-.sp-chart .line.rpm { stroke: var(--accent); }
-.sp-chart .line.quota { stroke: var(--sev-2); stroke-dasharray: 4 4; stroke-width: 1.5; opacity: 0.78; }
-.sp-chart .area.attr { fill: color-mix(in oklab, var(--accent) 10%, transparent); }
-.sp-chart .area.rpm { fill: color-mix(in oklab, var(--accent) 12%, transparent); }
-.sp-chart .hover-line { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; pointer-events: none; }
-.sp-chart .point.attr, .sp-chart .point.rpm { fill: var(--accent); }
-.sp-chart .point.compact { fill: var(--loc-vir); }
+.sp-chart { display: block; width: 100%; height: 256px; overflow: visible; cursor: crosshair; }
+.sp-chart .sp-grid line { stroke: var(--well-2); stroke-width: 1; }
+.sp-chart .sp-grid line.sp-grid-v { stroke: var(--well); stroke-width: 1; stroke-dasharray: 2 4; }
+.sp-chart .sp-axis text { fill: var(--muted); font-size: var(--fs-micro); font-family: var(--font); font-variant-numeric: tabular-nums; }
+.sp-chart .sp-line { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.sp-chart .sp-line-attr, .sp-chart .sp-line-rpm { stroke: var(--accent); }
+.sp-chart .sp-line-comp { stroke: var(--loc-vir); }
+.sp-chart .sp-line-quota { stroke: var(--sev-2); stroke-dasharray: 4 4; stroke-width: 1.5; opacity: 0.78; }
+.sp-chart .sp-area-attr { fill: color-mix(in oklab, var(--accent) 9%, transparent); }
+.sp-chart .sp-area-comp { fill: color-mix(in oklab, var(--loc-vir) 8%, transparent); }
+.sp-chart .sp-area-rpm { fill: color-mix(in oklab, var(--accent) 11%, transparent); }
+.sp-chart .sp-hover-line { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; pointer-events: none; }
+.sp-chart .sp-point { stroke: var(--card); stroke-width: 1.5; }
+.sp-chart .sp-point-attr, .sp-chart .sp-point-rpm { fill: var(--accent); }
+.sp-chart .sp-point-comp { fill: var(--loc-vir); }
 .sp-chart-empty { padding: 48px 0; text-align: center; color: var(--muted); font-size: var(--fs-small); }
 
 /* Gateway & live scheduler telemetry */
@@ -141,7 +143,7 @@
 }
 @media (max-width: 860px) {
   .sp-rate-card { grid-column: 1 / -1 !important; }
-  .sp-chart { height: 180px; }
+  .sp-chart { height: 200px; }
   .sp-chart-tools { margin-left: 0; }
 }
 @media (max-width: 620px) {

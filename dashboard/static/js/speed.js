@@ -5,15 +5,19 @@ const POLL_MS = 15000;
 const DATE_PAGE_SIZE = 12;
 const SVG_NS = "http://www.w3.org/2000/svg";
 
+const CHART_PAD = { L: 48, R: 24, T: 18, B: 32 };
+
 const S = {
   data: null,
   timer: 0,
   inflight: false,
   selectedModel: null,
   range: 300,
-  chartMode: "rpm",
+  chartMode: "landing",
   dateFilter: { year: "all", month: "all", page: 1 },
   chartSamples: [],
+  chartPlotStart: 0,
+  chartPlotSpan: 300,
   rangeSeg: null,
   modeSeg: null,
   sourceUrl: "speed.json",
@@ -135,13 +139,13 @@ function shellHTML() {
       <div class="sp-locks" id="spLocks" hidden></div>
     </article>
 
-    <article class="card sp-rate-card is-attr" style="--span:4">
+    <article class="card sp-rate-card is-rate-attr" style="--span:4">
       <header class="card-head"><h2>Attribution 落地</h2><span class="meta" id="spAttrWindow">近 5 分钟</span></header>
       <div class="sp-rate"><span class="big num" id="spAttrRate">—</span><span class="unit">条/分钟</span></div>
       <p class="sp-rate-sub" id="spPartsAttrSub">在途实时 (.parts) —</p>
     </article>
 
-    <article class="card sp-rate-card is-compact" style="--span:4">
+    <article class="card sp-rate-card is-rate-comp" style="--span:4">
       <header class="card-head"><h2>Compact</h2><span class="meta" id="spCompactWindow">近 5 分钟</span></header>
       <div class="sp-rate"><span class="big num" id="spCompactRate">—</span><span class="unit">条/分钟</span></div>
       <p class="sp-rate-sub" id="spPartsCompactSub">在途实时 (.parts) —</p>
@@ -160,8 +164,8 @@ function shellHTML() {
         <div class="sp-chart-tools">
           <div class="seg" id="spChartMode" role="group" aria-label="趋势指标">
             <span class="seg-knob" aria-hidden="true"></span>
-            <button type="button" data-value="rpm">实时 RPM</button>
             <button type="button" data-value="landing">落地速度</button>
+            <button type="button" data-value="rpm">实时 RPM</button>
           </div>
           <div class="seg" id="spRange" role="group" aria-label="历史窗口">
             <span class="seg-knob" aria-hidden="true"></span>
@@ -174,14 +178,15 @@ function shellHTML() {
         </div>
       </header>
       <div class="sp-chart-wrap" id="spChartWrap">
-        <svg class="sp-chart" id="spChart" viewBox="0 0 1000 220" preserveAspectRatio="none" role="img" aria-label="评测速度与 RPM 实时趋势">
-          <g class="grid" id="spGrid"></g>
-          <path class="area attr" id="spArea1" d=""></path>
-          <line class="line quota" id="spQuotaLine" x1="0" x2="0" y1="0" y2="0" visibility="hidden"></line>
-          <line class="hover-line" id="spHoverLine" x1="0" x2="0" y1="12" y2="194" visibility="hidden"></line>
-          <path class="line attr" id="spLine1" d=""></path>
-          <path class="line compact" id="spLine2" d=""></path>
-          <g class="axis" id="spAxis"></g>
+        <svg class="sp-chart" id="spChart" viewBox="0 0 960 256" role="img" aria-label="评测速度与 RPM 实时趋势">
+          <g class="sp-grid" id="spGrid"></g>
+          <path class="sp-area sp-area-attr" id="spArea1" d=""></path>
+          <path class="sp-area sp-area-comp" id="spArea2" d=""></path>
+          <line class="sp-line sp-line-quota" id="spQuotaLine" x1="0" x2="0" y1="0" y2="0" visibility="hidden"></line>
+          <line class="sp-hover-line" id="spHoverLine" x1="0" x2="0" y1="18" y2="224" visibility="hidden"></line>
+          <path class="sp-line sp-line-attr" id="spLine1" d=""></path>
+          <path class="sp-line sp-line-comp" id="spLine2" d=""></path>
+          <g class="sp-axis" id="spAxis"></g>
           <g id="spPointLayer"></g>
         </svg>
         <div class="sp-chart-empty" id="spChartEmpty" hidden>正在采集实时数据，约 15–30 秒后绘出趋势…</div>
@@ -518,10 +523,175 @@ function renderDates(root, model) {
   setHTML(root, "spDates", html);
 }
 
-function axisLabel(back, range) {
+function axisLabel(back, plotSpan) {
   if (back <= 1) return "现在";
-  if (range <= 3600) return `-${Math.round(back / 60)}m`;
-  return `-${Math.round(back / 3600)}h`;
+  if (plotSpan <= 3600) return `-${Math.round(back / 60)}m`;
+  const h = back / 3600;
+  if (h < 10 && Math.abs(h - Math.round(h)) >= 0.08) return `-${h.toFixed(1)}h`;
+  return `-${Math.round(h)}h`;
+}
+
+function niceAxisMax(rawMax, ticks = 4) {
+  const target = Math.max(1, rawMax * 1.12);
+  const perTick = target / ticks;
+  const steps = [
+    0.5, 1, 2, 2.5, 5, 8, 10, 12, 15, 20, 25, 30, 40, 50, 60, 75,
+    100, 125, 150, 200, 250, 300, 400, 500, 750, 1000,
+  ];
+  for (const s of steps) {
+    if (s >= perTick) return s * ticks;
+  }
+  const exp = 10 ** Math.floor(Math.log10(perTick));
+  for (const m of [1, 2, 2.5, 5, 10]) {
+    if (m * exp >= perTick) return m * exp * ticks;
+  }
+  return Math.ceil(perTick) * ticks;
+}
+
+function lookupPartsRate(rpmHist, colIdx, t) {
+  if (!rpmHist.length) return 0;
+  if (t <= rpmHist[0][0]) return Number(rpmHist[0][colIdx]) || 0;
+  const last = rpmHist[rpmHist.length - 1];
+  if (t >= last[0]) return Number(last[colIdx]) || 0;
+  let lo = 0, hi = rpmHist.length - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (rpmHist[mid][0] <= t) lo = mid; else hi = mid;
+  }
+  const p0 = rpmHist[lo], p1 = rpmHist[hi];
+  const f = p1[0] === p0[0] ? 0 : (t - p0[0]) / (p1[0] - p0[0]);
+  return (Number(p0[colIdx]) || 0) + ((Number(p1[colIdx]) || 0) - (Number(p0[colIdx]) || 0)) * f;
+}
+
+function blendPartsTail(history, rpmHist) {
+  const eff = history.map((p) => [p[0], Number(p[1]) || 0, Number(p[2]) || 0]);
+  if (eff.length < 2 || !rpmHist.length) return eff;
+  const lastT = eff[eff.length - 1][0];
+  for (const [col, rCol] of [[1, 2], [2, 3]]) {
+    const tailVal = eff[eff.length - 1][col];
+    let flatStart = eff.length - 1;
+    while (flatStart > 0 && eff[flatStart - 1][col] === tailVal && lastT - eff[flatStart - 1][0] <= 600) {
+      flatStart -= 1;
+    }
+    if (flatStart < eff.length - 1) {
+      let acc = 0;
+      for (let i = flatStart + 1; i < eff.length; i++) {
+        const dt = Math.max(0, eff[i][0] - eff[i - 1][0]);
+        const perMin = Math.max(0, lookupPartsRate(rpmHist, rCol, eff[i][0]));
+        acc += (perMin / 60) * dt;
+        eff[i][col] = tailVal + acc;
+      }
+    }
+  }
+  return eff;
+}
+
+function buildRpmSamples(raw, range) {
+  if (!raw.length) return { samples: [], now: Date.now() / 1000, step: 15 };
+  const now = raw[raw.length - 1][0];
+  const start = now - range;
+  const from = Math.max(start, raw[0][0]);
+  const step = range <= 600 ? 15 : range <= 3600 ? 30 : range <= 21600 ? 120 : range <= 86400 ? 300 : 600;
+  const samples = [];
+  if (now - from < 10) {
+    const last = raw[raw.length - 1];
+    samples.push({ t: last[0], v1: Number(last[1]) || 0, pa: Number(last[2]) || 0, pc: Number(last[3]) || 0 });
+    return { samples, now, step };
+  }
+  const count = Math.max(1, Math.min(240, Math.ceil((now - from) / step)));
+  const half = Math.max(step * 0.65, 20);
+  const maxGap = Math.max(300, step * 3);
+  const interpAt = (t) => {
+    if (t <= raw[0][0]) return raw[0];
+    const last = raw[raw.length - 1];
+    if (t >= last[0]) return last;
+    let lo = 0, hi = raw.length - 1;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (raw[mid][0] <= t) lo = mid; else hi = mid;
+    }
+    const p0 = raw[lo], p1 = raw[hi];
+    if (p1[0] - p0[0] > maxGap) return [t, 0, 0, 0];
+    const f = p1[0] === p0[0] ? 0 : (t - p0[0]) / (p1[0] - p0[0]);
+    return [
+      t,
+      (Number(p0[1]) || 0) + ((Number(p1[1]) || 0) - (Number(p0[1]) || 0)) * f,
+      (Number(p0[2]) || 0) + ((Number(p1[2]) || 0) - (Number(p0[2]) || 0)) * f,
+      (Number(p0[3]) || 0) + ((Number(p1[3]) || 0) - (Number(p0[3]) || 0)) * f,
+    ];
+  };
+  let idx = 0;
+  for (let i = 0; i <= count; i++) {
+    const t = from + (now - from) * (i / count);
+    while (idx < raw.length && raw[idx][0] < t - half) idx++;
+    let sv = 0, spa = 0, spc = 0, n = 0;
+    for (let k = idx; k < raw.length && raw[k][0] <= t + half; k++) {
+      sv += Number(raw[k][1]) || 0;
+      spa += Number(raw[k][2]) || 0;
+      spc += Number(raw[k][3]) || 0;
+      n++;
+    }
+    if (n > 0) {
+      samples.push({ t, v1: sv / n, pa: spa / n, pc: spc / n });
+    } else {
+      const q = interpAt(t);
+      samples.push({ t, v1: q[1], pa: q[2], pc: q[3] });
+    }
+  }
+  const last = raw[raw.length - 1];
+  samples[samples.length - 1] = { t: now, v1: Number(last[1]) || 0, pa: Number(last[2]) || 0, pc: Number(last[3]) || 0 };
+  return { samples, now, step };
+}
+
+function buildLandingSamples(history, rpmHist, range) {
+  if (!history.length) return { samples: [], now: Date.now() / 1000, step: 15 };
+  const all = range <= 3600 ? blendPartsTail(history, rpmHist) : history;
+  const now = all[all.length - 1][0];
+  const start = now - range;
+  const firstT = all[0][0];
+  const step = range <= 600 ? 15 : range <= 3600 ? 30 : range <= 21600 ? 60 : range <= 86400 ? 300 : 600;
+  const rateWindow = Math.max(300, step * 6);
+  const from = Math.max(start, firstT);
+  const count = Math.max(1, Math.min(240, Math.ceil((now - from) / step)));
+  const at = (t) => {
+    if (t <= firstT) return [firstT, all[0][1], all[0][2]];
+    const last = all[all.length - 1];
+    if (t >= last[0]) return last;
+    let lo = 0, hi = all.length - 1;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (all[mid][0] <= t) lo = mid; else hi = mid;
+    }
+    const p0 = all[lo], p1 = all[hi];
+    const f = p1[0] === p0[0] ? 0 : (t - p0[0]) / (p1[0] - p0[0]);
+    return [t, p0[1] + (p1[1] - p0[1]) * f, p0[2] + (p1[2] - p0[2]) * f];
+  };
+  const samples = [];
+  for (let i = 0; i <= count; i++) {
+    const t = from + (now - from) * (i / count);
+    const cur = at(t);
+    const base = at(Math.max(firstT, t - rateWindow));
+    const span = t - base[0];
+    if (span < 30) continue;
+    samples.push({
+      t,
+      a: Math.round(cur[1]),
+      c: Math.round(cur[2]),
+      v1: Math.max(0, (cur[1] - base[1]) / span * 60),
+      v2: Math.max(0, (cur[2] - base[2]) / span * 60),
+    });
+  }
+  const smooth = (key) => samples.map((_, i) => {
+    let sum = 0, n = 0;
+    for (let j = Math.max(0, i - 1); j <= Math.min(samples.length - 1, i + 1); j++) {
+      sum += samples[j][key];
+      n++;
+    }
+    return sum / n;
+  });
+  const v1 = smooth("v1"), v2 = smooth("v2");
+  samples.forEach((s, i) => { s.v1 = v1[i]; s.v2 = v2[i]; });
+  return { samples, now, step };
 }
 
 function drawChart(root) {
@@ -531,7 +701,9 @@ function drawChart(root) {
   const line1 = $("#spLine1", root);
   const line2 = $("#spLine2", root);
   const area1 = $("#spArea1", root);
+  const area2 = $("#spArea2", root);
   const quotaLine = $("#spQuotaLine", root);
+  const hoverLine = $("#spHoverLine", root);
   const pointLayer = $("#spPointLayer", root);
   const legend = $("#spChartLegend", root);
   const empty = $("#spChartEmpty", root);
@@ -540,7 +712,15 @@ function drawChart(root) {
   grid.replaceChildren();
   axis.replaceChildren();
   pointLayer.replaceChildren();
-  const W = 1000, H = 220, L = 44, R = 14, T = 14, B = 26;
+  const rect = chart.getBoundingClientRect();
+  const W = Math.max(320, Math.round(rect.width || 960));
+  const H = Math.max(200, Math.round(rect.height || 256));
+  chart.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const { L, R, T, B } = CHART_PAD;
+  if (hoverLine) {
+    hoverLine.setAttribute("y1", T);
+    hoverLine.setAttribute("y2", H - B);
+  }
   const isRpm = S.chartMode === "rpm";
   const quota = S.data?.gateways?.rpm_limit || null;
 
@@ -550,61 +730,10 @@ function drawChart(root) {
       : `<span style="--c:var(--accent)"><i></i>Attribution</span><span style="--c:var(--loc-vir)"><i></i>Compact</span>`;
   }
 
-  const samples = [];
-  let now = Date.now() / 1000;
-  if (isRpm) {
-    const raw = (S.data?.rpm_history || []);
-    if (raw.length) {
-      now = raw[raw.length - 1][0];
-      const start = now - S.range;
-      raw.filter((p) => p[0] >= start).forEach((p) => {
-        samples.push({ t: p[0], v1: Number(p[1]) || 0, pa: Number(p[2]) || 0, pc: Number(p[3]) || 0 });
-      });
-    }
-  } else {
-    const all = (S.data?.history || []);
-    if (all.length) {
-      now = all[all.length - 1][0];
-      const start = now - S.range;
-      const firstT = all[0][0];
-      const RATE_WINDOW = 300;
-      const step = S.range <= 600 ? 15 : S.range <= 3600 ? 30 : S.range <= 21600 ? 60 : S.range <= 86400 ? 300 : 600;
-      const from = Math.max(start, firstT);
-      const count = Math.max(1, Math.ceil((now - from) / step));
-      const at = (t) => {
-        if (t <= firstT) return [firstT, all[0][1], all[0][2]];
-        const last = all[all.length - 1];
-        if (t >= last[0]) return last;
-        let lo = 0, hi = all.length - 1;
-        while (hi - lo > 1) {
-          const mid = (lo + hi) >> 1;
-          if (all[mid][0] <= t) lo = mid; else hi = mid;
-        }
-        const p0 = all[lo], p1 = all[hi];
-        const f = p1[0] === p0[0] ? 0 : (t - p0[0]) / (p1[0] - p0[0]);
-        return [t, p0[1] + (p1[1] - p0[1]) * f, p0[2] + (p1[2] - p0[2]) * f];
-      };
-      for (let i = 0; i <= count; i++) {
-        const t = from + (now - from) * (i / count);
-        const cur = at(t);
-        const base = at(Math.max(firstT, t - RATE_WINDOW));
-        const span = t - base[0];
-        if (span < 30) continue;
-        samples.push({
-          t, a: cur[1], c: cur[2],
-          v1: Math.max(0, (cur[1] - base[1]) / span * 60),
-          v2: Math.max(0, (cur[2] - base[2]) / span * 60),
-        });
-      }
-      const smooth = (key) => samples.map((_, i) => {
-        let sum = 0, n = 0;
-        for (let j = Math.max(0, i - 2); j <= Math.min(samples.length - 1, i + 2); j++) { sum += samples[j][key]; n++; }
-        return sum / n;
-      });
-      const v1 = smooth("v1"), v2 = smooth("v2");
-      samples.forEach((s, i) => { s.v1 = v1[i]; s.v2 = v2[i]; });
-    }
-  }
+  const built = isRpm
+    ? buildRpmSamples(S.data?.rpm_history || [], S.range)
+    : buildLandingSamples(S.data?.history || [], S.data?.rpm_history || [], S.range);
+  const { samples, now, step } = built;
 
   S.chartSamples = samples;
   empty.hidden = samples.length > 0;
@@ -613,36 +742,50 @@ function drawChart(root) {
     line1.setAttribute("d", "");
     line2.setAttribute("d", "");
     area1.setAttribute("d", "");
+    if (area2) area2.setAttribute("d", "");
     quotaLine.setAttribute("visibility", "hidden");
     return;
   }
 
   const start = now - S.range;
-  let max = isRpm && quota ? quota : 0;
-  for (const s of samples) max = Math.max(max, s.v1 || 0, s.v2 || 0);
-  max = Math.max(1, Math.ceil(max * 1.15));
-  const x = (t) => L + ((t - start) / S.range) * (W - L - R);
+  const firstSampleT = samples[0].t;
+  const plotStart = S.range - (now - firstSampleT) > step * 2 ? firstSampleT : start;
+  const plotSpan = Math.max(60, now - plotStart);
+  S.chartPlotStart = plotStart;
+  S.chartPlotSpan = plotSpan;
+
+  let rawMax = isRpm && quota ? quota : 0;
+  for (const s of samples) rawMax = Math.max(rawMax, s.v1 || 0, s.v2 || 0);
+  const max = niceAxisMax(rawMax, 4);
+  const x = (t) => L + ((t - plotStart) / plotSpan) * (W - L - R);
   const y = (v) => T + (1 - v / max) * (H - T - B);
 
-  for (let i = 0; i <= 3; i++) {
-    const yy = T + ((H - T - B) * i) / 3;
+  for (let i = 0; i <= 4; i++) {
+    const yy = T + ((H - T - B) * i) / 4;
     const g = document.createElementNS(SVG_NS, "line");
     g.setAttribute("x1", L); g.setAttribute("x2", W - R);
     g.setAttribute("y1", yy); g.setAttribute("y2", yy);
     grid.appendChild(g);
+    const val = (max * (4 - i)) / 4;
     const text = document.createElementNS(SVG_NS, "text");
     text.setAttribute("x", L - 8); text.setAttribute("y", yy + 4);
     text.setAttribute("text-anchor", "end");
-    text.textContent = (max * (3 - i) / 3).toFixed(max < 10 ? 1 : 0);
+    text.textContent = Number.isInteger(val) ? String(val) : val.toFixed(1);
     axis.appendChild(text);
   }
   for (let i = 0; i <= 5; i++) {
-    const back = S.range * (1 - i / 5);
+    const back = plotSpan * (1 - i / 5);
+    const xx = x(now - back);
+    const vg = document.createElementNS(SVG_NS, "line");
+    vg.setAttribute("class", "sp-grid-v");
+    vg.setAttribute("x1", xx); vg.setAttribute("x2", xx);
+    vg.setAttribute("y1", T); vg.setAttribute("y2", H - B);
+    grid.appendChild(vg);
     const text = document.createElementNS(SVG_NS, "text");
-    text.setAttribute("x", x(now - back));
-    text.setAttribute("y", H - 6);
-    text.setAttribute("text-anchor", i === 0 ? "start" : i === 5 ? "end" : "middle");
-    text.textContent = axisLabel(back, S.range);
+    text.setAttribute("x", xx);
+    text.setAttribute("y", H - 10);
+    text.setAttribute("text-anchor", "middle");
+    text.textContent = axisLabel(back, plotSpan);
     axis.appendChild(text);
   }
 
@@ -657,25 +800,38 @@ function drawChart(root) {
 
   const linePath = (key) => samples.map((s, i) => `${i ? "L" : "M"}${x(s.t).toFixed(1)},${y(s[key]).toFixed(1)}`).join("");
   const p1 = linePath("v1");
-  line1.setAttribute("class", `line ${isRpm ? "rpm" : "attr"}`);
+  line1.setAttribute("class", `sp-line ${isRpm ? "sp-line-rpm" : "sp-line-attr"}`);
   line1.setAttribute("d", p1);
   if (samples.length > 1) {
     const baseY = y(0).toFixed(1);
-    area1.setAttribute("class", `area ${isRpm ? "rpm" : "attr"}`);
-    area1.setAttribute("d", `${p1}L${x(samples[samples.length - 1].t).toFixed(1)},${baseY}L${x(samples[0].t).toFixed(1)},${baseY}Z`);
+    const xEnd = x(samples[samples.length - 1].t).toFixed(1);
+    const xBegin = x(samples[0].t).toFixed(1);
+    area1.setAttribute("class", `sp-area ${isRpm ? "sp-area-rpm" : "sp-area-attr"}`);
+    area1.setAttribute("d", `${p1}L${xEnd},${baseY}L${xBegin},${baseY}Z`);
+    if (area2) {
+      if (isRpm) {
+        area2.setAttribute("d", "");
+      } else {
+        const p2 = linePath("v2");
+        area2.setAttribute("class", "sp-area sp-area-comp");
+        area2.setAttribute("d", `${p2}L${xEnd},${baseY}L${xBegin},${baseY}Z`);
+      }
+    }
   } else {
     area1.setAttribute("d", "");
+    if (area2) area2.setAttribute("d", "");
   }
+  line2.setAttribute("class", "sp-line sp-line-comp");
   line2.setAttribute("d", isRpm ? "" : linePath("v2"));
 
   const last = samples[samples.length - 1];
-  const dots = isRpm ? [[last.v1, "rpm"]] : [[last.v1, "attr"], [last.v2, "compact"]];
+  const dots = isRpm ? [[last.v1, "sp-point-rpm"]] : [[last.v1, "sp-point-attr"], [last.v2, "sp-point-comp"]];
   for (const [val, cls] of dots) {
     const dot = document.createElementNS(SVG_NS, "circle");
     dot.setAttribute("cx", x(last.t).toFixed(1));
     dot.setAttribute("cy", y(val).toFixed(1));
-    dot.setAttribute("r", "3.5");
-    dot.setAttribute("class", `point ${cls}`);
+    dot.setAttribute("r", "4");
+    dot.setAttribute("class", `sp-point ${cls}`);
     pointLayer.appendChild(dot);
   }
 }
@@ -685,21 +841,22 @@ function handleChartMove(event, root) {
   const chart = $("#spChart", root);
   if (!chart) return;
   const cr = chart.getBoundingClientRect();
-  const W = 1000, L = 44, R = 14;
-  const px = ((event.clientX - cr.left) / cr.width) * W;
+  const W = Math.max(320, Math.round(cr.width || 960));
+  const { L, R } = CHART_PAD;
+  const px = event.clientX - cr.left;
   const plot = W - L - R;
   if (px < L || px > W - R) {
     handleChartLeave(root);
     return;
   }
-  const now = S.chartSamples[S.chartSamples.length - 1].t;
-  const start = now - S.range;
-  const target = start + ((px - L) / plot) * S.range;
+  const plotStart = S.chartPlotStart;
+  const plotSpan = S.chartPlotSpan || S.range;
+  const target = plotStart + ((px - L) / plot) * plotSpan;
   let best = S.chartSamples[0];
   for (const s of S.chartSamples) {
     if (Math.abs(s.t - target) < Math.abs(best.t - target)) best = s;
   }
-  const x = L + ((best.t - start) / S.range) * plot;
+  const x = L + ((best.t - plotStart) / plotSpan) * plot;
   const line = $("#spHoverLine", root);
   if (line) {
     line.setAttribute("x1", x); line.setAttribute("x2", x);
@@ -764,8 +921,10 @@ function applyData(root, data) {
   setText(root, "spInputUpdated", data.input_updated_at ? `输入统计于 ${clock(data.input_updated_at)}` : "");
 
   const r = data.rates || {};
-  setText(root, "spAttrRate", rate(r.attr));
-  setText(root, "spCompactRate", rate(r.compact));
+  const attrRate = r.attr == null || (Number(r.attr) === 0 && Number(r.parts_attr) > 0) ? r.parts_attr : r.attr;
+  const compactRate = r.compact == null || (Number(r.compact) === 0 && Number(r.parts_compact) > 0) ? r.parts_compact : r.compact;
+  setText(root, "spAttrRate", rate(attrRate));
+  setText(root, "spCompactRate", rate(compactRate));
   setText(root, "spPartsAttrSub", `在途实时 (.parts) ${rate(r.parts_attr)} 条/分钟`);
   setText(root, "spPartsCompactSub", `在途实时 (.parts) ${rate(r.parts_compact)} 条/分钟`);
   setText(root, "spEta", etaLabel(data.eta_minutes));
@@ -833,6 +992,16 @@ function wireControls(root) {
   if (chart) {
     chart.addEventListener("pointermove", (e) => handleChartMove(e, root));
     chart.addEventListener("pointerleave", () => handleChartLeave(root));
+    if (typeof ResizeObserver === "function") {
+      let resizeRaf = 0;
+      new ResizeObserver(() => {
+        if (resizeRaf) return;
+        resizeRaf = requestAnimationFrame(() => {
+          resizeRaf = 0;
+          if (S.data) drawChart(root);
+        });
+      }).observe(chart);
+    }
   }
   if (!root._spClickWired) {
     root._spClickWired = true;
@@ -874,27 +1043,39 @@ function wireControls(root) {
   });
 }
 
+async function fetchQuietJSON(url, timeoutMs = 3000) {
+  const ac = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = ac ? setTimeout(() => ac.abort(), timeoutMs) : 0;
+  try {
+    const res = await fetch(url, { cache: "no-store", signal: ac ? ac.signal : undefined });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function fetchSpeed() {
   if (S.inflight || document.hidden || document.documentElement.dataset.view !== "speed") return;
   S.inflight = true;
   try {
-    let data = await getJSON(S.sourceUrl, { retries: 1 });
+    let data = S.sourceUrl === "speed.json"
+      ? await getJSON(S.sourceUrl, { retries: 1 })
+      : await fetchQuietJSON(S.sourceUrl);
     if (data && data.available === false && S.sourceUrl === "speed.json") {
       const aimeUrl = sitesMap().aime?.url;
       if (aimeUrl) {
         const remoteUrl = `${aimeUrl.replace(/\/+$/, "")}/speed.json`;
-        try {
-          const remoteData = await getJSON(remoteUrl, { retries: 0 });
-          if (remoteData && remoteData.available !== false) {
-            S.sourceUrl = remoteUrl;
-            data = remoteData;
-          }
-        } catch {
-          // Keep unavailable state with direct jump button when remote host is unreachable from browser.
+        const remoteData = await fetchQuietJSON(remoteUrl);
+        if (remoteData && remoteData.available !== false) {
+          S.sourceUrl = remoteUrl;
+          data = remoteData;
         }
       }
     }
-    if (S.root) applyData(S.root, data);
+    if (S.root && data) applyData(S.root, data);
   } catch (err) {
     if (S.root) {
       const conn = $("#spConn", S.root);
