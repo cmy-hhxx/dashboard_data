@@ -166,4 +166,20 @@ test("bench view forbids mock data, difficulty, 未归因, and obscure English j
   assert.ok(!src.includes("Join "), "must not expose raw English Join label");
   assert.ok(!/>\s*Tier\b/.test(src), "must not expose raw English Tier label");
   assert.ok(!src.includes("Δpp"), "must not expose obscure Δpp label");
+  assert.ok(!src.includes("bn-badges"), "must not render bn-badges");
+  assert.ok(!src.includes("bn-explorer-top"), "must not render bn-explorer-top");
+  assert.ok(!src.includes('class="meta"'), "must not render secondary gray meta subtitles");
+  assert.ok(src.includes("fieldSize"), "field view must paginate large datasets");
+});
+
+test("index.html #viewSwitch exposes 4 main tabs and 5 overflow items in + menu", () => {
+  const html = fs.readFileSync(path.resolve(HERE, "../static/index.html"), "utf8");
+  const navMatch = html.match(/<nav[^>]*id="viewSwitch"[\s\S]*?<\/nav>/);
+  assert.ok(navMatch, "#viewSwitch nav must exist");
+  const nav = navMatch[0];
+  const tabs = [...nav.matchAll(/class="vs-tab"[^>]*>([^<]+)</g)].map((m) => m[1]);
+  assert.deepEqual(tabs, ["数据看板", "Bench", "版本对比", "具体数据"]);
+  const actions = [...nav.matchAll(/class="vs-action"[\s\S]*?<span>([^<]+)<\/span>/g)].map((m) => m[1]);
+  assert.deepEqual(actions, ["评测速度", "评测体系", "评测评测", "预测数据", "文档"]);
+  assert.ok(nav.includes('class="vs-toggle"'), "must include + toggle button");
 });

@@ -1,5 +1,6 @@
 /* Router and shell: ?view=data|system|samples&product=wencai|aime (+ sample params). */
 import { $, $$, esc, segmented, getJSON, announce, installTips, importRetry, onNetwork, REDUCED } from "./core.js";
+import { glassTabMenu } from "./glass_tab_menu.js";
 import { pixelToggle } from "./pixel_toggle.js";
 
 const VIEWS = ["data", "speed", "system", "judge", "bench", "samples", "forecast", "compare", "docs"];
@@ -174,12 +175,6 @@ async function render({ refresh = false } = {}) {
   $$(".view").forEach((v) => v.classList.toggle("is-active", v.dataset.view === state.view));
   if (lastView !== state.view) {
     window.scrollTo(0, 0);
-    if (lastView && !REDUCED) {
-      const knob = $("#viewSwitch .seg-knob");
-      knob.classList.remove("is-swept");
-      void knob.offsetWidth;
-      knob.classList.add("is-swept");
-    }
   }
   lastView = state.view;
   const root = $(`.view[data-view="${state.view}"]`);
@@ -271,7 +266,7 @@ async function poll() {
 }
 
 async function boot() {
-  viewSeg = segmented($("#viewSwitch"), (v) => {
+  viewSeg = glassTabMenu($("#viewSwitch"), (v) => {
     announce(`切换到${VIEW_NAME[v]}`);
     const leaveBench = state.view === "bench" && v !== "bench" ? { ...BENCH_PARAMS, trace: null } : {};
     navigate({ view: v, doc: null, ...leaveBench, ...(v === "compare" || v === "forecast" ? SAMPLE_PARAMS : {}), ...(v === "data" ? { detail: null, ed: null, em: null, ep: null, edp: null } : {}), ...COMPARE_PARAMS });

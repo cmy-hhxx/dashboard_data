@@ -631,9 +631,9 @@ export async function render(root, ctx) {
     sort: "rank",
     page: 1,
     size: 25,
+    fieldSize: 500,
     mxMode: "bench",
     f: EMPTY_FILTER(),
-    moreOpen: false,
     trace: urlInit.trace,
     caseCache: new Map(),
     tierCasesCache: new Map(),
@@ -739,14 +739,6 @@ export async function render(root, ctx) {
   function renderHeroHTML(md, tierData) {
     const keys = S.isLong ? md.longKeys : md.stdKeys;
     const pool = manifest.pool || {};
-    const q = manifest.quality || {};
-    const joinRate = Number(q.join_rate ?? manifest.source?.join_rate ?? 1);
-    const joinOk = joinRate >= 0.98;
-    const unbiased = (tierData.coverage || []).filter((c) => !c.by_design);
-    const maxUnbiased = unbiased.reduce((m, c) => Math.max(m, Number(c.max_abs_delta_pp || 0)), 0);
-    const tol = Number(unbiased[0]?.tolerance_pp || params.tolerance_pp || 10);
-    const auditOk = maxUnbiased <= tol;
-    const sf = Number(tierData.shortfall || 0);
     const actualN = Number(tierData.actual || 0);
     const poolBase = S.isLong ? md.long_pool : md.base_pool;
     const tierPct = poolBase ? pct(actualN, poolBase, 1) : "—";
@@ -768,11 +760,6 @@ export async function render(root, ctx) {
             <span class="seg-knob" aria-hidden="true"></span>
             ${keys.map((k) => `<button type="button" data-value="${k}" aria-pressed="${String(k) === S.tier}">${S.isLong ? `长 ${k}` : fmt(k)}</button>`).join("")}
           </div>
-        </div>
-        <div class="bn-badges">
-          <span class="bn-badge ${joinOk ? "is-ok" : "is-warn"}"><i></i>标签对齐 ${pct(joinRate, 1, 1)}</span>
-          <span class="bn-badge ${auditOk ? "is-ok" : "is-warn"}"><i></i>${auditOk ? `抽样偏差 ≤${maxUnbiased.toFixed(1)}%` : `偏差关注 ${maxUnbiased.toFixed(1)}%`}</span>
-          ${sf > 0 ? `<span class="bn-badge is-warn"><i></i>数量缺口 −${fmt(sf)}</span>` : ""}
         </div>
       </div>
 
@@ -883,7 +870,6 @@ export async function render(root, ctx) {
     return `<section class="card bn-quota-card">
       <div class="card-head">
         <h2>配比结构</h2>
-        <span class="meta">${fmt(actualN)} / ${fmt(tierData.requested || actualN)} 条</span>
         <div class="bn-qlegend">
           <span class="bn-ql-item"><i class="bn-ql-bar"></i>已选</span>
           <span class="bn-ql-item"><i class="bn-ql-tick"></i>目标</span>
@@ -1063,10 +1049,6 @@ export async function render(root, ctx) {
     return `<section class="card bn-dist-card">
       <div class="card-head">
         <h2>数据分布与偏差</h2>
-        <span class="meta">${activeMeta.label} · ${rows.length} 项</span>
-        <span class="bn-badge ${isAudit ? (activeCov.ok === false ? "is-warn" : "is-ok") : "is-accent"} end">
-          <i></i>${isAudit ? (activeCov.ok === false ? `偏差关注 >${tol}%` : `偏差正常 ≤${tol}%`) : "主动配比维度"} · ${Number(activeCov.max_abs_delta_pp || 0).toFixed(1)}%
-        </span>
       </div>
       <div class="bn-dimgroups">
         <div class="bn-dgrp"><span class="bn-dgrp-lbl">质检维度</span>${auditMeta.map(pillBtn).join("")}</div>
@@ -1089,7 +1071,6 @@ export async function render(root, ctx) {
     const totals = ct.totals || {};
     const sIds = ct.stages?.length ? ct.stages : Object.keys(rows);
     const mIds = ct.mechanisms?.length ? ct.mechanisms : [...MECH_ORDER, "NA"];
-    const nonEmptyCells = sIds.reduce((acc, s) => acc + mIds.filter((m) => (rows[s]?.[m] || 0) > 0).length, 0);
 
     const maxCell = Math.max(1, ...sIds.flatMap((s) => mIds.map((m) => {
       const b = Number(rows[s]?.[m] || 0);
@@ -1105,7 +1086,6 @@ export async function render(root, ctx) {
     return `<section class="card bn-mx-card">
       <div class="card-head">
         <h2>环节 × 机制</h2>
-        <span class="meta">${fmt(totals.bench_total || tierData.actual || 0)} 样本 · ${nonEmptyCells} 非空组合</span>
         <div class="seg end" id="bn-seg-mx" role="group">
           <span class="seg-knob" aria-hidden="true"></span>
           <button type="button" data-value="bench" aria-pressed="${S.mxMode === "bench"}">数量</button>
@@ -1122,7 +1102,7 @@ export async function render(root, ctx) {
             const tip = `${label} · 已选 ${fmt(rows[s]?.bench_total || 0)} · 候选池 ${fmt(rows[s]?.pool_total || 0)}`;
             return `<button type="button" class="rh ${hl ? "is-hl" : ""}" data-mxs="${esc(s)}" data-tip="${esc(tip)}">
               <span class="mx-lab">${esc(label)}</span>
-              <span class="mx-caret" aria-hidden="true">›</span>
+              <i class="mx-caret" aria-hidden="true"></i>
             </button>`;
           }).join("")}
           <div class="rh mx-total-lab"><span class="mx-lab">合计</span></div>
@@ -1185,11 +1165,12 @@ export async function render(root, ctx) {
   function renderCasesHTML(allCases, filteredCases, tierData) {
     const chips = activeFilterPills(S.f, maps);
     const total = filteredCases.length;
-    const pages = Math.max(1, Math.ceil(total / S.size));
+    const isField = S.view === "field";
+    const pageSize = isField ? S.fieldSize : S.size;
+    const pages = Math.max(1, Math.ceil(total / pageSize));
     S.page = Math.max(1, Math.min(pages, S.page));
-    const slice = filteredCases.slice((S.page - 1) * S.size, S.page * S.size);
-    const secActiveCount = [S.f.l2, S.f.turn, S.f.tok, S.f.grp, S.f.dupOnly ? "1" : ""].filter(Boolean).length;
-    const secExpanded = S.moreOpen || secActiveCount > 0;
+    const slice = filteredCases.slice((S.page - 1) * pageSize, S.page * pageSize);
+    const sizeOpts = isField ? [200, 500, 1000] : [25, 50, 100];
 
     const optList = (dimKey, label, curVal) => {
       const list = (tierData.dims?.[dimKey] || []).filter((r) => (r.count || 0) > 0);
@@ -1199,11 +1180,27 @@ export async function render(root, ctx) {
       </select>`;
     };
 
+    const pagerHTML = total ? `<div class="bn-pager">
+      <div class="bn-pager-btns">
+        <button type="button" data-page="first" ${S.page <= 1 ? "disabled" : ""}>首页</button>
+        <button type="button" data-page="prev" ${S.page <= 1 ? "disabled" : ""}>上一页</button>
+        <span class="bn-pager-info">${S.page} / ${pages}</span>
+        <button type="button" data-page="next" ${S.page >= pages ? "disabled" : ""}>下一页</button>
+        <button type="button" data-page="last" ${S.page >= pages ? "disabled" : ""}>末页</button>
+      </div>
+      <div class="bn-pager-btns">
+        <span class="bn-pager-info">${fmt((S.page - 1) * pageSize + 1)}–${fmt(Math.min(S.page * pageSize, total))} / ${fmt(total)} 条</span>
+        <select class="bn-sel" id="bn-pagesize" aria-label="每页条数">
+          ${sizeOpts.map((n) => `<option value="${n}" ${pageSize === n ? "selected" : ""}>${n} 条/页</option>`).join("")}
+        </select>
+      </div>
+    </div>` : "";
+
     const bodyHTML = !filteredCases.length
       ? `<div class="bn-empty">暂无匹配问句</div>`
-      : S.view === "field"
+      : isField
         ? `<div class="bn-field">
-            ${groupFieldCases(filteredCases, S.groupBy, stageNames).map((g) => `<div class="bn-fgrp">
+            ${groupFieldCases(slice, S.groupBy, stageNames).map((g) => `<div class="bn-fgrp">
               <div class="bn-fgrp-head"><strong>${esc(g.label)}</strong><span>${fmt(g.items.length)}</span></div>
               <div class="bn-ftiles">
                 ${g.items.map((c) => {
@@ -1214,7 +1211,8 @@ export async function render(root, ctx) {
                 }).join("")}
               </div>
             </div>`).join("")}
-          </div>`
+          </div>
+          ${pagerHTML}`
         : `<div class="bn-list">
             <div class="bn-lhead"><span>等级</span><span>问句内容与问题定位</span><span>对话形态</span><span>规模与耗时</span><span style="text-align:right">基准档位</span></div>
             ${slice.map((c) => {
@@ -1252,47 +1250,42 @@ export async function render(root, ctx) {
               </button>`;
             }).join("")}
           </div>
-          <div class="bn-pager">
-            <div class="bn-pager-btns">
-              <button type="button" data-page="first" ${S.page <= 1 ? "disabled" : ""}>首页</button>
-              <button type="button" data-page="prev" ${S.page <= 1 ? "disabled" : ""}>上一页</button>
-              <span class="bn-pager-info">${S.page} / ${pages}</span>
-              <button type="button" data-page="next" ${S.page >= pages ? "disabled" : ""}>下一页</button>
-              <button type="button" data-page="last" ${S.page >= pages ? "disabled" : ""}>末页</button>
-            </div>
-            <div class="bn-pager-btns">
-              <span class="bn-pager-info">${fmt((S.page - 1) * S.size + 1)}–${fmt(Math.min(S.page * S.size, total))} / ${fmt(total)} 条</span>
-              <select class="bn-sel" id="bn-pagesize" aria-label="每页条数">
-                ${[25, 50, 100].map((n) => `<option value="${n}" ${S.size === n ? "selected" : ""}>${n} 条/页</option>`).join("")}
-              </select>
-            </div>
-          </div>`;
+          ${pagerHTML}`;
 
     return `<section class="card bn-cases-card">
-      <div class="bn-explorer-top">
-        <div class="bn-explorer-title">
-          <h2>问句全景</h2>
-          <span class="bn-count-pill">${fmt(filteredCases.length)} / ${fmt(allCases.length)} 条</span>
+      <div class="bn-fbar">
+        <span class="bn-fbar-title">问句全景</span>
+        <span class="bn-count-pill">${fmt(filteredCases.length)} / ${fmt(allCases.length)}</span>
+        <input type="text" class="bn-search" id="bn-search" value="${esc(S.f.q)}" placeholder="搜索问句 / 标签…" autocomplete="off">
+        <div class="bn-sev-pills">
+          <button type="button" class="bn-sev-pill" data-fsev="" aria-pressed="${!S.f.sev}">全部</button>
+          ${SEVS_ALL.map((s) => `<button type="button" class="bn-sev-pill" data-fsev="${s}" aria-pressed="${S.f.sev === s}" style="--c:${sevTone(s)}"><i></i>${sevLabel(s)}</button>`).join("")}
         </div>
-        <div class="bn-explorer-acts">
+        ${optList("stage", "环节", S.f.l1)}
+        ${optList("mechanism", "机制", S.f.l2)}
+        ${optList("turn_type", "形态", S.f.turn)}
+        ${optList("tokens", "长度", S.f.tok)}
+        ${optList("group", "分组", S.f.grp)}
+        <button type="button" class="bn-toggle-pill" id="bn-tog-dup" aria-pressed="${S.f.dupOnly}">重问 ≥2</button>
+        <div class="bn-fbar-end">
           <div class="seg" id="bn-seg-view" role="group" aria-label="展示方式">
             <span class="seg-knob" aria-hidden="true"></span>
-            <button type="button" data-value="list" aria-pressed="${S.view === "list"}">清单</button>
-            <button type="button" data-value="field" aria-pressed="${S.view === "field"}">方阵</button>
+            <button type="button" data-value="list" aria-pressed="${!isField}">清单</button>
+            <button type="button" data-value="field" aria-pressed="${isField}">方阵</button>
           </div>
-          ${S.view === "field" ? `<select class="bn-sel" id="bn-groupby" aria-label="分组维度">
-            <option value="l1" ${S.groupBy === "l1" ? "selected" : ""}>按环节分组</option>
-            <option value="sev" ${S.groupBy === "sev" ? "selected" : ""}>按等级分组</option>
-            <option value="min_tier" ${S.groupBy === "min_tier" ? "selected" : ""}>按首入档位</option>
-            <option value="group" ${S.groupBy === "group" ? "selected" : ""}>按业务分组</option>
+          ${isField ? `<select class="bn-sel" id="bn-groupby" aria-label="分组维度">
+            <option value="l1" ${S.groupBy === "l1" ? "selected" : ""}>按环节</option>
+            <option value="sev" ${S.groupBy === "sev" ? "selected" : ""}>按等级</option>
+            <option value="min_tier" ${S.groupBy === "min_tier" ? "selected" : ""}>按档位</option>
+            <option value="group" ${S.groupBy === "group" ? "selected" : ""}>按分组</option>
           </select>` : ""}
           <select class="bn-sel" id="bn-sort" aria-label="排序方式">
-            <option value="rank" ${S.sort === "rank" ? "selected" : ""}>默认抽样序</option>
-            <option value="sev" ${S.sort === "sev" ? "selected" : ""}>按问题等级</option>
-            <option value="dup" ${S.sort === "dup" ? "selected" : ""}>高频重问优先</option>
-            <option value="tokens" ${S.sort === "tokens" ? "selected" : ""}>文本长度降序</option>
+            <option value="rank" ${S.sort === "rank" ? "selected" : ""}>抽样序</option>
+            <option value="sev" ${S.sort === "sev" ? "selected" : ""}>问题等级</option>
+            <option value="dup" ${S.sort === "dup" ? "selected" : ""}>高频重问</option>
+            <option value="tokens" ${S.sort === "tokens" ? "selected" : ""}>文本长度</option>
             <option value="latency" ${S.sort === "latency" ? "selected" : ""}>耗时降序</option>
-            <option value="probs" ${S.sort === "probs" ? "selected" : ""}>问题数降序</option>
+            <option value="probs" ${S.sort === "probs" ? "selected" : ""}>问题数</option>
             <option value="day" ${S.sort === "day" ? "selected" : ""}>时间倒序</option>
           </select>
         </div>
@@ -1301,27 +1294,6 @@ export async function render(root, ctx) {
       <div class="bn-chips" ${chips.length ? "" : "hidden"}>
         ${chips.map((c) => `<button type="button" class="bn-chip" data-clrk="${c.k}">${esc(c.lbl)} ×</button>`).join("")}
         ${chips.length > 1 ? `<button type="button" class="bn-chip-clear" id="bn-clr-all">清空全部</button>` : ""}
-      </div>
-
-      <div class="bn-fbar">
-        <div class="bn-fprimary">
-          <input type="search" class="bn-search" id="bn-search" value="${esc(S.f.q)}" placeholder="搜索问句 / 问题标签 / 轨迹编号…" autocomplete="off">
-          <div class="bn-sev-pills">
-            <button type="button" class="bn-sev-pill" data-fsev="" aria-pressed="${!S.f.sev}">全部</button>
-            ${SEVS_ALL.map((s) => `<button type="button" class="bn-sev-pill" data-fsev="${s}" aria-pressed="${S.f.sev === s}" style="--c:${sevTone(s)}"><i></i>${sevLabel(s)}</button>`).join("")}
-          </div>
-          ${optList("stage", "全部环节", S.f.l1)}
-          <button type="button" class="bn-toggle-pill bn-fmore" id="bn-fmore" aria-expanded="${secExpanded}">
-            更多筛选${secActiveCount ? `<span class="bn-fmore-n">${secActiveCount}</span>` : ""}
-          </button>
-        </div>
-        <div class="bn-fsec" ${secExpanded ? "" : "hidden"}>
-          ${optList("mechanism", "问题机制", S.f.l2)}
-          ${optList("turn_type", "对话形态", S.f.turn)}
-          ${optList("tokens", "文本长度", S.f.tok)}
-          ${optList("group", "业务分组", S.f.grp)}
-          <button type="button" class="bn-toggle-pill" id="bn-tog-dup" aria-pressed="${S.f.dupOnly}">仅看高频重问 ≥2</button>
-        </div>
       </div>
 
       ${bodyHTML}
@@ -1620,12 +1592,11 @@ export async function render(root, ctx) {
         <section class="card bn-sb-card">
           <div class="card-head">
             <h2>问题分类占比</h2>
-            <span class="meta" id="bn-sb-meta">全部</span>
             <button type="button" class="bn-chip-clear end" id="bn-sb-reset" hidden>返回全部</button>
           </div>
           <div id="bn-sb-host"></div>
           ${topPatterns.length ? `<div class="bn-toppats">
-            <div class="bn-subhead"><strong>高频具体问题</strong><span>前 ${topPatterns.length} 项</span></div>
+            <div class="bn-subhead"><strong>高频具体问题</strong></div>
             <div class="bn-patgrid">
               ${topPatterns.map((p) => {
                 const pName = patternDisplayName(p.key, p.bucket, patNames, stageNames, mechNames);
@@ -1753,6 +1724,17 @@ export async function render(root, ctx) {
       repaint();
     }));
 
+    const mxPane = $(".bn-matrix .mx-scroll", root);
+    if (mxPane) {
+      const syncScroll = () => {
+        mxPane.classList.toggle("is-overflow", mxPane.scrollWidth > mxPane.clientWidth + 1);
+        mxPane.classList.toggle("is-at-end", mxPane.scrollLeft + mxPane.clientWidth >= mxPane.scrollWidth - 2);
+      };
+      mxPane.addEventListener("scroll", syncScroll, { passive: true });
+      new ResizeObserver(syncScroll).observe(mxPane);
+      syncScroll();
+    }
+
     const sbHost = $("#bn-sb-host", root);
     if (sbHost && !sbHost.firstChild) {
       const tree = buildSunburstTree(tierData, lastFiltered, taxonomy, stageNames, mechNames, patNames);
@@ -1762,9 +1744,7 @@ export async function render(root, ctx) {
         sort: true,
         state: S.sunburstState,
         onChange: (focus) => {
-          const meta = $("#bn-sb-meta", root);
           const resetBtn = $("#bn-sb-reset", root);
-          if (meta) meta.textContent = focus.id === "b" ? "全部" : focus.name;
           if (resetBtn) resetBtn.hidden = focus.id === "b";
           if (!sbReady) return;
           const code = focus.id === "b" ? "" : focus.id.slice(2);
@@ -1798,6 +1778,7 @@ export async function render(root, ctx) {
     if (segV) {
       const ctl = segmented(segV, (v) => {
         S.view = v;
+        S.page = 1;
         repaint({ rebuildSummary: false });
       });
       ctl.set(S.view, { silent: true });
@@ -1819,15 +1800,6 @@ export async function render(root, ctx) {
       });
     }
     $$("[data-fsev]", card).forEach((b) => b.addEventListener("click", () => toggleFilter("sev", b.dataset.fsev)));
-    const fmoreBtn = $("#bn-fmore", card);
-    if (fmoreBtn) {
-      fmoreBtn.addEventListener("click", () => {
-        S.moreOpen = !S.moreOpen;
-        const tray = $(".bn-fsec", card);
-        if (tray) tray.hidden = !S.moreOpen;
-        fmoreBtn.setAttribute("aria-expanded", String(S.moreOpen));
-      });
-    }
     $$("[data-fsel]", card).forEach((sel) => sel.addEventListener("change", (e) => {
       const key = {
         stage: "l1", mechanism: "l2", turn_type: "turn", tokens: "tok", group: "grp",
@@ -1847,7 +1819,15 @@ export async function render(root, ctx) {
     const grpEl = $("#bn-groupby", card);
     if (grpEl) grpEl.onchange = (e) => { S.groupBy = e.target.value; repaint({ rebuildSummary: false }); };
     const psEl = $("#bn-pagesize", card);
-    if (psEl) psEl.onchange = (e) => { S.size = Number(e.target.value); S.page = 1; repaint({ rebuildSummary: false }); };
+    if (psEl) {
+      psEl.onchange = (e) => {
+        const val = Number(e.target.value);
+        if (S.view === "field") S.fieldSize = val;
+        else S.size = val;
+        S.page = 1;
+        repaint({ rebuildSummary: false });
+      };
+    }
 
     $$("[data-clrk]", card).forEach((b) => b.addEventListener("click", () => {
       const k = b.dataset.clrk;
@@ -1868,7 +1848,8 @@ export async function render(root, ctx) {
     }
 
     $$("[data-page]", card).forEach((b) => b.addEventListener("click", () => {
-      const pages = Math.max(1, Math.ceil(filtered.length / S.size));
+      const pageSize = S.view === "field" ? S.fieldSize : S.size;
+      const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
       if (b.dataset.page === "first") S.page = 1;
       else if (b.dataset.page === "prev") S.page -= 1;
       else if (b.dataset.page === "next") S.page += 1;

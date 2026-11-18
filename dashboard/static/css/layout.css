@@ -6,6 +6,10 @@
      the inline padding lines the bar up with main's content column. */
   display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: var(--gap);
   padding: 12px max(var(--gutter), calc((100% - var(--page-max)) / 2 + var(--gutter)));
+}
+/* Keep the header's blur on ::before so #viewSwitch's child frosted glass panel is not trapped in a backdrop root. */
+.top::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
   background: color-mix(in oklab, var(--bg) 86%, transparent);
   backdrop-filter: saturate(1.4) blur(14px);
   -webkit-backdrop-filter: saturate(1.4) blur(14px);
@@ -21,23 +25,223 @@
 .brand:hover .brand-mark i:nth-child(odd) { transform: scale(1.08); }
 .top-end { display: flex; align-items: center; justify-content: flex-end; gap: var(--gap); min-width: 0; }
 
-/* The page switch: centred, its knob carries a soft accent glow and a light sweep each time it
-   lands on a new page; the pressed label lifts into ink. Only transform / opacity animate. */
-#viewSwitch { justify-self: center; box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ink) 4%, transparent); }
-#viewSwitch .seg-knob {
+/* The page switch: frosted glass 4-tab bar + morphing "+" menu (glass-tab-menu). */
+.vs-cluster {
+  --vs-w: 344px;
+  --vs-h: 40px;
+  --vs-menu-w: 344px;
+  --vs-menu-h: 184px;
+  --vs-gap: 8px;
+  --vs-glass-bg: linear-gradient(160deg, rgba(255, 255, 255, 0.80), rgba(255, 255, 255, 0.56));
+  --vs-glass-border: rgba(255, 255, 255, 0.88);
+  --vs-glass-shadow: inset 0 1px 1.5px rgba(255, 255, 255, 0.96), inset 0 0 12px rgba(255, 255, 255, 0.24),
+    0 10px 28px -10px rgba(34, 40, 56, 0.16), 0 1px 3px rgba(34, 40, 56, 0.06);
+  --vs-sel-bg: rgba(255, 255, 255, 0.96);
+  --vs-sel-border: rgba(255, 255, 255, 0.92);
+  --vs-sel-shadow: 0 3px 10px rgba(34, 40, 56, 0.12);
+  --vs-lens-bg: rgba(255, 255, 255, 0.22);
+  --vs-action-bg: linear-gradient(145deg, rgba(111, 107, 124, 0.08), rgba(105, 101, 119, 0.13));
+  --vs-action-inset: inset 0 1px 1px rgba(255, 255, 255, 0.36);
+  --vs-action-hover: rgba(255, 255, 255, 0.42);
+  --vs-action-active: rgba(255, 255, 255, 0.78);
+  position: relative;
+  flex: none;
+  justify-self: center;
+  width: calc(var(--vs-w) + var(--vs-h) + var(--vs-gap));
+  height: var(--vs-h);
+  user-select: none;
+  z-index: var(--z-overlay);
+}
+:root[data-mode="dark"] .vs-cluster {
+  --vs-glass-bg: linear-gradient(160deg, rgba(44, 50, 60, 0.82), rgba(28, 32, 39, 0.68));
+  --vs-glass-border: rgba(255, 255, 255, 0.14);
+  --vs-glass-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.14), inset 0 0 12px rgba(255, 255, 255, 0.04),
+    0 12px 32px -10px rgba(0, 0, 0, 0.55);
+  --vs-sel-bg: rgba(255, 255, 255, 0.15);
+  --vs-sel-border: rgba(255, 255, 255, 0.22);
+  --vs-sel-shadow: 0 4px 12px rgba(0, 0, 0, 0.32);
+  --vs-lens-bg: rgba(255, 255, 255, 0.10);
+  --vs-action-bg: linear-gradient(145deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.03));
+  --vs-action-inset: inset 0 1px 1px rgba(255, 255, 255, 0.08);
+  --vs-action-hover: rgba(255, 255, 255, 0.11);
+  --vs-action-active: color-mix(in oklab, var(--accent) 18%, rgba(255, 255, 255, 0.06));
+}
+.vs-panel {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: var(--vs-w);
+  height: var(--vs-h);
+  border: 1.5px solid var(--vs-glass-border);
+  border-radius: calc(var(--vs-h) / 2);
+  background: var(--vs-glass-bg);
+  box-shadow: var(--vs-glass-shadow);
+  backdrop-filter: blur(24px) saturate(1.25);
+  -webkit-backdrop-filter: blur(24px) saturate(1.25);
   overflow: hidden;
-  box-shadow: var(--shadow), 0 0 0 1px color-mix(in oklab, var(--accent) 14%, transparent), 0 6px 18px -8px color-mix(in oklab, var(--accent) 45%, transparent);
+  transform: translateZ(0);
 }
-#viewSwitch .seg-knob::after {
-  content: ""; position: absolute; inset: 0; transform: translateX(-110%); will-change: transform;
-  background: linear-gradient(100deg, transparent 20%, color-mix(in oklab, var(--accent) 16%, transparent) 50%, transparent 80%);
+.vs-tabs {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: center;
+  width: var(--vs-w);
+  height: calc(var(--vs-h) - 3px);
+  padding: 3.5px 4px;
+  transform-origin: center top;
 }
-#viewSwitch .seg-knob.is-swept::after { animation: knob-sweep 720ms cubic-bezier(0.3, 0, 0.2, 1); }
-@keyframes knob-sweep { to { transform: translateX(110%); } }
-#viewSwitch button { padding: 0 12px; transition: color var(--snap), transform var(--spring); }
-#viewSwitch button:active { transform: scale(0.96); }
-#viewSwitch button[aria-pressed="true"] { animation: seg-lift 420ms cubic-bezier(0.16, 1, 0.3, 1); }
-@keyframes seg-lift { from { transform: translateY(2px); opacity: 0.6; } }
+.vs-selection,
+.vs-lens {
+  position: absolute;
+  left: 4px;
+  top: 3.5px;
+  height: calc(var(--vs-h) - 10px);
+  border-radius: 999px;
+  pointer-events: none;
+  transform-origin: center center;
+}
+.vs-selection {
+  border: 1px solid var(--vs-sel-border);
+  background: color-mix(in oklab, var(--vs-sel-bg) calc((1 - var(--vs-a, 0) * 0.9) * 100%), transparent);
+  box-shadow: var(--vs-sel-shadow);
+}
+.vs-lens {
+  z-index: 2;
+  opacity: 0;
+  background: var(--vs-lens-bg);
+  backdrop-filter: blur(0.65px);
+  -webkit-backdrop-filter: blur(0.65px);
+}
+.vs-tab {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: calc(var(--vs-h) - 10px);
+  border-radius: 999px;
+  font-size: var(--fs-small);
+  font-weight: var(--w-medium);
+  color: var(--muted);
+  white-space: nowrap;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: color var(--snap);
+}
+.vs-tab:hover { color: var(--ink-2); }
+.vs-tab[aria-selected="true"] { color: var(--ink); }
+
+.vs-menu {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px;
+  width: var(--vs-menu-w);
+  height: var(--vs-menu-h);
+  transform-origin: center top;
+  opacity: 0;
+  pointer-events: none;
+}
+.vs-action {
+  grid-column: span 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 16px;
+  background: var(--vs-action-bg);
+  box-shadow: var(--vs-action-inset);
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  font-weight: var(--w-medium);
+  line-height: 1.15;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 140ms ease, color 140ms ease, transform 140ms ease;
+}
+.vs-action:nth-child(4),
+.vs-action:nth-child(5) {
+  grid-column: span 3;
+}
+.vs-icon {
+  width: 19px;
+  height: 19px;
+  flex: none;
+}
+.vs-action:hover {
+  background-color: var(--vs-action-hover);
+  color: var(--ink);
+}
+.vs-action:active { transform: scale(0.96); }
+.vs-action.is-active {
+  background: var(--vs-action-active);
+  color: var(--accent);
+}
+
+.vs-toggle {
+  position: absolute;
+  right: 0;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--vs-h);
+  height: var(--vs-h);
+  border: 1.5px solid var(--vs-glass-border);
+  border-radius: 50%;
+  background: var(--vs-glass-bg);
+  box-shadow: var(--vs-glass-shadow);
+  backdrop-filter: blur(24px) saturate(1.25);
+  -webkit-backdrop-filter: blur(24px) saturate(1.25);
+  transform-origin: center;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  filter: brightness(calc(1 + var(--vs-press, 0) * 0.14));
+}
+.vs-toggle:hover { color: var(--ink); }
+.vs-toggle.has-active::after {
+  content: "";
+  position: absolute;
+  right: 6px;
+  top: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 1.5px var(--card);
+}
+.vs-plus {
+  position: relative;
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+.vs-plus::before,
+.vs-plus::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 0;
+  width: 2px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--ink);
+}
+.vs-plus::after { transform: rotate(90deg); }
+.vs-tab:focus-visible,
+.vs-toggle:focus-visible,
+.vs-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+}
 .stamp { color: var(--faint); font-size: var(--fs-meta); white-space: nowrap; }
 .stamp.is-new { animation: stamp-new 2.4s cubic-bezier(0.16, 1, 0.3, 1); }
 @keyframes stamp-new { 0%, 30% { color: var(--accent); } }
@@ -183,22 +387,22 @@ button.cell[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px 
   .card { grid-column: span min(var(--span, 4) * 2, 12); }
   .card.keep { grid-column: span var(--span); }
 }
-/* With 评测速度 the switch is one tab wider: step the clock aside before 1440px, and move the
-   switch onto its own row before it reaches the product switch. */
-@media (max-width: 1440px) { .stamp { display: none; } }
-@media (max-width: 1240px) {
+/* Step the clock aside before 1280px, and move the switch onto its own row below 860px. */
+@media (max-width: 1280px) { .stamp { display: none; } }
+@media (max-width: 860px) {
   .top { grid-template-columns: auto minmax(0, 1fr); gap: 10px; }
   .top-end { gap: 10px; }
   .top-mid { display: contents; }
-  #viewSwitch { grid-column: 1 / -1; grid-row: 2; justify-self: stretch; overflow-x: auto; }
-  .stamp { display: none; }
-}
-@media (max-width: 860px) {
+  #viewSwitch { grid-column: 1 / -1; grid-row: 2; justify-self: center; }
   :root { --gutter: 16px; --r-card: 22px; }
   .bento { grid-template-columns: minmax(0, 1fr); }
   :root { --card-px: var(--sp-5); --card-py: var(--sp-5); }
   .card, .card.keep { grid-column: 1 / -1; }
   .big { font-size: var(--fs-num-l); }
+}
+@media (max-width: 440px) {
+  .vs-cluster { --vs-w: calc(100vw - 80px); --vs-menu-w: calc(100vw - 80px); }
+  .vs-tab { font-size: var(--fs-meta); }
 }
 @media (max-width: 520px) {
   .t-row { white-space: normal; flex-wrap: wrap; }
