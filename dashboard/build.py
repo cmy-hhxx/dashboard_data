@@ -45,6 +45,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 import ab_test
+import bench_dynamic
 import build_store as bs
 import user_rules
 from daytime import iso_now, local_day, local_day_minute
@@ -77,7 +78,7 @@ INPUT_INDEX_VERSION = "2026-11-12.1"
 # Bump when pairing semantics change (cache keys are not otherwise versioned).
 PAIRING_VERSION = "2026-11-13.1"
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-18.1"
+PAYLOAD_VERSION = "2026-11-18.2"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 3
 
@@ -1998,14 +1999,12 @@ def aggregate(product, samples, taxonomy):
     comp_rows = [s[3]["compact"] for s in samples if s[3]["compact"]]
 
     def per_session(key):
-        return [sum(len(t[key]) for t in c["turns"]) for c in comp_rows]
+        return [c["counts"][key] for c in comp_rows]
 
     comp_kinds, comp_names = Counter(), Counter()
     for c in comp_rows:
-        for t in c["turns"]:
-            for x in t["components"]:
-                comp_kinds[x["kind"] or "—"] += 1
-                comp_names[x["name"] or "—"] += 1
+        comp_kinds.update(c["kinds"])
+        comp_names.update(c["names"])
     compact_profile = {
         "sessions": len(comp_rows),
         "steps": {
@@ -2980,6 +2979,20 @@ SAMPLE_CACHE_VERSION = 1
 # only when the delta grows large or the baseline is missing/stale.
 SAMPLE_DELTA = "samples-delta.pkl"
 SAMPLE_COMPACT_ROWS = 8000
+# The cache is written as a header plus fixed-size pickled chunks instead of one
+# 140k-row dict: pickling a single dict keeps a memo entry for every nested
+# object, which cost ~2 GB on top of the build's own ~9 GB heap and pushed the
+# AIME build over the container's 16 GiB cgroup limit (OOM killed it mid-write,
+# so the payloads after it were never rewritten).  Chunks also let the file be
+# read back without materialising the whole memo at once.
+SAMPLE_CHUNK_ROWS = 1000
+# Rewriting the full baseline dirties ~2.5 GB of page cache inside the same
+# 16 GiB cgroup the build already fills with ~11 GB of sample objects; the
+# kernel could not reclaim that dirty cache fast enough and the memcg OOM
+# killer took the build (2026-11-18, the board froze at 13:04).  Push the
+# writeback out in steps so dirty pages stay bounded.
+SAMPLE_FLUSH_ROWS = 20000
+SAMPLE_STREAM = "chunks"
 
 
 def cgroup_headroom() -> int | None:
@@ -3034,15 +3047,73 @@ def capped_workers(wanted: int, headroom: int | None = None, rss: int = 0) -> in
     return 1
 
 
+COMPACT_STEPS = ("plans", "reasoning", "execution", "reflections", "tool_errors",
+                 "key_data", "artifacts", "components")
+
+
+def compact_summary(compact):
+    """Reduce one compact trajectory to the counts the aggregate reports.
+
+    The full compact (0.5 GB of JSON over AIME) is only ever counted — steps per
+    turn and components by kind/name — but keeping it alive for every cached
+    sample is what pushed the build past the container's memory limit.
+    """
+    if not compact or compact.get("summary"):
+        return compact
+    counts = {key: 0 for key in COMPACT_STEPS}
+    kinds, names = Counter(), Counter()
+    turns = compact.get("turns") or ()
+    for turn in turns:
+        for key in COMPACT_STEPS:
+            counts[key] += len(turn.get(key) or ())
+        for comp in turn.get("components") or ():
+            kinds[comp.get("kind") or "—"] += 1
+            names[comp.get("name") or "—"] += 1
+    return {"summary": True, "turns": len(turns), "counts": counts,
+            "kinds": dict(kinds), "names": dict(names)}
+
+
+def slim_parts(brief, facts):
+    """Drop cache fields no payload stage reads, so the cache can stay resident.
+
+    ``brief.compact`` / ``brief.session_meta`` are never consumed (details are
+    regenerated from the raw input by ``detail_builder``) and ``facts.compact``
+    only feeds the compact profile.  Idempotent: already-slim rows pass through.
+    """
+    if isinstance(brief, dict):
+        brief.pop("compact", None)
+        brief.pop("session_meta", None)
+    if isinstance(facts, dict) and facts.get("compact"):
+        facts["compact"] = compact_summary(facts["compact"])
+
+
+def slim_entry(entry):
+    slim_parts(entry.get("brief"), entry.get("facts"))
+    return entry
+
+
 def load_sample_pickle(path: Path):
     try:
         with open(path, "rb") as fh:
             data = pickle.load(fh)
+            if not isinstance(data, dict):
+                return {}
+            if data.get("version") != SAMPLE_CACHE_VERSION or data.get("build") != bs.BUILD_VERSION:
+                return {}
+            if data.get("format") != SAMPLE_STREAM:
+                return data.get("rows") or {}
+            rows = {}
+            while True:
+                try:
+                    chunk = pickle.load(fh)
+                except EOFError:
+                    break
+                if not isinstance(chunk, dict):
+                    break
+                rows.update(chunk)
+            return rows
     except (OSError, EOFError, pickle.PickleError, ValueError):
         return {}
-    if data.get("version") != SAMPLE_CACHE_VERSION or data.get("build") != bs.BUILD_VERSION:
-        return {}
-    return data.get("rows") or {}
 
 
 def load_sample_cache(cache_dir: Path):
@@ -3051,6 +3122,8 @@ def load_sample_cache(cache_dir: Path):
     delta = load_sample_pickle(cache_dir / SAMPLE_DELTA)
     rows = dict(base)
     rows.update(delta)
+    for entry in rows.values():
+        slim_entry(entry)
     return rows, delta
 
 
@@ -3058,8 +3131,21 @@ def write_sample_pickle(path: Path, rows):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = tmp_path(path)
     with open(tmp, "wb") as fh:
-        pickle.dump({"version": SAMPLE_CACHE_VERSION, "build": bs.BUILD_VERSION, "rows": rows},
-                    fh, protocol=5)
+        pickle.dump({"version": SAMPLE_CACHE_VERSION, "build": bs.BUILD_VERSION,
+                     "format": SAMPLE_STREAM}, fh, protocol=5)
+        chunk = {}
+        written = 0
+        for slug, entry in rows.items():
+            chunk[slug] = entry
+            if len(chunk) >= SAMPLE_CHUNK_ROWS:
+                pickle.dump(chunk, fh, protocol=5)
+                chunk.clear()
+                written += SAMPLE_CHUNK_ROWS
+                if written % SAMPLE_FLUSH_ROWS == 0:
+                    fh.flush()
+                    os.fsync(fh.fileno())
+        if chunk:
+            pickle.dump(chunk, fh, protocol=5)
     os.replace(tmp, path)
 
 
@@ -3083,8 +3169,12 @@ def build_samples(pairs, root, out_dir, store, reader, cluster_index, cluster_si
     # the light SQLite columns (fp/oh/ih/ch), so a stale file can only cost a
     # fallback load, never a wrong hit.
     cache_dir = cache_root(out_dir)
+    debug("rss %dMB before sample cache load" % (rss_bytes() >> 20))
     pickled, sample_delta = load_sample_cache(cache_dir)
+    debug("rss %dMB after sample cache load (%d+%d rows)" % (
+        rss_bytes() >> 20, len(pickled) - len(sample_delta), len(sample_delta)))
     meta = store.sample_meta(slugs)
+    debug("rss %dMB after sample meta (%d rows)" % (rss_bytes() >> 20, len(meta)))
     cached, need = {}, []
     for slug, info in meta.items():
         entry = pickled.get(slug)
@@ -3097,6 +3187,10 @@ def build_samples(pairs, root, out_dir, store, reader, cluster_index, cluster_si
             need.append(slug)
     if need:
         cached.update(store.load_samples(need))
+        for entry in cached.values():
+            slim_entry(entry)
+    debug("rss %dMB after sample rows (%d need)" % (rss_bytes() >> 20, len(need)))
+    loaded = set(need)
     hits, misses = [], []
     for pair in pairs:
         fp = sample_fingerprint(pair, cluster_sig)
@@ -3106,6 +3200,8 @@ def build_samples(pairs, root, out_dir, store, reader, cluster_index, cluster_si
             hits.append((pair, hit))
         else:
             misses.append(pair)
+    debug("rss %dMB after hit match (%d hits %d misses)" % (
+        rss_bytes() >> 20, len(hits), len(misses)))
 
     detail_bytes = 0
     changed_samples = {}
@@ -3113,6 +3209,7 @@ def build_samples(pairs, root, out_dir, store, reader, cluster_index, cluster_si
     def add_sample(pair, brief, row, facts, golden):
         nonlocal detail_bytes
         slug = pair.get("_slug") or pair.get("slug")
+        slim_parts(brief, facts)
         row["idate"] = row.get("d")
         row["inp"] = 1 if (pair.get("input") or (pair.get("refs") or {}).get("input")) else 0
         row["im"] = pair.get("im") or row.get("m")
@@ -3139,6 +3236,10 @@ def build_samples(pairs, root, out_dir, store, reader, cluster_index, cluster_si
         brief, row = remap_clusters(hit["brief"], hit["row"], cluster_index)
         golden = remap_golden(hit["golden"], brief)
         add_sample(pair, brief, row, hit["facts"], golden)
+        if pair["_slug"] in loaded:
+            # Rows that had to come back from SQLite (JSON decode) belong in the
+            # cache from now on, or every later build pays for them again.
+            changed_samples[pair["_slug"]] = hit
         stats["sample_hits"] += 1
 
     if misses:
@@ -3221,6 +3322,8 @@ def build_samples(pairs, root, out_dir, store, reader, cluster_index, cluster_si
         baseline_path = cache_dir / "samples.pkl"
         merged_delta = dict(sample_delta)
         merged_delta.update(changed_samples)
+        debug("rss %dMB before sample cache write (+%d delta)" % (
+            rss_bytes() >> 20, len(merged_delta)))
         if not baseline_path.exists() or len(merged_delta) > SAMPLE_COMPACT_ROWS:
             compacted = {slug: cached[slug] for slug in slugs if slug in cached}
             write_sample_pickle(baseline_path, compacted)
@@ -3273,7 +3376,7 @@ def cleanup_samples(sample_dir: Path, slugs):
             shutil.rmtree(path, ignore_errors=True)
 
 
-def payload_files_exist(out_dir: Path, ab_products=()) -> bool:
+def payload_files_exist(out_dir: Path, ab_products=(), bench_products=()) -> bool:
     try:
         data = json.loads((out_dir / "data.json").read_text(encoding="utf-8"))
         samples = json.loads((out_dir / "samples.json").read_text(encoding="utf-8"))
@@ -3285,6 +3388,7 @@ def payload_files_exist(out_dir: Path, ab_products=()) -> bool:
             and all((out_dir / f"recall-{p}.json").exists() for p in (samples.get("products") or {}))
             and all((out_dir / f"trends-{p}.json").exists() for p in (data.get("products") or {}))
             and all((out_dir / f"bench-{p}.json").exists() for p in (samples.get("products") or {}))
+            and all((out_dir / f"bench_index-{p}.json").exists() for p in bench_products)
             and all((out_dir / f"abtests-{p}.json").exists() for p in ab_products))
 
 
@@ -3529,6 +3633,10 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
         # 1_aime/ab_test), and requiring that product's abtests-*.json here would
         # silently disable payload reuse forever.
         ab_expected = {product for product in ENABLED if ab_test.ab_round_dirs(datasets, product)}
+        bench_expected = {product for product in ENABLED if bench_dynamic.dynamic_bench_root(datasets, product)}
+        bench_sig = hashlib.sha1("\x1f".join(
+            f"{p}:{bench_dynamic.dynamic_bench_signature(datasets, p)}" for p in sorted(bench_expected)
+        ).encode()).hexdigest() if bench_expected else ""
         scanned = sum(v["scanned"] for v in scan_info.values())
         marker = store.get_meta("complete")
         # A small, stable set of outputs may never pair (missing input / compact on
@@ -3547,9 +3655,10 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
                 and marker.get("feed") == feed_sig
                 and marker.get("releases") == release_sig
                 and marker.get("ab") == ab_sig
+                and marker.get("bench") == bench_sig
                 and marker.get("input") == input_sig
                 and (out_dir / "data.json").exists() and (out_dir / "samples.json").exists()
-                and (out_dir / "samples").is_dir() and payload_files_exist(out_dir, ab_expected)):
+                and (out_dir / "samples").is_dir() and payload_files_exist(out_dir, ab_expected, bench_expected)):
             timers["cluster"] = round(time.time() - t0, 1)
             timers["samples"] = 0.0
             timers["aggregate"] = 0.0
@@ -3726,20 +3835,44 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
             product = stale.name[len("recall-"):].split(".", 1)[0]
             if product not in indexes:
                 stale.unlink(missing_ok=True)
-        # Bench reads the pipeline's golden/badcase split when the datasets root has one, and
-        # falls back to this build's own cases otherwise; either way the rows carry a slug.
-        slug_by_trace = {
-            str((brief.get("ids") or {}).get("trace")): slug
-            for slug, brief, _row, _facts in all_samples
-            if (brief.get("ids") or {}).get("trace")
-        }
+        # Bench prefers 3_dynamic_bench (schema:2 summary + server index) when published for a
+        # product, falling back cleanly to the golden/badcase split otherwise.
+        trace_refs = {}
+        slug_by_trace = {}
+        for slug, brief, row, _facts in all_samples:
+            case_key = f"{row.get('sp')}|{row.get('m')}|{row.get('sid') or slug}"
+            ids_tid = (brief.get("ids") or {}).get("trace")
+            if ids_tid:
+                tid = str(ids_tid)
+                slug_by_trace[tid] = slug
+                trace_refs[tid] = (slug, case_key)
+            for t in (brief.get("attribution") or {}).get("turns") or []:
+                if isinstance(t, dict) and t.get("trace_id"):
+                    trace_refs.setdefault(str(t["trace_id"]), (slug, case_key))
+            for tr in brief.get("trace_severity") or []:
+                if isinstance(tr, dict) and tr.get("trace_id"):
+                    trace_refs.setdefault(str(tr["trace_id"]), (slug, case_key))
+
         for product in samples:
-            payload = bench_payload(datasets, product, samples[product], slug_by_trace)
-            payload["generated_at"] = generated
-            write_json(out_dir / f"bench-{product}.json", payload)
+            dyn = bench_dynamic.build_dynamic_bench(datasets, product, trace_refs, cache_root(out_dir)) if product in bench_expected else None
+            if dyn is not None:
+                payload, dyn_index = dyn
+                payload["generated_at"] = generated
+                dyn_index["generated_at"] = generated
+                write_json(out_dir / f"bench-{product}.json", payload)
+                replace_bytes(out_dir / f"bench_index-{product}.json", json.dumps(dyn_index, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+            else:
+                payload = bench_payload(datasets, product, samples[product], slug_by_trace)
+                payload["generated_at"] = generated
+                write_json(out_dir / f"bench-{product}.json", payload)
+                (out_dir / f"bench_index-{product}.json").unlink(missing_ok=True)
         for stale in out_dir.glob("bench-*.json*"):
             product = stale.name[len("bench-"):].split(".", 1)[0]
             if product not in samples:
+                stale.unlink(missing_ok=True)
+        for stale in out_dir.glob("bench_index-*.json*"):
+            product = stale.name[len("bench_index-"):].split(".", 1)[0]
+            if product not in bench_expected or product not in samples:
                 stale.unlink(missing_ok=True)
         for stale in out_dir.glob("trends-*.json*"):
             product = stale.name[len("trends-"):].split(".", 1)[0]
@@ -3768,7 +3901,7 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
             "rules": rules_sig, "datasets": str(datasets),
             "pairs_sig": pairs_sig, "unmatched": pairing_info.get("unmatched_sig") or "",
             "cluster": cluster_sig, "feed": feed_sig,
-            "releases": release_sig, "ab": ab_sig, "input": input_sig,
+            "releases": release_sig, "ab": ab_sig, "bench": bench_sig, "input": input_sig,
             "at": generated,
         })
         store.commit()

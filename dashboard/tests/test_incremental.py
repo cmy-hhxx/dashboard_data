@@ -173,5 +173,46 @@ class IncrementalTests(unittest.TestCase):
             self.assertEqual(data["source"]["root"], "datasets2")
 
 
+class SampleCacheShapeTests(unittest.TestCase):
+    """The slimmed cache must still feed the same compact-profile numbers."""
+
+    COMPACT = {"turns": [
+        {"plans": [1, 2], "reasoning": [1], "execution": [1, 2, 3], "reflections": [],
+         "tool_errors": [1], "key_data": [], "artifacts": [],
+         "components": [{"kind": "model", "name": "planner"},
+                        {"kind": None, "name": "答案合成"}]},
+        {"plans": [], "reasoning": [1, 2], "execution": [], "reflections": [1],
+         "tool_errors": [], "key_data": [1], "artifacts": [1],
+         "components": [{"kind": "tool", "name": None}]},
+    ]}
+
+    def test_compact_summary_matches_raw_counts(self):
+        import build
+        summary = build.compact_summary(json.loads(json.dumps(self.COMPACT)))
+        raw = self.COMPACT["turns"]
+        for key in build.COMPACT_STEPS:
+            self.assertEqual(summary["counts"][key], sum(len(t[key]) for t in raw), key)
+        kinds, names = {}, {}
+        for turn in raw:
+            for comp in turn["components"]:
+                kinds[comp["kind"] or "—"] = kinds.get(comp["kind"] or "—", 0) + 1
+                names[comp["name"] or "—"] = names.get(comp["name"] or "—", 0) + 1
+        self.assertEqual(summary["kinds"], kinds)
+        self.assertEqual(summary["names"], names)
+        self.assertEqual(build.compact_summary(summary), summary)
+
+    def test_slim_parts_drops_only_unread_fields(self):
+        import build
+        brief = {"question": "q", "ids": {"trace": "t"}, "compact": {"turns": []},
+                 "session_meta": {"app": "x"}, "attribution": {"problems": []}}
+        facts = {"tokens": 7, "compact": json.loads(json.dumps(self.COMPACT))}
+        build.slim_parts(brief, facts)
+        build.slim_parts(brief, facts)
+        self.assertEqual(set(brief), {"question", "ids", "attribution"})
+        self.assertEqual(facts["tokens"], 7)
+        self.assertTrue(facts["compact"]["summary"])
+        self.assertEqual(facts["compact"]["counts"]["components"], 3)
+
+
 if __name__ == "__main__":
     unittest.main()

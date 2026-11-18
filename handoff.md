@@ -95,6 +95,22 @@ server.py（标准库 HTTP，:5001，定时 build）──> app.js
   16:15–11-18 02:29 的停更就是它）。`build.py` 现在按 cgroup 余量把池降到放得下的数量，放不下就
   串行（`capped_workers`）；串行峰值约 15.2 GB / 16 GiB，余量很小，扩容到 24–32 GiB 之前不要再用
   `--jobs >1` 并跑其它重型进程。卡住的构建可以 `pkill -f eval_dashboard/build.py` 后立即重建。
+- **构建内存（2026-11-18 续）**：数据涨到 14.8 万样本后，`samples.pkl` 单独加载就占 8.7 GB，加上
+  配对/索引两段峰值 11.4–12.4 GB；与 AIME pipeline（cluster / bench，1–3 GB）和服务（5003 1.25 GB、
+  5002 0.71 GB、vscode 0.6 GB）同在一台 16 GiB 容器里，OOM killer 每 10 分钟打死一次构建，看板停在
+  13:04（`[refresh] failed:` 后 stderr 为空，`dmesg` 里是 `Memory cgroup out of memory`）。三处改动：
+  - 缓存只留 payload 真正读的字段（`slim_parts`）：`brief.compact`、`brief.session_meta` 没有消费者
+    （详情页由 `detail_builder` 从原始输入重建），`facts.compact` 换成 `compact_summary`（只保留
+    turns / 每类步骤计数 / 组件 kind·name 计数，聚合口径不变）。
+  - `samples.pkl` 改「header + 1000 行分块」写，单次 `pickle.dump` 的 memo 不再随行数涨；每 2 万行
+    `flush + fsync`，避免 2.5 GB 脏页同时压在同一个 cgroup 里。
+  - 从 SQLite 回捞的样本（`need`）现在会写进 delta：之前它们每天被重新 `json.loads` 一次，
+    单这一项每轮多占 2.4 GB，而且 compaction 永远补不上。
+  实测：构建成功 92–113 s，缓存加载后进程峰值从 11.4 GB 降到 **7.4 GB**（容器 anon 从 17.0 GB 降到
+  10.8 GB，余量 6 GB），`cache/samples.pkl` 从 2.13 GB 降到 1.63 GB；`compact.sessions` 与 SQLite
+  里带 compact 的样本数一致。存量缓存要压一次才吃到瘦身收益（停服务 → `load_sample_cache` +
+  `write_sample_pickle` 重写 `samples.pkl` → 起服务），之后按 delta/compaction 自动维持。
+  根因仍是容量——扩容到 24–32 GiB 才是最稳的解法。
 - 前端无框架、无打包器；原生 ES modules + SVG + 手写 CSS，唯一第三方库是内置的 `static/vendor/lightweight-charts`（K 线 / 趋势图）。
 - 生产由 `deploy.sh` 同步代码到远端，在远端构建数据、预压缩并重启；不要手改远端目录。
 

@@ -57,11 +57,13 @@ MODEL_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 AB_ROUND_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*$")
 AB_DETAIL_RE = re.compile(r"^/ab_samples/([^/]+)/(before-[0-9A-Za-z_-]+|\d+)\.json$")
 GPT_DETAIL_RE = re.compile(r"^/gpt_samples/([^/]+)/([0-9A-Za-z_-]+)\.json$")
-# /bench/<product>.json?kind=golden|bad&page=1&size=25: the case list is tens of thousands of rows,
-# so the page asks for one slice instead of downloading the whole bench payload.
+# /bench/<product>.json: serves schema:1 golden/bad slices or schema:2 dynamic bench views/fields.
 BENCH_RE = re.compile(r"^/bench/([a-z][a-z0-9_]*)\.json$")
+BENCH_CASE_RE = re.compile(r"^/bench_case/([a-z][a-z0-9_]*)/([a-z0-9_]+)/([^/]+)\.json$")
 _BENCH_CACHE = {}
 _BENCH_LOCK = threading.Lock()
+_BENCH_INDEX_CACHE = {}
+_BENCH_INDEX_LOCK = threading.Lock()
 
 
 def prewarm_details():
@@ -208,6 +210,42 @@ def bench_payload(product):
             _BENCH_CACHE.clear()
         _BENCH_CACHE[product] = (key, payload)
     return payload
+
+
+def bench_index(product):
+    """Cached server-side compact Bench case index with O(1) trace locator lookup."""
+    path = os.path.join(STATIC, f"bench_index-{product}.json")
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    key = (st.st_mtime_ns, st.st_size)
+    with _BENCH_INDEX_LOCK:
+        hit = _BENCH_INDEX_CACHE.get(product)
+        if hit and hit[0] == key:
+            return hit[1]
+    try:
+        with open(path, encoding="utf-8") as fh:
+            idx = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    by_key = {}
+    for model, rows in (idx.get("models") or {}).items():
+        for r in rows or []:
+            tid = r.get("trace_id")
+            if tid:
+                by_key[(model, tid)] = r
+    entry = {
+        "key": key,
+        "etag": f'"{st.st_mtime_ns:x}-{st.st_size:x}"',
+        "models": idx.get("models") or {},
+        "by_key": by_key,
+    }
+    with _BENCH_INDEX_LOCK:
+        if len(_BENCH_INDEX_CACHE) > 4:
+            _BENCH_INDEX_CACHE.clear()
+        _BENCH_INDEX_CACHE[product] = (key, entry)
+    return entry
 
 class Handler(SimpleHTTPRequestHandler):
     # HTTP/1.1 keeps the connection alive for the many sample-detail requests
@@ -403,7 +441,7 @@ class Handler(SimpleHTTPRequestHandler):
                 sys.stderr.write(f"[slow] {elapsed:.1f}s {getattr(self, 'command', '?')} {self.path}\n")
 
     def _serve_bench(self, path_only):
-        """One page of Bench's golden / badcase list; the payload stays on disk."""
+        """Serve Bench payloads: schema:2 dynamic bench views/fields or schema:1 golden/bad slices."""
         match = BENCH_RE.match(path_only)
         if not match:
             return False
@@ -413,6 +451,49 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_body(404, b'{"error":"bench unavailable"}', "application/json")
             return True
         query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        if payload.get("schema") == 2:
+            view = (query.get("view") or ["summary"])[0]
+            self._cache_policy = "no-cache"
+            if view == "summary":
+                body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+                self._send_body(200, body, "application/json; charset=utf-8")
+                return True
+            if view not in ("fields", "cases"):
+                self._send_body(400, b'{"error":"unknown bench view"}', "application/json")
+                return True
+            idx = bench_index(product)
+            if not idx:
+                self._send_body(404, b'{"error":"bench index unavailable"}', "application/json")
+                return True
+            import bench_dynamic
+            q_flat = {k: vals[0] for k, vals in query.items() if vals}
+            model = q_flat.get("model") or ""
+            rows = (idx["models"].get(model) or []) if model else [r for lst in idx["models"].values() for r in lst]
+            long_tok = int(((payload.get("manifest") or {}).get("params") or {}).get("long_tokens") or 65536)
+            matched = [r for r in rows if bench_dynamic.case_matches_query(r, q_flat, long_tok)]
+            if view == "fields":
+                public_rows = [bench_dynamic.public_case_row(r) for r in matched]
+                body = json.dumps({"schema": 2, "product": product, "total": len(public_rows), "cases": public_rows},
+                                  ensure_ascii=False, separators=(",", ":")).encode()
+                self._send_body(200, body, "application/json; charset=utf-8", etag=f"{idx['etag']}-{hashlib.sha1(self.path.encode()).hexdigest()[:8]}")
+                return True
+            sorted_rows = bench_dynamic.sort_case_rows(matched, q_flat.get("sort") or "rank")
+            try:
+                size = max(1, min(100, int(q_flat.get("size") or "25")))
+                page = max(1, int(q_flat.get("page") or "1"))
+            except ValueError:
+                size, page = 25, 1
+            total = len(sorted_rows)
+            pages = max(1, (total + size - 1) // size)
+            page = min(page, pages)
+            start = (page - 1) * size
+            body = json.dumps({
+                "schema": 2, "product": product, "page": page, "size": size, "total": total, "pages": pages,
+                "cases": [bench_dynamic.public_case_row(r) for r in sorted_rows[start:start + size]],
+            }, ensure_ascii=False, separators=(",", ":")).encode()
+            self._send_body(200, body, "application/json; charset=utf-8")
+            return True
+
         kind = (query.get("kind") or ["golden"])[0]
         rows = (payload.get("rows") or {}).get(kind)
         if rows is None:
@@ -437,6 +518,29 @@ class Handler(SimpleHTTPRequestHandler):
         }, ensure_ascii=False, separators=(",", ":")).encode()
         self._cache_policy = "no-cache"
         self._send_body(200, body, "application/json")
+        return True
+
+    def _serve_bench_case(self, path_only):
+        """Lazy single-line JSONL seek for one dynamic Bench case scene."""
+        match = BENCH_CASE_RE.match(path_only)
+        if not match:
+            return False
+        product, model = match.group(1), match.group(2)
+        trace_id = urllib.parse.unquote(match.group(3))
+        idx = bench_index(product)
+        row = idx["by_key"].get((model, trace_id)) if idx else None
+        if row is None:
+            self._send_body(404, b'{"error":"bench case not found"}', "application/json")
+            return True
+        import bench_dynamic
+        from build import default_datasets
+        detail = bench_dynamic.load_bench_case(default_datasets(), row)
+        if detail is None:
+            self._send_body(404, b'{"error":"bench case unreadable"}', "application/json")
+            return True
+        self._cache_policy = "public, max-age=120"
+        body = json.dumps(detail, ensure_ascii=False, separators=(",", ":")).encode()
+        self._send_body(200, body, "application/json; charset=utf-8")
         return True
 
     def do_GET(self):
@@ -492,7 +596,7 @@ class Handler(SimpleHTTPRequestHandler):
         if _lister and (path_only == "/inputs.json" or (path_only.startswith("/inputs/") and path_only.endswith(".json"))):
             if self._serve_inputs(path_only):
                 return
-        if self._serve_bench(path_only):
+        if self._serve_bench(path_only) or self._serve_bench_case(path_only):
             return
         if _builder and path_only.startswith("/samples/") and path_only.endswith(".json"):
             slug = path_only[len("/samples/"):-len(".json")]

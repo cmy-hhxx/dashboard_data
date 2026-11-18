@@ -13,6 +13,7 @@ const SAMPLE_PARAMS = {
   res: null, cls: null, typ: null, cause: null,
 };
 const COMPARE_PARAMS = { pair: null, online: null, round: null };
+const BENCH_PARAMS = { bm: null, bl: null, bt: null, bd: null, bv: null };
 // Views that read data-<product>.json (17 MB for AIME). The others only need the data.json shell,
 // so they neither wait for it nor spend the bandwidth their own payloads need.
 const NEEDS_PRODUCT = new Set(["data", "forecast", "compare"]);
@@ -41,7 +42,7 @@ const SKELETON = {
   speed: [[12, 168], [12, 168], [4, 124], [4, 124], [4, 124], [12, 280], [12, 240]],
   system: [[12, 420], [12, 520]],
   judge: [[12, 64], [4, 380], [4, 380], [4, 380], [12, 150], [7, 320], [5, 320]],
-  bench: [[12, 64], [12, 560]],
+  bench: [[12, 168], [5, 390], [7, 390], [7, 360], [5, 360], [12, 420]],
   compare: [[12, 72], [12, 560]],
   docs: [[4, 380], [4, 380], [4, 380]],
 };
@@ -272,12 +273,13 @@ async function poll() {
 async function boot() {
   viewSeg = segmented($("#viewSwitch"), (v) => {
     announce(`切换到${VIEW_NAME[v]}`);
-    navigate({ view: v, doc: null, ...(v === "compare" || v === "forecast" ? SAMPLE_PARAMS : {}), ...(v === "data" ? { detail: null, ed: null, em: null, ep: null, edp: null } : {}), ...COMPARE_PARAMS });
+    const leaveBench = state.view === "bench" && v !== "bench" ? { ...BENCH_PARAMS, trace: null } : {};
+    navigate({ view: v, doc: null, ...leaveBench, ...(v === "compare" || v === "forecast" ? SAMPLE_PARAMS : {}), ...(v === "data" ? { detail: null, ed: null, em: null, ep: null, edp: null } : {}), ...COMPARE_PARAMS });
   });
   productSeg = segmented($("#productSwitch"), (p) => {
     const away = awayURL(p, { view: state.view, product: p });
     if (away) location.assign(away);
-    else navigate({ product: p, case: null, ...COMPARE_PARAMS });
+    else navigate({ product: p, case: null, ...BENCH_PARAMS, ...COMPARE_PARAMS });
   });
   // Back from the other product's server (bfcache): the knob moved before leaving; put it back.
   window.addEventListener("pageshow", (e) => e.persisted && productSeg.set(state.product, { silent: true }));
