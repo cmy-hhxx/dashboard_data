@@ -610,9 +610,9 @@ export async function render(root, ctx) {
   }
 
   if (!raw || raw.schema !== 2) {
-    // Only the dynamic (3_dynamic_bench) bench is supported: a golden/bad summary is not
-    // another layout, it is missing data. Never fall back to the retired list view.
-    root.innerHTML = `<div class="bento bn-bento"><section class="card" style="--span:12"><div class="bn-empty">${raw ? "Bench 数据构建中…" : "暂无 Bench 数据"}</div></section></div>`;
+    // Only the dynamic (3_dynamic_bench) bench is supported. A golden/bad summary is not
+    // another layout, it is missing dynamic data — never fall back to the retired list view.
+    root.innerHTML = `<div class="bento bn-bento"><section class="card" style="--span:12"><div class="bn-empty">暂无 Bench 数据</div></section></div>`;
     return;
   }
 
