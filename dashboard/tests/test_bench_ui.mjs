@@ -126,11 +126,15 @@ test("filterBenchCases, sortBenchCases, groupFieldCases, deriveTierFromCases and
   const norm = benchMod.normalizeBenchPayload(SAMPLE_RAW, null);
   const derived = benchMod.deriveTierFromCases(SAMPLE_CASES, 500, norm.models.aime_expert.pool_stats, norm.manifest.params, null);
   assert.equal(derived.actual, 2);
-  assert.equal(derived.coverage.length, 9);
-  assert.ok(!derived.coverage.some((c) => c.dim === "difficulty" || c.dim === "group" || c.dim === "recalled_from"));
+  assert.equal(derived.coverage.length, 7);
+  assert.ok(!derived.coverage.some((c) => ["difficulty", "group", "recalled_from", "tokens", "pattern_source"].includes(c.dim)));
   assert.ok(!derived.crosstab.stages.includes("NA"));
   assert.ok(!derived.crosstab.mechanisms.includes("NA"));
+  assert.equal(derived.crosstab.totals.bench_total, 1);
+  assert.equal(derived.crosstab.rows.S9.pool_total, 300);
+  assert.equal(derived.dims.stage.find((r) => r.key === "S10").share_in_bench, 1);
   assert.equal(derived.extra.known_tokens_p50, 72000);
+  assert.equal(derived.extra.known_tokens_p90, 72000);
 
   assert.equal(benchMod.filterBenchCases(SAMPLE_CASES, { sev: "P0" }).length, 1);
   assert.equal(benchMod.filterBenchCases(SAMPLE_CASES, { tok: "unknown" }).length, 1);
@@ -176,6 +180,7 @@ test("bench view forbids mock data, difficulty, 未归因, and obscure English j
   assert.ok(!src.includes("业务分组") && !src.includes("召回来源"), "must not filter by group or recall");
   assert.ok(src.includes("paintBenchField") && src.includes("bn-field-pager"), "field view must mirror 会话场 per-group pagination");
   assert.ok(src.includes(".slice(0, 8)"), "bn-toppats should show up to 8 items");
+  assert.ok(src.includes('unit: "问题样本"'), "bench sunburst must clarify denominator as 问题样本");
   assert.ok(!src.includes('focus: `b/${S.f.l3}`'), "sunburst focus must stay on parent mechanism, never leaf pattern");
   const css = fs.readFileSync(path.resolve(HERE, "../static/css/bench.css"), "utf8");
   assert.ok(!/\.bn-prob-card\s*\{[^}]*border-left/.test(css), "bn-prob-card must not use border-left");

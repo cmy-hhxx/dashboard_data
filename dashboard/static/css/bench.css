@@ -319,6 +319,8 @@ button.bn-scell[aria-pressed="true"] { background: var(--accent-soft); }
 /* ---- Row 3: Problem Matrix & Sunburst ---- */
 .bn-mx-card { --span: 7; display: flex; flex-direction: column; }
 .bn-sb-card { --span: 5; display: flex; flex-direction: column; }
+.bn-mx-card .card-head,
+.bn-sb-card .card-head { align-items: center; gap: var(--sp-2) var(--sp-3); }
 .bn-matrix { --mx-headh: 34px; --mx-rowh: 28px; --mx-colw: 44px; min-width: 0; }
 .bn-matrix .mx-corner {
   display: flex; align-items: center; height: var(--mx-headh); padding: 0 6px;
@@ -375,7 +377,7 @@ button.bn-scell[aria-pressed="true"] { background: var(--accent-soft); }
 .bn-patitem[aria-pressed="true"] .bn-patname { color: var(--accent); font-weight: var(--w-medium); }
 .bn-patmeta { display: inline-flex; align-items: baseline; gap: 5px; flex: none; margin-left: auto; }
 .bn-patmeta b { color: var(--ink); font-weight: var(--w-medium); font-size: var(--fs-meta); }
-.bn-patmeta small { color: var(--muted); font-size: var(--fs-micro); min-width: 24px; text-align: right; }
+.bn-patmeta small { color: var(--muted); font-size: var(--fs-micro); min-width: 34px; text-align: right; }
 
 /* ---- Row 4: Multi-Angle Case Explorer ---- */
 .bn-cases-card { --span: 12; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); min-width: 0; }

@@ -19,6 +19,7 @@ except ImportError:  # pragma: no cover - stdlib fallback
 
 DYNAMIC_DIR = "3_dynamic_bench"
 DYNAMIC_SCHEMA = 2
+_CACHE_VER = 3
 DIMS = (
     "severity",
     "stage",
@@ -26,16 +27,14 @@ DIMS = (
     "pattern",
     "turn_type",
     "day",
-    "tokens",
     "round",
     "group",
-    "recalled_from",
-    "pattern_source",
 )
-BY_DESIGN_DIMS = {"severity", "stage", "mechanism", "pattern", "turn_type", "pattern_source"}
+TAX_DIMS = {"stage", "mechanism", "pattern"}
+BY_DESIGN_DIMS = {"severity", "stage", "mechanism", "pattern", "turn_type"}
 SEVS_ALL = ("GOLD", "P0", "P1", "P2", "P3", "P4")
-MECH_IDS = ("M1", "M2", "M3", "M4", "M5", "M6", "M7", "NA")
-STAGE_ORDER = ("S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11", "S12", "NA")
+MECH_IDS = ("M1", "M2", "M3", "M4", "M5", "M6", "M7")
+STAGE_ORDER = ("S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11", "S12")
 
 _TID_PREFIX_RE = re.compile(rb'^\{\s*"trace_id"\s*:\s*"([^"]+)"')
 _DAY_PREFIX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
@@ -172,7 +171,7 @@ def dynamic_bench_signature(datasets: Path, product: str = "aime") -> str:
         manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return ""
-    parts = []
+    parts = [_CACHE_VER]
     for p in _signature_files(root, manifest):
         try:
             st = p.stat()
@@ -252,35 +251,28 @@ def _read_crosstab_csv(path: Path) -> dict | None:
     stages = []
     stage_names = {}
     rows = {}
-    totals = {}
     mech_cols = list(MECH_IDS)
     with path.open(encoding="utf-8", errors="replace", newline="") as fh:
         reader = csv.DictReader(fh)
         if reader.fieldnames:
             skip_cols = {"stage", "stage_name", "bench_total", "pool_total", "bench_share", "pool_share"}
-            mech_cols = [c for c in reader.fieldnames if c and c not in skip_cols]
+            mech_cols = [c for c in reader.fieldnames if c and c not in skip_cols and c != "NA"]
         for r in reader:
             st = _clean(r.get("stage"))
-            if not st:
-                continue
-            if st == "TOTAL":
-                for m in mech_cols:
-                    totals[m] = int(float(r.get(m) or 0))
-                totals["bench_total"] = int(float(r.get("bench_total") or 0))
-                totals["pool_total"] = int(float(r.get("pool_total") or 0))
+            if not st or st == "NA" or st == "TOTAL":
                 continue
             stages.append(st)
             sname = _clean(r.get("stage_name"))
             if sname and sname != "NA":
                 stage_names[st] = sname
             row_dict = {m: int(float(r.get(m) or 0)) for m in mech_cols}
-            row_dict["bench_total"] = int(float(r.get("bench_total") or 0))
+            row_bench = sum(row_dict.values())
+            row_dict["bench_total"] = int(float(r.get("bench_total") or 0)) if row_bench == 0 else row_bench
             row_dict["pool_total"] = int(float(r.get("pool_total") or 0))
             rows[st] = row_dict
-    if not totals and stages:
-        totals = {m: sum(int(rows[s].get(m) or 0) for s in stages) for m in mech_cols}
-        totals["bench_total"] = sum(int(rows[s].get("bench_total") or 0) for s in stages)
-        totals["pool_total"] = sum(int(rows[s].get("pool_total") or 0) for s in stages)
+    totals = {m: sum(int(rows[s].get(m) or 0) for s in stages) for m in mech_cols}
+    totals["bench_total"] = sum(int(rows[s].get("bench_total") or 0) for s in stages)
+    totals["pool_total"] = sum(int(rows[s].get("pool_total") or 0) for s in stages)
     order_idx = {k: i for i, k in enumerate(STAGE_ORDER)}
     stages.sort(key=lambda s: (order_idx.get(s, 99), s))
     return {
@@ -408,19 +400,26 @@ def _derive_extra_and_sev_cells(cases: list[dict], tiers: list[int], is_long: bo
         with_tool = sum(1 for c in sub if c["stats"]["tool_count"] > 0)
         lat_sum = sum(float(c["stats"]["latency"]) for c in sub)
         dup_ge2 = sum(1 for c in sub if c["stats"]["dup_question"] >= 2)
-        nz_toks = sorted(c["stats"]["total_tokens"] for c in sub if c["stats"]["total_tokens"] > 0)
+        all_toks = sorted(c["stats"]["total_tokens"] for c in sub)
+        nz_toks = [x for x in all_toks if x > 0]
         sev_cells = defaultdict(lambda: {"P0": 0, "P1": 0})
         for c in sub:
             sev = c.get("severity")
-            if sev in ("P0", "P1"):
-                p = c["primary"]
+            p = c["primary"]
+            if sev in ("P0", "P1") and p["l1"] != "NA" and p["l2"] != "NA":
                 sev_cells[f"{p['l1']}.{p['l2']}"][sev] += 1
         out[t] = {
+            "tokens": {
+                "p50": _quantile(all_toks, 0.5),
+                "p90": _quantile(all_toks, 0.9),
+                "p99": _quantile(all_toks, 0.99),
+            },
             "extra": {
                 "with_tool_rate": round(with_tool / n, 4) if n else 0.0,
                 "avg_latency": round(lat_sum / n, 1) if n else 0.0,
                 "dup_ge2_count": dup_ge2,
                 "known_tokens_p50": _quantile(nz_toks, 0.5),
+                "known_tokens_p90": _quantile(nz_toks, 0.9),
             },
             "sev_cells": dict(sev_cells),
         }
@@ -432,8 +431,8 @@ def _derive_long_tier_stats(cases: list[dict], req_n: int, pool_size: int, pool_
     actual = len(sub)
     sev_actual = Counter(c["severity"] for c in sub)
     turn_actual = Counter(c["turn"] for c in sub)
-    stage_actual = Counter(c["primary"]["l1"] for c in sub)
-    mech_actual = Counter(c["primary"]["l2"] for c in sub)
+    stage_actual = Counter(c["primary"]["l1"] for c in sub if c["primary"]["l1"] != "NA")
+    mech_actual = Counter(c["primary"]["l2"] for c in sub if c["primary"]["l2"] != "NA")
 
     g_share = float(params.get("golden_share") or 0.2)
     p0_cap = float(params.get("p0_cap") or 0.25)
@@ -457,38 +456,42 @@ def _derive_long_tier_stats(cases: list[dict], req_n: int, pool_size: int, pool_
     sev_cells = defaultdict(lambda: {"P0": 0, "P1": 0})
     ct_rows = {}
     ct_totals = Counter()
-    all_stages = [s for s in STAGE_ORDER if s in stage_names or stage_actual[s] > 0 or s == "NA"]
+    all_stages = [s for s in STAGE_ORDER if s in stage_names or stage_actual[s] > 0]
     for s in all_stages:
         ct_rows[s] = {m: 0 for m in MECH_IDS}
         ct_rows[s]["bench_total"] = 0
         ct_rows[s]["pool_total"] = 0
 
+    defect_total = 0
     for c in sub:
         l1 = c["primary"]["l1"]
         l2 = c["primary"]["l2"]
-        if l1 not in ct_rows:
-            ct_rows[l1] = {m: 0 for m in MECH_IDS}
-            ct_rows[l1]["bench_total"] = 0
-            ct_rows[l1]["pool_total"] = 0
-        ct_rows[l1][l2] = ct_rows[l1].get(l2, 0) + 1
-        ct_rows[l1]["bench_total"] += 1
-        ct_totals[l2] += 1
-        if c["severity"] in ("P0", "P1"):
-            sev_cells[f"{l1}.{l2}"][c["severity"]] += 1
+        l3 = c["primary"]["l3"]
+        if l1 != "NA" and l2 != "NA":
+            defect_total += 1
+            if l1 not in ct_rows:
+                ct_rows[l1] = {m: 0 for m in MECH_IDS}
+                ct_rows[l1]["bench_total"] = 0
+                ct_rows[l1]["pool_total"] = 0
+            ct_rows[l1][l2] = ct_rows[l1].get(l2, 0) + 1
+            ct_rows[l1]["bench_total"] += 1
+            ct_totals[l2] += 1
+            if c["severity"] in ("P0", "P1"):
+                sev_cells[f"{l1}.{l2}"][c["severity"]] += 1
 
         dim_counts["severity"][c["severity"]] += 1
-        dim_counts["stage"][l1] += 1
-        dim_counts["mechanism"][l2] += 1
-        dim_counts["pattern"][c["primary"]["l3"]] += 1
+        if l1 != "NA":
+            dim_counts["stage"][l1] += 1
+        if l2 != "NA":
+            dim_counts["mechanism"][l2] += 1
+        if l3 != "NA":
+            dim_counts["pattern"][l3] += 1
         dim_counts["turn_type"][c["turn"]] += 1
         if c["day"]:
             dim_counts["day"][c["day"]] += 1
-        dim_counts["tokens"][tokens_bucket(c["stats"]["total_tokens"])] += 1
         dim_counts["round"][round_bucket(c["session_round"])] += 1
         if c["group"]:
             dim_counts["group"][c["group"]] += 1
-        dim_counts["recalled_from"][c["meta"]["recalled_from"]] += 1
-        dim_counts["pattern_source"][c["primary"]["path_source"] or "none"] += 1
 
     # Inject pool stage totals if present in pool_stats
     for pr in pool_dims.get("stage") or []:
@@ -500,14 +503,15 @@ def _derive_long_tier_stats(cases: list[dict], req_n: int, pool_size: int, pool_
     coverage_out = []
     tol = float(params.get("tolerance_pp") or 10.0)
     for d in DIMS:
-        plist = pool_dims.get(d) or []
-        p_map = {str(x.get("key")): x for x in plist if x.get("key") is not None}
-        keys = list(dict.fromkeys([str(x.get("key")) for x in plist if x.get("key") is not None] + list(dim_counts[d].keys())))
+        plist = [x for x in (pool_dims.get(d) or []) if x.get("key") not in (None, "", "NA")]
+        p_map = {str(x.get("key")): x for x in plist}
+        keys = list(dict.fromkeys([str(x.get("key")) for x in plist] + list(dim_counts[d].keys())))
+        denom = defect_total if d in TAX_DIMS else actual
         rows = []
         for k in keys:
             cnt = dim_counts[d][k]
             pr = p_map.get(k) or {}
-            sb = cnt / actual if actual else 0.0
+            sb = cnt / denom if denom else 0.0
             sp = float(pr.get("share") or 0.0)
             bucket = _clean(pr.get("bucket")) or k
             if d == "pattern":
@@ -553,6 +557,7 @@ def _derive_long_tier_stats(cases: list[dict], req_n: int, pool_size: int, pool_
             "avg_latency": round(lat_sum / actual, 1) if actual else 0.0,
             "dup_ge2_count": dup_ge2,
             "known_tokens_p50": _quantile(nz_toks, 0.5),
+            "known_tokens_p90": _quantile(nz_toks, 0.9),
         },
         "dims": dims_out,
         "coverage": coverage_out,
@@ -561,7 +566,7 @@ def _derive_long_tier_stats(cases: list[dict], req_n: int, pool_size: int, pool_
             "stage_names": {k: v for k, v in stage_names.items() if k in ct_rows},
             "mechanisms": list(MECH_IDS),
             "rows": ct_rows,
-            "totals": {**{m: ct_totals.get(m, 0) for m in MECH_IDS}, "bench_total": actual, "pool_total": sum(r.get("pool_total", 0) for r in ct_rows.values()) or pool_size},
+            "totals": {**{m: ct_totals.get(m, 0) for m in MECH_IDS}, "bench_total": defect_total, "pool_total": sum(r.get("pool_total", 0) for r in ct_rows.values()) or pool_size},
             "sev_cells": dict(sev_cells),
         },
     }
@@ -637,13 +642,15 @@ def _scan_dynamic_bench(root: Path) -> tuple[dict, dict[str, list[dict]]]:
             dims = {}
             for d in DIMS:
                 rows = _read_dim_csv(sdir / f"tier_{tnum}.dim_{d}.csv")
+                if d in TAX_DIMS:
+                    rows = [r for r in rows if r["key"] and r["key"] != "NA"]
                 if d == "mechanism":
                     for r in rows:
-                        if r["key"] != "NA" and r["bucket"]:
+                        if r["bucket"]:
                             mech_names.setdefault(r["key"], r["bucket"])
                 elif d == "pattern":
                     for r in rows:
-                        if r["key"] != "NA" and r["bucket"] and r["bucket"] != r["key"]:
+                        if r["bucket"] and r["bucket"] != r["key"]:
                             pat_names.setdefault(r["key"], r["bucket"])
                 dims[d] = rows
             ct = _read_crosstab_csv(sdir / f"tier_{tnum}.crosstab_stage_mechanism.csv") or {}
@@ -663,7 +670,7 @@ def _scan_dynamic_bench(root: Path) -> tuple[dict, dict[str, list[dict]]]:
                 "stage_actual": t_meta.get("stage_actual") or {},
                 "mechanism_actual": t_meta.get("mechanism_actual") or {},
                 "turn_actual": t_meta.get("turn_actual") or {},
-                "tokens": t_meta.get("tokens") or {"p50": 0, "p90": 0, "p99": 0},
+                "tokens": t_meta.get("tokens") or extra_info.get("tokens") or {"p50": 0, "p90": 0, "p99": 0},
                 "extra": extra_info.get("extra") or {},
                 "dims": dims,
                 "coverage": cov,
@@ -681,7 +688,7 @@ def _scan_dynamic_bench(root: Path) -> tuple[dict, dict[str, list[dict]]]:
             "base_pool": base_pool,
             "long_pool": long_pool,
             "pool_stats": {
-                "pool_size": pool_size,
+                "pool_size": int(pool_stats.get("pool_size") or base_pool),
                 "base_pool": base_pool,
                 "long_pool": long_pool,
                 "by_severity": pool_stats.get("by_severity") or m_meta.get("pool_by_severity") or {},

@@ -9,13 +9,11 @@ const SEVS_ALL = ["GOLD", "P0", "P1", "P2", "P3", "P4"];
 const SEV_RANK = Object.fromEntries(["P0", "P1", "P2", "P3", "P4", "GOLD", "none"].map((k, i) => [k, i]));
 const DIM_META = [
   { key: "day", label: "按天分布", audit: true },
-  { key: "tokens", label: "对话长度", audit: true },
   { key: "round", label: "对话轮数", audit: true },
   { key: "stage", label: "问题环节", audit: false },
   { key: "mechanism", label: "问题机制", audit: false },
   { key: "pattern", label: "具体问题", audit: false },
   { key: "turn_type", label: "单/多轮", audit: false },
-  { key: "pattern_source", label: "匹配方式", audit: false },
   { key: "severity", label: "问题等级", audit: false },
 ];
 
@@ -173,6 +171,12 @@ export function deriveTierFromCases(cases, tierN, poolStats, params, taxonomy) {
     dimCount[d].set(k, (dimCount[d].get(k) || 0) + 1);
   };
 
+  const poolDims = poolStats?.dims || {};
+  (poolDims.stage || []).forEach((pr) => {
+    const sk = pr?.key;
+    if (sk && ctRows[sk]) ctRows[sk].pool_total = Number(pr.count || 0);
+  });
+
   let withTool = 0;
   let latSum = 0;
   let dupGe2 = 0;
@@ -215,13 +219,14 @@ export function deriveTierFromCases(cases, tierN, poolStats, params, taxonomy) {
     if (l2) incDim("mechanism", l2);
     if (l3) incDim("pattern", l3);
     incDim("day", c.day || "");
-    incDim("tokens", tokBucketKey(totalTok));
     incDim("round", roundBucketKey(t, c.session_round));
-    incDim("pattern_source", c.primary?.path_source || "none");
   });
 
+  const stagePoolSum = Object.values(ctRows).reduce((s, r) => s + Number(r.pool_total || 0), 0);
+  if (stagePoolSum > 0) ctTotals.pool_total = stagePoolSum;
+  const defectTotal = ctTotals.bench_total;
+
   const dims = {};
-  const poolDims = poolStats?.dims || {};
   const byDesignSet = new Set(DIM_META.filter((d) => !d.audit).map((d) => d.key));
   const coverage = [];
   const tol = Number(params.tolerance_pp ?? 10.0);
@@ -234,11 +239,12 @@ export function deriveTierFromCases(cases, tierN, poolStats, params, taxonomy) {
       ? [...new Set([...poolList.map((r) => r.key), ...cmap.keys()])]
       : [...cmap.entries()].sort((a, b) => b[1] - a[1]).map(([k]) => k);
     const skipNA = dim === "stage" || dim === "mechanism" || dim === "pattern";
+    const denom = skipNA ? defectTotal : actual;
 
     dims[dim] = keys.filter((k) => k !== "" && (!skipNA || k !== "NA")).map((k) => {
       const pr = poolByKey.get(k);
       const cnt = cmap.get(k) || 0;
-      const sb = actual ? cnt / actual : 0;
+      const sb = denom ? cnt / denom : 0;
       const sp = pr ? Number(pr.share ?? (poolSize ? (pr.count || 0) / poolSize : 0)) : 0;
       return {
         key: k,
@@ -267,6 +273,7 @@ export function deriveTierFromCases(cases, tierN, poolStats, params, taxonomy) {
   const p0Max = Math.round(tierN * (params.p0_cap ?? 0.25));
   const rem = Math.max(0, tierN - gTarget - p0Max);
   const pRat = params.p_ratio || { P1: 0.4, P2: 0.3, P3: 0.2, P4: 0.1 };
+  const nzToks = toks.filter((x) => x > 0);
 
   return {
     requested: tierN,
@@ -287,7 +294,8 @@ export function deriveTierFromCases(cases, tierN, poolStats, params, taxonomy) {
       with_tool_rate: actual ? withTool / actual : 0,
       avg_latency: actual ? +(latSum / actual).toFixed(1) : 0,
       dup_ge2_count: dupGe2,
-      known_tokens_p50: quant(toks.filter((x) => x > 0), 0.5),
+      known_tokens_p50: quant(nzToks, 0.5),
+      known_tokens_p90: quant(nzToks, 0.9),
     },
     dims,
     coverage,
@@ -785,6 +793,11 @@ export async function render(root, ctx) {
         <div class="bn-fstage is-focus">
           <span class="bn-fstage-k">${S.isLong ? `长对话 ${S.tier} 条档` : `${fmt(Number(S.tier))} 条基准档`}</span>
           <div class="bn-fstage-v">${fmt(actualN)}</div>
+          <div class="bn-fstage-sub">
+            <span><em>问题样本</em> ${fmt(Math.max(0, actualN - Number(tierData.severity_actual?.GOLD || 0)))}</span>
+            <span><em>goldencase</em> ${fmt(Number(tierData.severity_actual?.GOLD || 0))}</span>
+            ${tierData.shortfall > 0 ? `<span><em>缺口</em> ${fmt(tierData.shortfall)}</span>` : ""}
+          </div>
           <div class="bn-nest">
             ${keys.map((k) => {
               const kn = Number(k);
@@ -803,16 +816,17 @@ export async function render(root, ctx) {
 
   function renderQuotaHTML(md, tierData) {
     const actualN = Number(tierData.actual || 1);
-    const poolBaseSize = Number(tierData.pool || (S.isLong ? md.long_pool : md.base_pool) || md.pool_size || 1);
+    const pBySev = md.pool_stats?.by_severity || {};
+    const sevPoolSum = sum(SEVS_ALL.map((s) => Number(pBySev[s] || 0)));
+    const poolDistSize = Number(md.pool_stats?.pool_size || sevPoolSum || md.base_pool || md.pool_size || 1);
     const sActual = tierData.severity_actual || {};
     const sTarget = tierData.severity_target || {};
-    const pBySev = md.pool_stats?.by_severity || {};
 
     const maxScale = Math.max(
       ...SEVS_ALL.map((s) => Math.max(
         actualN ? (Number(sActual[s] || 0) / actualN) * 100 : 0,
         Number(tierData.requested || actualN) ? (Number(sTarget[s] || 0) / Number(tierData.requested || actualN)) * 100 : 0,
-        poolBaseSize ? (Number(pBySev[s] || 0) / poolBaseSize) * 100 : 0,
+        poolDistSize ? (Number(pBySev[s] || 0) / poolDistSize) * 100 : 0,
       )),
       30,
     );
@@ -822,14 +836,15 @@ export async function render(root, ctx) {
       const tgtCnt = Number(sTarget[sev] || 0);
       const bPct = actualN ? (cnt / actualN) * 100 : 0;
       const tPct = Number(tierData.requested || actualN) ? (tgtCnt / Number(tierData.requested || actualN)) * 100 : 0;
-      const pPct = poolBaseSize ? (Number(pBySev[sev] || 0) / poolBaseSize) * 100 : 0;
+      const pPct = poolDistSize ? (Number(pBySev[sev] || 0) / poolDistSize) * 100 : 0;
       const toW = (p) => Math.min(100, Math.max(0, (p / maxScale) * 100)).toFixed(1);
       const c = sevTone(sev);
       const tStr = `${tPct.toFixed(1).replace(/\.0$/, "")}%`;
       const tgtText = sev === "P0" && tPct >= (params.p0_cap * 100 - 0.5) ? `≤${tStr}` : tStr;
       const pressed = S.f.sev === sev;
       const lbl = sevLabel(sev);
-      const tip = `${lbl} · 已选 ${fmt(cnt)} 条 (${bPct.toFixed(1)}%) · 目标 ${tgtText} · 候选池 ${pPct.toFixed(1)}%`;
+      const poolLbl = S.isLong ? "常规候选池" : "候选池";
+      const tip = `${lbl} · 已选 ${fmt(cnt)} 条 (${bPct.toFixed(1)}%) · 目标 ${tgtText} · ${poolLbl} ${pPct.toFixed(1)}%`;
 
       return `<button type="button" class="bn-qrow" data-fsev="${sev}" aria-pressed="${pressed}" data-tip="${esc(tip)}" style="--c:${c}">
         <span class="bn-qsev"><i></i>${lbl}</span>
@@ -856,6 +871,7 @@ export async function render(root, ctx) {
     const pSinglePct = pTurnTot ? ((poolTurn.single || 0) / pTurnTot) * 100 : 0;
 
     const mActual = tierData.mechanism_actual || {};
+    const probTot = Number(tierData.crosstab?.totals?.bench_total ?? Math.max(0, actualN - Number(sActual.GOLD || 0)));
     const mMax = Math.max(1, ...MECH_ORDER.map((m) => Number(mActual[m] || 0)));
 
     return `<section class="card bn-quota-card">
@@ -889,7 +905,7 @@ export async function render(root, ctx) {
         <div class="bn-subwell">
           <div class="bn-subhead">
             <strong>问题机制分布</strong>
-            <span>覆盖 ${MECH_ORDER.filter((m) => (mActual[m] || 0) > 0).length} / 7 类</span>
+            <span>问题 ${fmt(probTot)} 条 · ${MECH_ORDER.filter((m) => (mActual[m] || 0) > 0).length} / 7 类</span>
           </div>
           <div class="bn-mechbars">
             ${MECH_ORDER.map((m) => {
@@ -993,7 +1009,7 @@ export async function render(root, ctx) {
       const displayRows = [...rows].sort((a, b) => (b.count || 0) - (a.count || 0)).slice(0, 30);
       const maxS = Math.max(0.05, ...displayRows.flatMap((r) => [Number(r.share_in_bench || 0), Number(r.share_in_pool || 0)]));
       bodyHTML = `<div class="bn-db-head">
-        <span>分布项</span><span>已选 ● 与候选池 ○</span><span>条数</span><span>已选</span><span>候选池</span><span>差值</span>
+        <span>分布项${isTaxDim ? " · 问题样本" : ""}</span><span>已选 ● 与候选池 ○</span><span>条数</span><span>已选</span><span>候选池</span><span>差值</span>
       </div>
       <div class="bn-dist-body">
         ${displayRows.map((r) => {
@@ -1040,6 +1056,7 @@ export async function render(root, ctx) {
     const toks = tierData.tokens || {};
     const extra = tierData.extra || {};
     const p50Show = extra.known_tokens_p50 > 0 ? extra.known_tokens_p50 : (toks.p50 || 0);
+    const p90Show = extra.known_tokens_p90 > 0 ? extra.known_tokens_p90 : (toks.p90 || 0);
 
     return `<section class="card bn-dist-card">
       <div class="card-head">
@@ -1053,7 +1070,7 @@ export async function render(root, ctx) {
       ${bodyHTML}
       <div class="bn-scale-strip">
         <div class="bn-scell"><span>已知长度中位</span><b>${p50Show ? compact(p50Show) : "—"}</b></div>
-        <div class="bn-scell"><span>长度 90分位</span><b>${toks.p90 ? compact(toks.p90) : "—"}</b></div>
+        <div class="bn-scell"><span>已知长度 P90</span><b>${p90Show ? compact(p90Show) : "—"}</b></div>
         <div class="bn-scell"><span>工具调用率</span><b>${extra.with_tool_rate != null ? `${(extra.with_tool_rate * 100).toFixed(1)}%` : "—"}</b></div>
         <div class="bn-scell"><span>平均耗时</span><b>${extra.avg_latency != null ? `${extra.avg_latency}s` : "—"}</b></div>
         <button type="button" class="bn-scell" id="bn-dup-btn" aria-pressed="${S.f.dupOnly}"><span>高频重问 ≥2</span><b>${extra.dup_ge2_count != null ? fmt(extra.dup_ge2_count) : "—"}</b></button>
@@ -1079,11 +1096,13 @@ export async function render(root, ctx) {
     const rowTot = (s) => sum(mIds.map((m) => Number(rows[s]?.[m] || 0)));
     const colTot = (m) => sum(sIds.map((s) => Number(rows[s]?.[m] || 0)));
     const grandTot = sum(sIds.map(rowTot));
+    const totalActual = Number(tierData.actual || 0);
     const totalPool = sum(sIds.map((s) => Number(rows[s]?.pool_total || 0))) || Number(totals.pool_total || 0);
 
     return `<section class="card bn-mx-card">
       <div class="card-head">
         <h2>环节 × 机制</h2>
+        <span class="bn-count-pill">问题 ${fmt(grandTot)}${totalActual ? ` / ${fmt(totalActual)}` : ""}</span>
         <div class="seg end" id="bn-seg-mx" role="group">
           <span class="seg-knob" aria-hidden="true"></span>
           <button type="button" data-value="bench" aria-pressed="${S.mxMode === "bench"}">数量</button>
@@ -1213,7 +1232,17 @@ export async function render(root, ctx) {
     fieldGroupsCache = isField ? groupFieldCases(filteredCases, S.groupBy, stageNames) : [];
 
     const optList = (dimKey, label, curVal) => {
-      const list = (tierData.dims?.[dimKey] || []).filter((r) => (r.count || 0) > 0 && r.key && r.key !== "NA");
+      let list = (tierData.dims?.[dimKey] || []).filter((r) => (r.count || 0) > 0 && r.key && r.key !== "NA");
+      if (!list.length && dimKey === "tokens") {
+        const cntMap = new Map();
+        allCases.forEach((c) => {
+          const bk = tokBucketKey(c.stats?.total_tokens);
+          cntMap.set(bk, (cntMap.get(bk) || 0) + 1);
+        });
+        list = ["<8k", "8-32k", "32-64k", "64-128k", ">=128k", "unknown"]
+          .filter((k) => (cntMap.get(k) || 0) > 0)
+          .map((k) => ({ key: k, count: cntMap.get(k) }));
+      }
       return `<select class="bn-sel ${curVal ? "is-on" : ""}" data-fsel="${dimKey}" aria-label="${label}">
         <option value="">${label}</option>
         ${list.map((r) => `<option value="${esc(r.key)}" ${curVal === r.key ? "selected" : ""}>${esc(bucketLabel(dimKey, r, maps))} (${fmt(r.count)})</option>`).join("")}
@@ -1649,6 +1678,8 @@ export async function render(root, ctx) {
       .sort((a, b) => (b.count || 0) - (a.count || 0))
       .slice(0, 8);
     const totalActual = Number(tierData.actual || 0);
+    const probTotal = Number(tierData.crosstab?.totals?.bench_total ?? Math.max(0, totalActual - Number(tierData.severity_actual?.GOLD || 0)))
+      || sum((tierData.dims?.stage || []).map((x) => Number(x.count || 0)));
 
     const container = $(".bn-bento", root);
     const didRebuild = !container || rebuildSummary;
@@ -1661,11 +1692,12 @@ export async function render(root, ctx) {
         <section class="card bn-sb-card">
           <div class="card-head">
             <h2>问题分类占比</h2>
+            <span class="bn-count-pill">问题 ${fmt(probTotal)}${totalActual ? ` / ${fmt(totalActual)}` : ""}</span>
             <button type="button" class="bn-chip-clear end" id="bn-sb-reset" hidden>返回全部</button>
           </div>
           <div id="bn-sb-host"></div>
           ${topPatterns.length ? `<div class="bn-toppats">
-            <div class="bn-subhead"><strong>高频具体问题</strong></div>
+            <div class="bn-subhead"><strong>高频具体问题</strong><span>占问题样本 · ${fmt(probTotal)} 条</span></div>
             <div class="bn-patgrid">
               ${topPatterns.map((p) => {
                 const pName = patternDisplayName(p.key, p.bucket, patNames, stageNames, mechNames);
@@ -1673,7 +1705,7 @@ export async function render(root, ctx) {
                 const sub = parts.length >= 2 ? `${stageLabel(parts[0], stageNames)} · ${mechLabel(parts[1], mechNames)}` : "";
                 return `<button type="button" class="bn-patitem" data-fpat="${esc(p.key)}" aria-pressed="${S.f.l3 === p.key}" data-tip="${esc(`${sub} · ${pName} · ${fmt(p.count)} 条`)}">
                   <span class="bn-patname">${esc(pName)}</span>
-                  <span class="bn-patmeta num"><b>${fmt(p.count)}</b>${totalActual ? `<small>${pct(p.count, totalActual, 0)}</small>` : ""}</span>
+                  <span class="bn-patmeta num"><b>${fmt(p.count)}</b>${probTotal ? `<small>${pct(p.count, probTotal, 1)}</small>` : ""}</span>
                 </button>`;
               }).join("")}
             </div>
@@ -1810,7 +1842,7 @@ export async function render(root, ctx) {
       const tree = buildSunburstTree(tierData, lastFiltered, taxonomy, stageNames, mechNames, patNames);
       let sbReady = false;
       sunburst(sbHost, tree, {
-        unit: "样本",
+        unit: "问题样本",
         sort: true,
         fold: false,
         state: S.sunburstState,

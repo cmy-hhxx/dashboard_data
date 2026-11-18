@@ -138,11 +138,16 @@ class DynamicBenchTests(unittest.TestCase):
         )
         row2 = raw_rec("tid-2", 1, "GOLD", 0, 1, "2_task_eval/0_lost_user_back_test", [], "", "", "")
         long1 = raw_rec("tid-long-1", 0, "GOLD", 72000, 3, "0_daily_eval", [], "", "", "")
+        long2 = raw_rec(
+            "tid-long-2", 1, "P1", 96000, 5, "0_daily_eval",
+            [{"severity": "P1", "label": "缺关键数字", "path": "S9.M6.1", "path_source": "join", "l1": "S9", "l2": "M6", "component": "synthesizer"}],
+            "S9", "M6", "S9.M6.1",
+        )
 
         write_jsonl(self.exp / "tier_500.jsonl", [{**row1, "bench": {"tier": 500, "rank": 0}}])
         write_jsonl(self.exp / "tier_1000.jsonl", [{**row1, "bench": {"tier": 1000, "rank": 0}}, {**row2, "bench": {"tier": 1000, "rank": 1}}])
         write_jsonl(self.exp / "long" / "tier_10_long.jsonl", [{**long1, "bench": {"tier": 10, "rank": 0}}])
-        write_jsonl(self.exp / "long" / "tier_20_long.jsonl", [{**long1, "bench": {"tier": 20, "rank": 0}}])
+        write_jsonl(self.exp / "long" / "tier_20_long.jsonl", [{**long1, "bench": {"tier": 20, "rank": 0}}, {**long2, "bench": {"tier": 20, "rank": 1}}])
 
         for t, act in ((500, 1), (1000, 2)):
             (self.exp / "stats" / f"tier_{t}.json").write_text(json.dumps({
@@ -189,9 +194,20 @@ class DynamicBenchTests(unittest.TestCase):
         self.assertEqual(summary["pat_names"]["S9.M6.1"], "无依据断言数字")
 
         exp = summary["models"]["aime_expert"]
+        self.assertEqual(exp["pool_stats"]["pool_size"], 30)
         self.assertNotIn("difficulty", exp["pool_stats"].get("dims") or {})
         self.assertFalse(any(c["dim"] == "difficulty" for c in exp["tiers"]["500"]["coverage"]))
+        self.assertNotIn("NA", exp["tiers"]["500"]["crosstab"]["stages"])
+        self.assertNotIn("NA", exp["tiers"]["500"]["crosstab"]["mechanisms"])
+        self.assertEqual(exp["tiers"]["500"]["crosstab"]["totals"]["bench_total"], 1)
+        self.assertEqual(exp["tiers"]["500"]["extra"]["known_tokens_p90"], 12000)
         self.assertEqual(exp["long_tiers"]["10"]["actual"], 1)
+        self.assertEqual(exp["long_tiers"]["20"]["actual"], 2)
+        self.assertEqual(exp["long_tiers"]["20"]["crosstab"]["totals"]["bench_total"], 1)
+        self.assertNotIn("NA", exp["long_tiers"]["20"]["crosstab"]["stages"])
+        self.assertNotIn("NA", exp["long_tiers"]["20"]["crosstab"]["mechanisms"])
+        l20_s9 = next(r for r in exp["long_tiers"]["20"]["dims"]["stage"] if r["key"] == "S9")
+        self.assertEqual(l20_s9["share_in_bench"], 1.0)
 
         cases = index["models"]["aime_expert"]
         by_tid = {c["trace_id"]: c for c in cases}
