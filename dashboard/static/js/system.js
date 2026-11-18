@@ -1,6 +1,6 @@
 /* 评测体系: how a session becomes compact + attribution + clusters. The page shows the process, not
    the batch's numbers: clustering walks real problems through the taxonomy, and the evidence loop
-   opens concrete golden cases message by message. */
+   raises concrete golden Traces message by message. */
 import {
   $, $$, esc, fmt, SEV, sevColor, KIND, getJSON,
   bindTips, REDUCED,
@@ -220,7 +220,7 @@ function goldenCard(cases, index) {
     : "";
   return `<article class="card" style="--span:12">
     <header class="card-head"><h2>证据闭环</h2><span class="meta" id="eMeta"></span>${player}</header>
-    ${a ? `<div class="echo"><div class="echo-main"><div id="anatomyBody">${anatomyBody(a)}</div></div></div>` : `<div class="empty">暂无 golden case。</div>`}
+    ${a ? `<div class="echo"><div class="echo-main"><div id="anatomyBody">${anatomyBody(a)}</div></div></div>` : `<div class="empty">暂无 golden Trace。</div>`}
   </article>`;
 }
 

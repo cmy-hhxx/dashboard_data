@@ -56,7 +56,7 @@ URL 参数沿用看板：`product=wencai|aime` 可指定产品（不写时用该
 对外地址与样本详情页一致（见 [接口使用指南](../../docs/接口使用指南.md) 第二节）：
 
 - 乌兰察布（问财）：`http://117.50.195.94:2833/matrix/?matrix=1`
-- 弗吉尼亚（AIME）：`http://10.217.219.2:2222/matrix/?matrix=1`
+- 弗吉尼亚（AIME）：`http://10.217.219.2:2476/matrix/?matrix=1`
 - DSW 代理：`…/proxy/dsw/trace-detail/matrix/`、`…/proxy/dsw/trace-detail-oversea/matrix/`
 
 ## 本地跑

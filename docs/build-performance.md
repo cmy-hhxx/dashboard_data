@@ -65,6 +65,9 @@
 - `build_samples` 先按 fingerprint 分流，命中样本只做重映射和聚合；
 - 未命中样本按输入文件分组，交给 `ProcessPoolExecutor`（fork）并行；worker 只读 SQLite 和原始行，
   回传 compact summary，主进程统一写 SQLite；`--jobs 1` 或小批量自动退回串行；
+- 池大小按 cgroup 余量收缩（`capped_workers`）：父进程 RSS 加每 worker 半份堆，放不下就串行。
+  16 GiB 的 AIME 容器里串行峰值约 15 GB；fork 4 个 worker 会 OOM，OOM 杀掉 worker 后父进程会卡在
+  写管道（兄弟仍持有读端），构建不退出并一直占着 `cache/build.lock`。扩容到 24–32 GiB 前不要并行；
 - 每个 worker 用 `raw_line` + SQLite 行号读单行，不再整文件加载；输出文件也建立行号索引，
   既服务样本构建，也服务详情懒加载。
 

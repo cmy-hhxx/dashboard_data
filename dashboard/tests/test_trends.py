@@ -224,7 +224,7 @@ class TrendBuildTests(unittest.TestCase):
             self.assertEqual(hist[(1, 1, node_idx["S1.M2.1"], 0, 1)], [3, 1])
             self.assertEqual(hist[(1, 1, node_idx["S1.M2.1.3"], 0, 1)], [1, 1])
             self.assertEqual(hist[(1, 1, node_idx["S2.M1.2"], 1, 0)], [28, 1])
-            # P3/P4 的计数与命中会话数也进 payload，且不改变 P0-P2 的值。
+            # P3/P4 的计数与命中 trace 数也进 payload，且不改变 P0-P2 的值。
             self.assertEqual(cells[(1, 1, node_idx["S2.M1.2"], 1, 0)],
                              [0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 1])
             self.assertEqual(len(wencai["cells"]), 10)

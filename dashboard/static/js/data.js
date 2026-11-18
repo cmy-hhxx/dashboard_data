@@ -1,5 +1,5 @@
 /* 数据: 会话场 · 聚类矩阵 · 数据量 · 评测量 · 归因体系 · 聚类体系 · 预测体系. Titles only; the layout carries the rest.
-   Charts drill in place; a session tile opens 具体数据 for that case, a matrix cell opens its trend chart in the card. */
+   Charts drill in place; a session tile opens 具体数据 for that Trace, a matrix cell opens its trend chart in the card. */
 import { $, $$, esc, fmt, pct, sum, compact, WORST, SEV_NAME, KIND, sevColor, counter, runCounters, bindTips, segmented, REDUCED, showTip, hideTip, getJSON } from "./core.js";
 import { renderContent } from "./render.js";
 import { sunburst } from "./sunburst.js";
@@ -32,8 +32,8 @@ const ui = (product) =>
     },
   });
 const SPLIT_SHORT = { daily: "日常", lost: "流失" };
-// A 数据量 branch with inputs but no evaluated case: the ring keeps it shut and says where to look.
-const NO_CASE = "暂无已评测 case";
+// A 数据量 branch with inputs but no evaluated Trace: the ring keeps it shut and says where to look.
+const NO_CASE = "暂无已评测 Trace";
 const dot = (c) => `<i style="--c:${c}"></i>`;
 
 export async function render(root, c) {
@@ -2519,7 +2519,7 @@ function matrixCard(p, tax) {
 
 /* ---------------------------------------------------------------- push-pull: one card opens wide, its row mates fold
    Rows keep the 2 + 3 bento. Opening a card widens it (8 of 12 columns) and folds the others in its
-   row down to their key numbers; the opened card shows the cases behind what was picked as a star
+   row down to their key numbers; the opened card shows the Traces behind what was picked as a star
    map. The move is FLIP + Web Animations: measure, switch the layout, then play every card from its
    old box to its new one on one spring, so neighbours stay edge to edge the whole way. */
 const ROW = { vol: "top", eval: "top", attr: "bottom", clu: "bottom", pred: "bottom" };
@@ -2532,7 +2532,7 @@ const sevIdx = (w) => {
   const i = WORST.indexOf(w);
   return i < 0 ? 5 : i;
 };
-/* The cases behind an opened card, worst first, beside its star map: a severity (or result) dot, the
+/* The Traces behind an opened card, worst first, beside its star map: a severity (or result) dot, the
    question and its problem count (or verdict). The head is the slice's size and its severity split. */
 const LEDGER_MAX = 120;
 const predDot = (it) => (it.r === "correct" ? "var(--accent)" : it.r === "wrong" ? "var(--sev-1)" : it.r === "mixed" ? "var(--sev-3)" : it.r === "pending" ? "var(--muted)" : "var(--faint)");
@@ -2549,7 +2549,7 @@ function ledger(groups, pred, unit = null, rows = null, { count = true, strip = 
   const rowHTML = (it, k) =>
     `<button type="button" class="gl-r${pred && !it.s ? " is-inert" : ""}" data-i="${k}" style="--i:${Math.min(k, 14)};--c:${pred ? predDot(it) : sevColor(it.w)}" title="${esc(it.q || "（无提问）")}"><i></i><span>${esc(it.q || "（无提问）")}</span>${count ? `<b class="num">${pred ? esc(RESULT[it.r] || "") : it.n ? fmt(it.n) : "—"}</b>` : ""}</button>`;
   const rowsHtml = items.slice(0, size).map(rowHTML);
-  const sumHtml = `<div class="gl-sum"><b class="num">${fmt(all.length)}</b><small>${unit || (pred ? "道预测题" : "个 case")}</small>${strip ? `<span class="gl-strip" aria-hidden="true">${parts
+  const sumHtml = `<div class="gl-sum"><b class="num">${fmt(all.length)}</b><small>${unit || (pred ? "道预测题" : "条 Trace")}</small>${strip ? `<span class="gl-strip" aria-hidden="true">${parts
     .filter((x) => x.n)
     .map((x) => `<i style="flex:${x.n} 1 0;background:${x.c}"></i>`)
     .join("")}</span>` : ""}</div>`;
@@ -2707,7 +2707,7 @@ function trendSampleDrawer(plot, load, repaint, interaction = {}) {
     let trace = item.trace;
     if (!trace && item.turn != null) {
       try { trace = (await loadSample(item.s)).attribution?.turns?.[item.turn]?.trace_id; }
-      catch { /* The sample page can still open the selected case. */ }
+      catch { /* The sample page can still open the selected Trace. */ }
     }
     openSamples({ case: item.s, trace: trace || null });
   };
@@ -2775,7 +2775,7 @@ async function loadTrendSamplePage(trend, spec, pick) {
   const CHUNK = 12;
   const CONCURRENCY = 8;
   const snapshot = () => ({
-    items: state.items.slice(), unit: "个 case",
+    items: state.items.slice(), unit: "条 Trace",
     // No candidate at all is not the same as candidates that miss the cluster/levels: say which
     // one happened instead of blaming the index for every empty drawer.
     emptyText: candidates.length ? "候选样本没有命中该簇的问题" : "",
@@ -3115,15 +3115,15 @@ function pushPull(bento, p, tax, u) {
     }
     if (gx._token !== token || gx.hidden) return;
     if (!groups.some((g) => g.items.length)) {
-      gx.innerHTML = `<div class="empty">暂无已评测的 case</div>`;
+      gx.innerHTML = `<div class="empty">暂无已评测的 Trace</div>`;
       return;
     }
     const pred = spec.card === "pred";
-    // The star map still reads the whole slice; the case list beside it is paged so a 20k-case
+    // The star map still reads the whole slice; the Trace list beside it is paged so a 20k-Trace
     // selection only puts one page of rows in the DOM (and the page is reachable without a cap).
     const GX_PAGE = 40;
     let page = 0;
-    const pagerHTML = (n) => (n <= 1 ? "" : `<div class="gx-pager mxt-sample-pager" role="group" aria-label="case 分页">
+    const pagerHTML = (n) => (n <= 1 ? "" : `<div class="gx-pager mxt-sample-pager" role="group" aria-label="Trace 分页">
       <button type="button" data-gxpage="prev" aria-label="上一页"${page === 0 ? " disabled" : ""}>‹</button>
       <span class="mxt-sample-page num">第 <b>${page + 1}</b> / ${n} 页</span>
       <button type="button" data-gxpage="next" aria-label="下一页"${page === n - 1 ? " disabled" : ""}>›</button>

@@ -1,4 +1,4 @@
-/* 证据闭环, full screen. One golden case is played as a derivation the reader can follow step by
+/* 证据闭环, full screen. One golden Trace is played as a derivation the reader can follow step by
    step: the problem the evaluator filed → the sentences it quoted → the messages those sentences
    come from (a line runs from each quote to its message, and the sentence lights up inside it) →
    the phenomenon it derived and the cluster pattern it was filed under. The whole trajectory stays

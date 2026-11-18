@@ -792,7 +792,7 @@ function trend(rnd, selectedCell, metric) {
     const cur = values[state.round];
     const label = TREND_LABEL[metric] || metricLabel(metric);
     const kline = abTrendKline(rounds, values, metric, label);
-    // 每个口径直接显示“问题数 · 涉及的 Trace 数”；Trace 数就是点击后召回的 case 数。
+    // 每个口径直接显示“问题数 · 涉及的 Trace 数”；Trace 数就是点击后召回的 Trace 数。
     // 变化矩阵只看发版前 / 发版后，不再混入线上真实样本。
     const refsBySide = {
       before: abTrendSampleRefs(rnd, ["before"], row, col.prefix),

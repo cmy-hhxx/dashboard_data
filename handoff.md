@@ -199,7 +199,7 @@ A/B 面板里的样本入口（旭日图叶子样本、矩阵格趋势的样本�
 | `dashboard/ab_test.py` | A/B Test 轮次读取：清单 / 逐条叶子落点 / 前后并集树 / 线上真实用户 → `abtests-<product>.json` | A/B Test 数据接入 |
 | `dashboard/static/js/abtest.js` + `css/abtest.css` | A/B Test 面板（记录列表、三批汇总、聚类矩阵、跨期趋势） | A/B Test 对比交互 |
 | `dashboard/static/js/sunburst.js` | 原生 SVG 可下钻旭日图 | 数据量 / 聚类环 / AB 并集树 |
-| `dashboard/static/js/galaxy.js` | 星图：一颗星一个 case、按分组成团的 canvas 视图（推拉展开的卡片里） | 星图布局、配色、交互 |
+| `dashboard/static/js/galaxy.js` | 星图：一颗星一条 Trace、按分组成团的 canvas 视图（推拉展开的卡片里） | 星图布局、配色、交互 |
 | `dashboard/static/js/particles.js` | 证据流：沿证据连线流动的低密度粒子（体系页证据闭环、样本页） | 粒子密度、速度 |
 | `dashboard/static/css/*.css` | 样式按页拆分，按 index.html 中的顺序加载：`base`（token / 重置）→ `layout`（外壳 + Bento）→ `content`（消息内容、证据 mark、anatomy 底座）→ `data` → `system` → `samples`（具体数据工作台） | 样式微调、响应式 |
 | `dashboard/tests/*.py` | 合成数据端到端构建、增量、sidecar、懒详情测试 | 改 build.py 后 |
@@ -233,7 +233,7 @@ system.goldens[product][] = { slug, date, question, model, problems[], messages[
 ```text
 q 问题 · m 模型 · sp daily/lost · d 日期 · w 最严重等级 · n 问题数
 sv 严重度构成 · r 环节 · st 阶段 · pt 模式 · tg 标签
-tr 轮数 · mc 消息数 · lang · case · s 短 slug
+tr 输入 Trace 数 · mc 消息数 · lang · case 会话键 · s 短 slug
 uid 用户 ID（输入 meta.user_id）· ut 用户类型 real/test/internal/unknown · ul 流失标记（1 才有）
 ```
 
@@ -247,11 +247,11 @@ uid 用户 ID（输入 meta.user_id）· ut 用户类型 real/test/internal/unkn
 ```
 
 - `nodes` 是聚类路径的全部前缀（环节 / 机制 / 模式 / 子模式），格子的列节点按精确匹配取一层，
-  四层都能点；`base` 是该日该场景该模型该来源的已评测记录数，是比例的分母；
-  `cells` 里的 `pK` 是 P K 问题条数、`hK` 是出现该等级问题的去重会话数，比例 = hK / sessions；
-  `hAny` 是这些会话的并集（`ΣhK` 会把同一会话在多个等级上重复计数，合计口径必须用 `hAny`）。
-  `hAny` 后面是 `(等级 mask, 会话数)` 稀疏直方图：mask 第 k 位表示会话命中 Pk；多选等级（如
-  P0+P1+P2）时，把 mask 与选中位有交集的会话数相加，就是精确的命中会话并集（schema 2 起提供；
+  四层都能点；`base` 是该日该场景该模型该来源的已评测 Trace 数（Σ`tr`，含无问题 Trace），是比例的分母；
+  `cells` 里的 `pK` 是 P K 问题条数、`hK` 是出现该等级问题的去重 Trace 数，比例 = hK / base；
+  `hAny` 是这些 Trace 的并集（`ΣhK` 会把同一条 Trace 在多个等级上重复计数，合计口径必须用 `hAny`）。
+  `hAny` 后面是 `(等级 mask, Trace 数)` 稀疏直方图：mask 第 k 位表示该 Trace 命中 Pk；多选等级（如
+  P0+P1+P2）时，把 mask 与选中位有交集的 Trace 数相加，就是精确的命中 Trace 并集（schema 2 起提供；
   schema 1 的老文件没有这段，前端对多等级比例会退化成按等级相加后再截断）。
 - 合计算 P0-P4 全部问题，与矩阵格子「问题合计」同口径；矩阵本身仍只画 P0-P1 的着色。
 - 发版日期：`<datasets>/releases.json` 优先（问财 / AIME 分开写，支持 `"YYYY-MM-DD"` 或
@@ -369,7 +369,7 @@ attribution / compact」的日期，并给出聚类落点缺口与 A/B 轮次、
    拦下，不进入展开/折叠；完全没数据的卡用 `is-mini` 直接以折叠态渲染（预测体系即此）。
 3. **改证据闭环**：`build.py` 的 `system_facts` 产出 `system.goldens[product][]`
    （每个产品 10 个候选）；`system.js` 的 `goldenCard` / `wireGoldens`
-   做单条轮播：上一条 / 下一条只换当前 case 的 anatomy，默认直接展示，不在体系页承载全部样本。
+   做单条轮播：上一条 / 下一条只换当前 Trace 的 anatomy，默认直接展示，不在体系页承载全部样本。
 4. **改聚类体系**：`build.py` 的 `taxonomy_out` 提供阶段/环节/机制/模式；
    `system.js` 的 `flowCard` / `patternMatrix` / `wireFx` 负责渲染与阶段联动。
 5. **改构建性能 / 缓存**：`build_store.py` 的 `scan_file`、`BuildStore`；`build.py` 的
@@ -419,7 +419,7 @@ attribution / compact」的日期，并给出聚类落点缺口与 A/B 轮次、
   单 trace 输出没有这个字段，就不显示（不要再补「暂无点评」占位）。Trace 点评仍取 `turns[i].summary`。
 - **复制**：`navigator.clipboard` 在 HTTP 下不可用，`copyText` 必须有 textarea + `execCommand`
   回退；按钮反馈「已复制 / 复制失败」。
-- **数据页跳样本只有一处**：会话场格子带 `case`；聚类矩阵格子不再跳页，而是在卡片里换成趋势图
+- **数据页跳样本只有一处**：会话场格子带会话键（payload 字段 `case`）；聚类矩阵格子不再跳页，而是在卡片里换成趋势图
   （`data.js` 的 `openTrend` / `paintTrendPlot`），旭日图、桑基图、预测页签仍只在页内下钻。
   问财的场景在 `build.py` 里来自 skill 投票，索引行用 `sc` 携带与 task/skill 不一致的场景，`samples.js` 的 `sceneOf` 优先读它。
 - **聚类矩阵卡的样本抽屉**：抽屉展开会让 `.mxt-sample-layout` 分栏、地图变窄；趋势图已统一到

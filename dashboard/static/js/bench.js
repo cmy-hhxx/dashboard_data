@@ -1,16 +1,16 @@
-/* Bench: the evaluator's two ends of the same data, one list each. Golden cases are cases the
-   evaluator left alone (no problem at all); badcases are the cases it filed a P0 or P1 on. The
-   list comes from the server a page at a time (/bench/<product>.json); every row opens its case in
+/* Bench: the evaluator's two ends of the same data, one list each. 正常 Trace are the ones the
+   evaluator left alone (no problem at all); 问题 Trace are the ones it filed a P0 or P1 on. The
+   list comes from the server a page at a time (/bench/<product>.json); every row opens its Trace in
    具体数据, where the trajectory and the evidence live. */
 import { $, esc, fmt, SEV_NAME, sevColor, getJSON } from "./core.js";
 
 const PAGE = 25;
 const S = { kind: "golden", page: 1, sev: "", counts: null, total: 0, pages: 1, rows: [], token: 0 };
-const SEG_NAME = { golden: "Golden case", bad: "Badcase" };
+const SEG_NAME = { golden: "正常 Trace", bad: "问题 Trace" };
 const GO = `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const chip = (k) => `<span class="jd-sev" style="--c:${sevColor(k)}"><i></i>${esc(SEV_NAME[k] || k || "无问题")}</span>`;
 
-/* One case, one line: what the list knows, and a way into its trajectory. */
+/* One Trace, one line: what the list knows, and a way into its trajectory. */
 function rowHTML(r, i) {
   const golden = r.w === "none";
   const sub = golden
@@ -21,7 +21,7 @@ function rowHTML(r, i) {
   if (!r.s) {
     return `<div class="bn-row is-static" style="--i:${i}">${chip(r.w)}${label}${meta}<span class="bn-go is-none">无详情</span></div>`;
   }
-  return `<button type="button" class="bn-row" style="--i:${i}" data-open="${esc(r.s)}" title="在具体数据中打开这道 case">${chip(r.w)}${label}${meta}<span class="bn-go">查看${GO}</span></button>`;
+  return `<button type="button" class="bn-row" style="--i:${i}" data-open="${esc(r.s)}" title="在具体数据中打开这条 Trace">${chip(r.w)}${label}${meta}<span class="bn-go">查看${GO}</span></button>`;
 }
 
 function segHTML() {

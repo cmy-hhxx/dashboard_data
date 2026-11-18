@@ -102,7 +102,7 @@ export function problemKlineSpec(model, node, idx, expanded = false, onPick = nu
         .sort((a, b) => b.counts[di] - a.counts[di])[0];
       const line = (label, value) => `<div class="kl-tip-row"><span>${esc(label)}</span><b class="num">${value}</b></div>`;
       return line("问题", fmt(row.problems))
-        + line("命中会话", fmt(row.hits))
+        + line("命中 Trace", fmt(row.hits))
         + (share == null ? "" : line(`占${up.name}`, `${fmt(100 * share, 1)}%`))
         + (lead ? `<div class="kl-tip-row kl-tip-lead"><span>最多</span><b title="${esc(lead.name)}">${esc(lead.name)} · ${fmt(lead.counts[di])}</b></div>` : "");
     },

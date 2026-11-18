@@ -299,7 +299,7 @@ export function capacityDocHTML() {
                   ${copyBtnHTML("复制基准", { fn: "capHero" })}
                 </div>
                 <h2>一条归因 41.3 万 token · 17.7 次调用</h2>
-                <p>100 个 case 并发、200 个模型请求额度下，Runner 28 分钟读完输入产出 <b>138 行正式归因</b>，折合每小时 <b>292.8 行</b>。</p>
+                <p>100 条 Trace 并发、200 个模型请求额度下，Runner 28 分钟读完输入产出 <b>138 行正式归因</b>，折合每小时 <b>292.8 行</b>。</p>
               </div>
               <div class="cap-hero-num">
                 <div><b class="num" data-count="292.8" data-d="1">292.8</b><em>行/h</em></div>
@@ -312,7 +312,7 @@ export function capacityDocHTML() {
             <header class="card-head"><h2>计量层级</h2><span class="meta">速度统一按「正式归因行」计算</span></header>
             <div class="cap-chain">
               <div class="cap-chain-node"><span class="num">01</span><b>输入行</b><code>1 行 JSONL</code><span>一条会话记录</span></div>
-              <div class="cap-chain-node"><span class="num">02</span><b>case</b><code>1 : N</code><span>每条 trace 一个 case，产出一行归因</span></div>
+              <div class="cap-chain-node"><span class="num">02</span><b>Trace</b><code>1 : 1</code><span>每条 Trace 产出一行归因</span></div>
               <div class="cap-chain-node"><span class="num">03</span><b>attempt</b><code>17.7 : 1</code><span>一次 agent 任务，含多次请求与重试</span></div>
               <div class="cap-chain-node"><span class="num">04</span><b>token</b><code>2.34 万 : 1</code><span>输入 + 输出 + 缓存读写</span></div>
             </div>

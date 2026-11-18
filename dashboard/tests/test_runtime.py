@@ -72,7 +72,12 @@ class PredictionFeedTests(unittest.TestCase):
                                                    "flows": {"a_fast": [1]}})
             self.assertEqual(pred["accuracy"], FEED["accuracy"])
             # Only judged answers reach the star map; unverifiable ones stay a count.
-            self.assertEqual(pred["items"], [{"q": "茅台明天涨吗", "v": "a_fast", "r": "wrong", "t": "个股走势", "e": "趋势外推"}])
+            item = pred["items"][0]
+            self.assertEqual({k: item[k] for k in ("q", "v", "r", "t", "e")},
+                             {"q": "茅台明天涨吗", "v": "a_fast", "r": "wrong", "t": "个股走势", "e": "趋势外推"})
+            # 星图分组用类别 / 批次 / 题号；原始轨迹和预测正文都不进 items。
+            self.assertEqual((item["c"], item["d"], item["i"]), ("其他", None, 0))
+            self.assertNotIn("trajectory", item)
             for dropped in ("labels", "summary", "sources", "schema"):
                 self.assertNotIn(dropped, pred)
             self.assertEqual(run_build(datasets, static).get("reused"), 1)

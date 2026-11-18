@@ -14,7 +14,7 @@ trace 的 `problems` 问题数组与 P0–P4 严重度，并新增 `GET /severit
 
 | 部署 | 对外 | 集群内 | 数据 |
 |---|---|---|---|
-| 弗吉尼亚 | `http://10.217.219.2:2224` | `http://interactive-npasm9ch66eb:5003` | AIME |
+| 弗吉尼亚 | `http://10.217.219.2:2477` | `http://interactive-s3ynzadcvm9c:5003` | AIME |
 | 乌兰察布 | 暂未提供（问财供数接口尚未实现，5003 已停用） | — | — |
 
 接口前缀 `/api/v1/analysis`，健康检查 `GET /healthz`。对外端口由平台侧映射到 pod 的 5003
@@ -143,7 +143,7 @@ python3 run.py status
 ./deploy.sh                     # rsync 到 /opt/eval_analysis + 重启 + 冒烟（EVAL_DEPLOY_HOST/PORT/KEY 可覆盖 ssh 别名）
 ssh aime_rsi_data 'cd /opt/eval_analysis && ./start.sh'
 ssh aime_rsi_data 'cd /opt/eval_analysis && ./stop.sh'
-curl -s http://10.217.219.2:2224/healthz           # 5003 目前只部署在弗吉尼亚
+curl -s http://10.217.219.2:2477/healthz           # 5003 目前只部署在弗吉尼亚
 ```
 
 `start.sh` 会等到 `/healthz` 返回 `ok:true`（首次构建实测 341 秒（扫 11.4 GB 输入）；

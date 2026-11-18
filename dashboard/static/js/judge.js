@@ -1,7 +1,7 @@
 /* 评测评测: how far the evaluator itself can be trusted. Top to bottom: a second model's audit of
    every filed problem on three dimensions (定级合理 / 证据闭环 / 输出准确) and where by stage it
-   fails; repeat consistency across reruns of one case; agreement with human re-labels; and the
-   evaluator's badcases, each opening to the case, the evaluator's verdict and evidence, the audit
+   fails; repeat consistency across reruns of one Trace; agreement with human re-labels; and the
+   evaluator's problem Traces, each opening to the trace, the evaluator's verdict and evidence, the audit
    model's ruling and the dimension it failed. Reads data.json's judge[<p>]; until that feed exists
    it shows the clearly marked mock from judge_mock.js. */
 import { $, esc, fmt, sevColor, SEV_NAME, bindTips, counter, runCounters } from "./core.js";
@@ -27,7 +27,7 @@ const delta = (now, prev, label) => {
 // Pass rates tint by how far they fall short: 100% is the plain well, 55% and below is full tint.
 const failTint = (rate) => `--a:${Math.round(3 + Math.max(0, Math.min(1, (1 - rate) / 0.45)) * 44)}%`;
 
-/* Badcase filter: one dimension plus an optional severity or stage, set from anywhere on the page. */
+/* 问题 Trace filter: one dimension plus an optional severity or stage, set from anywhere on the page. */
 const B = { dim: "", sev: "", stage: "", runs: 5, open: new Set() };
 const DIM_ORDER = ["grade", "evidence", "output"];
 const ICON = {
@@ -55,7 +55,7 @@ function dimCard(J, d, i) {
   const bad = J.badcases.filter((b) => b.fail === d.key).length;
   return `<article class="card jd-dim" style="--span:4;--i:${i}" data-dim="${d.key}">
     <header class="card-head"><h2>${esc(d.name)}</h2>
-      <button type="button" class="jd-go end" data-bc-dim="${d.key}">${fmt(bad)} 个 badcase${ICON.go}</button></header>
+      <button type="button" class="jd-go end" data-bc-dim="${d.key}">${fmt(bad)} 条问题 Trace${ICON.go}</button></header>
     <div class="jd-dim-hero">
       <span class="jd-ring" style="--p:${(d.rate * 100).toFixed(1)}"><b class="mid">${counter(d.rate * 100, { d: 1, suffix: "%" })}</b></span>
       <div class="jd-dim-side">${delta(d.rate, d.prev, `上一版 ${J.prev} 是 ${pc(d.prev, 1)}`)}<span class="jd-dim-n num">${fmt(Math.round(d.n * (1 - d.rate)))} / ${fmt(d.n)} 未通过</span>
@@ -85,11 +85,11 @@ function repeatCard(J) {
   const kpis = [["sameSev", "定级一致"], ["sameSet", "问题集一致"], ["sameEvidence", "证据一致"]].map(([k, name], i) => `<div class="jd-kpi" style="--i:${i}" ${tip(`<div class="t-head">${esc(name)}</div>${row(J.version, pc(R[k], 1))}${row(J.prev, pc(R.prev[k], 1))}`)}>
       <span class="jd-kpi-n">${esc(name)}</span><b class="mid">${counter(R[k] * 100, { d: 0, suffix: "%" })}</b>${delta(R[k], R.prev[k], `上一版 ${J.prev} 是 ${pc(R.prev[k], 1)}`)}</div>`).join("");
   const labels = AGREE(R.runs);
-  const rows = R.bySev.map((s, i) => `<div class="jd-st" style="--i:${i}" ${tip(`<div class="t-head">${esc(sevName(s.sev))} · ${fmt(s.n)} 个 case</div>${s.agree.map((v, k) => row(`${labels[k]} 次定级相同`, pc(v, 1))).join("")}`)}>
+  const rows = R.bySev.map((s, i) => `<div class="jd-st" style="--i:${i}" ${tip(`<div class="t-head">${esc(sevName(s.sev))} · ${fmt(s.n)} 条 Trace</div>${s.agree.map((v, k) => row(`${labels[k]} 次定级相同`, pc(v, 1))).join("")}`)}>
       ${chip(s.sev)}<span class="jd-st-bar">${s.agree.map((v, k) => `<i style="flex:${v} 1 0;--k:${k}"></i>`).join("")}</span><b class="num">${pc(s.agree[0])}</b></div>`).join("");
   return `<article class="card jd-rep" id="jdRep" style="--span:7">
     <header class="card-head"><h2>重复一致</h2>${runSeg(J)}
-      <span class="meta end num">同一 case 重跑 ${R.runs} 次</span></header>
+      <span class="meta end num">同一条 Trace 重跑 ${R.runs} 次</span></header>
     <div class="jd-kpis is-3">${kpis}</div>
     <div class="jd-sts">${rows}</div>
     <div class="jd-key">${labels.map((a, k) => `<span><i style="--k:${k}"></i>${a}</span>`).join("")}</div>
@@ -101,11 +101,11 @@ function overlapCard(J) {
   const bins = R.overlap;
   const max = Math.max(...bins.map((b) => b.n));
   const total = bins.reduce((a, b) => a + b.n, 0) || 1;
-  const bars = bins.map((b, i) => `<span class="jd-hb${b.hi <= 0.5 ? " is-low" : ""}" style="--h:${((100 * b.n) / max).toFixed(1)}%;--i:${i}" ${tip(`<div class="t-head">问题集重合 ${pc(b.lo)}–${pc(b.hi)}</div>${row("case", fmt(b.n))}${row("占比", pc(b.n / total, 1))}`)}><i></i></span>`).join("");
+  const bars = bins.map((b, i) => `<span class="jd-hb${b.hi <= 0.5 ? " is-low" : ""}" style="--h:${((100 * b.n) / max).toFixed(1)}%;--i:${i}" ${tip(`<div class="t-head">问题集重合 ${pc(b.lo)}–${pc(b.hi)}</div>${row("Trace", fmt(b.n))}${row("占比", pc(b.n / total, 1))}`)}><i></i></span>`).join("");
   const low = bins.filter((b) => b.hi <= 0.5).reduce((a, b) => a + b.n, 0);
   return `<article class="card jd-ovl" id="jdOvl" style="--span:5">
-    <header class="card-head"><h2>问题集重合</h2><span class="meta end num">低于 50% 的 case ${pc(low / total, 1)}</span></header>
-    <p class="jd-cap">同一道 case 重跑 <b class="num">${R.runs}</b> 次，把每次得到的问题集两两比对，算一次重合比例；越靠左，说明重跑出来的问题越不一致。</p>
+    <header class="card-head"><h2>问题集重合</h2><span class="meta end num">低于 50% 的 Trace ${pc(low / total, 1)}</span></header>
+    <p class="jd-cap">同一条 Trace 重跑 <b class="num">${R.runs}</b> 次，把每次得到的问题集两两比对，算一次重合比例；越靠左，说明重跑出来的问题越不一致。</p>
     <div class="jd-hist">${bars}</div>
     <div class="jd-hist-x num"><span>0%</span><span>50%</span><span>100%</span></div>
   </article>`;
@@ -162,10 +162,10 @@ function sevPrCard(J) {
   </article>`;
 }
 
-/* ---------------------------------------------------------------- ④ badcases */
+/* ---------------------------------------------------------------- ④ 问题 Trace */
 function badcaseCard() {
   return `<article class="card jd-bc" style="--span:12" id="jdBadcases">
-    <header class="card-head"><h2>评测器 badcase</h2><div class="jd-bc-tools" id="jdBcTools"></div><span class="meta end num" id="jdBcCount"></span></header>
+    <header class="card-head"><h2>评测器问题 Trace</h2><div class="jd-bc-tools" id="jdBcTools"></div><span class="meta end num" id="jdBcCount"></span></header>
     <div class="jd-bcl" id="jdBcList"></div>
   </article>`;
 }
@@ -182,7 +182,7 @@ function bcTools(J) {
   return `<div class="jd-bc-seg" role="group" aria-label="未通过维度">${seg}</div>${tokens}`;
 }
 
-/* One badcase as an accordion row; Bench lists the same rows. */
+/* One problem Trace as an accordion row; Bench lists the same rows. */
 export function badcaseRow(J, b, i, open = B.open.has(b.id)) {
   const dim = J.dims.find((d) => d.key === b.fail);
   const ev = b.evidence.map((e) => `<li class="${e.ok ? "" : "is-bad"}"><span class="num">#${e.m}</span><q>${esc(e.quote)}</q>${e.ok ? "" : `<i class="jd-x">${ICON.no}</i>`}</li>`).join("");
@@ -221,7 +221,7 @@ function paintBadcases(root, J) {
   $("#jdBcCount", root).textContent = `${fmt(list.length)} / ${fmt(J.badcases.length)}`;
   $("#jdBcList", root).innerHTML = list.length
     ? list.map((b, i) => badcaseRow(J, b, i)).join("")
-    : `<div class="empty">没有符合条件的 badcase<br><button type="button" class="link" data-bc-dim="" data-bc-reset>查看全部</button></div>`;
+    : `<div class="empty">没有符合条件的问题 Trace<br><button type="button" class="link" data-bc-dim="" data-bc-reset>查看全部</button></div>`;
 }
 
 /* Every reading drills into the cases behind it: a dimension card, a severity bar or a stage cell

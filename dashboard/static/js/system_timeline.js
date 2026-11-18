@@ -1,7 +1,7 @@
 /* 归因时序: embedded in the 评测体系 page after 证据闭环.
    Three interactive blocks in one system card:
-   01 一条 case 的时间线 (Gantt + failure simulation + readout + 11-16 measured table)
-   02 整批怎么调度 (16-case discrete simulation + concurrency / model-request steppers)
+   01 一条 Trace 的时间线 (Gantt + failure simulation + readout + 11-16 measured table)
+   02 整批怎么调度 (16-Trace discrete simulation + concurrency / model-request steppers)
    03 引文在哪几步被核对 (T1/T2/T3 verification + tamper diff) */
 import { $, $$, segmented, REDUCED } from "./core.js";
 
@@ -49,13 +49,13 @@ export function timelineCardHTML() {
   return `<article class="card tl-card" id="tlCard" style="--span:12" aria-label="归因时序说明">
     <header class="card-head">
       <h2>归因时序</h2>
-      <span class="meta">1 个 case = 1 条 trace · 9 个字段调用 · 每组 1 次调查 · 1 次小结</span>
+      <span class="meta">1 条 Trace · 9 个字段调用 · 每组 1 次调查 · 1 次小结</span>
     </header>
 
     <div class="tl-sections">
-      <section class="tl-sec" aria-label="单条 case 的时间线">
+      <section class="tl-sec" aria-label="单条 Trace 的时间线">
         <div class="tl-subhead">
-          <h3><span class="tl-num num">01</span>一条 case 的时间线</h3>
+          <h3><span class="tl-num num">01</span>一条 Trace 的时间线</h3>
           <span class="meta" id="tl-case-meta"></span>
           <div class="tl-end">
             <div class="seg" id="tl-lens-seg" role="group" aria-label="视角">
@@ -82,7 +82,7 @@ export function timelineCardHTML() {
           <div class="tl-pipe-step is-code"><b>⑤ 组装整行</b><code>attribution-session</code><span>程序 · 写出 attribution 行</span></div>
         </div>
 
-        <div class="tl-canvas-wrap"><svg class="tl-canvas" id="tl-c-canvas" role="img" aria-label="单个 case 的甘特图：字段摘要、拼装验收、组件调查、小结、组装整行"></svg></div>
+        <div class="tl-canvas-wrap"><svg class="tl-canvas" id="tl-c-canvas" role="img" aria-label="单条 Trace 的甘特图：字段摘要、拼装验收、组件调查、小结、组装整行"></svg></div>
 
         <div class="tl-legend">
           <span class="tl-lg"><i class="tl-sw model"></i>模型调用（已完成）</span>
@@ -107,13 +107,13 @@ export function timelineCardHTML() {
 
         <div class="tl-table-wrap">
           <table class="tl-table">
-            <thead><tr><th>阶段</th><th>每 case 模型调用</th><th class="num">中位</th><th class="num">p90</th><th>关键特征（2026-11-16 · 34 case 实测）</th></tr></thead>
+            <thead><tr><th>阶段</th><th>每条 Trace 模型调用</th><th class="num">中位</th><th class="num">p90</th><th>关键特征（2026-11-16 · 34 条 Trace 实测）</th></tr></thead>
             <tbody>
               <tr><td><b>① 字段摘要</b> <code>attribution-compact-field</code></td><td>9（无工具时 7）</td><td class="num">~4 s</td><td class="num">~18 s</td><td>9 个同时发出，耗时取决于最慢字段 <code>components</code>（中位 ~18 s，p90 ~30 s）与 <code>execution_chain</code>（中位 ~14 s）。</td></tr>
               <tr><td><b>③ 组件调查</b> <code>attribution-component</code></td><td>每组 1 个任务</td><td class="num">~36 s</td><td class="num">~66 s</td><td>平均每任务 ~3.8 次工具调用；各组同时跑，耗时取决于最慢的一组。</td></tr>
               <tr><td><b>④ 小结</b> <code>attribution-trace</code></td><td>1</td><td class="num">~3–6 s</td><td class="num">—</td><td>不带工具，只写 summary（有标准答案时加 is_correct）。</td></tr>
               <tr><td><b>② ⑤ 程序步骤</b> <code>compact / session</code></td><td>0</td><td class="num">≈0 s</td><td class="num">—</td><td>纯程序校验与拼装，不调模型。</td></tr>
-              <tr><td><b>整批 34 个 case</b></td><td>—</td><td class="num" colspan="2">147–208 s 墙钟</td><td>长尾由单次长生成或提交被退回后重写决定。</td></tr>
+              <tr><td><b>整批 34 条 Trace</b></td><td>—</td><td class="num" colspan="2">147–208 s 墙钟</td><td>长尾由单次长生成或提交被退回后重写决定。</td></tr>
             </tbody>
           </table>
         </div>
@@ -124,13 +124,13 @@ export function timelineCardHTML() {
           <h3><span class="tl-num num">02</span>整批怎么调度</h3>
           <span class="meta" id="tl-global-meta"></span>
           <div class="tl-end">
-            <div class="tl-step"><span class="tl-step-k">并发 case <code>--concurrency</code></span><button type="button" data-tl-g="conc" data-d="-1" aria-label="减少并发 case">−</button><b class="num" id="tl-v-conc">6</b><button type="button" data-tl-g="conc" data-d="1" aria-label="增加并发 case">+</button></div>
+            <div class="tl-step"><span class="tl-step-k">并发 Trace <code>--concurrency</code></span><button type="button" data-tl-g="conc" data-d="-1" aria-label="减少并发 Trace">−</button><b class="num" id="tl-v-conc">6</b><button type="button" data-tl-g="conc" data-d="1" aria-label="增加并发 Trace">+</button></div>
             <div class="tl-step"><span class="tl-step-k">请求上限 <code>--model-requests</code></span><button type="button" data-tl-g="req" data-d="-2" aria-label="降低模型请求上限">−</button><b class="num" id="tl-v-req">12</b><button type="button" data-tl-g="req" data-d="2" aria-label="提高模型请求上限">+</button></div>
             <button class="icon-btn tl-play" id="tl-g-play" type="button" aria-pressed="false" aria-label="播放">${PLAY_SVG}</button>
           </div>
         </div>
 
-        <div class="tl-canvas-wrap"><svg class="tl-canvas" id="tl-g-canvas" role="img" aria-label="整批调度：每个 case 的准入等待、字段摘要阶段、调查阶段与写出时刻"></svg></div>
+        <div class="tl-canvas-wrap"><svg class="tl-canvas" id="tl-g-canvas" role="img" aria-label="整批调度：每条 Trace 的准入等待、字段摘要阶段、调查阶段与写出时刻"></svg></div>
 
         <div class="tl-legend">
           <span class="tl-lg"><i class="tl-sw wait"></i>等准入（名额或缓冲已满）</span>
@@ -140,10 +140,10 @@ export function timelineCardHTML() {
         </div>
 
         <div class="tl-rules">
-          <div class="tl-rule"><b>case 名额</b><span>最多 <code>--concurrency</code> 个同时在跑（默认 32），结束才让出名额。</span></div>
-          <div class="tl-rule"><b>单 case 窗口</b><span>每 case 最多同时 <code>--task-concurrency</code> 个任务（默认 12），9 个字段一次发齐。</span></div>
+          <div class="tl-rule"><b>Trace 名额</b><span>最多 <code>--concurrency</code> 个同时在跑（默认 32），结束才让出名额。</span></div>
+          <div class="tl-rule"><b>单条 Trace 窗口</b><span>每条 Trace 最多同时 <code>--task-concurrency</code> 个任务（默认 12），9 个字段一次发齐。</span></div>
           <div class="tl-rule"><b>全局请求上限</b><span>在飞模型请求不超过 <code>--model-requests</code>（默认 256）；缓冲低时字段优先，高时调查与小结优先。</span></div>
-          <div class="tl-rule"><b>compact 缓冲</b><span>已写 compact、未写 attribution 的 case 数上限 = <code>--compact-backlog</code>，case 结束或失败立即释放。</span></div>
+          <div class="tl-rule"><b>compact 缓冲</b><span>已写 compact、未写 attribution 的 Trace 数上限 = <code>--compact-backlog</code>，Trace 结束或失败立即释放。</span></div>
         </div>
       </section>
 
@@ -352,9 +352,9 @@ export function wireTimeline(root) {
         obj: `${field.label}（${field.key}）`,
         stage: "attribution-compact-field",
         who: skipped ? "程序：无工具调用直接判空" : `模型：单轮调用，${field.session ? "整场范围" : "本轮范围"}`,
-        dep: "case 启动即 9 个字段同时发出",
+        dep: "Trace 启动即 9 个字段同时发出",
         tools: "无工具；提交不合格可返工",
-        effect: "整条 case 终止：两份文件都不写",
+        effect: "整条 Trace 终止：两份文件都不写",
       };
     }
     if (id === "compact") {
@@ -387,7 +387,7 @@ export function wireTimeline(root) {
     if (id === "session") {
       return {
         obj: "组装正式行", stage: "attribution-session", who: "程序（不调模型）",
-        dep: "小结完成", tools: "—", effect: "写出 attribution 行，释放 case 名额",
+        dep: "小结完成", tools: "—", effect: "写出 attribution 行，释放 Trace 名额",
       };
     }
     if (id === "file:compact") return { obj: "compact 文件", stage: "<model>_compact-<batch>.jsonl", who: "程序写盘", dep: "关口 1", tools: "—", effect: "—" };
@@ -415,7 +415,7 @@ export function wireTimeline(root) {
     if (S.lens === "fail" && !f) {
       text = "点甘特图中的任意模型调用（实心条），查看它失败后哪些步骤还会运行、哪份文件还会写出。";
     } else if (!f) {
-      text = `时间集中在两段：① 等最慢字段 components（约 ${fmtSec(P.compactAt)}），③ 等最慢调查组（约 ${fmtSec(P.settleAt - P.compactAt)}）。${S.rework ? " 交付组第 1 次提交被退回重写，拖长整条 case。" : ""}`;
+      text = `时间集中在两段：① 等最慢字段 components（约 ${fmtSec(P.compactAt)}），③ 等最慢调查组（约 ${fmtSec(P.settleAt - P.compactAt)}）。${S.rework ? " 交付组第 1 次提交被退回重写，拖长整条 Trace。" : ""}`;
     } else if (f.startsWith("f:")) {
       cls = "is-bad";
       text = "字段失败：Compact 无法拼装，后续调查、小结、组装全部停止，两份文件都不写；下次续跑整条重评。";
