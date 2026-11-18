@@ -666,10 +666,17 @@ export async function render(root, ctx) {
   let sheetBackdrop = null;
 
   function syncSunburstFromFilter() {
-    if (S.f.l3 && S.f.l1 !== "NA") S.sunburstState = { focus: `b/${S.f.l3}`, open: null };
-    else if (S.f.l1 && S.f.l2 && S.f.l1 !== "NA" && S.f.l2 !== "NA") S.sunburstState = { focus: `b/${S.f.l1}.${S.f.l2}`, open: null };
-    else if (S.f.l1) S.sunburstState = { focus: `b/${S.f.l1}`, open: null };
-    else S.sunburstState = { focus: "b", open: null };
+    if (S.f.l3 && S.f.l1 && S.f.l2 && S.f.l1 !== "NA" && S.f.l2 !== "NA") {
+      S.sunburstState = { focus: `b/${S.f.l1}.${S.f.l2}`, open: `b/${S.f.l3}` };
+    } else if (S.f.l1 && S.f.l2 && S.f.l1 !== "NA" && S.f.l2 !== "NA") {
+      S.sunburstState = { focus: `b/${S.f.l1}.${S.f.l2}`, open: null };
+    } else if (S.f.l1 && S.f.l1 !== "NA") {
+      S.sunburstState = { focus: `b/${S.f.l1}`, open: null };
+    } else if (S.f.l1 === "NA") {
+      S.sunburstState = { focus: "b", open: "b/NA" };
+    } else {
+      S.sunburstState = { focus: "b", open: null };
+    }
   }
 
   const toggleFilter = (k, v) => {
@@ -932,6 +939,8 @@ export async function render(root, ctx) {
           <span class="bn-ql-item"><i class="bn-dleg-line"></i>±${tol}% 参考线</span>
         </div>
         <div class="bn-day-bars" style="${colsCss}">
+          <span class="bn-day-axis is-top">${(maxShare * 100).toFixed(0)}%</span>
+          <span class="bn-day-axis is-bot">0%</span>
           ${sorted.map((r) => {
             const hb = Math.max(3, (Number(r.share_in_bench || 0) / maxShare) * 100);
             const hp = Math.max(3, (Number(r.share_in_pool || 0) / maxShare) * 100);
@@ -981,7 +990,7 @@ export async function render(root, ctx) {
       const displayRows = [...rows].sort((a, b) => (b.count || 0) - (a.count || 0)).slice(0, 30);
       const maxS = Math.max(0.05, ...displayRows.flatMap((r) => [Number(r.share_in_bench || 0), Number(r.share_in_pool || 0)]));
       bodyHTML = `<div class="bn-db-head">
-        <span>分布项</span><span>已选 ● 与候选池 ○</span><span>已选</span><span>候选池</span><span>差值</span>
+        <span>分布项</span><span>已选 ● 与候选池 ○</span><span>条数</span><span>已选</span><span>候选池</span><span>差值</span>
       </div>
       <div class="bn-dist-body">
         ${displayRows.map((r) => {
@@ -1004,7 +1013,8 @@ export async function render(root, ctx) {
               <div class="bn-db-pool" style="left:${pPos.toFixed(1)}%"></div>
               <div class="bn-db-bench ${cls}" style="left:${bPos.toFixed(1)}%"></div>
             </div>
-            <span class="bn-db-bench-n">${(sb * 100).toFixed(1)}%<small>${fmt(r.count)}</small></span>
+            <span class="bn-db-cnt">${fmt(r.count)}</span>
+            <span class="bn-db-bench-n">${(sb * 100).toFixed(1)}%</span>
             <span class="bn-db-pool-n">${(sp * 100).toFixed(1)}%</span>
             <span class="bn-db-pp ${cls}">${dp > 0 ? "+" : ""}${dp.toFixed(1)}%</span>
           </button>`;
@@ -1020,7 +1030,7 @@ export async function render(root, ctx) {
       const warn = d.audit && cv && cv.ok === false;
       return `<button type="button" class="bn-dim-btn ${S.dim === d.key ? "is-on" : ""} ${warn ? "is-warn" : ""} ${d.audit ? "" : "is-design"}" data-dimpick="${d.key}">
         <span>${d.label}</span>
-        ${cv ? `<span class="bn-dim-pp">${maxPp.toFixed(1)}%</span>` : ""}
+        ${d.audit && cv ? `<span class="bn-dim-pp">${maxPp.toFixed(1)}%</span>` : ""}
       </button>`;
     };
 
@@ -1033,8 +1043,9 @@ export async function render(root, ctx) {
         <h2>数据分布与偏差</h2>
       </div>
       <div class="bn-dimgroups">
-        <div class="bn-dgrp"><span class="bn-dgrp-lbl">质检维度</span>${auditMeta.map(pillBtn).join("")}</div>
-        <div class="bn-dgrp"><span class="bn-dgrp-lbl">配比维度</span>${designMeta.map(pillBtn).join("")}</div>
+        ${auditMeta.map(pillBtn).join("")}
+        <span class="bn-dim-sep" aria-hidden="true"></span>
+        ${designMeta.map(pillBtn).join("")}
       </div>
       ${bodyHTML}
       <div class="bn-scale-strip">
@@ -1234,7 +1245,7 @@ export async function render(root, ctx) {
             </div>`).join("")}
           </div>`
         : `<div class="bn-list">
-            <div class="bn-lhead"><span>等级</span><span>问句内容与问题定位</span><span>对话形态</span><span>规模与耗时</span><span style="text-align:right">基准档位</span></div>
+            <div class="bn-lhead"><span>等级</span><span>问句内容</span><span>问题归因</span><span>形态 · 工具</span><span style="text-align:right">规模 · 耗时</span><span style="text-align:right">基准档位</span></div>
             ${slice.map((c) => {
               const col = sevTone(c.severity);
               const st = c.stats || {};
@@ -1242,26 +1253,28 @@ export async function render(root, ctx) {
               const pCount = rowProbsCount(c);
               const isLongCase = (st.total_tokens || 0) >= (params.long_tokens || 65536);
               const tTag = c.bench?.long_tier ? `长 ${c.bench.long_tier}` : `${fmt(c.bench?.min_tier || c.bench?.tier || S.tier)} 档`;
-              const turnTxt = c.turn === "multi" ? `多轮 · ${c.session_round || 2} 轮` : "单轮";
+              const turnTxt = c.turn === "multi" ? `多轮 ${c.session_round || 2} 轮` : "单轮";
               const stName = pr.l1 && pr.l1 !== "NA" ? stageLabel(pr.l1, stageNames) : "";
               const patName = pr.l3 && pr.l3 !== "NA" ? patternDisplayName(pr.l3, "", patNames, stageNames, mechNames) : "";
-              const pathTag = !stName ? "" : (patName && patName !== stName
-                ? (patName.startsWith(`${stName} ·`) ? patName : `${stName} · ${patName}`)
-                : stName);
+              const attrMain = !stName ? (pr.label && pr.label !== "goldencase" ? pr.label : "无问题")
+                : (patName && patName !== stName ? (patName.startsWith(`${stName} ·`) ? patName : `${stName} · ${patName}`) : stName);
+              const extraLbl = pr.label && pr.label !== "goldencase" && pr.label !== patName && pr.label !== attrMain ? pr.label : "";
+              const hasFlags = (st.dup_question || 1) >= 2 || isLongCase;
               return `<button type="button" class="bn-lrow" data-trace="${esc(c.trace_id)}" aria-current="${S.trace === c.trace_id}" style="--c:${col}">
                 <span class="bn-sev-tag" style="--c:${col}">${esc(sevLabel(c.severity))}</span>
                 <div class="bn-lq">
                   <span class="bn-lq-txt" title="${esc(c.question)}">${esc(c.question)}</span>
-                  <span class="bn-lq-tags">
-                    ${pathTag ? `<span class="bn-mtag is-path">${esc(pathTag)}</span>` : ""}
-                    ${pr.label && pr.label !== "goldencase" && pr.label !== patName ? `<span class="bn-mtag">${esc(pr.label)}</span>` : ""}
-                    ${pCount > 1 ? `<span class="bn-mtag">+${pCount - 1} 问题</span>` : ""}
+                  ${hasFlags ? `<span class="bn-lq-flags">
                     ${(st.dup_question || 1) >= 2 ? `<span class="bn-mtag is-dup">×${st.dup_question} 重问</span>` : ""}
                     ${isLongCase ? `<span class="bn-mtag is-long">≥64K</span>` : ""}
-                  </span>
+                  </span>` : ""}
                 </div>
-                <span class="bn-cell-meta">${turnTxt}</span>
-                <span class="bn-cell-meta">${st.total_tokens ? compact(st.total_tokens) : "—"}<small>${st.tool_count || 0} 工具 · ${st.latency || 0}s</small></span>
+                <div class="bn-lpat">
+                  <span class="bn-lpat-main ${!stName && !extraLbl ? "is-none" : ""}" title="${esc(extraLbl ? `${attrMain} · ${extraLbl}` : attrMain)}">${esc(attrMain)}</span>
+                  ${pCount > 1 ? `<span class="bn-mtag">+${pCount - 1}</span>` : ""}
+                </div>
+                <span class="bn-cell-meta">${turnTxt} · ${st.tool_count || 0} 工具</span>
+                <span class="bn-cell-meta bn-lscale"><b>${st.total_tokens ? compact(st.total_tokens) : "—"}</b><em>${st.latency || 0}s</em></span>
                 <span class="bn-tier-col">
                   <span class="bn-tier-tag">${tTag} #${c.bench?.rank ?? "—"}</span>
                   ${c.slug ? '<span class="bn-loc-dot" title="已入库可跳转"></span>' : ""}
@@ -1632,7 +1645,8 @@ export async function render(root, ctx) {
     const topPatterns = (tierData.dims?.pattern || [])
       .filter((p) => p.key && p.key !== "NA" && p.count > 0)
       .sort((a, b) => (b.count || 0) - (a.count || 0))
-      .slice(0, 4);
+      .slice(0, 8);
+    const totalActual = Number(tierData.actual || 0);
 
     const container = $(".bn-bento", root);
     const didRebuild = !container || rebuildSummary;
@@ -1657,7 +1671,7 @@ export async function render(root, ctx) {
                 const sub = parts.length >= 2 ? `${stageLabel(parts[0], stageNames)} · ${mechLabel(parts[1], mechNames)}` : "";
                 return `<button type="button" class="bn-patitem" data-fpat="${esc(p.key)}" aria-pressed="${S.f.l3 === p.key}" data-tip="${esc(`${sub} · ${pName} · ${fmt(p.count)} 条`)}">
                   <span class="bn-patname">${esc(pName)}</span>
-                  <b>${fmt(p.count)}</b>
+                  <span class="bn-patmeta num"><b>${fmt(p.count)}</b>${totalActual ? `<small>${pct(p.count, totalActual, 0)}</small>` : ""}</span>
                 </button>`;
               }).join("")}
             </div>
@@ -1746,6 +1760,7 @@ export async function render(root, ctx) {
       S.f.l3 = same ? "" : code;
       syncSunburstFromFilter();
       S.page = 1;
+      S.fieldPages = {};
       repaint();
     }));
     $$(".bn-dist-card [data-dimpick]", root).forEach((b) => b.addEventListener("click", () => { S.dim = b.dataset.dimpick; repaint(); }));
@@ -1796,16 +1811,30 @@ export async function render(root, ctx) {
         unit: "样本",
         sort: true,
         state: S.sunburstState,
-        onChange: (focus) => {
+        onChange: (focus, open) => {
           const resetBtn = $("#bn-sb-reset", root);
-          if (resetBtn) resetBtn.hidden = focus.id === "b";
+          if (resetBtn) resetBtn.hidden = focus.id === "b" && !S.f.l1 && !S.f.l3;
           if (!sbReady) return;
-          const code = focus.id === "b" ? "" : focus.id.slice(2);
-          const parts = code.split(".");
-          S.f.l1 = parts[0] || "";
-          S.f.l2 = parts[1] || "";
-          S.f.l3 = parts.length > 2 ? code : "";
+          const fCode = focus.id === "b" ? "" : focus.id.slice(2);
+          const fParts = fCode.split(".");
+          if (open && !open.children && !open.other && open.id.startsWith("b/") && open.id.slice(2).split(".").length >= 3) {
+            const oCode = open.id.slice(2);
+            const oParts = oCode.split(".");
+            S.f.l1 = oParts[0] || "";
+            S.f.l2 = oParts[1] || "";
+            S.f.l3 = oCode;
+          } else if (focus.id === "b" && open?.id === "b/NA") {
+            S.f.l1 = "NA";
+            S.f.l2 = "";
+            S.f.l3 = "";
+          } else {
+            S.f.l1 = fParts[0] || "";
+            S.f.l2 = fParts[1] || "";
+            S.f.l3 = fParts.length > 2 ? fCode : "";
+          }
+          if (resetBtn) resetBtn.hidden = focus.id === "b" && !S.f.l1 && !S.f.l3;
           S.page = 1;
+          S.fieldPages = {};
           repaint({ rebuildSummary: false });
         },
       });
@@ -1818,6 +1847,7 @@ export async function render(root, ctx) {
           S.f.l2 = "";
           S.f.l3 = "";
           S.page = 1;
+          S.fieldPages = {};
           repaint();
         };
       }

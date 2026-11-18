@@ -77,6 +77,10 @@ export function sunburst(host, tree, { unit = "", sort = false, state = null, an
   index(root);
   let focus = (state && byId.get(state.focus)) || root;
   let open = state && state.open !== undefined && state.focus === focus.id ? byId.get(state.open) || null : biggest(focus, inert);
+  if (!focus.children && focus.parent) {
+    open = focus;
+    focus = focus.parent;
+  }
   if (open && open.parent !== focus) open = biggest(focus, inert);
   const save = () => {
     if (state) {

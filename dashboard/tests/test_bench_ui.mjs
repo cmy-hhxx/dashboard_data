@@ -147,6 +147,8 @@ test("filterBenchCases, sortBenchCases, groupFieldCases, deriveTierFromCases and
   assert.equal(tree.id, "b");
   assert.equal(tree.n, 2);
   assert.ok(tree.children.every((c) => !c.name.includes("未归因")));
+  const s10 = tree.children.find((c) => c.id === "b/S10");
+  assert.ok(s10 && s10.children.some((m) => m.id === "b/S10.M2"));
 });
 
 test("resolveSampleHref builds valid samples deep links", () => {
@@ -169,8 +171,11 @@ test("bench view forbids mock data, difficulty, 未归因, and obscure English j
   assert.ok(!src.includes('class="meta"'), "must not render secondary gray meta subtitles");
   assert.ok(!src.includes("业务分组") && !src.includes("召回来源"), "must not filter by group or recall");
   assert.ok(src.includes("paintBenchField") && src.includes("bn-field-pager"), "field view must mirror 会话场 per-group pagination");
+  assert.ok(src.includes(".slice(0, 8)"), "bn-toppats should show up to 8 items");
+  assert.ok(!src.includes('focus: `b/${S.f.l3}`'), "sunburst focus must stay on parent mechanism, never leaf pattern");
   const css = fs.readFileSync(path.resolve(HERE, "../static/css/bench.css"), "utf8");
   assert.ok(!/\.bn-prob-card\s*\{[^}]*border-left/.test(css), "bn-prob-card must not use border-left");
+  assert.ok(!/\.bn-more-pop\s*\{[^}]*(?:^|[;\s])filter:\s*blur/.test(css), "bn-more-pop must not animate blur filter");
 });
 
 test("index.html #viewSwitch exposes 4 main tabs and 5 overflow items in + menu", () => {
