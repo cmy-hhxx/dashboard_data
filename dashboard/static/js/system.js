@@ -506,21 +506,59 @@ function treeSVG(model, W = TREE_W) {
     if (n.row === 0) {
       const rx = Number((n.x - 118).toFixed(1));
       const ry = Number((n.y - 22).toFixed(1));
-      const lx = (rx - 256).toFixed(1);
-      const waveBack = `M${lx} ${ry}H${rx}Q${rx + 5} ${ry + 11} ${rx} ${ry + 22}T${rx} ${ry + 44}T${rx} ${ry + 66}T${rx} ${ry + 88}H${lx}Z`;
-      const waveFront = `M${lx} ${ry}H${rx}Q${rx - 4.5} ${ry + 11} ${rx} ${ry + 22}T${rx} ${ry + 44}T${rx} ${ry + 66}T${rx} ${ry + 88}H${lx}Z`;
-      const waveCrest = `M${rx} ${ry}Q${rx - 4.5} ${ry + 11} ${rx} ${ry + 22}T${rx} ${ry + 44}T${rx} ${ry + 66}T${rx} ${ry + 88}`;
-      rootClip = `<defs><clipPath id="fxRootClip"><rect x="${rx}" y="${ry}" width="236" height="44" rx="22"/></clipPath></defs>`;
+      const lx = (rx - 260).toFixed(1);
+      const waveBack = `M${lx} ${ry}H${rx}Q${rx + 6.5} ${ry + 11} ${rx} ${ry + 22}T${rx} ${ry + 44}T${rx} ${ry + 66}T${rx} ${ry + 88}H${lx}Z`;
+      const waveMid = `M${lx} ${ry}H${rx}Q${rx - 5} ${ry + 11} ${rx} ${ry + 22}T${rx} ${ry + 44}T${rx} ${ry + 66}T${rx} ${ry + 88}H${lx}Z`;
+      const waveFront = `M${lx} ${ry}H${rx}Q${rx + 5.5} ${ry + 11} ${rx} ${ry + 22}T${rx} ${ry + 44}T${rx} ${ry + 66}T${rx} ${ry + 88}H${lx}Z`;
+      const waveCrest = `M${rx} ${ry}Q${rx + 5.5} ${ry + 11} ${rx} ${ry + 22}T${rx} ${ry + 44}T${rx} ${ry + 66}T${rx} ${ry + 88}`;
+      const bubbles = [
+        [34, 12, 1.8, "0s", "2.6s"],
+        [68, 30, 1.3, "-0.9s", "2.2s"],
+        [106, 18, 2.1, "-1.5s", "3.0s"],
+        [142, 33, 1.5, "-0.4s", "2.4s"],
+        [182, 14, 1.7, "-1.9s", "2.7s"],
+        [214, 27, 1.2, "-1.1s", "2.1s"],
+      ].map(([dx, dy, r, del, dur]) =>
+        `<circle class="fx-bubble" cx="${(rx - dx).toFixed(1)}" cy="${(ry + dy).toFixed(1)}" r="${r}" style="--bd:${del};--bt:${dur}"/>`
+      ).join("");
+      rootClip = `<defs>
+        <clipPath id="fxRootClip"><rect x="${rx}" y="${ry}" width="236" height="44" rx="22"/></clipPath>
+        <linearGradient id="fxWaveGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" class="fx-wg-a"/>
+          <stop offset="68%" class="fx-wg-b"/>
+          <stop offset="100%" class="fx-wg-c"/>
+        </linearGradient>
+        <linearGradient id="fxRootGloss" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="#ffffff" stop-opacity="0.34"/>
+          <stop offset="48%" stop-color="#ffffff" stop-opacity="0.04"/>
+          <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+        </linearGradient>
+        <linearGradient id="fxRootSweep" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#ffffff" stop-opacity="0"/>
+          <stop offset="50%" stop-color="#ffffff" stop-opacity="0.32"/>
+          <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+        </linearGradient>
+        <linearGradient id="fxCrestGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="#ffffff" stop-opacity="0.75"/>
+          <stop offset="50%" class="fx-cg-mid"/>
+          <stop offset="100%" stop-color="#ffffff" stop-opacity="0.65"/>
+        </linearGradient>
+      </defs>`;
       return `<g class="fx-tn is-root" ${at} data-rx="${rx}">
         <rect class="fx-root-bg" x="${rx}" y="${ry}" width="236" height="44" rx="22"/>
         <g clip-path="url(#fxRootClip)">
           <g class="fx-root-shift">
             <path class="fx-wave-back" d="${waveBack}"/>
+            <path class="fx-wave-mid" d="${waveMid}"/>
             <g class="fx-wave-front-wrap">
-              <path class="fx-wave-front" d="${waveFront}"/>
-              <path class="fx-wave-crest" d="${waveCrest}" fill="none"/>
+              <path class="fx-wave-front" d="${waveFront}" fill="url(#fxWaveGrad)"/>
+              <path class="fx-wave-glow" d="${waveCrest}" fill="none"/>
+              <path class="fx-wave-crest" d="${waveCrest}" fill="none" stroke="url(#fxCrestGrad)"/>
             </g>
+            <g class="fx-bubbles" aria-hidden="true">${bubbles}</g>
           </g>
+          <rect class="fx-root-gloss" x="${rx}" y="${ry}" width="236" height="22" fill="url(#fxRootGloss)"/>
+          <rect class="fx-root-sweep" x="${rx - 90}" y="${ry}" width="90" height="44" fill="url(#fxRootSweep)"/>
         </g>
         <rect class="fx-root-ring" x="${rx}" y="${ry}" width="236" height="44" rx="22" fill="none"/>
         <text class="fx-tn-k" x="${(n.x - 94).toFixed(1)}" y="${n.y + 5}">全部问题</text>
@@ -916,7 +954,7 @@ function modalSpecHTML(node, unit = "问题") {
       ${sevChips.join("")}
     </div>
     ${node.desc ? `<p class="sm-spec-def">${esc(node.desc)}</p>` : ""}
-    ${node.include ? `<div class="sm-bounds"><div><span>纳入</span><p>${esc(node.include)}</p></div></div>` : ""}
+    ${node.include ? `<div class="sm-bounds"><div><span>进入标准</span><p>${esc(node.include)}</p></div></div>` : ""}
     ${node.children && node.children.length ? `<div class="sm-spec-hint">含 <b class="num">${node.children.length}</b> 个下级分支，点击弧段或列表项可继续下钻</div>` : ""}`;
 }
 
@@ -924,7 +962,9 @@ function modalSpecHTML(node, unit = "问题") {
 export function cellModalHTML(tax, pd, sid, mid, { pos = null, pattern = null } = {}) {
   const st = sid ? (tax.stages || []).find((x) => x.id === sid) : null;
   const m = mid ? (tax.mechanisms || []).find((x) => x.id === mid) : null;
-  if (!st && !m) return `<div class="sm-body"><div class="sm-empty">未找到对应条目。</div></div>`;
+  if (!st && !m) {
+    return `<header class="sm-head"><div class="sm-coord"></div><button type="button" class="sm-icon sm-close" data-close aria-label="关闭">${ICON_X}</button><h2 id="smTitle">未找到对应条目</h2></header><div class="sm-body"><div class="sm-empty">未找到对应条目。</div></div>`;
+  }
   const cc = cellCounts(tax, pd);
   const n = batchCountOf(pd, st && st.id, m && m.id);
   const { top } = matchingPatterns(tax, st && st.id, m && m.id);
@@ -994,13 +1034,16 @@ function specText(tax, sid, mid) {
     [st && `${st.id} ${st.name}`, m && `${m.id} ${m.name}`].filter(Boolean).join(" × "),
     st && st.def ? `环节：${st.def}` : "",
     m && m.def ? `错法：${m.def}` : "",
-    ...top.map(([pid, pt]) => [`${pid} ${pt.name || ""}：${pt.plain || pt.def || ""}`, pt.include ? `  纳入：${pt.include}` : ""].filter(Boolean).join("\n")),
+    ...top.map(([pid, pt]) => [`${pid} ${(pt && pt.name) || ""}：${(pt && (pt.plain || pt.def)) || ""}`, pt && pt.include ? `  进入标准：${pt.include}` : ""].filter(Boolean).join("\n")),
   ].filter(Boolean).join("\n");
 }
+
+const escAttr = (v) => (typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(String(v)) : String(v).replace(/["\\]/g, "\\$&"));
 
 function paintModal(key, swap, pattern = null) {
   const [sid, mid] = key.split("|");
   const panel = $(".sm-panel", MOD.el);
+  if (!panel) return;
   const i = sid && mid ? MOD.list.indexOf(`${sid}.${mid}`) : -1;
   panel.innerHTML = cellModalHTML(E.tax, E.pd, sid || null, mid || null, { pos: i >= 0 ? { i, n: MOD.list.length } : null, pattern });
   MOD.key = key;
@@ -1016,28 +1059,34 @@ function paintModal(key, swap, pattern = null) {
   if (sbHost && tree && tree.children && tree.children.length) {
     const unit = cellCounts(E.tax, E.pd).unit;
     const initState = pattern ? { focus: tree.id, open: pattern } : null;
-    sunburst(sbHost, tree, {
-      unit,
-      sort: true,
-      fold: false,
-      state: initState,
-      animate: !REDUCED,
-      onChange: (focus, open) => {
-        const active = open || focus;
-        if (specEl) specEl.innerHTML = modalSpecHTML(active, unit);
-        if (samplesBtn && active) {
-          samplesBtn.dataset.samples = `${active.s || sid || ""}|${active.m || mid || ""}|${active.pattern || ""}`;
-        }
-      },
-    });
+    try {
+      sunburst(sbHost, tree, {
+        unit,
+        sort: true,
+        fold: false,
+        state: initState,
+        animate: !REDUCED,
+        onChange: (focus, open) => {
+          const active = open || focus;
+          if (specEl) specEl.innerHTML = modalSpecHTML(active, unit);
+          if (samplesBtn && active) {
+            samplesBtn.dataset.samples = `${active.s || sid || ""}|${active.m || mid || ""}|${active.pattern || ""}`;
+          }
+        },
+      });
+    } catch (err) {
+      console.error("sunburst modal render failed:", err);
+      sbHost.innerHTML = "";
+      if (specEl) specEl.innerHTML = modalSpecHTML(tree, unit);
+    }
   }
   $$("#fxTax .is-sel, #fxTree .is-sel", document).forEach((x) => x.classList.remove("is-sel"));
-  if (sid && mid) $(`#fxTax .fx-g-c[data-s="${sid}"][data-m="${mid}"]`)?.classList.add("is-sel");
+  if (sid && mid) $(`#fxTax .fx-g-c[data-s="${escAttr(sid)}"][data-m="${escAttr(mid)}"]`)?.classList.add("is-sel");
   const treeTarget = pattern ? `${pattern}` : sid && mid ? `${sid}.${mid}` : sid;
   const phaseId = sid && E.tax?.stages?.find((x) => x.id === sid)?.phase;
-  const selNode = (treeTarget && $(`#fxTree .fx-tn[data-node="${treeTarget}"]`))
-    || (sid && $(`#fxTree .fx-tn[data-node="${sid}"]`))
-    || (phaseId && $(`#fxTree .fx-tn[data-node="ph:${phaseId}"]`));
+  const selNode = (treeTarget && $(`#fxTree .fx-tn[data-node="${escAttr(treeTarget)}"]`))
+    || (sid && $(`#fxTree .fx-tn[data-node="${escAttr(sid)}"]`))
+    || (phaseId && $(`#fxTree .fx-tn[data-node="ph:${escAttr(phaseId)}"]`));
   selNode?.classList.add("is-sel");
 }
 
@@ -1067,18 +1116,25 @@ function openCellModal(sid, mid, from, pattern = null) {
     const el = document.createElement("div");
     el.className = "sm";
     el.innerHTML = `<div class="sm-scrim" data-close></div><div class="sm-panel" role="dialog" aria-modal="true" aria-labelledby="smTitle"></div>`;
-    if (from) {
+    if (from && from.getBoundingClientRect) {
       const r = from.getBoundingClientRect();
       el.style.setProperty("--ox", `${r.left + r.width / 2}px`);
       el.style.setProperty("--oy", `${r.top + r.height / 2}px`);
     }
     document.body.appendChild(el);
     MOD.el = el;
+    try {
+      paintModal(`${sid || ""}|${mid || ""}`, false, pattern);
+    } catch (err) {
+      console.error("openCellModal failed:", err);
+      closeCellModal(true);
+      return;
+    }
     bindTips(el);
     document.documentElement.classList.add("is-modal");
     document.addEventListener("keydown", onModalKey, true);
     el.addEventListener("click", (e) => {
-      if (e.target.closest("[data-close]")) { closeCellModal(); return; }
+      if (e.target === el || e.target.closest("[data-close]")) { closeCellModal(); return; }
       const cell = e.target.closest("[data-cell]");
       if (cell) { const [s, m] = cell.dataset.cell.split("."); paintModal(`${s}|${m}`, true); return; }
       const step = e.target.closest("[data-step]");
@@ -1101,23 +1157,28 @@ function openCellModal(sid, mid, from, pattern = null) {
         E.nav?.({ view: "samples", product: E.product, stage: s || null, mech: m || null, pattern: pat || null, p: null, q: null, w: null, case: null, trace: null });
       }
     });
-    paintModal(`${sid || ""}|${mid || ""}`, false, pattern);
     requestAnimationFrame(() => {
+      if (MOD.el !== el) return;
       el.classList.add("is-in");
       $(".sm-close", el)?.focus({ preventScroll: true });
     });
     return;
   }
-  paintModal(`${sid || ""}|${mid || ""}`, true, pattern);
+  try {
+    paintModal(`${sid || ""}|${mid || ""}`, true, pattern);
+  } catch (err) {
+    console.error("paintModal update failed:", err);
+    closeCellModal(true);
+  }
 }
 
 function closeCellModal(now = false) {
+  document.documentElement.classList.remove("is-modal");
+  document.removeEventListener("keydown", onModalKey, true);
+  $$("#fxTax .is-sel, #fxTree .is-sel").forEach((x) => x.classList.remove("is-sel"));
   if (!MOD.el) return;
   const el = MOD.el;
   MOD.el = null;
-  document.removeEventListener("keydown", onModalKey, true);
-  document.documentElement.classList.remove("is-modal");
-  $$("#fxTax .is-sel, #fxTree .is-sel").forEach((x) => x.classList.remove("is-sel"));
   if (now || REDUCED) el.remove();
   else {
     el.classList.remove("is-in");
@@ -1610,14 +1671,18 @@ function wireCluster(tx, tax, state) {
   };
 
   tx.addEventListener("click", (e) => {
+    const clearBeforeOpen = () => {
+      tx._hovering = false;
+      clearHl();
+    };
     const tn = e.target.closest(".fx-tn[data-node]");
-    if (activateTree(tn)) return;
+    if (tn) { clearBeforeOpen(); if (activateTree(tn)) return; }
     const cell = e.target.closest(".fx-g-c:not(.is-empty)");
-    if (cell) { openCellModal(cell.dataset.s, cell.dataset.m, cell); return; }
+    if (cell) { clearBeforeOpen(); openCellModal(cell.dataset.s, cell.dataset.m, cell); return; }
     const row = e.target.closest(".fx-g-row[data-s], .fx-g-sum[data-row-sum]");
-    if (row) { openCellModal(row.dataset.s || row.dataset.rowSum, null, row); return; }
+    if (row) { clearBeforeOpen(); openCellModal(row.dataset.s || row.dataset.rowSum, null, row); return; }
     const col = e.target.closest(".fx-g-col[data-m], .fx-g-sum[data-col-sum]");
-    if (col) openCellModal(null, col.dataset.m || col.dataset.colSum, col);
+    if (col) { clearBeforeOpen(); openCellModal(null, col.dataset.m || col.dataset.colSum, col); }
   });
 
   tx.addEventListener("keydown", (e) => {

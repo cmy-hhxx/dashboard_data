@@ -145,40 +145,81 @@
   fill: var(--lift); filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.06));
 }
 .fx-tn.is-root .fx-root-shift {
-  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
 }
+.fx-tn.is-root .fx-wg-a { stop-color: color-mix(in oklab, var(--accent) 14%, var(--lift)); transition: stop-color 360ms; }
+.fx-tn.is-root .fx-wg-b { stop-color: color-mix(in oklab, var(--accent) 26%, var(--lift)); transition: stop-color 360ms; }
+.fx-tn.is-root .fx-wg-c { stop-color: color-mix(in oklab, var(--accent) 36%, var(--lift)); transition: stop-color 360ms; }
+.fx-tn.is-root .fx-cg-mid { stop-color: var(--accent); stop-opacity: 0.92; transition: stop-color 360ms; }
+.fx-tn.is-root.is-full .fx-wg-a { stop-color: color-mix(in oklab, var(--loc-ulq) 12%, var(--lift)); }
+.fx-tn.is-root.is-full .fx-wg-b { stop-color: color-mix(in oklab, var(--loc-ulq) 22%, var(--lift)); }
+.fx-tn.is-root.is-full .fx-wg-c { stop-color: color-mix(in oklab, var(--loc-ulq) 30%, var(--lift)); }
+.fx-tn.is-root.is-full .fx-cg-mid { stop-color: var(--loc-ulq); stop-opacity: 0.9; }
 .fx-tn.is-root .fx-wave-back {
   fill: color-mix(in oklab, var(--accent) 11%, var(--lift));
-  animation: fx-wave-up 2.8s linear infinite;
-  transition: fill 320ms;
+  animation: fx-wave-up 3.2s linear infinite;
+  transition: fill 360ms;
+}
+.fx-tn.is-root .fx-wave-mid {
+  fill: color-mix(in oklab, var(--accent) 17%, var(--lift));
+  animation: fx-wave-down 2.5s linear infinite;
+  transition: fill 360ms;
 }
 .fx-tn.is-root .fx-wave-front-wrap {
-  animation: fx-wave-down 2.1s linear infinite;
+  animation: fx-wave-up 1.95s linear infinite;
 }
-.fx-tn.is-root .fx-wave-front {
-  fill: color-mix(in oklab, var(--accent) 22%, var(--lift));
-  transition: fill 320ms;
+.fx-tn.is-root .fx-wave-glow {
+  stroke: color-mix(in oklab, var(--accent) 44%, transparent);
+  stroke-width: 5.5; filter: blur(2.5px); opacity: 0; transition: opacity 240ms;
 }
 .fx-tn.is-root .fx-wave-crest {
-  stroke: color-mix(in oklab, var(--accent) 52%, transparent);
-  stroke-width: 1.4; opacity: 0; transition: opacity 240ms;
+  stroke-width: 1.65; stroke-linecap: round; opacity: 0; transition: opacity 240ms;
 }
+.fx-tn.is-root.is-flowing .fx-wave-glow { opacity: 0.85; }
 .fx-tn.is-root.is-flowing .fx-wave-crest { opacity: 1; }
 .fx-tn.is-root.is-full .fx-wave-back {
   fill: color-mix(in oklab, var(--loc-ulq) 10%, var(--lift));
 }
-.fx-tn.is-root.is-full .fx-wave-front {
-  fill: color-mix(in oklab, var(--loc-ulq) 18%, var(--lift));
+.fx-tn.is-root.is-full .fx-wave-mid {
+  fill: color-mix(in oklab, var(--loc-ulq) 15%, var(--lift));
+}
+.fx-tn.is-root .fx-bubble {
+  fill: rgba(255, 255, 255, 0.72);
+  stroke: color-mix(in oklab, var(--accent) 36%, transparent); stroke-width: 0.6;
+  animation: fx-bubble-drift var(--bt, 2.5s) ease-in var(--bd, 0s) infinite;
+}
+.fx-tn.is-root.is-full .fx-bubble {
+  stroke: color-mix(in oklab, var(--loc-ulq) 38%, transparent);
+}
+.fx-tn.is-root .fx-root-gloss { pointer-events: none; opacity: 0.82; }
+.fx-tn.is-root .fx-root-sweep { pointer-events: none; opacity: 0; }
+.fx-tn.is-root.is-on .fx-root-sweep,
+.fx-tn.is-root.is-full .fx-root-sweep {
+  animation: fx-root-shimmer 1.9s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 .fx-tn.is-root .fx-root-ring {
-  stroke: color-mix(in oklab, var(--ink) 12%, transparent); stroke-width: 1; transition: stroke 200ms, stroke-width 200ms;
+  stroke: color-mix(in oklab, var(--ink) 12%, transparent); stroke-width: 1; transition: stroke 200ms, stroke-width 200ms, filter 240ms;
 }
-.fx-tn.is-root.is-on .fx-root-ring { stroke: var(--accent); stroke-width: 1.5; }
-.fx-tn.is-root.is-full .fx-root-ring { stroke: color-mix(in oklab, var(--loc-ulq) 55%, transparent); }
+.fx-tn.is-root.is-on .fx-root-ring {
+  stroke: var(--accent); stroke-width: 1.6;
+  filter: drop-shadow(0 0 6px color-mix(in oklab, var(--accent) 32%, transparent));
+}
+.fx-tn.is-root.is-full .fx-root-ring { stroke: color-mix(in oklab, var(--loc-ulq) 58%, transparent); }
 @keyframes fx-wave-up { from { transform: translateY(0); } to { transform: translateY(-44px); } }
 @keyframes fx-wave-down { from { transform: translateY(-44px); } to { transform: translateY(0); } }
+@keyframes fx-bubble-drift {
+  0% { transform: translate(0, 0) scale(0.5); opacity: 0; }
+  25% { opacity: 0.85; }
+  75% { opacity: 0.7; }
+  100% { transform: translate(18px, -10px) scale(1.15); opacity: 0; }
+}
+@keyframes fx-root-shimmer {
+  0% { opacity: 0; transform: translateX(0); }
+  20% { opacity: 0.9; }
+  100% { opacity: 0; transform: translateX(340px); }
+}
 @media (prefers-reduced-motion: reduce) {
-  .fx-tn.is-root .fx-wave-back, .fx-tn.is-root .fx-wave-front-wrap { animation: none; }
+  .fx-tn.is-root .fx-wave-back, .fx-tn.is-root .fx-wave-mid, .fx-tn.is-root .fx-wave-front-wrap, .fx-tn.is-root .fx-bubble, .fx-tn.is-root .fx-root-sweep { animation: none; }
 }
 .fx-tn-k { font-size: 13px; fill: var(--muted); font-weight: var(--w-medium); }
 .fx-tn-big { font-size: 16px; fill: var(--ink); font-weight: var(--w-title); font-family: var(--mono); }
@@ -310,6 +351,7 @@ button.fx-g-sum:hover, .fx-g-sum.is-hl, .fx-g-sum.is-tick {
 /* Centered cell dialog */
 .is-modal, .is-modal body { overflow: hidden; }
 .sm:not(.duo) { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; padding: var(--sp-6); }
+.sm:not(.duo):not(.is-in) { pointer-events: none; }
 .sm-scrim {
   position: absolute; inset: 0; background: color-mix(in oklab, var(--bg) 70%, transparent);
   backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);

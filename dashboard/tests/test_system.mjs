@@ -209,7 +209,8 @@ test("cellModalHTML renders a clean sunburst container with P0/P1 keys and drill
   assert.ok(cell.includes("<code>M5</code>"));
   assert.ok(cell.includes("<code>S9.M5.3</code>"));
   assert.ok(cell.includes("公式或数量级算错"));
-  assert.ok(cell.includes("纳入"));
+  assert.ok(cell.includes("进入标准"));
+  assert.ok(!cell.includes("纳入"));
   assert.ok(!cell.includes("排除"));
   assert.ok(!cell.includes("上游数据源本身错误"));
   const aiPhrases = [
@@ -234,9 +235,13 @@ test("cellModalHTML renders a clean sunburst container with P0/P1 keys and drill
   assert.ok(mech.includes('id="smSpec"'));
   assert.ok(mech.includes("<code>M5</code>"));
   assert.ok(mech.includes("<code>S9.M5</code>"));
+  assert.ok(mech.includes("data-close"));
   for (const gone of aiPhrases) {
     assert.ok(!mech.includes(gone), `mechanism modal must not contain ${gone}`);
   }
+  const missing = cellModalHTML(SAMPLE_TAX, SAMPLE_PD, "S_NONE", null);
+  assert.ok(missing.includes("data-close"));
+  assert.ok(missing.includes("未找到对应条目"));
 });
 
 test("computeOptimalBudget, selectOptimalTree and buildReplaySchedule keep exact real totals on 131,632-problem trees", () => {
@@ -331,6 +336,12 @@ test("computeOptimalBudget, selectOptimalTree and buildReplaySchedule keep exact
   assert.ok(html.includes("<code>S3</code>"));
   assert.ok(html.includes("<code>M1</code>"));
   assert.ok(html.includes('data-tip="t"'));
+  assert.ok(html.includes('id="fxWaveGrad"'));
+  assert.ok(html.includes('class="fx-wave-mid"'));
+  assert.ok(html.includes('class="fx-wave-glow"'));
+  assert.ok(html.includes('class="fx-bubble"'));
+  assert.ok(html.includes('class="fx-root-gloss"'));
+  assert.ok(html.includes('class="fx-root-sweep"'));
   for (const gone of ["NaN", "展示", "fxRootLeaf", "fx-leaf-box", "其余"]) {
     assert.ok(!html.includes(gone), `large flowCard must not contain ${gone}`);
   }
