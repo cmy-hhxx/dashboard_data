@@ -1,40 +1,55 @@
 /* 文档: three reference documents under ?view=docs (&doc=severity | capacity | api).
-   Index shows three quiet editorial cards; opening a card renders a progressive chaptered doc. */
+   Index shows three equal liquid-flood cards; opening a card renders a progressive chaptered doc. */
 import { $, $$, esc, segmented, copyText, copyBtnHTML, flashCopy, wireCopy } from "./core.js";
+import { floodCards } from "./shader_flood.js";
 import { capacityDocHTML, wireCapacityDoc, capacityCopyResolvers } from "./doc_capacity.js";
 import { apiDocHTML, wireApiDoc, apiCopyResolvers } from "./doc_api.js";
-
-const ICON_ARROW = '<svg class="dc-arrow" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 8h9m-3.5-3.5L12.5 8 9 11.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 const DOCS = [
   {
     id: "severity",
     num: "01",
+    tag: "定级标准",
     title: "P0–P4 定级标准",
     desc: "判级流程、五档边界与 75 个真实对照案例",
-    anchor: `<span class="dc-anchor dc-anchor-sev" aria-hidden="true">
-      <span class="dc-sev-bar"><i style="--c:var(--sev-0)"></i><i style="--c:var(--sev-1)"></i><i style="--c:var(--sev-2)"></i><i style="--c:var(--sev-3)"></i><i style="--c:var(--sev-4)"></i></span>
-      <span class="dc-sev-keys"><b>P0</b><b>P1</b><b>P2</b><b>P3</b><b>P4</b></span>
+    foot: "5 档口径 · 75 例 · 205 条证据",
+    palette: ["#3a0a0c", "#d2452f", "#ffd6c6"],
+    visual: `<span class="dc-visual dc-sev-scale" aria-hidden="true">
+      <span class="dc-sev-col"><i style="--c:var(--sev-0)"></i><b>P0</b><em>不可信</em></span>
+      <span class="dc-sev-col"><i style="--c:var(--sev-1)"></i><b>P1</b><em>需大改</em></span>
+      <span class="dc-sev-col"><i style="--c:var(--sev-2)"></i><b>P2</b><em>局部错</em></span>
+      <span class="dc-sev-col"><i style="--c:var(--sev-3)"></i><b>P3</b><em>表达偏</em></span>
+      <span class="dc-sev-col"><i style="--c:var(--sev-4)"></i><b>P4</b><em>未伤交付</em></span>
     </span>`,
   },
   {
     id: "capacity",
     num: "02",
+    tag: "容量与性能",
     title: "容量与性能说明",
     desc: "单条消耗拆解、并发配比试算与排查命令",
-    anchor: `<span class="dc-anchor dc-anchor-cap" aria-hidden="true">
-      <span class="dc-cap-stat"><b class="num">292.8</b><span>行 / 小时</span></span>
-      <span class="dc-cap-stat"><b class="num">41.3 万</b><span>token / 条</span></span>
+    foot: "3 个交互试算 · 5 条排查命令",
+    palette: ["#0b2358", "#3a63f0", "#d4e0ff"],
+    visual: `<span class="dc-visual dc-cap-preview" aria-hidden="true">
+      <span class="dc-cap-kpi"><b class="num">292.8</b><em>行 / 小时</em></span>
+      <span class="dc-cap-pair">
+        <span><em>单条消耗</em><b class="num">41.3 万 token</b></span>
+        <span><em>最佳配比</em><b class="num">64 并发 / 128 额度</b></span>
+      </span>
     </span>`,
   },
   {
     id: "api",
     num: "03",
+    tag: "评测接口",
     title: "评测接口指南",
     desc: "5003 供数接口调用与 5002 对话直达",
-    anchor: `<span class="dc-anchor dc-anchor-api" aria-hidden="true">
-      <span class="dc-api-line"><b class="num">5003</b><code>/api/v1/analysis/*</code></span>
-      <span class="dc-api-line"><b class="num">5002</b><code>/?case=…&amp;trace=…</code></span>
+    foot: "外网 / 内网一键切换 · 链接生成器",
+    palette: ["#092e2a", "#1d7d72", "#c8f2ec"],
+    visual: `<span class="dc-visual dc-api-preview" aria-hidden="true">
+      <span class="dc-api-step"><em>5003 供数</em><code>/traces → trace_id</code></span>
+      <span class="dc-api-step"><em>5002 页面</em><code>/?case=…&amp;trace=…</code></span>
+      <span class="dc-api-chips"><code>/severity</code><code>/summary</code><code>/changes</code></span>
     </span>`,
   },
 ];
@@ -43,21 +58,17 @@ let severityCache = null;
 
 function indexHTML() {
   return `<div class="dc">
-    <div class="dc-index">
-      <header class="dc-index-head">
-        <h1>文档</h1>
-        <p>定级标准、运行容量与数据接口手册</p>
-      </header>
-      <div class="dc-grid" role="list">${DOCS.map((d, i) => `<a class="dc-card" role="listitem" href="?view=docs&amp;doc=${d.id}" data-doc="${d.id}" style="--i:${i}">
-        <span class="dc-card-top">
-          <span class="dc-num num">${esc(d.num)}</span>
-          ${ICON_ARROW}
+    <div class="dc-stage" id="dcStage">
+      <div class="dc-grid" role="list">${DOCS.map((d, i) => `<a class="dc-card" role="listitem" href="?view=docs&amp;doc=${d.id}" data-flood data-doc="${d.id}" style="--dc-accent:${d.palette[1]};--i:${i}">
+        <span class="dc-body">
+          <span class="dc-top"><span class="dc-tag">${esc(d.num)} · ${esc(d.tag)}</span><span class="dc-go" aria-hidden="true">进入 →</span></span>
+          <span class="dc-card-head">
+            <b class="dc-title">${esc(d.title)}</b>
+            <span class="dc-desc">${esc(d.desc)}</span>
+          </span>
+          ${d.visual}
+          <span class="dc-foot num">${esc(d.foot)}</span>
         </span>
-        <span class="dc-card-copy">
-          <b class="dc-title">${esc(d.title)}</b>
-          <span class="dc-desc">${esc(d.desc)}</span>
-        </span>
-        ${d.anchor}
       </a>`).join("")}</div>
     </div>
   </div>`;
@@ -311,6 +322,8 @@ export async function render(root, c) {
   const key = doc ? doc.id : "index";
   if (root._dcKey === key && root.firstChild) return;
   root._dcKey = key;
+  root._flood?.destroy();
+  root._flood = null;
   root._tocObs?.disconnect();
   root._tocObs = null;
   root._nav = c.navigate;
@@ -332,6 +345,13 @@ export async function render(root, c) {
 
   if (!doc) {
     root.innerHTML = indexHTML();
+    const stage = $("#dcStage", root);
+    const cards = [...stage.querySelectorAll("[data-flood]")];
+    root._flood = floodCards(stage, cards, {
+      palettes: DOCS.map((d) => d.palette),
+      radius: 28,
+      onOpen: (i) => c.navigate?.({ view: "docs", doc: DOCS[i].id }),
+    });
     return;
   }
 

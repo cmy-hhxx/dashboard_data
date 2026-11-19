@@ -451,18 +451,18 @@ function layoutTree(model, W = TREE_W) {
     relaxX(cells, cellW + 10, 56, W - 56);
   } else {
     const cellPitch = cells.length > 1 ? usable / (cells.length - 1) : 48;
-    const cellR = Math.max(8, Math.min(11.5, (cellPitch - 3.5) / 2));
+    const cellR = Math.max(6.5, Math.min(11.5, (cellPitch - 3) / 2));
     cells.forEach((cn) => { cn.r = cellR; });
-    relaxX(cells, cellR * 2 + 3.5, TREE_PAD_X + cellR, W - TREE_PAD_X - cellR);
+    relaxX(cells, Math.min(cellR * 2 + 3, cellPitch * 0.94), TREE_PAD_X + cellR, W - TREE_PAD_X - cellR);
   }
 
   const leaves = model.leaves;
   let minInitDx = leaves.length > 1 ? Infinity : 48;
   for (let i = 1; i < leaves.length; i++) minInitDx = Math.min(minInitDx, leaves[i].x - leaves[i - 1].x);
   const leafPitch = leaves.length > 1 ? usable / (leaves.length - 1) : 48;
-  const maxR = Math.max(2.6, Math.min(9.5, Math.min(minInitDx, leafPitch) * 0.39));
-  const minR = Math.max(2.0, maxR * 0.54);
-  relaxX(leaves, maxR * 2 + 2.4, TREE_PAD_X + maxR, W - TREE_PAD_X - maxR);
+  const maxR = Math.max(1.8, Math.min(9.5, Math.min(minInitDx, leafPitch) * 0.39));
+  const minR = Math.max(1.4, maxR * 0.56);
+  relaxX(leaves, Math.min(maxR * 2 + 2.0, leafPitch * 0.92), TREE_PAD_X + maxR, W - TREE_PAD_X - maxR);
 
   let minFinalDx = leaves.length > 1 ? Infinity : 48;
   for (let i = 1; i < leaves.length; i++) minFinalDx = Math.min(minFinalDx, leaves[i].x - leaves[i - 1].x);
@@ -557,7 +557,7 @@ export function flowCard(tax, pd) {
     return `<div class="fx-box fx-out" data-o="${i}" style="--c:${c}">${ico}<b>${t}</b></div>`;
   }).join("");
 
-  const model = tax ? layoutTree(selectOptimalTree(treeModel(tax, pd), computeOptimalBudget(TREE_W)), TREE_W) : null;
+  const model = tax ? layoutTree(selectOptimalTree(treeModel(tax, pd), { maxCells: Infinity, maxLeaves: Infinity }), TREE_W) : null;
   const hasTree = !!(model && model.leaves.length);
   const treeBlock = hasTree
     ? `<div class="fx-tree-wrap">${treeSVG(model, TREE_W)}</div>
@@ -1120,9 +1120,7 @@ export function buildReplaySchedule(model) {
 
   const seededIds = new Set();
   const maxSeed = leaves.length >= 2
-    ? (leaves.length <= 26
-      ? Math.max(1, Math.min(leaves.length - 1, Math.round(leaves.length * 0.42)))
-      : Math.max(1, leaves.length - Math.min(22, Math.max(8, Math.round(leaves.length * 0.25)))))
+    ? Math.max(1, Math.min(leaves.length - 1, Math.round(leaves.length * 0.30)))
     : 0;
   if (maxSeed > 0) {
     const byCount = leaves.slice().sort((a, b) => b.n - a.n);
@@ -1180,18 +1178,12 @@ export function buildReplaySchedule(model) {
   const sprouts = [];
   const followupsBySprout = new Map();
 
-  const seededList = leaves.filter((lf) => seededIds.has(lf.id)).sort((a, b) => b.n - a.n);
-  const animatedSeedIds = leaves.length > 26
-    ? new Set(seededList.slice(0, 30).map((lf) => lf.id))
-    : seededIds;
-
   leaves.forEach((lf) => {
     if (seededIds.has(lf.id)) {
-      if (!animatedSeedIds.has(lf.id) || lf.n <= 1) {
+      if (lf.n <= 1) {
         seedMap.set(lf.id, lf.n);
       } else {
-        const ratio = leaves.length > 26 ? 0.32 : 0.28;
-        const init = Math.max(1, Math.round(lf.n * ratio));
+        const init = Math.max(1, Math.round(lf.n * 0.28));
         seedMap.set(lf.id, init);
         splitChunks(lf.n - init, maxMatchPerLeaf).forEach((delta) => {
           seededMatches.push({ leaf: lf, delta, isNew: false });
@@ -1203,7 +1195,7 @@ export function buildReplaySchedule(model) {
   });
 
   unbornLeaves.forEach((lf, idx) => {
-    const hasFollow = leaves.length <= 26 || idx < 14;
+    const hasFollow = leaves.length <= 26 || idx < 18;
     const firstDelta = !hasFollow || lf.n <= 1 ? lf.n : Math.min(lf.n, Math.max(1, Math.round(lf.n * 0.45)));
     sprouts.push({ leaf: lf, delta: firstDelta, isNew: true });
     const chunks = splitChunks(lf.n - firstDelta, maxMatchPerLeaf).map((delta) => ({ leaf: lf, delta, isNew: false }));
@@ -1403,7 +1395,7 @@ function wireFx(root, tax, pd) {
   const replayBtn = $("#fxReplay", diagram);
 
   const matModel = tax ? matrixModel(tax, pd) : null;
-  const tree = tax && treeSvg ? layoutTree(selectOptimalTree(treeModel(tax, pd), computeOptimalBudget(TREE_W)), TREE_W) : null;
+  const tree = tax && treeSvg ? layoutTree(selectOptimalTree(treeModel(tax, pd), { maxCells: Infinity, maxLeaves: Infinity }), TREE_W) : null;
   const liveLeaf = new Map();
   const live = new Map();
   if (tree) {
@@ -1686,24 +1678,23 @@ function wireFx(root, tax, pd) {
     later(() => el.classList.remove("is-lit"), ms);
   };
 
-  const revealCellBranch = (cellNode) => {
-    if (!cellNode) return;
-    const cellEl = nodeElMap.get(cellNode.id);
-    const linkEl = linkElMap.get(cellNode.id);
-    if (cellEl && cellEl.classList.contains("is-hidden")) {
-      cellEl.classList.remove("is-hidden");
-      restart(cellEl, "is-sprout");
-      later(() => cellEl.classList.remove("is-sprout"), 2400);
+  const revealNodeAndLink = (nodeId) => {
+    const nEl = nodeElMap.get(nodeId);
+    const lEl = linkElMap.get(nodeId);
+    if (lEl && lEl.classList.contains("is-hidden")) {
+      lEl.classList.remove("is-hidden");
+      restart(lEl, "is-sprout");
+      later(() => lEl.classList.remove("is-sprout"), 2200);
     }
-    if (linkEl && linkEl.classList.contains("is-hidden")) {
-      linkEl.classList.remove("is-hidden");
-      restart(linkEl, "is-sprout");
-      later(() => linkEl.classList.remove("is-sprout"), 2200);
+    if (nEl && nEl.classList.contains("is-hidden")) {
+      nEl.classList.remove("is-hidden");
+      restart(nEl, "is-sprout");
+      later(() => nEl.classList.remove("is-sprout"), 2400);
     }
   };
 
   const revealLeafBranch = (leaf) => {
-    revealCellBranch(leaf.parent);
+    for (let cur = leaf.parent; cur && cur.row >= 1; cur = cur.parent) revealNodeAndLink(cur.id);
     const linkEl = linkElMap.get(leaf.id);
     if (linkEl && linkEl.classList.contains("is-hidden")) {
       linkEl.classList.remove("is-hidden");
@@ -1754,6 +1745,7 @@ function wireFx(root, tax, pd) {
 
     liveLeaf.clear();
     const cellHasSeeded = new Set();
+    const stageHasSeeded = new Set();
     tree.leaves.forEach((lf) => {
       const sVal = schedule.seedMap.get(lf.id) || 0;
       const leafEl = nodeElMap.get(lf.id);
@@ -1762,7 +1754,10 @@ function wireFx(root, tax, pd) {
       linkEl?.classList.remove("is-sprout", "is-lit");
       liveLeaf.set(lf.id, sVal);
       if (sVal > 0) {
-        if (lf.parent) cellHasSeeded.add(lf.parent.id);
+        if (lf.parent) {
+          cellHasSeeded.add(lf.parent.id);
+          if (lf.parent.parent) stageHasSeeded.add(lf.parent.parent.id);
+        }
         leafEl?.classList.remove("is-hidden");
         linkEl?.classList.remove("is-hidden");
       } else {
@@ -1781,6 +1776,16 @@ function wireFx(root, tax, pd) {
       lEl?.classList.toggle("is-hidden", !active);
     });
 
+    tree.stages.forEach((sn) => {
+      const sEl = nodeElMap.get(sn.id);
+      const lEl = linkElMap.get(sn.id);
+      sEl?.classList.remove("is-sprout", "is-hit");
+      lEl?.classList.remove("is-sprout", "is-lit");
+      const active = stageHasSeeded.has(sn.id);
+      sEl?.classList.toggle("is-hidden", !active);
+      lEl?.classList.toggle("is-hidden", !active);
+    });
+
     recomputeLive();
     syncAllNodes();
     syncMatrix();
@@ -1788,10 +1793,10 @@ function wireFx(root, tax, pd) {
 
   initSeed();
 
-  const DUR = [820, 700, 660];
-  const HOP_DUR = [380, 340, 320, 380];
-  const MATCH_GAP = 680;
-  const SPROUT_GAP = 1020;
+  const DUR = [720, 620, 560];
+  const HOP_DUR = [320, 290, 280, 320];
+  const MATCH_GAP = 420;
+  const SPROUT_GAP = 640;
 
   const along = (id, u) => {
     const p = paths.get(id);
@@ -1812,7 +1817,7 @@ function wireFx(root, tax, pd) {
   };
 
   const spawn = (forcedInput, forcedEv, forcedOut = null, delayMs = 0) => {
-    if (sparks.length >= 48) return;
+    if (!forcedEv && sparks.length >= 64) return;
     const ev = forcedEv || (phaseState === "replay" && evIdx < schedule.events.length ? schedule.events[evIdx++] : null);
     if (!ev) return;
     refreshColors();
@@ -1831,18 +1836,19 @@ function wireFx(root, tax, pd) {
   };
 
   const spawnWave = (now) => {
-    if (evIdx >= schedule.events.length || sparks.length >= 44) return null;
+    if (evIdx >= schedule.events.length || sparks.length >= 58) return null;
     const batch = [];
     let hasSprout = false;
-    while (evIdx < schedule.events.length && batch.length < 4 && sparks.length + batch.length < 48) {
+    while (evIdx < schedule.events.length && batch.length < 5 && sparks.length + batch.length < 64) {
       const nextEv = schedule.events[evIdx];
       if (nextEv.isNew && hasSprout) break;
       if (nextEv.isNew) hasSprout = true;
       batch.push(schedule.events[evIdx++]);
     }
+    if (!batch.length) return null;
     const in0 = Math.floor(Math.random() * ins.length);
     const out0 = Math.floor(Math.random() * outs.length);
-    batch.forEach((ev, k) => spawn((in0 + k) % ins.length, ev, (out0 + k) % outs.length, k * 95));
+    batch.forEach((ev, k) => spawn((in0 + k) % ins.length, ev, (out0 + k) % outs.length, k * 80));
     return now + (hasSprout ? SPROUT_GAP : MATCH_GAP);
   };
 
@@ -1923,14 +1929,21 @@ function wireFx(root, tax, pd) {
           if (s.hop < s.chain.length - 1) {
             const curId = s.chain[s.hop];
             const nextId = s.chain[s.hop + 1];
-            const curNode = tree.byId.get(curId);
-            const nextNode = tree.byId.get(nextId);
-            if (curNode && !nodeElMap.get(curId)?.classList.contains("is-hidden")) {
-              land(nodeElMap.get(curId), 440);
+            const curEl = nodeElMap.get(curId);
+            if (curEl) {
+              if (curEl.classList.contains("is-hidden")) {
+                curEl.classList.remove("is-hidden");
+                restart(curEl, "is-sprout");
+                later(() => curEl.classList.remove("is-sprout"), 2400);
+              } else {
+                land(curEl, 440);
+              }
             }
-            if (s.ev.isNew && nextNode) {
-              if (nextNode.row === 3) revealCellBranch(nextNode);
-              else if (nextNode.row === 4) revealLeafBranch(nextNode);
+            const nextLink = linkElMap.get(nextId);
+            if (s.ev.isNew && nextLink && nextLink.classList.contains("is-hidden")) {
+              nextLink.classList.remove("is-hidden");
+              restart(nextLink, "is-sprout");
+              later(() => nextLink.classList.remove("is-sprout"), 2200);
             }
             lightLink(nextId, 520);
             s.hop += 1;

@@ -10,14 +10,16 @@ const docsSource = fs.readFileSync(new URL("../static/js/docs.js", import.meta.u
 const cssSource = fs.readFileSync(new URL("../static/css/docs.css", import.meta.url), "utf8");
 const severityHTML = fs.readFileSync(new URL("../static/docs/severity.html", import.meta.url), "utf8");
 
-test("docs index and document shells drop dc-head, dc-switch and liquid shader slop", () => {
+test("docs index restores liquid-flood cards without dc-index-head and doc shells drop dc-head, dc-switch", () => {
+  assert.ok(!docsSource.includes("dc-index-head"));
   assert.ok(!docsSource.includes("dc-head"));
   assert.ok(!docsSource.includes("dc-switch"));
   assert.ok(!docsSource.includes("dc-crumb"));
-  assert.ok(!docsSource.includes("shader_flood"));
-  assert.ok(!docsSource.includes("dc-foot"));
-  assert.ok(docsSource.includes("dc-anchor"));
+  assert.ok(docsSource.includes("shader_flood"));
+  assert.ok(docsSource.includes("dc-foot"));
+  assert.ok(docsSource.includes("dc-visual"));
   assert.ok(!severityHTML.includes("p4-head"));
+  assert.ok(!cssSource.includes("dc-index-head"));
   assert.ok(!cssSource.includes("dc-head"));
   assert.ok(!cssSource.includes("dc-switch"));
   assert.ok(!cssSource.includes("dc-crumb"));

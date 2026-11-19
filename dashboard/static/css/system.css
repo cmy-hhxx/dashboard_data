@@ -250,7 +250,7 @@
 
 /* Centered cell dialog */
 .is-modal, .is-modal body { overflow: hidden; }
-.sm { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; padding: var(--sp-6); }
+.sm:not(.duo) { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; padding: var(--sp-6); }
 .sm-scrim {
   position: absolute; inset: 0; background: color-mix(in oklab, var(--bg) 70%, transparent);
   backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
