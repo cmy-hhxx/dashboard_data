@@ -5,51 +5,51 @@ import { floodCards } from "./shader_flood.js";
 import { capacityDocHTML, wireCapacityDoc, capacityCopyResolvers } from "./doc_capacity.js";
 import { apiDocHTML, wireApiDoc, apiCopyResolvers } from "./doc_api.js";
 
+const ICON_ARROW = '<svg class="dc-arrow" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 8h9m-3.5-3.5L12.5 8 9 11.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const ICON_BACK = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const ICON_TOP = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 12.5V3.5M4.5 7 8 3.5 11.5 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
 const DOCS = [
   {
     id: "severity",
     num: "01",
-    tag: "定级标准",
+    short: "定级标准",
     title: "P0–P4 定级标准",
-    desc: "判级流程、五档边界与 75 个真实对照案例",
-    foot: "5 档口径 · 75 例 · 205 条证据",
+    desc: "五档判级边界与 75 个真实案例",
     palette: ["#3a0a0c", "#d2452f", "#ffd6c6"],
     visual: `<span class="dc-visual dc-sev-scale" aria-hidden="true">
-      <span class="dc-sev-col"><i style="--c:var(--sev-0)"></i><b>P0</b><em>不可信</em></span>
-      <span class="dc-sev-col"><i style="--c:var(--sev-1)"></i><b>P1</b><em>需大改</em></span>
-      <span class="dc-sev-col"><i style="--c:var(--sev-2)"></i><b>P2</b><em>局部错</em></span>
-      <span class="dc-sev-col"><i style="--c:var(--sev-3)"></i><b>P3</b><em>表达偏</em></span>
-      <span class="dc-sev-col"><i style="--c:var(--sev-4)"></i><b>P4</b><em>未伤交付</em></span>
+      <span class="dc-sev-col"><i style="--c:var(--sev-0)"></i><b>P0</b></span>
+      <span class="dc-sev-col"><i style="--c:var(--sev-1)"></i><b>P1</b></span>
+      <span class="dc-sev-col"><i style="--c:var(--sev-2)"></i><b>P2</b></span>
+      <span class="dc-sev-col"><i style="--c:var(--sev-3)"></i><b>P3</b></span>
+      <span class="dc-sev-col"><i style="--c:var(--sev-4)"></i><b>P4</b></span>
     </span>`,
   },
   {
     id: "capacity",
     num: "02",
-    tag: "容量与性能",
-    title: "容量与性能说明",
-    desc: "单条消耗拆解、并发配比试算与排查命令",
-    foot: "3 个交互试算 · 5 条排查命令",
+    short: "容量性能",
+    title: "容量与性能",
+    desc: "单条消耗拆解与并发配比试算",
     palette: ["#0b2358", "#3a63f0", "#d4e0ff"],
     visual: `<span class="dc-visual dc-cap-preview" aria-hidden="true">
       <span class="dc-cap-kpi"><b class="num">292.8</b><em>行 / 小时</em></span>
       <span class="dc-cap-pair">
-        <span><em>单条消耗</em><b class="num">41.3 万 token</b></span>
-        <span><em>最佳配比</em><b class="num">64 并发 / 128 额度</b></span>
+        <span><em>单条</em><b class="num">41.3 万</b></span>
+        <span><em>配比</em><b class="num">64 / 128</b></span>
       </span>
     </span>`,
   },
   {
     id: "api",
     num: "03",
-    tag: "评测接口",
-    title: "评测接口指南",
-    desc: "5003 供数接口调用与 5002 对话直达",
-    foot: "外网 / 内网一键切换 · 链接生成器",
+    short: "评测接口",
+    title: "评测接口",
+    desc: "5003 供数接口与 5002 对话直达",
     palette: ["#092e2a", "#1d7d72", "#c8f2ec"],
     visual: `<span class="dc-visual dc-api-preview" aria-hidden="true">
-      <span class="dc-api-step"><em>5003 供数</em><code>/traces → trace_id</code></span>
-      <span class="dc-api-step"><em>5002 页面</em><code>/?case=…&amp;trace=…</code></span>
-      <span class="dc-api-chips"><code>/severity</code><code>/summary</code><code>/changes</code></span>
+      <span class="dc-api-step"><em>5003</em><code>/api/v1/analysis/*</code></span>
+      <span class="dc-api-step"><em>5002</em><code>/?case=…&amp;trace=…</code></span>
     </span>`,
   },
 ];
@@ -61,17 +61,72 @@ function indexHTML() {
     <div class="dc-stage" id="dcStage">
       <div class="dc-grid" role="list">${DOCS.map((d, i) => `<a class="dc-card" role="listitem" href="?view=docs&amp;doc=${d.id}" data-flood data-doc="${d.id}" style="--dc-accent:${d.palette[1]};--i:${i}">
         <span class="dc-body">
-          <span class="dc-top"><span class="dc-tag">${esc(d.num)} · ${esc(d.tag)}</span><span class="dc-go" aria-hidden="true">进入 →</span></span>
+          <span class="dc-top"><span class="dc-num num">${esc(d.num)}</span>${ICON_ARROW}</span>
           <span class="dc-card-head">
             <b class="dc-title">${esc(d.title)}</b>
             <span class="dc-desc">${esc(d.desc)}</span>
           </span>
           ${d.visual}
-          <span class="dc-foot num">${esc(d.foot)}</span>
         </span>
       </a>`).join("")}</div>
     </div>
   </div>`;
+}
+
+function docChromeHTML(activeId) {
+  const tabs = DOCS.map((d) => `<a class="dc-docbar-tab" href="?view=docs&amp;doc=${d.id}" data-doc="${d.id}"${d.id === activeId ? ' aria-current="page"' : ""}>${esc(d.short)}</a>`).join("");
+  return `<div class="dc-progress" role="progressbar" aria-label="文档浏览进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i class="dc-progress-fill"></i></div>
+  <div class="dc-docbar">
+    <button type="button" class="dc-back" data-back>${ICON_BACK}<span>全部文档</span></button>
+    <nav class="dc-docbar-tabs" aria-label="切换文档">${tabs}</nav>
+    <span class="dc-docbar-pct num" aria-hidden="true">0%</span>
+    <button type="button" class="dc-top-btn" data-scroll-top aria-label="回到顶部" hidden>${ICON_TOP}<span>顶部</span></button>
+  </div>`;
+}
+
+function wireDocProgress(root) {
+  root._docProgressCleanup?.();
+  const bar = $(".dc-progress", root);
+  const fill = $(".dc-progress-fill", root);
+  const pctEl = $(".dc-docbar-pct", root);
+  const topBtn = $("[data-scroll-top]", root);
+  if (!bar || !fill) return;
+
+  let raf = 0;
+  const update = () => {
+    raf = 0;
+    const docEl = document.documentElement;
+    const max = Math.max(0, docEl.scrollHeight - window.innerHeight);
+    const y = Math.max(0, window.scrollY || docEl.scrollTop || 0);
+    const ratio = max > 0 ? Math.min(1, y / max) : 1;
+    const pct = Math.round(ratio * 100);
+    fill.style.transform = `scaleX(${ratio.toFixed(4)})`;
+    bar.setAttribute("aria-valuenow", String(pct));
+    if (pctEl) pctEl.textContent = `${pct}%`;
+    if (topBtn) topBtn.hidden = y < 220;
+  };
+  const onScroll = () => {
+    if (!root.isConnected || !bar.isConnected) { root._docProgressCleanup?.(); return; }
+    if (!raf) raf = requestAnimationFrame(update);
+  };
+  const onKey = (e) => {
+    if (!root.isConnected || !bar.isConnected) { root._docProgressCleanup?.(); return; }
+    if (e.key === "Escape" && !e.defaultPrevented && !e.target?.closest("input, textarea, select")) {
+      window.scrollTo({ top: 0, behavior: "instant" });
+      root._nav?.({ view: "docs", doc: null });
+    }
+  };
+  window.addEventListener("scroll", onScroll, { passive: true });
+  window.addEventListener("resize", onScroll, { passive: true });
+  window.addEventListener("keydown", onKey);
+  update();
+
+  root._docProgressCleanup = () => {
+    if (raf) cancelAnimationFrame(raf);
+    window.removeEventListener("scroll", onScroll);
+    window.removeEventListener("resize", onScroll);
+    window.removeEventListener("keydown", onKey);
+  };
 }
 
 export function wireDocToc(shell, navSelector, { handleClick = true } = {}) {
@@ -324,6 +379,8 @@ export async function render(root, c) {
   root._dcKey = key;
   root._flood?.destroy();
   root._flood = null;
+  root._docProgressCleanup?.();
+  root._docProgressCleanup = null;
   root._tocObs?.disconnect();
   root._tocObs = null;
   root._nav = c.navigate;
@@ -332,12 +389,18 @@ export async function render(root, c) {
     root._dcWired = true;
     root.addEventListener("click", (e) => {
       if (e.target.closest("[data-back]")) {
+        window.scrollTo({ top: 0, behavior: "instant" });
         root._nav?.({ view: "docs", doc: null });
         return;
       }
-      const card = e.target.closest(".dc-card[data-doc]");
+      if (e.target.closest("[data-scroll-top]")) {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+        return;
+      }
+      const card = e.target.closest(".dc-card[data-doc], .dc-docbar-tab[data-doc]");
       if (card && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey && e.button === 0) {
         e.preventDefault();
+        window.scrollTo({ top: 0, behavior: "instant" });
         root._nav?.({ view: "docs", doc: card.dataset.doc });
       }
     });
@@ -356,23 +419,25 @@ export async function render(root, c) {
   }
 
   if (doc.id === "capacity") {
-    root.innerHTML = `<div class="dc dc-doc">${capacityDocHTML()}</div>`;
+    root.innerHTML = `<div class="dc dc-doc">${docChromeHTML(doc.id)}${capacityDocHTML()}</div>`;
     wireCapacityDoc(root);
     wireCopy(root, capacityCopyResolvers(root));
     root._tocObs = wireDocToc(root, ".doc-toc");
+    wireDocProgress(root);
     return;
   }
 
   if (doc.id === "api") {
-    root.innerHTML = `<div class="dc dc-doc">${apiDocHTML()}</div>`;
+    root.innerHTML = `<div class="dc dc-doc">${docChromeHTML(doc.id)}${apiDocHTML()}</div>`;
     wireApiDoc(root);
     wireCopy(root, apiCopyResolvers(root));
     root._tocObs = wireDocToc(root, ".doc-toc");
+    wireDocProgress(root);
     return;
   }
 
   // doc.id === "severity"
-  root.innerHTML = `<div class="dc dc-doc"><div id="dcSeverityBody"><div class="doc-loading"><div class="empty">正在加载 P0–P4 定级标准与 75 个案例…</div></div></div></div>`;
+  root.innerHTML = `<div class="dc dc-doc">${docChromeHTML(doc.id)}<div id="dcSeverityBody"><div class="doc-loading"><div class="empty">正在加载 P0–P4 定级标准与 75 个案例…</div></div></div></div>`;
   try {
     if (!severityCache) {
       const res = await fetch("docs/severity.html");
@@ -385,9 +450,11 @@ export async function render(root, c) {
       body.innerHTML = severityCache;
       root._tocObs = wireSeverityDoc(body);
       wireCopy(root, severityCopyResolvers(body));
+      wireDocProgress(root);
     }
   } catch (err) {
     const body = $("#dcSeverityBody", root);
     if (body) body.innerHTML = `<div class="doc-loading"><div class="empty">文档加载失败：${esc(String(err.message || err))}</div></div>`;
+    wireDocProgress(root);
   }
 }

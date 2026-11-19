@@ -82,6 +82,9 @@ test("system CSS styles the compact 5-tier SVG tree and tree-structured modal, r
   assert.ok(systemCss.includes(".fx-g-ph.is-hl"));
   assert.ok(systemCss.includes(".fx-g-col code"));
   assert.ok(systemCss.includes(".fx-toast"));
+  assert.ok(systemCss.includes(".fx-prog"));
+  assert.ok(systemCss.includes(".fx-clu-gear"));
+  assert.ok(systemCss.includes(".fx-g-sum"));
   assert.ok(systemCss.includes(".sm-panel"));
   assert.ok(systemCss.includes(".sm-pat.is-focus"));
   assert.ok(systemCss.includes(".sm-tree"));
@@ -127,6 +130,11 @@ test("flowCard builds a compact 5-tier cluster tree with M{n} cells, dot leaves,
   }
   assert.ok(html.includes('<button type="button" class="fx-g-c'));
   assert.ok(html.includes('data-s="S9" data-m="M5"'));
+  assert.ok(html.includes('id="fxProg"'));
+  assert.ok(html.includes('class="fx-clu-gear"'));
+  assert.ok(html.includes('is-row-sum'));
+  assert.ok(html.includes('is-col-sum'));
+  assert.ok(html.includes('id="fxGrandSum"'));
 });
 
 test("treeModel rolls up clusters, supports matrix/patterns fallbacks, and preserves planar phase order", () => {
@@ -195,10 +203,10 @@ test("cellModalHTML renders a clean tree hierarchy without conversational AI cop
   assert.ok(cell.includes("终稿整合或推算过程中的计算错误"));
   assert.ok(cell.includes("公式或数量级算错"));
   assert.ok(cell.includes("纳入"));
-  assert.ok(cell.includes("排除"));
-  assert.ok(cell.includes("上游数据源本身错误"));
+  assert.ok(!cell.includes("排除"));
+  assert.ok(!cell.includes("上游数据源本身错误"));
   assert.ok(cell.includes("同比环比混算"));
-  assert.ok(cell.includes(">12<"));
+  assert.ok(cell.includes(">12 · "));
   assert.ok(cell.includes("sm-pat is-focus"));
   assert.ok(cell.includes("sm-pat-n"));
   const aiPhrases = [

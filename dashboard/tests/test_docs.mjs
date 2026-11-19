@@ -10,14 +10,16 @@ const docsSource = fs.readFileSync(new URL("../static/js/docs.js", import.meta.u
 const cssSource = fs.readFileSync(new URL("../static/css/docs.css", import.meta.url), "utf8");
 const severityHTML = fs.readFileSync(new URL("../static/docs/severity.html", import.meta.url), "utf8");
 
-test("docs index restores liquid-flood cards without dc-index-head and doc shells drop dc-head, dc-switch", () => {
+test("docs index restores streamlined liquid-flood cards without dc-index-head or dc-foot clutter and adds top progress + return bar", () => {
   assert.ok(!docsSource.includes("dc-index-head"));
   assert.ok(!docsSource.includes("dc-head"));
   assert.ok(!docsSource.includes("dc-switch"));
   assert.ok(!docsSource.includes("dc-crumb"));
+  assert.ok(!docsSource.includes("dc-foot"));
   assert.ok(docsSource.includes("shader_flood"));
-  assert.ok(docsSource.includes("dc-foot"));
   assert.ok(docsSource.includes("dc-visual"));
+  assert.ok(docsSource.includes("dc-progress"));
+  assert.ok(docsSource.includes("dc-docbar"));
   assert.ok(!severityHTML.includes("p4-head"));
   assert.ok(!cssSource.includes("dc-index-head"));
   assert.ok(!cssSource.includes("dc-head"));
