@@ -82,8 +82,9 @@ test("system CSS styles the compact 5-tier SVG tree and tree-structured modal, r
   assert.ok(systemCss.includes(".fx-g-ph.is-hl"));
   assert.ok(systemCss.includes(".fx-g-col code"));
   assert.ok(systemCss.includes(".fx-toast"));
-  assert.ok(systemCss.includes(".fx-prog"));
-  assert.ok(systemCss.includes(".fx-clu-gear"));
+  assert.ok(systemCss.includes(".fx-root-fill"));
+  assert.ok(!systemCss.includes(".fx-clu-gear"));
+  assert.ok(!systemCss.includes(".fx-prog"));
   assert.ok(systemCss.includes(".fx-g-sum"));
   assert.ok(systemCss.includes(".sm-panel"));
   assert.ok(systemCss.includes(".sm-pat.is-focus"));
@@ -107,7 +108,8 @@ test("flowCard builds a compact 5-tier cluster tree with M{n} cells, dot leaves,
   assert.ok(html.includes('class="fx-tax-head"'));
   assert.ok(html.includes('class="fx-toasts"'));
   assert.ok(html.includes('id="fxPause"'));
-  assert.ok(html.includes('id="fxReplay"'));
+  assert.ok(html.includes('id="fxSpeed"'));
+  assert.ok(!html.includes('id="fxReplay"'));
   assert.ok(html.includes("fx-tn is-root"));
   assert.ok(html.includes("fx-tn is-phase"));
   assert.ok(html.includes("fx-tn is-stage"));
@@ -130,8 +132,9 @@ test("flowCard builds a compact 5-tier cluster tree with M{n} cells, dot leaves,
   }
   assert.ok(html.includes('<button type="button" class="fx-g-c'));
   assert.ok(html.includes('data-s="S9" data-m="M5"'));
-  assert.ok(html.includes('id="fxProg"'));
-  assert.ok(html.includes('class="fx-clu-gear"'));
+  assert.ok(html.includes('class="fx-root-fill"'));
+  assert.ok(!html.includes('id="fxProg"'));
+  assert.ok(!html.includes('fx-clu-gear'));
   assert.ok(html.includes('is-row-sum'));
   assert.ok(html.includes('is-col-sum'));
   assert.ok(html.includes('id="fxGrandSum"'));

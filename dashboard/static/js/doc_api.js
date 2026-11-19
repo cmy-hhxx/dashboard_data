@@ -33,9 +33,9 @@ export function apiDocHTML() {
   return `<div class="doc-shell api-shell">
     <aside class="doc-side">
       <div class="dc-side-head">
-        <button type="button" class="dc-back" data-back><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>全部文档</button>
+        <button type="button" class="dc-back" data-back aria-label="返回全部文档" title="返回全部文档"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <div class="doc-side-title">评测接口指南</div>
       </div>
-      <div class="doc-side-title">评测接口指南</div>
       <nav class="doc-toc" id="apiToc" aria-label="接口章节">
         <a href="#api-env"><span class="num">01</span><span>环境与链路</span></a>
         <a href="#api-rules"><span class="num">02</span><span>口径与协议</span></a>

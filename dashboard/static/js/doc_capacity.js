@@ -277,9 +277,9 @@ export function capacityDocHTML() {
   return `<div class="doc-shell cap-shell">
     <aside class="doc-side">
       <div class="dc-side-head">
-        <button type="button" class="dc-back" data-back><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>全部文档</button>
+        <button type="button" class="dc-back" data-back aria-label="返回全部文档" title="返回全部文档"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <div class="doc-side-title">容量与性能说明</div>
       </div>
-      <div class="doc-side-title">容量与性能说明</div>
       <nav class="doc-toc" id="capToc" aria-label="容量章节">
         <a href="#cap-baseline"><span class="num">01</span><span>口径与基准</span></a>
         <a href="#cap-cost"><span class="num">02</span><span>分阶段消耗</span></a>

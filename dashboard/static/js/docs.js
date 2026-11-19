@@ -6,8 +6,6 @@ import { capacityDocHTML, wireCapacityDoc, capacityCopyResolvers } from "./doc_c
 import { apiDocHTML, wireApiDoc, apiCopyResolvers } from "./doc_api.js";
 
 const ICON_ARROW = '<svg class="dc-arrow" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 8h9m-3.5-3.5L12.5 8 9 11.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-const ICON_BACK = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-const ICON_TOP = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 12.5V3.5M4.5 7 8 3.5 11.5 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 const DOCS = [
   {
@@ -73,23 +71,14 @@ function indexHTML() {
   </div>`;
 }
 
-function docChromeHTML(activeId) {
-  const tabs = DOCS.map((d) => `<a class="dc-docbar-tab" href="?view=docs&amp;doc=${d.id}" data-doc="${d.id}"${d.id === activeId ? ' aria-current="page"' : ""}>${esc(d.short)}</a>`).join("");
-  return `<div class="dc-progress" role="progressbar" aria-label="文档浏览进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i class="dc-progress-fill"></i></div>
-  <div class="dc-docbar">
-    <button type="button" class="dc-back" data-back>${ICON_BACK}<span>全部文档</span></button>
-    <nav class="dc-docbar-tabs" aria-label="切换文档">${tabs}</nav>
-    <span class="dc-docbar-pct num" aria-hidden="true">0%</span>
-    <button type="button" class="dc-top-btn" data-scroll-top aria-label="回到顶部" hidden>${ICON_TOP}<span>顶部</span></button>
-  </div>`;
+function docChromeHTML() {
+  return `<div class="dc-progress" role="progressbar" aria-label="文档浏览进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i class="dc-progress-fill"></i></div>`;
 }
 
 function wireDocProgress(root) {
   root._docProgressCleanup?.();
   const bar = $(".dc-progress", root);
   const fill = $(".dc-progress-fill", root);
-  const pctEl = $(".dc-docbar-pct", root);
-  const topBtn = $("[data-scroll-top]", root);
   if (!bar || !fill) return;
 
   let raf = 0;
@@ -102,8 +91,6 @@ function wireDocProgress(root) {
     const pct = Math.round(ratio * 100);
     fill.style.transform = `scaleX(${ratio.toFixed(4)})`;
     bar.setAttribute("aria-valuenow", String(pct));
-    if (pctEl) pctEl.textContent = `${pct}%`;
-    if (topBtn) topBtn.hidden = y < 220;
   };
   const onScroll = () => {
     if (!root.isConnected || !bar.isConnected) { root._docProgressCleanup?.(); return; }
@@ -393,11 +380,7 @@ export async function render(root, c) {
         root._nav?.({ view: "docs", doc: null });
         return;
       }
-      if (e.target.closest("[data-scroll-top]")) {
-        window.scrollTo({ top: 0, behavior: "smooth" });
-        return;
-      }
-      const card = e.target.closest(".dc-card[data-doc], .dc-docbar-tab[data-doc]");
+      const card = e.target.closest(".dc-card[data-doc]");
       if (card && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey && e.button === 0) {
         e.preventDefault();
         window.scrollTo({ top: 0, behavior: "instant" });

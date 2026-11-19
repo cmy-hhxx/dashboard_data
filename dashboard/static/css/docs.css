@@ -7,15 +7,15 @@
 .dc-doc { min-width: 0; max-width: 100%; }
 
 /* ------------------------------------------------------------------ 3-card index */
-.dc-stage { position: relative; isolation: isolate; }
+.dc-stage { position: relative; isolation: isolate; max-width: 980px; margin: var(--sp-3) auto 0; }
 .sf-canvas { position: absolute; inset: 0; z-index: 1; display: block; width: 100%; height: 100%; pointer-events: none; }
 .dc-grid {
   display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: 1fr;
   gap: var(--gap); align-items: stretch;
 }
 .dc-card {
-  position: relative; display: flex; min-width: 0; height: 100%; min-height: clamp(316px, 42vh, 380px);
-  padding: var(--sp-6); overflow: hidden; border-radius: var(--r-card); background: var(--card); color: var(--ink);
+  position: relative; display: flex; min-width: 0; height: 100%;
+  padding: var(--sp-5); overflow: hidden; border-radius: var(--r-card); background: var(--card); color: var(--ink);
   text-decoration: none; text-align: left; cursor: pointer;
   box-shadow: var(--shadow), inset 0 0 0 1px color-mix(in oklab, var(--ink) 7%, transparent);
   outline: none; -webkit-tap-highlight-color: transparent; touch-action: pan-y;
@@ -25,46 +25,46 @@
 .dc-card:focus-visible { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px var(--accent); }
 .dc-body {
   position: relative; z-index: 2; pointer-events: none;
-  display: grid; grid-template-rows: auto auto 1fr; gap: var(--sp-5); width: 100%; height: 100%;
+  display: grid; grid-template-rows: auto auto 1fr; gap: var(--sp-4); width: 100%; height: 100%;
 }
 .dc-top { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
 .dc-num { font: var(--w-medium) var(--fs-small)/1 var(--mono); color: var(--muted); transition: color 0.2s; }
-.dc-arrow { width: 16px; height: 16px; flex: none; color: var(--muted); transition: transform var(--snap), color 0.2s; }
+.dc-arrow { width: 15px; height: 15px; flex: none; color: var(--muted); transition: transform var(--snap), color 0.2s; }
 .dc-card:hover .dc-arrow { transform: translateX(3px); }
-.dc-card-head { display: grid; gap: var(--sp-2); align-content: start; }
+.dc-card-head { display: grid; gap: var(--sp-1); align-content: start; }
 .dc-title {
-  font-size: var(--fs-num-s); line-height: 1.3; font-weight: var(--w-title);
+  font-size: var(--fs-title); line-height: 1.3; font-weight: var(--w-title);
   letter-spacing: -0.015em; color: var(--ink); transition: color 0.2s;
 }
-.dc-desc { color: var(--ink-2); font-size: var(--fs-body); line-height: 1.55; transition: color 0.2s; }
+.dc-desc { color: var(--ink-2); font-size: var(--fs-small); line-height: 1.5; transition: color 0.2s; }
 
 /* Card focal visual zone */
 .dc-visual {
-  display: grid; align-content: center; gap: var(--sp-3); padding: var(--sp-5);
+  display: grid; align-content: center; gap: var(--sp-2); padding: var(--sp-4);
   border-radius: var(--r-well); background: var(--well);
   transition: background 0.2s, box-shadow 0.2s;
 }
-.dc-sev-scale { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--sp-3); }
-.dc-sev-col { display: grid; gap: var(--sp-2); align-content: center; text-align: left; }
-.dc-sev-col i { display: block; height: 10px; border-radius: 5px; background: var(--c); }
-.dc-sev-col b { font: var(--w-title) var(--fs-title)/1.2 var(--mono); color: var(--ink); transition: color 0.2s; }
+.dc-sev-scale { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--sp-2); }
+.dc-sev-col { display: grid; gap: 6px; align-content: center; text-align: left; }
+.dc-sev-col i { display: block; height: 8px; border-radius: 4px; background: var(--c); }
+.dc-sev-col b { font: var(--w-title) var(--fs-small)/1.2 var(--mono); color: var(--ink); transition: color 0.2s; }
 
-.dc-cap-preview { gap: var(--sp-4); }
+.dc-cap-preview { gap: var(--sp-3); }
 .dc-cap-kpi { display: flex; align-items: baseline; gap: var(--sp-2); }
-.dc-cap-kpi b { font-size: var(--fs-num-m); line-height: 1; font-weight: var(--w-light); letter-spacing: -0.025em; color: var(--ink); transition: color 0.2s; }
-.dc-cap-kpi em { font-style: normal; font-size: var(--fs-body); color: var(--muted); transition: color 0.2s; }
+.dc-cap-kpi b { font-size: var(--fs-num-s); line-height: 1; font-weight: var(--w-light); letter-spacing: -0.025em; color: var(--ink); transition: color 0.2s; }
+.dc-cap-kpi em { font-style: normal; font-size: var(--fs-small); color: var(--muted); transition: color 0.2s; }
 .dc-cap-pair {
   display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-3);
-  padding-top: var(--sp-3); border-top: 1px solid var(--well-2);
+  padding-top: var(--sp-2); border-top: 1px solid var(--well-2);
 }
-.dc-cap-pair > span { display: flex; align-items: baseline; gap: var(--sp-2); }
+.dc-cap-pair > span { display: flex; align-items: baseline; gap: 6px; }
 .dc-cap-pair em { font-style: normal; font-size: var(--fs-small); color: var(--muted); transition: color 0.2s; }
-.dc-cap-pair b { font-size: var(--fs-body); font-weight: var(--w-medium); color: var(--ink); transition: color 0.2s; }
+.dc-cap-pair b { font-size: var(--fs-small); font-weight: var(--w-medium); color: var(--ink); transition: color 0.2s; }
 
-.dc-api-preview { gap: var(--sp-3); }
-.dc-api-step { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: var(--sp-3); align-items: center; }
+.dc-api-preview { gap: var(--sp-2); }
+.dc-api-step { display: grid; grid-template-columns: 50px minmax(0, 1fr); gap: var(--sp-2); align-items: center; }
 .dc-api-step em {
-  display: inline-flex; justify-content: center; align-items: center; height: 22px; padding: 0 var(--sp-2);
+  display: inline-flex; justify-content: center; align-items: center; height: 20px; padding: 0 6px;
   border-radius: var(--r-chip); background: var(--card); color: var(--ink-2);
   font-style: normal; font: var(--w-medium) var(--fs-small)/1 var(--mono);
 }
@@ -99,7 +99,7 @@
   border-top-color: color-mix(in oklab, var(--dc-on) 18%, transparent);
 }
 
-/* ------------------------------------------------------------------ doc top progress bar & sticky return bar */
+/* ------------------------------------------------------------------ doc top progress bar */
 .dc-progress {
   position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 50;
   background: color-mix(in oklab, var(--ink) 7%, transparent); pointer-events: none;
@@ -108,48 +108,21 @@
   display: block; width: 100%; height: 100%; background: var(--accent);
   transform: scaleX(0); transform-origin: left center; transition: transform 60ms linear;
 }
-.dc-docbar {
-  position: sticky; top: 68px; z-index: 15;
-  display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap;
-  margin-bottom: var(--sp-4); padding: var(--sp-2) var(--sp-3);
-  border-radius: var(--r-card); background: color-mix(in oklab, var(--card) 92%, transparent);
-  border: 1px solid var(--well-2);
-  backdrop-filter: saturate(1.3) blur(10px); -webkit-backdrop-filter: saturate(1.3) blur(10px);
-}
-.dc-docbar-tabs { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
-.dc-docbar-tab {
-  display: inline-flex; align-items: center; height: 30px; padding: 0 var(--sp-3);
-  border-radius: var(--r-chip); color: var(--muted); font-size: var(--fs-small); font-weight: var(--w-medium);
-  text-decoration: none; transition: background var(--snap), color var(--snap);
-}
-.dc-docbar-tab:hover { background: var(--hover); color: var(--ink); }
-.dc-docbar-tab[aria-current="page"] { background: var(--ink); color: var(--card); }
-.dc-docbar-pct {
-  margin-left: auto; font: var(--w-medium) var(--fs-small)/1 var(--mono); color: var(--muted);
-  font-variant-numeric: tabular-nums;
-}
-.dc-top-btn {
-  display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 var(--sp-3);
-  border-radius: var(--r-ctl); background: var(--well); color: var(--ink-2);
-  font-size: var(--fs-small); font-weight: var(--w-medium);
-  transition: background var(--snap), color var(--snap), transform var(--snap);
-}
-.dc-top-btn[hidden] { display: none; }
-.dc-top-btn:hover { background: var(--well-2); color: var(--ink); }
-.dc-top-btn:active { transform: scale(0.97); }
-.dc-top-btn svg { width: 13px; height: 13px; }
 
 /* ------------------------------------------------------------------ shared doc shell & copy button */
 .doc-loading { border-radius: var(--r-card); background: var(--card); padding: var(--sp-6); border: 1px solid var(--well-2); }
-.dc-side-head { display: flex; align-items: center; }
+.dc-side-head {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding-bottom: var(--sp-3); border-bottom: 1px solid var(--well-2);
+}
 .dc-back {
-  display: inline-flex; align-items: center; gap: var(--sp-1); height: 32px;
-  padding: 0 var(--sp-3) 0 var(--sp-2); border-radius: var(--r-ctl);
-  background: var(--well); color: var(--ink-2); font-size: var(--fs-small); font-weight: var(--w-medium);
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 28px; height: 28px; padding: 0; border-radius: var(--r-chip);
+  background: var(--well); color: var(--ink-2);
   transition: background var(--snap), color var(--snap), transform var(--snap);
 }
 .dc-back:hover { background: var(--well-2); color: var(--ink); }
-.dc-back:active { transform: scale(0.97); }
+.dc-back:active { transform: scale(0.95); }
 .dc-back svg { width: 14px; height: 14px; }
 
 .dc-copy {
@@ -217,8 +190,7 @@
   border-radius: var(--r-card); background: var(--card); border: 1px solid var(--well-2);
 }
 .doc-side-title {
-  padding: var(--sp-1) var(--sp-3) var(--sp-3);
-  border-bottom: 1px solid var(--well-2);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   color: var(--ink); font-size: var(--fs-title); font-weight: var(--w-title);
 }
 .doc-toc { display: grid; gap: 2px; }
