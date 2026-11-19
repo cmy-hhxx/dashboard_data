@@ -523,25 +523,20 @@ function treeSVG(model, W = TREE_W) {
       ).join("");
       rootClip = `<defs>
         <clipPath id="fxRootClip"><rect x="${rx}" y="${ry}" width="236" height="44" rx="22"/></clipPath>
-        <linearGradient id="fxWaveGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" class="fx-wg-a"/>
-          <stop offset="68%" class="fx-wg-b"/>
-          <stop offset="100%" class="fx-wg-c"/>
+        <linearGradient id="fxLiquidSheen" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="#ffffff" stop-opacity="0.34"/>
+          <stop offset="55%" stop-color="#ffffff" stop-opacity="0.06"/>
+          <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
         </linearGradient>
         <linearGradient id="fxRootGloss" x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" stop-color="#ffffff" stop-opacity="0.34"/>
-          <stop offset="48%" stop-color="#ffffff" stop-opacity="0.04"/>
+          <stop offset="0%" stop-color="#ffffff" stop-opacity="0.42"/>
+          <stop offset="65%" stop-color="#ffffff" stop-opacity="0.06"/>
           <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
         </linearGradient>
         <linearGradient id="fxRootSweep" x1="0%" y1="0%" x2="100%" y2="0%">
           <stop offset="0%" stop-color="#ffffff" stop-opacity="0"/>
-          <stop offset="50%" stop-color="#ffffff" stop-opacity="0.32"/>
+          <stop offset="50%" stop-color="#ffffff" stop-opacity="0.38"/>
           <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
-        </linearGradient>
-        <linearGradient id="fxCrestGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" stop-color="#ffffff" stop-opacity="0.75"/>
-          <stop offset="50%" class="fx-cg-mid"/>
-          <stop offset="100%" stop-color="#ffffff" stop-opacity="0.65"/>
         </linearGradient>
       </defs>`;
       return `<g class="fx-tn is-root" ${at} data-rx="${rx}">
@@ -551,9 +546,10 @@ function treeSVG(model, W = TREE_W) {
             <path class="fx-wave-back" d="${waveBack}"/>
             <path class="fx-wave-mid" d="${waveMid}"/>
             <g class="fx-wave-front-wrap">
-              <path class="fx-wave-front" d="${waveFront}" fill="url(#fxWaveGrad)"/>
+              <path class="fx-wave-front" d="${waveFront}"/>
+              <path class="fx-wave-sheen" d="${waveFront}" fill="url(#fxLiquidSheen)"/>
               <path class="fx-wave-glow" d="${waveCrest}" fill="none"/>
-              <path class="fx-wave-crest" d="${waveCrest}" fill="none" stroke="url(#fxCrestGrad)"/>
+              <path class="fx-wave-crest" d="${waveCrest}" fill="none"/>
             </g>
             <g class="fx-bubbles" aria-hidden="true">${bubbles}</g>
           </g>

@@ -336,8 +336,9 @@ test("computeOptimalBudget, selectOptimalTree and buildReplaySchedule keep exact
   assert.ok(html.includes("<code>S3</code>"));
   assert.ok(html.includes("<code>M1</code>"));
   assert.ok(html.includes('data-tip="t"'));
-  assert.ok(html.includes('id="fxWaveGrad"'));
+  assert.ok(html.includes('id="fxLiquidSheen"'));
   assert.ok(html.includes('class="fx-wave-mid"'));
+  assert.ok(html.includes('class="fx-wave-sheen"'));
   assert.ok(html.includes('class="fx-wave-glow"'));
   assert.ok(html.includes('class="fx-bubble"'));
   assert.ok(html.includes('class="fx-root-gloss"'));
