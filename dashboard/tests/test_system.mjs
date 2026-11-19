@@ -5,10 +5,9 @@ import test from "node:test";
 globalThis.location = { search: "" };
 globalThis.window = {};
 const { timelineCardHTML } = await import("../static/js/system_timeline.js");
-const { flowCard, parseCellParam, cellSpecHTML } = await import("../static/js/system.js");
+const { flowCard, cellModalHTML } = await import("../static/js/system.js");
 const systemCss = fs.readFileSync(new URL("../static/css/system.css", import.meta.url), "utf8");
 const timelineSrc = fs.readFileSync(new URL("../static/js/system_timeline.js", import.meta.url), "utf8");
-const appSrc = fs.readFileSync(new URL("../static/js/app.js", import.meta.url), "utf8");
 
 const SAMPLE_TAX = {
   phases: [
@@ -43,64 +42,51 @@ const SAMPLE_PD = {
   },
 };
 
-test("timeline drops meta spans and removes 引文核对 section completely", () => {
+test("timeline speaks plain Chinese: no meta spans, stage ids, flags or 引文核对", () => {
   const html = timelineCardHTML();
-  assert.ok(!html.includes('class="meta"'));
-  assert.ok(!html.includes("tl-case-meta"));
-  assert.ok(!html.includes("tl-global-meta"));
-  assert.ok(!html.includes("引文核对"));
-  assert.ok(!html.includes("tl-ev"));
-  assert.ok(!timelineSrc.includes("tl-ev"));
-  assert.ok(!timelineSrc.includes("tl-case-meta"));
-  assert.ok(!timelineSrc.includes("tl-global-meta"));
+  for (const bad of ['class="meta"', "tl-case-meta", "tl-global-meta", "引文核对", "tl-ev", "attribution-", "--model-requests", "--concurrency", "verifiedCompact", ".jsonl"]) {
+    assert.ok(!html.includes(bad), `timeline html must not contain ${bad}`);
+    assert.ok(!timelineSrc.includes(bad), `timeline source must not contain ${bad}`);
+  }
+  assert.ok(html.includes('id="tl-pipe"'));
+  assert.ok(html.includes('id="tl-focus"'));
 });
 
-test("system CSS centers card-head, unifies fx-diagram, and drops tl-ev rules", () => {
+test("system CSS centers card-head, styles the board and the dialog, drops old tl rules", () => {
   assert.ok(systemCss.includes('.view[data-view="system"] .card-head'));
-  assert.ok(systemCss.includes("justify-content: center"));
+  assert.ok(systemCss.includes(".fx-board"));
+  assert.ok(systemCss.includes(".sm-panel"));
   assert.ok(!systemCss.includes(".tl-ev"));
-  assert.ok(!/\.fx-tax\s*\{[^}]*border-top:\s*1px\s+dashed/.test(systemCss));
+  assert.ok(!systemCss.includes(".tl-readout"));
+  assert.ok(!systemCss.includes(".sys-spec"));
 });
 
-test("flowCard merges 01-03 flow and 04 clustering explainer + clickable matrix in one fx-diagram", () => {
+test("flowCard stacks 01→04 vertically with a Galton board whose bins align with matrix columns", () => {
   const html = flowCard(SAMPLE_TAX, SAMPLE_PD);
   assert.ok(html.includes('id="fxDiagram"'));
-  assert.ok(html.includes('id="fxJunction"'));
+  assert.ok(html.includes('class="fx-sparks"'));
+  assert.ok(html.includes('id="fxBoard"'));
+  assert.equal((html.match(/class="fx-bin"/g) || []).length, SAMPLE_TAX.mechanisms.length);
   assert.ok(html.includes("fx-cl-how"));
-  assert.ok(html.includes("纵轴 · 定位发生环节"));
-  assert.ok(html.includes("横轴 · 判定失效机制"));
-  assert.ok(html.includes("格内 · 沉淀标准模式"));
+  assert.ok(!html.includes("Compact"));
   assert.ok(html.includes('<button type="button" class="fx-g-c'));
   assert.ok(html.includes('data-s="S9" data-m="M5"'));
-  assert.ok(html.includes('<button type="button" class="fx-g-row" data-s="S9"'));
-  assert.ok(html.includes('<button type="button" class="fx-g-col" data-m="M5"'));
 });
 
-test("cellSpecHTML renders complete L1/L2/L3/L4口径 for cell, stage, and mechanism", () => {
-  assert.equal(parseCellParam(SAMPLE_TAX, "S9.M5").code, "S9.M5");
+test("cellModalHTML explains a cell, a stage and a mechanism without leaving the page", () => {
+  const cell = cellModalHTML(SAMPLE_TAX, SAMPLE_PD, "S9", "M5", { pos: { i: 1, n: 2 } });
+  assert.ok(cell.includes("答案合成 × 加工计算错误"));
+  assert.ok(cell.includes("data-close"));
+  assert.ok(cell.includes('data-samples="S9|M5"'));
+  assert.ok(cell.includes('data-step="-1"'));
+  assert.ok(cell.includes("终稿整合或推算过程中的计算错误"));
+  assert.ok(cell.includes("公式或数量级算错"));
+  assert.ok(cell.includes("上游数据源本身错误"));
+  assert.ok(cell.includes("同比环比混算"));
+  assert.ok(cell.includes(">12<"));
 
-  const cellHtml = cellSpecHTML(SAMPLE_TAX, SAMPLE_PD, "S9.M5", "aime");
-  assert.ok(cellHtml.includes("data-sys-back"));
-  assert.ok(cellHtml.includes('data-open-samples="S9|M5"'));
-  assert.ok(cellHtml.includes("S9 答案合成 × M5 加工计算错误"));
-  assert.ok(cellHtml.includes("汇总全部依据并生成最终答复"));
-  assert.ok(cellHtml.includes("终稿整合或推算过程中的计算错误"));
-  assert.ok(cellHtml.includes("数值推算算错"));
-  assert.ok(cellHtml.includes("公式或数量级算错"));
-  assert.ok(cellHtml.includes("上游数据源本身错误"));
-  assert.ok(cellHtml.includes("S9.M5.3.1"));
-  assert.ok(cellHtml.includes("同比环比混算"));
-
-  const stageHtml = cellSpecHTML(SAMPLE_TAX, SAMPLE_PD, "S9", "aime");
-  assert.ok(stageHtml.includes("S9 答案合成"));
-  assert.ok(stageHtml.includes("S9.M5"));
-
-  const mechHtml = cellSpecHTML(SAMPLE_TAX, SAMPLE_PD, "M5", "aime");
-  assert.ok(mechHtml.includes("M5 加工计算错误"));
-  assert.ok(mechHtml.includes("S9.M5"));
-});
-
-test("app.js clears system cell param when switching tabs or re-clicking system tab", () => {
-  assert.ok(appSrc.includes("cell: null"));
-  assert.ok(appSrc.includes('button[data-value="system"]'));
+  const stage = cellModalHTML(SAMPLE_TAX, SAMPLE_PD, "S9", null);
+  assert.ok(stage.includes('data-cell="S9.M5"'));
+  const mech = cellModalHTML(SAMPLE_TAX, SAMPLE_PD, null, "M5");
+  assert.ok(mech.includes('data-cell="S9.M5"'));
 });

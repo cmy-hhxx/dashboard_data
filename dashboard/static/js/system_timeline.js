@@ -1,7 +1,8 @@
 /* 归因时序: embedded in the 评测体系 page after 证据闭环.
-   Two interactive blocks in one system card:
-   01 一条 Trace 的时间线 (Gantt + failure simulation + readout + 11-16 measured table)
-   02 整批怎么调度 (16-Trace discrete simulation + concurrency / model-request steppers) */
+   01 一条对话怎样被评完 — a Gantt that plays itself once it scrolls into view, a five-step stepper that
+      fills in sync with the playhead, a failure simulation and one plain-language focus panel.
+   02 一批对话怎样排队 — a 16-conversation simulation whose bars grow with the playhead.
+   Every label is plain Chinese: no stage ids, file paths or command-line flags. */
 import { $, $$, segmented, REDUCED } from "./core.js";
 
 const NS = "http://www.w3.org/2000/svg";
@@ -22,6 +23,14 @@ const GROUP_DUR = [30, 38, 26, 42];
 const DELIVERY_DUR = 36;
 const REWORK = { reject: 34, end: 70 };
 const TRACE_DUR = 5;
+
+const STEPS = [
+  { sec: "field", title: "逐项摘要", who: "模型" },
+  { sec: "compact", title: "拼装验收", who: "程序" },
+  { sec: "group", title: "组件调查", who: "模型" },
+  { sec: "trace", title: "写小结", who: "模型" },
+  { sec: "session", title: "组装成行", who: "程序" },
+];
 
 const clamp = (v, min, max) => (v < min ? min : v > max ? max : v);
 const fmtSec = (s) => `${Math.round(s)} s`;
@@ -45,101 +54,83 @@ function add(parent, tag, attrs, text) {
 const PLAY_SVG = `<svg class="i-play" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.5v9l7-4.5z" fill="currentColor"/></svg><svg class="i-pause" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.5h2v9H5zM9 3.5h2v9H9z" fill="currentColor"/></svg>`;
 
 export function timelineCardHTML() {
-  return `<article class="card tl-card" id="tlCard" style="--span:12" aria-label="归因时序说明">
-    <header class="card-head">
-      <h2>归因时序</h2>
-    </header>
+  return `<article class="card tl-card" id="tlCard" style="--span:12" aria-label="归因时序">
+    <header class="card-head"><h2>归因时序</h2></header>
 
     <div class="tl-sections">
-      <section class="tl-sec" aria-label="单条 Trace 的时间线">
+      <section class="tl-sec" aria-label="一条对话怎样被评完">
         <div class="tl-subhead">
-          <h3><span class="tl-num num">01</span>一条 Trace 的时间线</h3>
+          <h3><span class="tl-num num">01</span>一条对话怎样被评完</h3>
           <div class="tl-end">
             <div class="seg" id="tl-lens-seg" role="group" aria-label="视角">
               <span class="seg-knob" aria-hidden="true"></span>
               <button type="button" data-value="time" aria-pressed="true">看时序</button>
               <button type="button" data-value="fail" aria-pressed="false">模拟失败</button>
             </div>
-            <div class="tl-step"><span class="tl-step-k">工具链组</span><button type="button" id="tl-g-dec" aria-label="减少工具链组">−</button><b class="num" id="tl-v-g">2</b><button type="button" id="tl-g-inc" aria-label="增加工具链组">+</button></div>
-            <button class="tl-pill" id="tl-notool" type="button" aria-pressed="false">本轮没调工具</button>
-            <button class="tl-pill" id="tl-rework" type="button" aria-pressed="false">一次提交被退回</button>
-            <button class="icon-btn tl-play" id="tl-c-play" type="button" aria-pressed="false" aria-label="播放">${PLAY_SVG}</button>
+            <div class="tl-step"><span class="tl-step-k">调查组</span><button type="button" id="tl-g-dec" aria-label="减少调查组">−</button><b class="num" id="tl-v-g">2</b><button type="button" id="tl-g-inc" aria-label="增加调查组">+</button></div>
+            <button class="tl-pill" id="tl-notool" type="button" aria-pressed="false">没调工具</button>
+            <button class="tl-pill" id="tl-rework" type="button" aria-pressed="false">提交被退回</button>
+            <button class="tl-play" id="tl-c-play" type="button" aria-pressed="false" aria-label="播放">${PLAY_SVG}</button>
           </div>
         </div>
 
-        <div class="tl-pipe" aria-label="阶段顺序">
-          <div class="tl-pipe-step is-model"><b>① 字段摘要</b><span>模型 · 9 次并行，无工具</span></div>
-          <span class="tl-pipe-arrow" aria-hidden="true">→</span>
-          <div class="tl-pipe-step is-code"><b>② 拼装 + 验收</b><span>程序 · 写出 compact 行</span></div>
-          <span class="tl-pipe-arrow" aria-hidden="true">→</span>
-          <div class="tl-pipe-step is-model"><b>③ 组件调查</b><span>模型 · 每组 1 任务，带工具</span></div>
-          <span class="tl-pipe-arrow" aria-hidden="true">→</span>
-          <div class="tl-pipe-step is-model"><b>④ 小结</b><span>模型 · 1 次，写 summary</span></div>
-          <span class="tl-pipe-arrow" aria-hidden="true">→</span>
-          <div class="tl-pipe-step is-code"><b>⑤ 组装整行</b><span>程序 · 写出 attribution 行</span></div>
-        </div>
+        <ol class="tl-pipe" id="tl-pipe" aria-label="五个步骤">${STEPS.map((s, i) => `<li class="tl-pipe-step${s.who === "程序" ? " is-code" : ""}" data-sec="${s.sec}" style="--p:0">
+          <span class="tl-pipe-n num">${i + 1}</span>
+          <span class="tl-pipe-t"><b>${s.title}</b><em>${s.who}</em></span>
+          <i class="tl-pipe-bar" aria-hidden="true"></i>
+        </li>`).join("")}</ol>
 
-        <div class="tl-canvas-wrap"><svg class="tl-canvas" id="tl-c-canvas" role="img" aria-label="单条 Trace 的甘特图：字段摘要、拼装验收、组件调查、小结、组装整行"></svg></div>
+        <div class="tl-canvas-wrap" id="tl-c-wrap"><svg class="tl-canvas" id="tl-c-canvas" role="img" aria-label="一条对话的时间线：逐项摘要、拼装验收、组件调查、写小结、组装成行"></svg></div>
 
         <div class="tl-legend">
-          <span class="tl-lg"><i class="tl-sw model"></i>模型调用（已完成）</span>
-          <span class="tl-lg"><i class="tl-sw later"></i>模型调用（未完成）</span>
+          <span class="tl-lg"><i class="tl-sw model"></i>模型在写</span>
+          <span class="tl-lg"><i class="tl-sw later"></i>还没轮到</span>
           <span class="tl-lg"><i class="tl-sw code"></i>程序步骤</span>
-          <span class="tl-lg"><i class="tl-sw file"></i>写出文件</span>
-          <span class="tl-lg"><i class="tl-sw gate"></i>关口：等前面全部结束</span>
-          <span class="tl-lg"><i class="tl-sw wait"></i>等待关口</span>
+          <span class="tl-lg"><i class="tl-sw file"></i>写出结果</span>
+          <span class="tl-lg"><i class="tl-sw gate"></i>关口</span>
           <span class="tl-lg"><i class="tl-sw fail"></i>失败</span>
-          <span class="tl-lg"><i class="tl-sw blocked"></i>因上游失败不运行</span>
+          <span class="tl-lg"><i class="tl-sw blocked"></i>受牵连不再运行</span>
         </div>
 
-        <div class="tl-readout" aria-live="polite">
-          <div class="tl-ro"><span class="tl-ro-k">选中项</span><span class="tl-ro-v" id="tl-ro-obj">—</span></div>
-          <div class="tl-ro"><span class="tl-ro-k">阶段名</span><span class="tl-ro-v mono" id="tl-ro-stage">—</span></div>
-          <div class="tl-ro"><span class="tl-ro-k">执行方</span><span class="tl-ro-v" id="tl-ro-who">—</span></div>
-          <div class="tl-ro"><span class="tl-ro-k">前置条件</span><span class="tl-ro-v" id="tl-ro-dep">—</span></div>
-          <div class="tl-ro"><span class="tl-ro-k">工具与提交</span><span class="tl-ro-v" id="tl-ro-tools">—</span></div>
-          <div class="tl-ro"><span class="tl-ro-k">失败影响</span><span class="tl-ro-v" id="tl-ro-effect">—</span></div>
-        </div>
-        <div class="tl-outcome" id="tl-outcome" aria-live="polite"></div>
+        <div class="tl-focus" id="tl-focus" aria-live="polite"></div>
 
-        <div class="tl-table-wrap">
-          <table class="tl-table">
-            <thead><tr><th>阶段</th><th>每条 Trace 模型调用</th><th class="num">中位</th><th class="num">p90</th><th>关键特征（2026-11-16 · 34 条 Trace 实测）</th></tr></thead>
-            <tbody>
-              <tr><td><b>① 字段摘要</b> <code>attribution-compact-field</code></td><td>9（无工具时 7）</td><td class="num">~4 s</td><td class="num">~18 s</td><td>9 个同时发出，耗时取决于最慢字段 <code>components</code>（中位 ~18 s，p90 ~30 s）与 <code>execution_chain</code>（中位 ~14 s）。</td></tr>
-              <tr><td><b>③ 组件调查</b> <code>attribution-component</code></td><td>每组 1 个任务</td><td class="num">~36 s</td><td class="num">~66 s</td><td>平均每任务 ~3.8 次工具调用；各组同时跑，耗时取决于最慢的一组。</td></tr>
-              <tr><td><b>④ 小结</b> <code>attribution-trace</code></td><td>1</td><td class="num">~3–6 s</td><td class="num">—</td><td>不带工具，只写 summary（有标准答案时加 is_correct）。</td></tr>
-              <tr><td><b>② ⑤ 程序步骤</b> <code>compact / session</code></td><td>0</td><td class="num">≈0 s</td><td class="num">—</td><td>纯程序校验与拼装，不调模型。</td></tr>
-              <tr><td><b>整批 34 条 Trace</b></td><td>—</td><td class="num" colspan="2">147–208 s 墙钟</td><td>长尾由单次长生成或提交被退回后重写决定。</td></tr>
-            </tbody>
-          </table>
+        <div class="tl-facts">
+          <div class="tl-fact"><span>逐项摘要</span><b class="num">约 4 s</b><p>最慢的「组件」一项要 18 秒，它决定这一段有多长。</p></div>
+          <div class="tl-fact"><span>组件调查</span><b class="num">约 36 s</b><p>每组平均翻查原文 3.8 次，最慢的一组要 66 秒。</p></div>
+          <div class="tl-fact"><span>一批 34 条</span><b class="num">147–208 s</b><p>长尾来自一次很长的生成，或一次被退回后的重写。</p></div>
         </div>
       </section>
 
-      <section class="tl-sec" aria-label="整批调度">
+      <section class="tl-sec" aria-label="一批对话怎样排队">
         <div class="tl-subhead">
-          <h3><span class="tl-num num">02</span>整批怎么调度</h3>
+          <h3><span class="tl-num num">02</span>一批对话怎样排队</h3>
           <div class="tl-end">
-            <div class="tl-step"><span class="tl-step-k">并发 Trace</span><button type="button" data-tl-g="conc" data-d="-1" aria-label="减少并发 Trace">−</button><b class="num" id="tl-v-conc">6</b><button type="button" data-tl-g="conc" data-d="1" aria-label="增加并发 Trace">+</button></div>
-            <div class="tl-step"><span class="tl-step-k">请求上限</span><button type="button" data-tl-g="req" data-d="-2" aria-label="降低模型请求上限">−</button><b class="num" id="tl-v-req">12</b><button type="button" data-tl-g="req" data-d="2" aria-label="提高模型请求上限">+</button></div>
-            <button class="icon-btn tl-play" id="tl-g-play" type="button" aria-pressed="false" aria-label="播放">${PLAY_SVG}</button>
+            <div class="tl-step"><span class="tl-step-k">同时处理</span><button type="button" data-tl-g="conc" data-d="-1" aria-label="减少同时处理的对话">−</button><b class="num" id="tl-v-conc">6</b><button type="button" data-tl-g="conc" data-d="1" aria-label="增加同时处理的对话">+</button></div>
+            <div class="tl-step"><span class="tl-step-k">请求上限</span><button type="button" data-tl-g="req" data-d="-2" aria-label="降低请求上限">−</button><b class="num" id="tl-v-req">12</b><button type="button" data-tl-g="req" data-d="2" aria-label="提高请求上限">+</button></div>
+            <button class="tl-play" id="tl-g-play" type="button" aria-pressed="false" aria-label="播放">${PLAY_SVG}</button>
           </div>
         </div>
 
-        <div class="tl-canvas-wrap"><svg class="tl-canvas" id="tl-g-canvas" role="img" aria-label="整批调度：每条 Trace 的准入等待、字段摘要阶段、调查阶段与写出时刻"></svg></div>
+        <div class="tl-stats" id="tl-stats">
+          <div class="tl-stat"><span>整批用时</span><b class="num" data-stat="end">—</b></div>
+          <div class="tl-stat"><span>已写完</span><b class="num" data-stat="done">—</b></div>
+          <div class="tl-stat"><span>请求峰值</span><b class="num" data-stat="peak">—</b></div>
+        </div>
+
+        <div class="tl-canvas-wrap" id="tl-g-wrap"><svg class="tl-canvas" id="tl-g-canvas" role="img" aria-label="一批对话的排队情况：每条对话的等待、逐项摘要、组件调查与写完时刻"></svg></div>
 
         <div class="tl-legend">
-          <span class="tl-lg"><i class="tl-sw wait"></i>等准入（名额或缓冲已满）</span>
-          <span class="tl-lg"><i class="tl-sw compact"></i>① 字段摘要阶段</span>
-          <span class="tl-lg"><i class="tl-sw model"></i>③ 组件调查 + ④ 小结</span>
-          <span class="tl-lg"><i class="tl-sw end"></i>写出 attribution 行</span>
+          <span class="tl-lg"><i class="tl-sw wait"></i>排队等进场</span>
+          <span class="tl-lg"><i class="tl-sw compact"></i>逐项摘要</span>
+          <span class="tl-lg"><i class="tl-sw model"></i>组件调查与小结</span>
+          <span class="tl-lg"><i class="tl-sw end"></i>写完</span>
         </div>
 
         <div class="tl-rules">
-          <div class="tl-rule"><b>Trace 名额</b><span>最多 <code>--concurrency</code> 个同时在跑（默认 32），结束才让出名额。</span></div>
-          <div class="tl-rule"><b>单条 Trace 窗口</b><span>每条 Trace 最多同时 <code>--task-concurrency</code> 个任务（默认 12），9 个字段一次发齐。</span></div>
-          <div class="tl-rule"><b>全局请求上限</b><span>在飞模型请求不超过 <code>--model-requests</code>（默认 256）；缓冲低时字段优先，高时调查与小结优先。</span></div>
-          <div class="tl-rule"><b>compact 缓冲</b><span>已写 compact、未写 attribution 的 Trace 数上限 = <code>--compact-backlog</code>，Trace 结束或失败立即释放。</span></div>
+          <div class="tl-rule"><b>进场名额</b><span>同时最多处理固定数量的对话，一条写完才放下一条进场。</span></div>
+          <div class="tl-rule"><b>单条并行</b><span>每条对话最多同时跑 12 个任务，9 项摘要一次发齐。</span></div>
+          <div class="tl-rule"><b>请求总闸</b><span>全场同时在跑的模型请求有上限；排队少时先写摘要，多时先把调查做完。</span></div>
+          <div class="tl-rule"><b>缓冲区</b><span>已压缩、还没写完归因的对话有数量上限，写完或失败立刻腾位。</span></div>
         </div>
       </section>
     </div>
@@ -171,29 +162,23 @@ export function wireTimeline(root) {
       const skipped = S.noTool && field.toolOnly;
       const dur = skipped ? 0 : field.dur;
       compactAt = Math.max(compactAt, dur);
-      rows.push({
-        id: `f:${field.key}`, sec: "field", kind: skipped ? "skip" : "model",
-        label: field.label, key: field.key, start: 0, end: dur, field,
-      });
+      rows.push({ id: `f:${field.key}`, sec: "field", kind: skipped ? "skip" : "model", label: field.label, start: 0, end: dur, field });
     });
-    rows.push({ id: "compact", sec: "compact", kind: "code", label: "拼装 + 验收", key: "attribution-compact", start: compactAt, end: compactAt });
+    rows.push({ id: "compact", sec: "compact", kind: "code", label: "拼装验收", start: compactAt, end: compactAt });
     const groups = [];
     const g = S.noTool ? 0 : S.g;
-    for (let i = 0; i < g; i++) groups.push({ id: `g:${i}`, label: `工具链组 ${i + 1}`, key: `tool-chain #${i + 1}`, dur: GROUP_DUR[i] });
-    groups.push({ id: "g:delivery", label: "交付组", key: "delivery", dur: DELIVERY_DUR, delivery: true });
+    for (let i = 0; i < g; i++) groups.push({ id: `g:${i}`, label: `调查组 ${i + 1}`, dur: GROUP_DUR[i], n: i + 1 });
+    groups.push({ id: "g:delivery", label: "交付组", dur: DELIVERY_DUR, delivery: true });
     let settleAt = compactAt;
     groups.forEach((group) => {
       const rework = S.rework && group.delivery;
       const end = compactAt + (rework ? REWORK.end : group.dur);
       settleAt = Math.max(settleAt, end);
-      rows.push({
-        id: group.id, sec: "group", kind: "model", label: group.label, key: group.key,
-        start: compactAt, end, group, rework: rework ? compactAt + REWORK.reject : null, waitFrom: 0,
-      });
+      rows.push({ id: group.id, sec: "group", kind: "model", label: group.label, start: compactAt, end, group, rework: rework ? compactAt + REWORK.reject : null, waitFrom: 0 });
     });
-    rows.push({ id: "trace", sec: "trace", kind: "model", label: "写小结", key: "summary (+is_correct)", start: settleAt, end: settleAt + TRACE_DUR, waitFrom: 0 });
+    rows.push({ id: "trace", sec: "trace", kind: "model", label: "写小结", start: settleAt, end: settleAt + TRACE_DUR, waitFrom: 0 });
     const doneAt = settleAt + TRACE_DUR;
-    rows.push({ id: "session", sec: "session", kind: "code", label: "组装整行", key: "attribution-session", start: doneAt, end: doneAt });
+    rows.push({ id: "session", sec: "session", kind: "code", label: "组装成行", start: doneAt, end: doneAt });
     return { rows, compactAt, settleAt, doneAt, groups: groups.length };
   }
 
@@ -210,19 +195,19 @@ export function wireTimeline(root) {
   }
 
   const SECTIONS = {
-    field: { title: "① 字段摘要", stage: "attribution-compact-field", note: () => `模型 · ${S.noTool ? "7 次（2 个字段由程序判空）" : "9 次"} · 同时发出 · 无工具` },
-    compact: { title: "② 拼装 + 验收", stage: "attribution-compact", code: true, note: () => "程序 · 每个字段交回时逐项 verifiedCompact，全部通过后拼装" },
-    group: { title: "③ 组件调查", stage: "attribution-component", note: (P) => `模型 · ${P.groups} 个任务 · 同时发出 · 每个任务带工具，最多 4 次提交` },
-    trace: { title: "④ 小结", stage: "attribution-trace", note: () => "模型 · 1 次 · 无工具 · 问题列表由程序合并，不交给模型改" },
-    session: { title: "⑤ 组装整行", stage: "attribution-session", code: true, note: () => "程序 · 把 trace 结果组装成正式行" },
+    field: { title: "① 逐项摘要", note: () => `模型 · ${S.noTool ? "7 项同时写，另 2 项没调工具直接留空" : "9 项同时写"} · 不用工具` },
+    compact: { title: "② 拼装验收", note: () => "程序 · 每项交回就检查，全部通过后拼成压缩稿" },
+    group: { title: "③ 组件调查", note: (P) => `模型 · ${P.groups} 组同时深查 · 可翻原文、看图、算数 · 每组最多提交 4 次` },
+    trace: { title: "④ 写小结", note: () => "模型 · 一段话总结，问题清单由程序合并" },
+    session: { title: "⑤ 组装成行", note: () => "程序 · 组装成最终的归因结果" },
   };
 
-  const cBoard = { root: $("#tl-c-canvas", host), P: null, geo: null, playhead: null, rowNodes: {} };
+  const cBoard = { root: $("#tl-c-canvas", host), P: null, geo: null, playhead: null, rowNodes: {}, gates: [], ranges: {} };
 
   function caseGeo(P) {
-    const L = 300;
+    const L = 168;
     const R = VB_W - 16;
-    const tmax = Math.ceil((P.doneAt * 1.18 + 4) / 10) * 10;
+    const tmax = Math.ceil((P.doneAt * 1.12 + 4) / 10) * 10;
     return { L, R, tmax, x: (t) => L + ((R - L) * t) / tmax };
   }
 
@@ -233,14 +218,14 @@ export function wireTimeline(root) {
     }
     S.sel = id;
     refreshCase();
+    syncFocus();
   }
 
   function drawRow(layer, row, y, rowH, geo) {
-    const node = add(layer, "g", { class: "row", tabindex: "0", role: "button", "aria-label": `${row.label} ${row.key}` });
+    const node = add(layer, "g", { class: "row", tabindex: "0", role: "button", "aria-label": row.label });
     cBoard.rowNodes[row.id] = { node, row };
-    add(node, "rect", { x: 0, y, width: VB_W, height: rowH, class: "row-hit" });
+    add(node, "rect", { x: 0, y, width: VB_W, height: rowH, rx: 6, class: "row-hit" });
     add(node, "text", { x: 24, y: y + 15, class: "row-label" }, row.label);
-    add(node, "text", { x: 112, y: y + 15, class: "row-key" }, row.kind === "code" ? "" : row.key);
     const midY = y + rowH / 2;
     if (row.waitFrom !== undefined && row.start > 0) {
       add(node, "line", { x1: geo.x(row.waitFrom), y1: midY, x2: geo.x(row.start) - 2, y2: midY, class: "wait-line" });
@@ -248,44 +233,39 @@ export function wireTimeline(root) {
     if (row.kind === "model") {
       const x0 = geo.x(row.start);
       const x1 = geo.x(row.end);
-      add(node, "rect", { x: x0, y: midY - 6, width: Math.max(3, x1 - x0), height: 12, rx: 3, class: "bar-model" });
-      const done = add(node, "rect", { x: x0, y: midY - 6, width: 0, height: 12, rx: 3, class: "bar-model-done" });
-      row._done = done;
+      add(node, "rect", { x: x0, y: midY - 6, width: Math.max(3, x1 - x0), height: 12, rx: 6, class: "bar-model" });
+      row._done = add(node, "rect", { x: x0, y: midY - 6, width: 0, height: 12, rx: 6, class: "bar-model-done" });
       if (row.sec === "group") {
-        const calls = [0.15, 0.32, 0.5, 0.68];
         const firstEnd = row.rework !== null ? row.rework : row.end;
-        calls.forEach((f) => {
+        [0.15, 0.32, 0.5, 0.68].forEach((f) => {
           const tx = geo.x(row.start + (firstEnd - row.start) * f * 0.92);
           add(node, "line", { x1: tx, y1: midY - 6, x2: tx, y2: midY + 6, class: "bar-tick" });
         });
         if (row.rework !== null) {
           const rx = geo.x(row.rework);
           add(node, "line", { x1: rx, y1: midY - 9, x2: rx, y2: midY + 9, class: "bar-reject" });
-          add(node, "text", { x: geo.x(row.end) + 40, y: y + 15, class: "reject-label" }, "红线处第 1 次提交被退回，工具预算 +3，重新调查");
+          add(node, "text", { x: geo.x(row.end) + 44, y: y + 15, class: "reject-label" }, "第 1 次提交被退回，多给 3 次查询额度重查");
           [0.2, 0.42, 0.64].forEach((f) => {
             const tx = geo.x(row.rework + (row.end - row.rework) * f);
             add(node, "line", { x1: tx, y1: midY - 6, x2: tx, y2: midY + 6, class: "bar-tick" });
           });
         }
       }
-      add(node, "text", { x: x1 + 6, y: y + 15, class: "dur" }, fmtSec(row.end - row.start));
+      add(node, "text", { x: x1 + 8, y: y + 15, class: "dur" }, fmtSec(row.end - row.start));
     } else if (row.kind === "skip") {
       const sx = geo.x(0);
       add(node, "path", { d: `M${sx},${midY - 5} l5,5 l-5,5 l-5,-5 z`, class: "code-mark" });
-      add(node, "text", { x: sx + 10, y: y + 15, class: "skip-label" }, "程序跳过：本轮没有工具调用，直接给空值");
+      add(node, "text", { x: sx + 12, y: y + 15, class: "skip-label" }, "没调工具，这一项直接留空");
     } else {
       const cx = geo.x(row.start);
       add(node, "path", { d: `M${cx},${midY - 6} l6,6 l-6,6 l-6,-6 z`, class: "code-mark" });
-      const label = row.id === "compact" ? "程序拼装 compact，不调模型" : "程序组装，不调模型";
-      add(node, "text", { x: cx + 12, y: y + 15, class: "code-label" }, label);
       const isCompact = row.id === "compact";
-      const file = isCompact
-        ? { id: "file:compact", name: "写出 <model>/compact/<model>_compact-<batch>.jsonl" }
-        : { id: "file:attr", name: "写出 <model>/<model>_attribution-<batch>.jsonl" };
+      add(node, "text", { x: cx + 12, y: y + 15, class: "code-label" }, isCompact ? "程序拼装，不调模型" : "程序组装，不调模型");
+      const file = isCompact ? { id: "file:compact", name: "写出压缩稿" } : { id: "file:attr", name: "写出归因结果" };
       const fnode = add(layer, "g", { class: "row" });
       cBoard.rowNodes[file.id] = { node: fnode, row: { id: file.id }, passive: true };
       if (isCompact) {
-        const fx = cx + 12 + 186;
+        const fx = cx + 150;
         add(fnode, "rect", { x: fx, y: midY - 7, width: 10, height: 13, rx: 2, class: "file-mark" });
         add(fnode, "text", { x: fx + 16, y: y + 15, class: "file-label" }, file.name);
       } else {
@@ -301,111 +281,107 @@ export function wireTimeline(root) {
 
   function metaOf(id) {
     if (id.startsWith("f:")) {
-      const key = id.slice(2);
-      const field = FIELDS.find((f) => f.key === key);
+      const field = FIELDS.find((f) => f.key === id.slice(2));
       const skipped = S.noTool && field.toolOnly;
       return {
-        obj: `${field.label}（${field.key}）`,
-        stage: "attribution-compact-field",
-        who: skipped ? "程序：无工具调用直接判空" : `模型：单轮调用，${field.session ? "整场范围" : "本轮范围"}`,
-        dep: "Trace 启动即 9 个字段同时发出",
-        tools: "无工具；提交不合格可返工",
-        effect: "整条 Trace 终止：两份文件都不写",
+        title: `摘要 · ${field.label}`,
+        who: skipped ? "程序" : "模型",
+        what: skipped ? "这一轮没调工具，这一项直接留空，不调模型。" : `读${field.session ? "整场对话" : "这一轮"}的原文，写出「${field.label}」这一项摘要，不用工具。`,
+        when: "对话一进场，9 项同时开始。",
+        fail: "整条对话停下，压缩稿和归因结果都不写。",
       };
     }
     if (id === "compact") {
-      return {
-        obj: "拼装 Compact", stage: "attribution-compact", who: "程序（不调模型）",
-        dep: "9 个字段全部交回并通过 verifiedCompact",
-        tools: "—", effect: "写出 compact 行，开启分组调查",
-      };
+      return { title: "拼装验收", who: "程序", what: "每交回一项就检查一次，9 项全部通过后拼成一份压缩稿。", when: "9 项摘要全部交回（关口 1）。", fail: "缺任何一项都拼不成，整条对话停下。" };
     }
     if (id.startsWith("g:")) {
       const delivery = id === "g:delivery";
       return {
-        obj: delivery ? "交付组：核查终稿" : "工具链组：按调用图合并的一条调用链",
-        stage: "attribution-component",
-        who: "模型：每组 1 个任务；组由程序划分",
-        dep: "关口 1：Compact 已拼装并验收",
-        tools: "read_trace / search_trace / view_image / calculate / execute_code / read_artifact；初始 4 次，退回 +3，最多 4 次提交",
-        effect: "仅该组无结果：小结标注“评测覆盖不完整”，两份文件照写",
+        title: delivery ? "交付组 · 核查最终回答" : `调查组 ${Number(id.slice(2)) + 1} · 沿一条调用链深查`,
+        who: "模型",
+        what: "可以翻原文、搜关键词、看图、算数、跑代码；每组最多提交 4 次，被退回会多给 3 次查询额度。",
+        when: "压缩稿通过后（关口 1），各组同时开始。",
+        fail: "只缺这一组的结论，小结里注明「覆盖不完整」，两份结果照常写出。",
       };
     }
     if (id === "trace") {
-      return {
-        obj: "本条 trace 小结", stage: "attribution-trace",
-        who: "模型：1 次调用，只写 summary",
-        dep: "关口 2：所有调查组结束（含失败）",
-        tools: "无工具；问题列表由程序合并",
-        effect: "attribution 行写不出；compact 行已在关口 1 写出",
-      };
+      return { title: "写小结", who: "模型", what: "用一段话总结这条对话的问题；问题清单由程序合并，模型不改动。", when: "所有调查组都结束（关口 2），失败的也算结束。", fail: "归因结果写不出，但压缩稿已写好；下次重跑整条。" };
     }
     if (id === "session") {
+      return { title: "组装成行", who: "程序", what: "把小结和问题清单组装成最终的归因结果，并放出进场名额。", when: "小结写完。", fail: "—" };
+    }
+    if (id === "file:compact") return { title: "压缩稿", who: "程序", what: "把 9 项摘要写成一份压缩稿，供组件调查使用。", when: "关口 1 通过。", fail: "—" };
+    return { title: "归因结果", who: "程序", what: "写出这条对话最终的归因结果。", when: "组装完成。", fail: "—" };
+  }
+
+  function outcomeOf() {
+    const P = cBoard.P;
+    const f = S.fail;
+    if (S.lens === "fail" && !f) return { cls: "", text: "点图里任意一条实心条，看它失败后哪些步骤还会跑、哪份结果还能写出。" };
+    if (!f) {
       return {
-        obj: "组装正式行", stage: "attribution-session", who: "程序（不调模型）",
-        dep: "小结完成", tools: "—", effect: "写出 attribution 行，释放 Trace 名额",
+        cls: "",
+        text: `时间主要花在两段：先等最慢的一项摘要「组件」（约 ${fmtSec(P.compactAt)}），再等最慢的一组调查（约 ${fmtSec(P.settleAt - P.compactAt)}）。${S.rework ? "交付组第一次提交被退回，整条对话被明显拖长。" : ""}`,
       };
     }
-    if (id === "file:compact") return { obj: "compact 文件", stage: "<model>_compact-<batch>.jsonl", who: "程序写盘", dep: "关口 1", tools: "—", effect: "—" };
-    return { obj: "attribution 文件", stage: "<model>_attribution-<batch>.jsonl", who: "程序写盘", dep: "组装整行", tools: "—", effect: "—" };
+    if (f.startsWith("f:")) return { cls: "is-bad", text: "一项摘要失败：压缩稿拼不成，后面的调查、小结、组装全部停下，两份结果都不写，下次整条重跑。" };
+    if (f.startsWith("g:")) return { cls: "is-warn", text: "一组调查失败：其余各组和小结照常进行，小结里注明「覆盖不完整」，两份结果照常写出。" };
+    return { cls: "is-bad", text: "小结失败：归因结果写不出，但压缩稿已经写好；下次重跑整条。" };
   }
 
-  function syncReadout() {
+  function syncFocus() {
+    const node = $("#tl-focus", host);
+    if (!node) return;
     const m = S.sel ? metaOf(S.sel) : null;
-    $("#tl-ro-obj", host).textContent = m ? m.obj : "点任意一行";
-    $("#tl-ro-stage", host).textContent = m ? m.stage : "—";
-    $("#tl-ro-who", host).textContent = m ? m.who : "—";
-    $("#tl-ro-dep", host).textContent = m ? m.dep : "—";
-    $("#tl-ro-tools", host).textContent = m ? m.tools : "—";
-    const eff = $("#tl-ro-effect", host);
-    eff.textContent = m ? m.effect : "—";
-    eff.className = `tl-ro-v${m && S.sel === S.fail ? " is-bad" : ""}`;
+    const o = outcomeOf();
+    node.innerHTML = `<div class="tl-focus-main">${m
+      ? `<div class="tl-focus-head"><b>${m.title}</b><span class="tl-chip${m.who === "程序" ? " is-code" : ""}">${m.who}</span></div>
+         <dl class="tl-focus-dl">
+           <div><dt>做什么</dt><dd>${m.what}</dd></div>
+           <div><dt>等谁</dt><dd>${m.when}</dd></div>
+           <div><dt>出错时</dt><dd class="${S.sel === S.fail ? "is-bad" : ""}">${m.fail}</dd></div>
+         </dl>`
+      : `<div class="tl-focus-head"><b>点图里任意一行</b></div>`}</div>
+      <p class="tl-outcome${o.cls ? ` ${o.cls}` : ""}">${o.text}</p>`;
   }
 
-  function syncOutcome() {
-    const P = cBoard.P;
-    const node = $("#tl-outcome", host);
-    const f = S.fail;
-    let text;
-    let cls = "";
-    if (S.lens === "fail" && !f) {
-      text = "点甘特图中的任意模型调用（实心条），查看它失败后哪些步骤还会运行、哪份文件还会写出。";
-    } else if (!f) {
-      text = `时间集中在两段：① 等最慢字段 components（约 ${fmtSec(P.compactAt)}），③ 等最慢调查组（约 ${fmtSec(P.settleAt - P.compactAt)}）。${S.rework ? " 交付组第 1 次提交被退回重写，拖长整条 Trace。" : ""}`;
-    } else if (f.startsWith("f:")) {
-      cls = "is-bad";
-      text = "字段失败：Compact 无法拼装，后续调查、小结、组装全部停止，两份文件都不写；下次续跑整条重评。";
-    } else if (f.startsWith("g:")) {
-      cls = "is-warn";
-      text = "单组调查失败：其余组与小结照常运行，summary 加上“评测覆盖不完整：部分组件调查未完成；”，两份文件照常写出。";
-    } else {
-      cls = "is-bad";
-      text = "小结失败：attribution 行写不出，但 compact 行已在关口 1 写出；下次续跑会整条重评。";
-    }
-    node.textContent = text;
-    node.className = `tl-outcome${cls ? ` ${cls}` : ""}`;
-  }
-
+  /* Per frame: bar fills, running rows, playhead, gates and the stepper. */
   function refreshCase() {
     const { geo } = cBoard;
     Object.entries(cBoard.rowNodes).forEach(([id, entry]) => {
       const { row } = entry;
       const state = statusOf(row);
-      const cls = `row${state !== "ok" ? ` is-${state}` : ""}${S.sel === id ? " is-sel" : ""}`;
-      entry.node.setAttribute("class", cls);
+      let running = false;
       if (row._done) {
         const w = clamp(geo.x(Math.min(S.t, row.end)) - geo.x(row.start), 0, geo.x(row.end) - geo.x(row.start));
         row._done.setAttribute("width", String(Math.max(0, w)));
+        running = state !== "blocked" && S.t >= row.start && S.t < row.end && (S.playing || S.t < cBoard.P.doneAt);
       }
+      const cls = `row${state !== "ok" ? ` is-${state}` : ""}${S.sel === id ? " is-sel" : ""}${running ? " is-run" : ""}`;
+      entry.node.setAttribute("class", cls);
     });
+    cBoard.gates.forEach((g) => g.node.setAttribute("class", `gate-g${S.t >= g.t ? " is-passed" : ""}`));
+
     const ph = cBoard.playhead;
     ph.textContent = "";
-    add(ph, "line", { x1: 0, y1: cBoard.top - 4, x2: 0, y2: cBoard.height - 26 });
-    add(ph, "path", { d: "M-4,0 L4,0 L0,6 z", transform: `translate(0,${cBoard.top - 6})` });
+    add(ph, "line", { x1: 0, y1: cBoard.top - 2, x2: 0, y2: cBoard.height - 26 });
+    add(ph, "rect", { x: -22, y: 1, width: 44, height: 18, rx: 9 });
+    add(ph, "text", { x: 0, y: 14, "text-anchor": "middle" }, fmtSec(S.t));
     ph.setAttribute("transform", `translate(${geo.x(S.t).toFixed(1)},0)`);
 
-    syncReadout();
-    syncOutcome();
+    $$(".tl-pipe-step", host).forEach((li) => {
+      const r = cBoard.ranges[li.dataset.sec];
+      if (!r) return;
+      const p = r.end > r.start ? clamp((S.t - r.start) / (r.end - r.start), 0, 1) : (S.t >= r.start ? 1 : 0);
+      li.style.setProperty("--p", p.toFixed(3));
+      const blocked = r.rows.every((row) => statusOf(row) === "blocked");
+      const failed = r.rows.some((row) => statusOf(row) === "fail");
+      li.classList.toggle("is-done", p >= 1 && !blocked);
+      li.classList.toggle("is-now", p > 0 && p < 1);
+      li.classList.toggle("is-blocked", blocked);
+      li.classList.toggle("is-fail", failed);
+      li.classList.toggle("is-sel", r.rows.some((row) => row.id === S.sel));
+    });
   }
 
   function renderCase() {
@@ -417,16 +393,20 @@ export function wireTimeline(root) {
     const svgRoot = cBoard.root;
     svgRoot.textContent = "";
     cBoard.rowNodes = {};
+    cBoard.gates = [];
+    cBoard.ranges = {};
     const layer = add(svgRoot, "g", {});
-    const top = 26;
-    const secH = 24;
+    const top = 30;
+    const secH = 26;
     const rowH = 22;
     let y = top;
     const layout = [];
     ["field", "compact", "group", "trace", "session"].forEach((sec) => {
       layout.push({ type: "sec", sec, y });
       y += secH;
-      P.rows.forEach((row) => { if (row.sec === sec) { layout.push({ type: "row", row, y }); y += rowH; } });
+      const rows = P.rows.filter((row) => row.sec === sec);
+      rows.forEach((row) => { layout.push({ type: "row", row, y }); y += rowH; });
+      cBoard.ranges[sec] = { rows, start: Math.min(...rows.map((r) => r.start)), end: Math.max(...rows.map((r) => r.end)) };
       y += 6;
     });
     const height = y + 34;
@@ -434,47 +414,50 @@ export function wireTimeline(root) {
 
     for (let t = 0; t <= geo.tmax; t += 10) {
       const gx = geo.x(t);
-      add(layer, "line", { x1: gx, y1: top - 4, x2: gx, y2: height - 26, class: "grid-line" });
-      add(layer, "text", { x: gx, y: 14, "text-anchor": "middle", class: "axis-label" }, `${t} s`);
+      add(layer, "line", { x1: gx, y1: top - 2, x2: gx, y2: height - 26, class: "grid-line" });
+      add(layer, "text", { x: gx, y: height - 10, "text-anchor": "middle", class: "axis-label" }, `${t} s`);
     }
 
     const secY = {};
     layout.forEach((item) => { if (item.type === "sec") secY[item.sec] = item.y; });
     const gate = (t, label, yTop) => {
+      const g = add(layer, "g", { class: "gate-g" });
       const gx = geo.x(t);
-      add(layer, "line", { x1: gx, y1: yTop, x2: gx, y2: height - 26, class: "gate" });
-      add(layer, "text", { x: gx + 5, y: height - 12, class: "gate-label" }, label);
+      add(g, "line", { x1: gx, y1: yTop, x2: gx, y2: height - 26, class: "gate" });
+      add(g, "text", { x: gx + 6, y: height - 30, class: "gate-label" }, label);
+      cBoard.gates.push({ t, node: g });
     };
-    gate(P.compactAt, "关口 1：9 个字段全部交回并验收", secY.compact);
-    gate(P.settleAt, "关口 2：所有组结束（成功或失败）", secY.trace);
 
     layout.forEach((item) => {
       if (item.type === "sec") {
         const sec = SECTIONS[item.sec];
-        add(layer, "rect", { x: 0, y: item.y + 2, width: VB_W, height: secH - 4, rx: 6, class: "sec-bg" });
-        add(layer, "text", { x: 10, y: item.y + 16, class: "sec-title" }, sec.title);
-        add(layer, "text", { x: 96, y: item.y + 16, class: `sec-stage${sec.code ? " is-code" : ""}` }, sec.stage);
-        add(layer, "text", { x: geo.L + 4, y: item.y + 16, class: "sec-note" }, sec.note(P));
+        add(layer, "rect", { x: 0, y: item.y + 3, width: VB_W, height: secH - 6, rx: 8, class: "sec-bg" });
+        add(layer, "text", { x: 12, y: item.y + 17, class: "sec-title" }, sec.title);
+        add(layer, "text", { x: geo.L + 4, y: item.y + 17, class: "sec-note" }, sec.note(P));
         return;
       }
       drawRow(layer, item.row, item.y, rowH, geo);
     });
+    gate(P.compactAt, "关口 1 · 9 项摘要全部通过", secY.compact);
+    gate(P.settleAt, "关口 2 · 所有调查组都结束", secY.trace);
 
     cBoard.playhead = add(svgRoot, "g", { class: "playhead" });
     cBoard.height = height;
     cBoard.top = top;
-    if (still || wasEnd) S.t = P.doneAt;
+    if (still || (wasEnd && !S.playing)) S.t = P.doneAt;
     S.t = clamp(S.t, 0, P.doneAt);
     $("#tl-v-g", host).textContent = S.noTool ? "0" : String(S.g);
     $("#tl-g-dec", host).disabled = S.noTool || S.g <= 0;
     $("#tl-g-inc", host).disabled = S.noTool || S.g >= 4;
     refreshCase();
+    syncFocus();
   }
 
   function stopCase() {
     S.playing = false;
     setPlay($("#tl-c-play", host), false);
     if (rafC) { cancelAnimationFrame(rafC); rafC = 0; }
+    if (cBoard.P) refreshCase();
   }
 
   let lastCaseTick = 0;
@@ -482,15 +465,22 @@ export function wireTimeline(root) {
     if (!S.playing || !host.isConnected) { rafC = 0; return; }
     const dt = Math.min(0.05, (now - (lastCaseTick || now)) / 1000);
     lastCaseTick = now;
-    S.t += (dt * cBoard.P.doneAt) / 8;
+    S.t += (dt * cBoard.P.doneAt) / 7;
     if (S.t >= cBoard.P.doneAt) {
       S.t = cBoard.P.doneAt;
-      refreshCase();
       stopCase();
       return;
     }
     refreshCase();
     rafC = requestAnimationFrame(caseTick);
+  }
+  function playCase(fromStart) {
+    if (still) return;
+    if (fromStart || S.t >= cBoard.P.doneAt) S.t = 0;
+    S.playing = true;
+    lastCaseTick = 0;
+    setPlay($("#tl-c-play", host), true);
+    if (!rafC) rafC = requestAnimationFrame(caseTick);
   }
 
   const lensEl = $("#tl-lens-seg", host);
@@ -499,6 +489,7 @@ export function wireTimeline(root) {
       S.lens = v;
       if (v !== "fail") S.fail = null;
       refreshCase();
+      syncFocus();
     });
     requestAnimationFrame(() => seg.set("time", { silent: true }));
   }
@@ -526,14 +517,18 @@ export function wireTimeline(root) {
     e.currentTarget.setAttribute("aria-pressed", String(S.rework));
     if (S.rework) S.sel = "g:delivery";
     renderCase();
+    playCase(true);
   });
-  $("#tl-c-play", host)?.addEventListener("click", (e) => {
+  $("#tl-c-play", host)?.addEventListener("click", () => {
     if (S.playing) { stopCase(); return; }
-    if (S.t >= cBoard.P.doneAt) S.t = 0;
-    S.playing = true;
-    lastCaseTick = 0;
-    setPlay(e.currentTarget, true);
-    rafC = requestAnimationFrame(caseTick);
+    playCase(false);
+  });
+  $("#tl-pipe", host)?.addEventListener("click", (e) => {
+    const li = e.target.closest(".tl-pipe-step");
+    const r = li && cBoard.ranges[li.dataset.sec];
+    if (!r || !r.rows.length) return;
+    const first = r.rows.find((row) => row.kind === "model") || r.rows[0];
+    pick(first.id);
   });
   cBoard.root?.addEventListener("pointerdown", (e) => {
     if (e.target.closest(".row")) return;
@@ -541,12 +536,12 @@ export function wireTimeline(root) {
     const vx = (e.clientX - rect.left) * (VB_W / rect.width);
     const { geo } = cBoard;
     if (vx < geo.L - 4) return;
-    stopCase();
+    if (S.playing) { S.playing = false; setPlay($("#tl-c-play", host), false); }
     S.t = clamp(((vx - geo.L) / (geo.R - geo.L)) * geo.tmax, 0, cBoard.P.doneAt);
     refreshCase();
   });
 
-  /* 02 · 整批调度 */
+  /* 02 · 一批对话怎样排队 */
   function rng(seed) {
     let s = seed;
     return () => {
@@ -635,15 +630,33 @@ export function wireTimeline(root) {
     return { cases, end: t, samples };
   }
 
-  const gBoard = { root: $("#tl-g-canvas", host), playhead: null };
+  const gBoard = { root: $("#tl-g-canvas", host), playhead: null, rows: [], clip: null };
 
   function paintGlobal() {
     const { data } = G;
+    const t = G.t;
+    const x = gBoard.x;
+    gBoard.rows.forEach((r) => {
+      const { cs } = r;
+      if (r.wait) r.wait.setAttribute("x2", x(clamp(t, 0, cs.admit)).toFixed(1));
+      const compW = t <= cs.admit ? 0 : Math.max(t >= cs.compactAt ? 2 : 0, x(Math.min(t, cs.compactAt)) - x(cs.admit));
+      const attrW = t <= cs.compactAt ? 0 : Math.max(t >= cs.end ? 2 : 0, x(Math.min(t, cs.end)) - x(cs.compactAt));
+      r.comp.setAttribute("width", compW.toFixed(1));
+      r.attr.setAttribute("width", attrW.toFixed(1));
+      r.end.setAttribute("class", `g-end${t >= cs.end - 1e-6 ? " is-on" : ""}`);
+    });
+    gBoard.clip.setAttribute("width", Math.max(0, x(t) - gBoard.L + 1).toFixed(1));
+    const landed = data.cases.filter((cs) => cs.end <= t + 1e-6).length;
+    const peak = data.samples.reduce((m, s) => (s[0] <= t ? Math.max(m, s[1]) : m), 0);
+    const stat = (k, v) => { const el = $(`[data-stat="${k}"]`, host); if (el) el.textContent = v; };
+    stat("end", fmtSec(data.end));
+    stat("done", `${landed} / ${G.total}`);
+    stat("peak", `${peak} / ${G.req}`);
     const ph = gBoard.playhead;
     ph.textContent = "";
-    if (!G.play && G.t >= data.end - 1e-6) return;
+    if (!G.play && t >= data.end - 1e-6) return;
     add(ph, "line", { x1: 0, y1: 14, x2: 0, y2: gBoard.height - 18 });
-    ph.setAttribute("transform", `translate(${gBoard.x(Math.min(G.t, data.end)).toFixed(1)},0)`);
+    ph.setAttribute("transform", `translate(${x(Math.min(t, data.end)).toFixed(1)},0)`);
   }
 
   function drawGlobal() {
@@ -651,32 +664,34 @@ export function wireTimeline(root) {
     G.data = data;
     const svgRoot = gBoard.root;
     svgRoot.textContent = "";
-    const L = 44;
+    const L = 52;
     const R = VB_W - 8;
-    const chartTop = 18;
-    const chartH = 46;
+    const chartTop = 22;
+    const chartH = 50;
     const rowsTop = chartTop + chartH + 22;
-    const rowH = 14;
-    const height = rowsTop + data.cases.length * rowH + 22;
+    const rowH = 15;
+    const height = rowsTop + data.cases.length * rowH + 24;
     svgRoot.setAttribute("viewBox", `0 0 ${VB_W} ${height}`);
     const span = Math.ceil(data.end / 20) * 20;
     const x = (t) => L + ((R - L) * t) / span;
-    gBoard.x = x;
-    gBoard.height = height;
-    gBoard.span = span;
+    Object.assign(gBoard, { x, height, span, L, rows: [] });
+
+    const defs = add(svgRoot, "defs", {});
+    const cp = add(defs, "clipPath", { id: "tl-occ-clip" });
+    gBoard.clip = add(cp, "rect", { x: L, y: 0, width: R - L, height });
 
     for (let t = 0; t <= span; t += 20) {
-      add(svgRoot, "line", { x1: x(t), y1: chartTop, x2: x(t), y2: height - 18, class: "grid-line" });
-      add(svgRoot, "text", { x: x(t), y: height - 4, "text-anchor": "middle", class: "axis-label" }, `${t} s`);
+      add(svgRoot, "line", { x1: x(t), y1: chartTop, x2: x(t), y2: height - 20, class: "grid-line" });
+      add(svgRoot, "text", { x: x(t), y: height - 5, "text-anchor": "middle", class: "axis-label" }, `${t} s`);
     }
 
     const maxY = Math.max(G.req, 1);
     const base = chartTop + chartH;
     const y = (v) => base - chartH * clamp(v / maxY, 0, 1);
     add(svgRoot, "line", { x1: L, y1: y(G.req), x2: R, y2: y(G.req), class: "cap-line" });
-    add(svgRoot, "text", { x: L - 6, y: y(G.req) + 4, "text-anchor": "end", class: "cap-label" }, String(G.req));
-    add(svgRoot, "text", { x: L - 6, y: base + 4, "text-anchor": "end", class: "cap-label" }, "0");
-    add(svgRoot, "text", { x: L + 6, y: chartTop - 6, class: "cap-label" }, "在飞模型请求数");
+    add(svgRoot, "text", { x: L - 8, y: y(G.req) + 4, "text-anchor": "end", class: "cap-label" }, String(G.req));
+    add(svgRoot, "text", { x: L - 8, y: base + 4, "text-anchor": "end", class: "cap-label" }, "0");
+    add(svgRoot, "text", { x: L + 6, y: chartTop - 8, class: "cap-label" }, "同时在跑的模型请求");
     const pts = data.samples.filter((_, k) => k % 2 === 0);
     if (pts.length) {
       let d = `M${x(pts[0][0]).toFixed(1)},${base}`;
@@ -687,18 +702,20 @@ export function wireTimeline(root) {
         line += `${k ? " L" : "M"}${seg}`;
       });
       d += ` L${x(pts[pts.length - 1][0]).toFixed(1)},${base} Z`;
-      add(svgRoot, "path", { d, class: "occ-area" });
-      add(svgRoot, "path", { d: line, class: "occ-line" });
+      const occ = add(svgRoot, "g", { "clip-path": "url(#tl-occ-clip)" });
+      add(occ, "path", { d, class: "occ-area" });
+      add(occ, "path", { d: line, class: "occ-line" });
     }
 
     data.cases.forEach((cs, index) => {
       const ry = rowsTop + index * rowH;
-      add(svgRoot, "text", { x: L - 6, y: ry + 8, "text-anchor": "end", class: "case-label" }, `c${index + 1}`);
+      add(svgRoot, "text", { x: L - 8, y: ry + 8.5, "text-anchor": "end", class: "case-label" }, `#${index + 1}`);
       const row = add(svgRoot, "g", { class: "g-row" });
-      if (cs.admit > 0) add(row, "line", { x1: x(0), y1: ry + 4.5, x2: x(cs.admit), y2: ry + 4.5, class: "g-wait" });
-      add(row, "rect", { x: x(cs.admit), y: ry, width: Math.max(2, x(cs.compactAt) - x(cs.admit)), height: 9, rx: 3, class: "g-compact" });
-      add(row, "rect", { x: x(cs.compactAt), y: ry, width: Math.max(2, x(cs.end) - x(cs.compactAt)), height: 9, rx: 3, class: "g-attr" });
-      add(row, "line", { x1: x(cs.end), y1: ry - 2, x2: x(cs.end), y2: ry + 11, class: "g-end" });
+      const wait = cs.admit > 0 ? add(row, "line", { x1: x(0), y1: ry + 5, x2: x(cs.admit), y2: ry + 5, class: "g-wait" }) : null;
+      const comp = add(row, "rect", { x: x(cs.admit), y: ry, width: 0, height: 10, rx: 5, class: "g-compact" });
+      const attr = add(row, "rect", { x: x(cs.compactAt), y: ry, width: 0, height: 10, rx: 5, class: "g-attr" });
+      const end = add(row, "line", { x1: x(cs.end), y1: ry - 2, x2: x(cs.end), y2: ry + 12, class: "g-end" });
+      gBoard.rows.push({ cs, wait, comp, attr, end });
     });
     gBoard.playhead = add(svgRoot, "g", { class: "playhead" });
     if (!G.play) G.t = data.end;
@@ -716,24 +733,28 @@ export function wireTimeline(root) {
     if (!G.play || !host.isConnected) { rafG = 0; return; }
     const dt = Math.min(0.06, (now - (lastGTick || now)) / 1000);
     lastGTick = now;
-    G.t += (dt * G.data.end) / 10;
+    G.t += (dt * G.data.end) / 8;
     if (G.t >= G.data.end) {
       G.t = G.data.end;
-      paintGlobal();
       stopGlobal();
+      paintGlobal();
       return;
     }
     paintGlobal();
     rafG = requestAnimationFrame(gTick);
   }
-
-  $("#tl-g-play", host)?.addEventListener("click", (e) => {
-    if (G.play) { stopGlobal(); return; }
-    if (G.t >= G.data.end - 1e-6) G.t = 0;
+  function playGlobal(fromStart) {
+    if (still) return;
+    if (fromStart || G.t >= G.data.end - 1e-6) G.t = 0;
     G.play = true;
     lastGTick = 0;
-    setPlay(e.currentTarget, true);
-    rafG = requestAnimationFrame(gTick);
+    setPlay($("#tl-g-play", host), true);
+    if (!rafG) rafG = requestAnimationFrame(gTick);
+  }
+
+  $("#tl-g-play", host)?.addEventListener("click", () => {
+    if (G.play) { stopGlobal(); paintGlobal(); return; }
+    playGlobal(false);
   });
 
   $$("[data-tl-g]", host).forEach((button) => {
@@ -748,13 +769,30 @@ export function wireTimeline(root) {
       }
       stopGlobal();
       drawGlobal();
+      playGlobal(true);
     });
   });
 
   renderCase();
   drawGlobal();
 
+  // Each block plays itself once, the first time it scrolls into view.
+  let io = null;
+  if (!still && typeof IntersectionObserver !== "undefined") {
+    const seen = new Set();
+    io = new IntersectionObserver((entries) => {
+      entries.forEach((en) => {
+        if (!en.isIntersecting || seen.has(en.target.id)) return;
+        seen.add(en.target.id);
+        if (en.target.id === "tl-c-wrap") playCase(true);
+        else { stopGlobal(); playGlobal(true); }
+      });
+    }, { threshold: 0.35 });
+    ["#tl-c-wrap", "#tl-g-wrap"].forEach((sel) => { const el = $(sel, host); if (el) io.observe(el); });
+  }
+
   host._tlCleanup = () => {
+    io?.disconnect();
     stopCase();
     stopGlobal();
   };

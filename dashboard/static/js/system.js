@@ -1,9 +1,11 @@
-/* 评测体系: end-to-end architecture (inputs → compact → attribution → 2D clustering),
-   clustering methodology & cell specification drilldown (?view=system&cell=...),
-   evidence closure golden traces, and attribution timeline. */
+/* 评测体系: one vertical slide. A conversation (01) pours into the compression hub (02), fans out into
+   the four attribution outputs (03), then funnels into a Galton board whose pegs scatter every problem
+   into one bin per failure mechanism — bins that sit exactly above the cluster matrix columns (04).
+   A cell opens a centered explanation dialog instead of leaving the page.
+   Below: evidence closure (golden traces) and the attribution timeline. */
 import {
   $, $$, esc, fmt, SEV, sevColor, KIND, getJSON,
-  bindTips, hideTip, copyBtnHTML, wireCopy, REDUCED,
+  bindTips, hideTip, copyText, flashCopy, REDUCED,
 } from "./core.js";
 import { threadFlow } from "./particles.js";
 import { openTheater } from "./evidence_theater.js";
@@ -33,23 +35,18 @@ function compactAnatomy(a) {
 }
 
 function clearEffects(root) {
-  clearInterval(E.fxTimer);
-  E.fxTimer = null;
-  if (E.fxT) E.fxT.forEach(clearTimeout);
-  E.fxT = new Set();
-  if (E.fxObs) { E.fxObs.disconnect(); E.fxObs = null; }
+  E.fx?.destroy();
+  E.fx = null;
   if (E.obs) { E.obs.disconnect(); E.obs = null; }
   if (E.flow) { E.flow.destroy(); E.flow = null; }
   root?._builder?.destroy();
   if (root) root._builder = null;
-  root?._specTocObs?.disconnect();
-  if (root) root._specTocObs = null;
+  closeCellModal(true);
 }
 
 export async function render(root, c) {
   const d = c.data;
-  const cellParam = (new URLSearchParams(location.search).get("cell") || "").trim();
-  const key = `${c.product}|${d.generated_at}|${cellParam}`;
+  const key = `${c.product}|${d.generated_at}`;
   if (shown === key && root.firstChild) return;
   shown = key;
   clearEffects(root);
@@ -64,12 +61,7 @@ export async function render(root, c) {
 
   E.nav = c.navigate || null;
   E.tax = d.taxonomy;
-  const pd = d.products && d.products[c.product];
-
-  if (cellParam && d.taxonomy) {
-    renderCellSpec(root, d.taxonomy, pd, cellParam, c);
-    return;
-  }
+  E.pd = d.products && d.products[c.product];
 
   const src = d.system && d.system.goldens;
   let picked = [];
@@ -82,7 +74,7 @@ export async function render(root, c) {
   if (E.index >= E.goldens.length) E.index = 0;
 
   root.innerHTML = `<div class="bento">
-    ${flowCard(d.taxonomy, pd)}
+    ${flowCard(d.taxonomy, E.pd)}
     ${goldenCard(E.goldens, E.index)}
     ${timelineCardHTML()}
   </div>`;
@@ -92,113 +84,44 @@ export async function render(root, c) {
   }
   wireGoldens(root);
   wireAnatomy(root, E.goldens[E.index]);
-  wireFx(root, d.taxonomy);
+  wireFx(root, d.taxonomy, E.pd);
   wireTimeline(root);
-  // The page builds itself under a dozen cursors on the first visit of the session; afterwards it
-  // simply appears, and the player in the corner can replay the build on request.
   buildPage(root, { key: "sys", targets: buildTargets(root) });
 }
 
-/* What the cursors build, in reading order: each card's frame, then its blocks. */
 function buildTargets(root) {
   return $$(".bento > .card", root).flatMap((card) => [
     { el: card, kind: "frame", label: "Card" },
     { el: $(".card-head h2", card), kind: "text", label: "Heading" },
-    ...$$(".fx-col > .fx-label, .fx-box, .fx-hub, .fx-bridge, .fx-cl-how, .fx-g, .echo-bar, .anatomy .rail, .anatomy .aprobs", card)
-      .map((el) => ({ el, kind: el.matches(".fx-label") ? "text" : el.matches(".fx-g, .fx-cl-how, .rail, .aprobs") ? "grid" : "block",
-        label: el.matches(".fx-g") ? "Heatmap" : el.matches(".fx-cl-how") ? "Method" : el.matches(".fx-bridge") ? "Bridge" : el.matches(".rail") ? "Messages" : el.matches(".aprobs") ? "Problems" : el.matches(".fx-label") ? "Label" : el.matches(".fx-hub") ? "Hub" : "Block" })),
+    ...$$(".fx-stage > .fx-label, .fx-box, .fx-hub, .fx-cl-how, .fx-board, .fx-g, .echo-bar, .anatomy .rail, .anatomy .aprobs", card)
+      .map((el) => ({ el, kind: el.matches(".fx-label") ? "text" : el.matches(".fx-g, .fx-board, .fx-cl-how, .rail, .aprobs") ? "grid" : "block",
+        label: el.matches(".fx-g") ? "Heatmap" : el.matches(".fx-board") ? "Board" : el.matches(".fx-cl-how") ? "Method" : el.matches(".rail") ? "Messages" : el.matches(".aprobs") ? "Problems" : el.matches(".fx-label") ? "Label" : el.matches(".fx-hub") ? "Hub" : "Block" })),
   ].filter((t) => t.el));
 }
 
-/* ---------------------------------------------------------------- 评测体系: unified 4-step architecture */
-const FX_IN = [
-  ["user", "用户提问", "原始问句与追问"],
-  ["think", "模型思考", "推理、规划与自我修正"],
-  ["call", "工具调用", "参数、返回与报错"],
-  ["answer", "最终回答", "交给用户的结论"],
-];
+/* ---------------------------------------------------------------- the vertical slide */
+const FX_IN = [["user", "用户提问"], ["think", "模型思考"], ["call", "工具调用"], ["answer", "最终回答"]];
 const FX_STEPS = [["规划", "var(--t0)"], ["推理", "var(--t2)"], ["执行", "var(--accent)"], ["报错", "var(--sev-1)"], ["反思", "var(--t2)"], ["关键数据", "var(--t1)"], ["产物", "var(--t1)"]];
 const FX_OUT = [
-  ["问题", "标签与现象", "只记能回到原文的问题", "var(--sev-1)"],
-  ["定级", "P0 最重 → P4 最轻", "按对用户的影响", "var(--sev-0)"],
-  ["证据", "原文引用 → 消息位置", "逐字回链原文", "var(--accent)"],
-  ["归属", "组件与环节角色", "交给聚类归入模式", "var(--t1)"],
+  ["问题", "哪里出了错，只记能回到原文的问题", "var(--sev-1)"],
+  ["定级", "P0 最重，P4 最轻，按对用户的影响", "var(--sev-0)"],
+  ["证据", "每条问题都逐字回链到原文", "var(--accent)"],
+  ["归属", "出在哪一步、哪个组件", "var(--t1)"],
 ];
 const taxoNum = (a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1));
 const patNum = (id) => id.split(".").map((x) => Number(x.replace(/\D/g, "")) || 0);
+const byPat = (a, b) => {
+  const pa = patNum(a[0]);
+  const pb = patNum(b[0]);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
+  }
+  return 0;
+};
 const l3 = (tax) => Object.entries((tax && tax.patterns) || {}).filter(([id]) => id.split(".").length === 3);
 const l4 = (tax) => Object.entries((tax && tax.patterns) || {}).filter(([id]) => id.split(".").length === 4);
 
-export function flowCard(tax, pd) {
-  const ticks = Array.from({ length: 60 }, (_, k) => {
-    const c = k % 9 === 0 ? FX_STEPS[(k / 9) % FX_STEPS.length][1] : "";
-    const a = (k * Math.PI) / 30;
-    const r0 = c ? 63 : 67;
-    const [x0, y0, x1, y1] = [Math.cos(a) * r0, Math.sin(a) * r0, Math.cos(a) * 74, Math.sin(a) * 74].map((v) => v.toFixed(1));
-    return `<line x1="${x0}" y1="${y0}" x2="${x1}" y2="${y1}"${c ? ` class="c" style="--c:${c}"` : ""}/>`;
-  }).join("");
-  const tiles = [2, 9, 0, 9, 2, 9, 9, 4, 9].map((v) => `<i style="--c:${v < 5 ? `var(--sev-${v})` : "var(--sev-none)"}"></i>`).join("");
-  const ins = FX_IN.map(([k, t, sub]) =>
-    `<div class="fx-box fx-in k-${k}" title="${sub}"><i class="fx-dot"></i><span class="fx-txt"><b>${t}</b></span></div>`).join("");
-  const outs = FX_OUT.map(([t, sub, rule, c], i) => {
-    const label = i === 1 ? `<span class="fx-sub">${sub}</span>` : "";
-    const ico = i === 1
-      ? `<span class="fx-ico is-sev">${SEV.map((_, k) => `<i style="--c:${sevColor(k)};--k:${k}"></i>`).join("")}</span>`
-      : `<span class="fx-ico"><i></i></span>`;
-    return `<div class="fx-box fx-out" style="--c:${c}" title="${sub} · ${rule}">${ico}<span class="fx-txt"><b>${t}</b>${label}</span></div>`;
-  }).join("");
-
-  const clHow = `<div class="fx-cl-how">
-    <div class="fx-how-step">
-      <div class="fx-how-top"><span class="num">01</span><b>纵轴 · 定位发生环节（L1）</b></div>
-      <p>先按归因认定的责任组件，把每条问题落到「规划 → 请求 → 执行 → 交付」四阶段下的具体环节，明确问题出在链路哪一步。</p>
-    </div>
-    <div class="fx-how-step">
-      <div class="fx-how-top"><span class="num">02</span><b>横轴 · 判定失效机制（L2）</b></div>
-      <p>再按共性错误机理横向切分（如空转未执行、目标错配、计算算错、无依据断言），区分同一环节下的不同错因。</p>
-    </div>
-    <div class="fx-how-step">
-      <div class="fx-how-top"><span class="num">03</span><b>格内 · 沉淀标准模式（L3 / L4）</b></div>
-      <p>同一格内的相似问题经语义聚类形成带纳入与排除边界的标准模式；未命中任何模式的单条问题保持「未聚类」，绝不强行塞入「其他」。</p>
-    </div>
-  </div>`;
-
-  const taxBody = tax
-    ? `<div class="fx-cl">${taxGrid(tax, pd)}</div>`
-    : `<div class="empty">聚类矩阵待接入（需提供 cluster_tree.json）</div>`;
-
-  return `<article class="card" style="--span:12">
-    <header class="card-head"><h2>评测体系</h2></header>
-    <div class="fx-diagram" id="fxDiagram">
-      <svg class="fx-wires" aria-hidden="true"></svg>
-      <div class="fx" id="fx">
-        <div class="fx-col"><div class="fx-label"><span class="num">01</span>会话输入</div>${ins}</div>
-        <div class="fx-col fx-mid"><div class="fx-label"><span class="num">02</span>Compact 压缩</div>
-          <div class="fx-hubwrap">
-            <div class="fx-hub"><span class="fx-orbit"><i></i></span><svg class="fx-ring" viewBox="-80 -80 160 160" aria-hidden="true">${ticks}</svg><span class="fx-core"><span>${tiles}</span></span></div>
-          </div>
-        </div>
-        <div class="fx-col"><div class="fx-label"><span class="num">03</span>归因</div>${outs}</div>
-      </div>
-      <div class="fx-bridge">
-        <div class="fx-junction" id="fxJunction">
-          <span class="fx-j-dot" aria-hidden="true"></span>
-          <b>归因问题进入二维聚类</b>
-          <span>环节 × 机制 → 标准模式</span>
-        </div>
-      </div>
-      <div class="fx-tax" id="fxTax">
-        <div class="fx-label fx-tax-label"><span class="num">04</span>聚类体系</div>
-        ${clHow}
-        ${taxBody}
-      </div>
-    </div>
-  </article>`;
-}
-
-/* The taxonomy is one grid: 环节 (rows, grouped by phase) × 机制 (columns), drawn as a heatmap.
-   With a batch on hand a cell's number is how many problems were clustered into that pair;
-   without one it is how many L3 patterns the pair defines. */
+/* Counts per cell: problems from the batch when there is one, else how many patterns the cell defines. */
 function cellCounts(tax, pd) {
   const pats = l3(tax);
   const byPattern = (sid, mid) => pats.filter(([id]) => id.startsWith(`${sid}.${mid}.`)).length;
@@ -209,31 +132,90 @@ function cellCounts(tax, pd) {
   return { unit: "模式", n: byPattern, has: byPattern };
 }
 
-function taxGrid(tax, pd) {
+function matrixModel(tax, pd) {
   const stages = (tax.stages || []).slice().sort(taxoNum);
   const mechs = (tax.mechanisms || []).slice().sort(taxoNum);
   const cc = cellCounts(tax, pd);
-  const n = (sid, mid) => cc.n(sid, mid);
   let max = 0;
-  stages.forEach((st) => mechs.forEach((m) => { max = Math.max(max, n(st.id, m.id)); }));
+  const colTot = mechs.map((m) => stages.reduce((s, st) => {
+    const v = cc.n(st.id, m.id);
+    max = Math.max(max, v);
+    return s + v;
+  }, 0));
+  return { stages, mechs, cc, max, colTot, maxCol: Math.max(1, ...colTot) };
+}
+
+export function flowCard(tax, pd) {
+  const ticks = Array.from({ length: 60 }, (_, k) => {
+    const c = k % 9 === 0 ? FX_STEPS[(k / 9) % FX_STEPS.length][1] : "";
+    const a = (k * Math.PI) / 30;
+    const r0 = c ? 63 : 67;
+    const [x0, y0, x1, y1] = [Math.cos(a) * r0, Math.sin(a) * r0, Math.cos(a) * 74, Math.sin(a) * 74].map((v) => v.toFixed(1));
+    return `<line x1="${x0}" y1="${y0}" x2="${x1}" y2="${y1}"${c ? ` class="c" style="--c:${c}"` : ""}/>`;
+  }).join("");
+  const tiles = [2, 9, 0, 9, 2, 9, 9, 4, 9].map((v) => `<i style="--c:${v < 5 ? `var(--sev-${v})` : "var(--sev-none)"}"></i>`).join("");
+  const ins = FX_IN.map(([k, t], i) => `<div class="fx-box fx-in k-${k}" data-i="${i}"><i class="fx-dot"></i><b>${t}</b></div>`).join("");
+  const outs = FX_OUT.map(([t, tip, c], i) => {
+    const ico = i === 1
+      ? `<span class="fx-ico is-sev">${SEV.map((_, k) => `<i style="--c:${sevColor(k)};--k:${k}"></i>`).join("")}</span>`
+      : `<span class="fx-ico"><i></i></span>`;
+    return `<div class="fx-box fx-out" data-o="${i}" style="--c:${c}" title="${tip}">${ico}<b>${t}</b></div>`;
+  }).join("");
+
+  const clHow = `<div class="fx-cl-how">
+    <div class="fx-how-step"><div class="fx-how-top"><span class="num">01</span><b>先看出在哪一步</b></div>
+      <p>按归因认定的责任组件，把问题落到「规划、请求、执行、交付」下的某个环节，这是矩阵的行。</p></div>
+    <div class="fx-how-step"><div class="fx-how-top"><span class="num">02</span><b>再看错在哪种方式</b></div>
+      <p>同一环节里，按错法再分一次，比如没去做、找错了对象、算错了、没依据就下结论，这是矩阵的列。</p></div>
+    <div class="fx-how-step"><div class="fx-how-top"><span class="num">03</span><b>最后归进标准模式</b></div>
+      <p>同一格里相似的问题合成一种标准模式，写清收什么、不收什么；对不上任何模式的问题保持「未聚类」。</p></div>
+  </div>`;
+
+  return `<article class="card fx-card" style="--span:12">
+    <header class="card-head"><h2>评测体系</h2></header>
+    <div class="fx-diagram" id="fxDiagram">
+      <svg class="fx-wires" aria-hidden="true"></svg>
+      <canvas class="fx-sparks" aria-hidden="true"></canvas>
+      <section class="fx-stage"><div class="fx-label"><span class="num">01</span>一段对话</div><div class="fx-row">${ins}</div></section>
+      <section class="fx-stage fx-mid"><div class="fx-label"><span class="num">02</span>压缩成要点</div>
+        <div class="fx-hub"><span class="fx-orbit"><i></i></span><svg class="fx-ring" viewBox="-80 -80 160 160" aria-hidden="true">${ticks}</svg><span class="fx-core"><span>${tiles}</span></span></div>
+      </section>
+      <section class="fx-stage"><div class="fx-label"><span class="num">03</span>找出问题</div><div class="fx-row">${outs}</div></section>
+      <section class="fx-stage fx-tax" id="fxTax">
+        <div class="fx-label"><span class="num">04</span>落进分类</div>
+        ${tax ? `${taxBoard(tax, pd)}${clHow}${taxGrid(tax, pd)}` : `${clHow}<div class="empty">聚类矩阵待接入</div>`}
+      </section>
+    </div>
+  </article>`;
+}
+
+/* The Galton board: pegs are drawn into the shared SVG, bins share the matrix's column grid so every
+   bin stands right above its own mechanism column. */
+function taxBoard(tax, pd) {
+  const { mechs, cc, colTot, maxCol } = matrixModel(tax, pd);
+  return `<div class="fx-board" id="fxBoard" style="--cols:${mechs.length}">
+    <div class="fx-pegs" id="fxPegs" aria-hidden="true"></div>
+    <span class="fx-board-k">${cc.unit === "问题" ? "每种错法的问题数" : "每种错法的模式数"}</span>
+    ${mechs.map((m, j) => `<div class="fx-bin" data-m="${m.id}" style="--v:${(colTot[j] / maxCol).toFixed(3)};--j:${j}"><b class="num">${fmt(colTot[j])}</b><i></i></div>`).join("")}
+  </div>`;
+}
+
+function taxGrid(tax, pd) {
+  const { stages, mechs, cc, max } = matrixModel(tax, pd);
   const heat = (v) => (max ? Math.sqrt(v / max) : 0).toFixed(3);
   const head = `<span class="fx-g-corner"></span><span></span>${mechs.map((m) =>
-    `<button type="button" class="fx-g-col" data-m="${m.id}" data-tip="m" aria-label="${esc(`${m.id} ${m.name} 口径详解`)}"><code>${m.id}</code><span>${esc(m.name)}</span></button>`).join("")}`;
+    `<button type="button" class="fx-g-col" data-m="${m.id}" data-tip="m" aria-label="${esc(`${m.name}：查看口径`)}"><code>${m.id}</code><span>${esc(m.name)}</span></button>`).join("")}`;
   const body = (tax.phases || []).map((ph) => {
     const list = stages.filter((st) => st.phase === ph.id);
     if (!list.length) return "";
-    return list.map((st, i) => `${i === 0 ? `<span class="fx-g-ph" style="grid-row:span ${list.length}">${esc(ph.name)}</span>` : ""}<button type="button" class="fx-g-row" data-s="${st.id}" data-tip="s" aria-label="${esc(`${st.id} ${st.name} 口径详解`)}"><code>${st.id}</code><span>${esc(st.name)}</span></button>${mechs.map((m) => {
-      const v = n(st.id, m.id);
+    return list.map((st, i) => `${i === 0 ? `<span class="fx-g-ph" style="grid-row:span ${list.length}">${esc(ph.name)}</span>` : ""}<button type="button" class="fx-g-row" data-s="${st.id}" data-tip="s" aria-label="${esc(`${st.name}：查看口径`)}"><code>${st.id}</code><span>${esc(st.name)}</span></button>${mechs.map((m) => {
+      const v = cc.n(st.id, m.id);
       return v || cc.has(st.id, m.id)
-        ? `<button type="button" class="fx-g-c${Number(heat(v)) > 0.62 ? " is-hot" : ""}" data-s="${st.id}" data-m="${m.id}" data-n="${v}" data-tip="c" style="--h:${heat(v)}" aria-label="${esc(`${st.id} ${st.name} × ${m.id} ${m.name}：${fmt(v)} 个${cc.unit}，查看口径详解`)}"><b class="num">${v ? fmt(v) : "·"}</b></button>`
+        ? `<button type="button" class="fx-g-c${Number(heat(v)) > 0.62 ? " is-hot" : ""}" data-s="${st.id}" data-m="${m.id}" data-n="${v}" data-tip="c" style="--h:${heat(v)}" aria-label="${esc(`${st.name} × ${m.name}：${fmt(v)} 个${cc.unit}，查看口径`)}"><b class="num">${v ? fmt(v) : "·"}</b></button>`
         : `<span class="fx-g-c is-empty" data-s="${st.id}" data-m="${m.id}"></span>`;
     }).join("")}`).join("");
   }).join("");
-  const meta = `<div class="fx-g-meta">
-    <span class="fx-g-formula">编码读法：<code>S 环节</code> × <code>M 机制</code> → <code>S.M.n 模式</code></span>
-    <span class="fx-g-ramp"><span>${cc.unit}数</span><b class="num">0</b><i></i><b class="num">${fmt(max)}</b></span>
-  </div>`;
-  return `<div class="fx-gw" data-unit="${cc.unit}">${meta}<div class="fx-g" style="--cols:${mechs.length}">${head}${body}</div></div>`;
+  return `<div class="fx-gw" data-unit="${cc.unit}"><div class="fx-g" style="--cols:${mechs.length}">${head}${body}</div></div>`;
 }
 
 function taxTip(tax, el) {
@@ -241,54 +223,24 @@ function taxTip(tax, el) {
   const mid = el.dataset.m || null;
   const st = sid && tax.stages.find((x) => x.id === sid);
   const m = mid && tax.mechanisms.find((x) => x.id === mid);
-  const coord = [sid, mid].filter(Boolean).join(".");
-  const pats = l3(tax)
-    .filter(([id]) => (!sid || id.startsWith(`${sid}.`)) && (!mid || id.split(".")[1] === mid))
-    .sort((a, b) => { const pa = patNum(a[0]); const pb = patNum(b[0]); return pa[0] - pb[0] || pa[1] - pb[1] || pa[2] - pb[2]; });
+  const pats = l3(tax).filter(([id]) => (!sid || id.startsWith(`${sid}.`)) && (!mid || id.split(".")[1] === mid));
   const name = [st && st.name, m && m.name].filter(Boolean).join(" × ");
   const unit = el.closest(".fx-gw")?.dataset.unit || "问题";
-  const count = el.dataset.n != null && unit === "问题"
-    ? `<div class="t-row">问题<b class="num">${fmt(Number(el.dataset.n))}</b></div>` : "";
-  const MAX = 8;
-  const list = pats.slice(0, MAX).map(([id, pt]) => `<div class="fx-tip-pat"><code>${id}</code><span>${esc(pt.name || id)}</span></div>`).join("");
-  return `<div class="t-head">${coord ? `<code>${esc(coord)}</code> ` : ""}${esc(name)}</div>${count}<div class="t-row">模式<b class="num">${pats.length}</b></div>${list ? `<div class="fx-tip-pats">${list}${pats.length > MAX ? `<div class="fx-tip-more">… 另 ${pats.length - MAX} 个</div>` : ""}</div>` : ""}`;
+  const count = el.dataset.n != null && unit === "问题" ? `<div class="t-row">问题<b class="num">${fmt(Number(el.dataset.n))}</b></div>` : "";
+  return `<div class="t-head">${esc(name)}</div>${count}<div class="t-row">标准模式<b class="num">${pats.length}</b></div>`;
 }
 
-/* ---------------------------------------------------------------- 聚类口径详解 (?view=system&cell=...) */
-export function parseCellParam(tax, raw) {
-  const parts = String(raw || "").trim().toUpperCase().split(".");
-  let st = null;
-  let mech = null;
-  for (const p of parts) {
-    if (!st && /^S\d+$/.test(p)) st = (tax.stages || []).find((x) => x.id === p) || null;
-    else if (!mech && /^M\d+$/.test(p)) mech = (tax.mechanisms || []).find((x) => x.id === p) || null;
-  }
-  return { st, mech, code: [st && st.id, mech && mech.id].filter(Boolean).join(".") };
-}
-
-function phaseNameOf(tax, phaseId) {
-  return ((tax.phases || []).find((p) => p.id === phaseId) || {}).name || phaseId || "—";
-}
-
+/* ---------------------------------------------------------------- the centered explanation dialog */
 function matchingPatterns(tax, sid, mid) {
-  const sortPat = (a, b) => {
-    const pa = patNum(a[0]);
-    const pb = patNum(b[0]);
-    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-      if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
-    }
-    return 0;
-  };
   const hits = (id) => (!sid || id.startsWith(`${sid}.`)) && (!mid || id.split(".")[1] === mid);
-  const top = l3(tax).filter(([id]) => hits(id)).sort(sortPat);
-  const children = l4(tax).filter(([id]) => hits(id)).sort(sortPat);
+  const top = l3(tax).filter(([id]) => hits(id)).sort(byPat);
   const byParent = new Map();
-  children.forEach(([id, pt]) => {
+  l4(tax).filter(([id]) => hits(id)).sort(byPat).forEach(([id, pt]) => {
     const p3 = id.split(".").slice(0, 3).join(".");
     if (!byParent.has(p3)) byParent.set(p3, []);
     byParent.get(p3).push([id, pt]);
   });
-  return { top, children, byParent };
+  return { top, byParent };
 }
 
 function batchCountOf(pd, sid, mid) {
@@ -305,272 +257,191 @@ function batchCountOf(pd, sid, mid) {
   return total;
 }
 
-export function cellSpecHTML(tax, pd, cellParam, product = "aime") {
-  const { st, mech, code } = parseCellParam(tax, cellParam);
-  if (!st && !mech) {
-    return `<div class="doc-shell sys-spec">
-      <aside class="doc-side">
-        <div class="dc-side-head"><button type="button" class="dc-back" data-sys-back><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>返回评测体系</button></div>
-        <div class="doc-side-title">聚类口径详解</div>
-      </aside>
-      <div class="doc-main">
-        <header class="doc-hero"><h1>未找到对应的聚类口径</h1><p class="doc-lead">参数 <code>${esc(cellParam)}</code> 未匹配到已知环节或机制，请返回评测体系矩阵重新选择。</p></header>
-      </div>
-    </div>`;
+const phaseName = (tax, id) => ((tax.phases || []).find((p) => p.id === id) || {}).name || "";
+const ICON_X = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+const ICON_L = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 4L6 8l4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const ICON_R = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+/* Pure markup for one cell (S × M), one stage (S) or one mechanism (M); exported for tests. */
+export function cellModalHTML(tax, pd, sid, mid, { pos = null } = {}) {
+  const st = sid ? (tax.stages || []).find((x) => x.id === sid) : null;
+  const m = mid ? (tax.mechanisms || []).find((x) => x.id === mid) : null;
+  if (!st && !m) return `<div class="sm-body"><p class="sm-lead">没有找到这一格的口径。</p></div>`;
+  const cc = cellCounts(tax, pd);
+  const n = batchCountOf(pd, st && st.id, m && m.id);
+  const { top, byParent } = matchingPatterns(tax, st && st.id, m && m.id);
+  const title = st && m ? `${st.name} × ${m.name}` : (st || m).name;
+  const coord = [st && st.id, m && m.id].filter(Boolean).map((c) => `<code>${esc(c)}</code>`).join('<i aria-hidden="true">×</i>');
+
+  let lead;
+  if (st && m) lead = `问题出在「${esc(st.name)}」这一步，错法属于「${esc(m.name)}」。${n != null ? `本批有 <b class="num">${fmt(n)}</b> 条问题落在这一格，` : ""}共归成 <b class="num">${top.length}</b> 种标准模式。`;
+  else if (st) lead = `「${esc(st.name)}」属于${esc(phaseName(tax, st.phase))}阶段。下面是这一步可能出错的几种方式，选一格看它具体收哪些问题。`;
+  else lead = `「${esc(m.name)}」这种错法会出现在下面几个环节，选一格看它具体收哪些问题。`;
+
+  const axis = (k, name, def) => `<section class="sm-axis"><span class="sm-k">${k}</span><b>${esc(name)}</b>${def ? `<p>${esc(def)}</p>` : ""}</section>`;
+  const l2 = st && m ? (tax.l2 || {})[`${st.id}.${m.id}`] : null;
+  const axes = `<div class="sm-axes${st && m ? "" : " is-one"}">
+    ${st ? axis("在哪一步出错", st.name, st.def) : ""}
+    ${m ? axis("错在哪种方式", m.name, (l2 && l2.def) || m.def) : ""}
+  </div>`;
+
+  let body;
+  if (st && m) {
+    body = top.length ? `<section class="sm-sec"><h3>这一格收哪些问题</h3><ol class="sm-pats">${top.map(([pid, pt]) => {
+      const subs = byParent.get(pid) || [];
+      return `<li class="sm-pat">
+        <div class="sm-pat-head"><code>${esc(pid)}</code><b>${esc(pt.name || pid)}</b></div>
+        ${pt.plain || pt.def ? `<p>${esc(pt.plain || pt.def)}</p>` : ""}
+        ${pt.include || pt.exclude ? `<div class="sm-bounds">
+          <div><span>算进来</span><p>${esc(pt.include || "—")}</p></div>
+          <div><span>不算进来</span><p>${esc(pt.exclude || "—")}</p></div>
+        </div>` : ""}
+        ${subs.length ? `<ul class="sm-subs">${subs.map(([id, sp]) => `<li><code>${esc(id)}</code><span>${esc(sp.name || id)}${sp.plain ? `：${esc(sp.plain)}` : ""}</span></li>`).join("")}</ul>` : ""}
+      </li>`;
+    }).join("")}</ol></section>` : `<section class="sm-sec"><p class="sm-lead">这一格还没有沉淀出标准模式。</p></section>`;
+  } else {
+    const others = st
+      ? (tax.mechanisms || []).slice().sort(taxoNum).map((x) => ({ s: st.id, m: x.id, name: x.name }))
+      : (tax.stages || []).slice().sort(taxoNum).map((x) => ({ s: x.id, m: m.id, name: x.name }));
+    const cells = others
+      .map((o) => ({ ...o, v: cc.n(o.s, o.m), has: cc.has(o.s, o.m) }))
+      .filter((o) => o.v || o.has);
+    body = `<section class="sm-sec"><h3>${st ? "这一步的几种错法" : "出现在这些环节"}</h3><div class="sm-cells">${cells.map((o) =>
+      `<button type="button" class="sm-cell" data-cell="${o.s}.${o.m}"><code>${o.s}.${o.m}</code><span>${esc(o.name)}</span><b class="num">${fmt(o.v)}</b></button>`).join("") || '<p class="sm-lead">暂无。</p>'}</div></section>`;
   }
 
-  const sid = st && st.id;
-  const mid = mech && mech.id;
-  const { top, children, byParent } = matchingPatterns(tax, sid, mid);
-  const batchCount = batchCountOf(pd, sid, mid);
-  const l2Node = sid && mid ? (tax.l2 || {})[`${sid}.${mid}`] : null;
-  const tagMap = new Map((tax.tags || []).map((t) => [t.id || t.name, t]));
-  const stagesSorted = (tax.stages || []).slice().sort(taxoNum);
-  const mechsSorted = (tax.mechanisms || []).slice().sort(taxoNum);
+  const nav = pos ? `<div class="sm-nav">
+      <button type="button" class="sm-icon" data-step="-1" aria-label="上一格"${pos.i <= 0 ? " disabled" : ""}>${ICON_L}</button>
+      <span class="num">${pos.i + 1} / ${pos.n}</span>
+      <button type="button" class="sm-icon" data-step="1" aria-label="下一格"${pos.i >= pos.n - 1 ? " disabled" : ""}>${ICON_R}</button>
+    </div>` : "";
 
-  const title = st && mech
-    ? `${st.id} ${st.name} × ${mech.id} ${mech.name}`
-    : st ? `${st.id} ${st.name}` : `${mech.id} ${mech.name}`;
-  const sideTitle = code ? `${code} 口径详解` : "聚类口径详解";
-  const phaseLabel = st ? `所属阶段：${phaseNameOf(tax, st.phase)}` : "跨环节失效机制";
-  const lead = st && mech
-    ? `${phaseLabel}。当问题归属在「${st.name}」且失效表现为「${mech.name}」时，进入坐标格 ${code}，当前定义 ${top.length} 个标准 L3 模式${children.length ? `与 ${children.length} 个 L4 子模式` : ""}。`
-    : st
-      ? `${phaseLabel}。汇总「${st.name}」下跨全部失效机制的 ${top.length} 个标准 L3 模式${children.length ? `与 ${children.length} 个 L4 子模式` : ""}。`
-      : `汇总失效机制「${mech.name}」在全部环节下的 ${top.length} 个标准 L3 模式${children.length ? `与 ${children.length} 个 L4 子模式` : ""}。`;
-
-  // Sibling navigation list in left rail
-  const sibItems = st
-    ? mechsSorted.map((m) => {
-        const count = l3(tax).filter(([id]) => id.startsWith(`${st.id}.${m.id}.`)).length;
-        if (!count && m.id !== mid) return "";
-        const target = `${st.id}.${m.id}`;
-        const active = mech && m.id === mech.id;
-        return `<button type="button" class="sys-sib" data-cell="${esc(target)}" aria-current="${active ? "true" : "false"}"><code>${esc(target)}</code><span>${esc(m.name)}</span><b class="num">${count}</b></button>`;
-      }).filter(Boolean).join("")
-    : stagesSorted.map((s) => {
-        const count = l3(tax).filter(([id]) => id.startsWith(`${s.id}.${mech.id}.`)).length;
-        if (!count) return "";
-        const target = `${s.id}.${mech.id}`;
-        return `<button type="button" class="sys-sib" data-cell="${esc(target)}" aria-current="false"><code>${esc(target)}</code><span>${esc(s.name)}</span><b class="num">${count}</b></button>`;
-      }).filter(Boolean).join("");
-
-  const stageSection = st
-    ? `<div class="sys-def-card">
-        <div class="sys-def-head"><code>${esc(st.id)}</code><h3>${esc(st.name)}</h3><span class="sys-phase-tag">${esc(phaseNameOf(tax, st.phase))}阶段</span></div>
-        <p>${esc(st.def || "暂无环节定义。")}</p>
-        ${(st.components || []).length ? `<div class="sys-comp-row"><span class="sys-k">责任组件</span><div class="sys-chips">${st.components.map((cp) => `<code>${esc(cp)}</code>`).join("")}</div></div>` : ""}
-      </div>`
-    : `<div class="sys-axis-grid">${stagesSorted.map((s) => {
-        const cnt = l3(tax).filter(([id]) => id.startsWith(`${s.id}.${mech.id}.`)).length;
-        if (!cnt) return "";
-        return `<button type="button" class="sys-axis-card" data-cell="${esc(`${s.id}.${mech.id}`)}">
-          <div class="sys-axis-top"><code>${esc(s.id)}</code><b>${esc(s.name)}</b><span class="num">${cnt} 个模式</span></div>
-          <p>${esc(s.def || phaseNameOf(tax, s.phase))}</p>
-        </button>`;
-      }).filter(Boolean).join("")}</div>`;
-
-  const mechSection = mech
-    ? `<div class="sys-def-card">
-        <div class="sys-def-head"><code>${esc(mech.id)}</code><h3>${esc(mech.name)}</h3></div>
-        <p>${esc(mech.def || "暂无机制定义。")}</p>
-        ${l2Node && l2Node.def ? `<div class="sys-l2-cross"><span class="sys-k">${esc(`${st.id}.${mech.id}`)} 交叉口径定义</span><p>${esc(l2Node.def)}</p></div>` : ""}
-      </div>`
-    : `<div class="sys-axis-grid">${mechsSorted.map((m) => {
-        const cnt = l3(tax).filter(([id]) => id.startsWith(`${st.id}.${m.id}.`)).length;
-        if (!cnt) return "";
-        const l2 = (tax.l2 || {})[`${st.id}.${m.id}`];
-        return `<button type="button" class="sys-axis-card" data-cell="${esc(`${st.id}.${m.id}`)}">
-          <div class="sys-axis-top"><code>${esc(`${st.id}.${m.id}`)}</code><b>${esc(m.name)}</b><span class="num">${cnt} 个模式</span></div>
-          <p>${esc((l2 && l2.def) || m.def || "")}</p>
-        </button>`;
-      }).filter(Boolean).join("")}</div>`;
-
-  const patternCards = top.map(([pid, pt]) => {
-    const subs = byParent.get(pid) || [];
-    const tags = (pt.tags || []).map((t) => {
-      const info = tagMap.get(t);
-      const tip = info && info.def ? ` title="${esc(info.def)}"` : "";
-      return `<span class="sys-tag"${tip}>${esc(t)}</span>`;
-    }).join("");
-    const l4HTML = subs.length
-      ? `<div class="sys-l4-list">${subs.map(([l4id, l4pt]) => `<div class="sys-l4-item">
-          <div class="sys-l4-head"><code>${esc(l4id)}</code><b>${esc(l4pt.name || l4id)}</b></div>
-          ${l4pt.plain ? `<p class="sys-pat-plain">${esc(l4pt.plain)}</p>` : ""}
-          ${l4pt.def ? `<p>${esc(l4pt.def)}</p>` : ""}
-          ${l4pt.include || l4pt.exclude ? `<div class="sys-bounds">
-            <div><span>纳入边界</span><p>${esc(l4pt.include || "—")}</p></div>
-            <div><span>排除边界</span><p>${esc(l4pt.exclude || "—")}</p></div>
-          </div>` : ""}
-        </div>`).join("")}</div>`
-      : "";
-    return `<article class="sys-pat-card" data-pat="${esc(pid)}">
-      <header class="sys-pat-head">
-        <code>${esc(pid)}</code>
-        <h3>${esc(pt.name || pid)}</h3>
-        ${copyBtnHTML("复制模式", { fn: "patSpec" })}
-      </header>
-      ${pt.plain ? `<p class="sys-pat-plain">${esc(pt.plain)}</p>` : ""}
-      ${pt.def ? `<div class="sys-pat-def"><span class="sys-k">正式定义</span><p>${esc(pt.def)}</p></div>` : ""}
-      ${pt.include || pt.exclude ? `<div class="sys-bounds">
-        <div><span>纳入边界（Include）</span><p>${esc(pt.include || "—")}</p></div>
-        <div><span>排除边界（Exclude）</span><p>${esc(pt.exclude || "—")}</p></div>
-      </div>` : ""}
-      ${tags ? `<div class="sys-tags">${tags}</div>` : ""}
-      ${l4HTML}
-    </article>`;
-  }).join("") || `<div class="empty">该坐标格尚未定义标准模式。</div>`;
-
-  return `<div class="doc-shell sys-spec" data-product="${esc(product)}">
-    <aside class="doc-side">
-      <div class="dc-side-head">
-        <button type="button" class="dc-back" data-sys-back><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>返回评测体系</button>
-      </div>
-      <div class="doc-side-title">${esc(sideTitle)}</div>
-      <nav class="doc-toc" id="sysSpecToc" aria-label="口径章节">
-        <a href="#spec-stage"><span class="num">01</span><span>环节口径</span></a>
-        <a href="#spec-mech"><span class="num">02</span><span>机制口径</span></a>
-        <a href="#spec-patterns"><span class="num">03</span><span>模式口径</span></a>
-        <a href="#spec-rules"><span class="num">04</span><span>归类规则</span></a>
-      </nav>
-      ${sibItems ? `<div class="sys-sibs-wrap"><div class="sys-sibs-title">${st ? `${esc(st.id)} 下其余机制` : `${esc(mech.id)} 下各环节`}</div><div class="sys-sibs">${sibItems}</div></div>` : ""}
-    </aside>
-
-    <div class="doc-main">
-      <header class="doc-hero">
-        <div class="doc-hero-top">
-          <h1>${esc(title)}</h1>
-          <div class="sys-spec-actions">
-            ${copyBtnHTML("复制口径", { fn: "cellSpec" })}
-            <button type="button" class="sys-jump-btn" data-open-samples="${esc(sid || "")}|${esc(mid || "")}">查看真实样本 →</button>
-          </div>
-        </div>
-        <p class="doc-lead">${esc(lead)}</p>
-        <div class="doc-kpis">
-          <div class="doc-kpi"><b class="num">${esc(code)}</b><span>坐标编码</span></div>
-          <div class="doc-kpi"><b class="num">${fmt(top.length)}</b><span>L3 标准模式${children.length ? `（含 ${fmt(children.length)} 个 L4 子模式）` : ""}</span></div>
-          <div class="doc-kpi"><b class="num">${batchCount != null ? fmt(batchCount) : "—"}</b><span>${batchCount != null ? "当前批次归入问题数" : "暂无批次问题统计"}</span></div>
-        </div>
-      </header>
-
-      <section class="doc-sec" id="spec-stage" aria-label="环节口径">
-        <div class="doc-sec-head"><span class="doc-idx num">01</span><h2>纵轴 · 发生环节口径（L1）</h2></div>
-        ${stageSection}
-      </section>
-
-      <section class="doc-sec" id="spec-mech" aria-label="机制口径">
-        <div class="doc-sec-head"><span class="doc-idx num">02</span><h2>横轴 · 失效机制口径（L2）</h2></div>
-        ${mechSection}
-      </section>
-
-      <section class="doc-sec" id="spec-patterns" aria-label="标准模式口径">
-        <div class="doc-sec-head"><span class="doc-idx num">03</span><h2>格内 · 标准模式口径清单（L3 / L4）</h2></div>
-        <p class="doc-lead">每条模式同时给出通俗说明、正式定义与纳入/排除硬边界，用于判别问题是否归入该编码。</p>
-        <div class="sys-pats">${patternCards}</div>
-      </section>
-
-      <section class="doc-sec" id="spec-rules" aria-label="归类判定规则">
-        <div class="doc-sec-head"><span class="doc-idx num">04</span><h2>归类判定规则</h2></div>
-        <div class="sys-rule-list">
-          <div class="sys-rule-item"><span class="num">01</span><div><b>先按责任组件定纵轴（L1）</b><p>归因阶段为每条问题标定环节角色与责任组件，唯一映射到规划、请求、执行、交付四阶段下的一个环节。</p></div></div>
-          <div class="sys-rule-item"><span class="num">02</span><div><b>再按失效机理定横轴（L2）</b><p>结合问题现象、原始证据与推导推理，判定其对应的共性失效机制（如空转未执行、目标错配、加工计算错误），锁定二维坐标格。</p></div></div>
-          <div class="sys-rule-item"><span class="num">03</span><div><b>严格按纳入/排除边界落入模式</b><p>只有同时满足模式的纳入边界且不触犯排除边界时才赋予定型编码；新问题或边缘案例保持「未聚类（code = null）」，绝不强行归入「其他」。</p></div></div>
-        </div>
-      </section>
-    </div>
-  </div>`;
+  return `<header class="sm-head">
+      <div class="sm-coord">${coord}</div>
+      <button type="button" class="sm-icon sm-close" data-close aria-label="关闭">${ICON_X}</button>
+      <h2 id="smTitle">${esc(title)}</h2>
+      <p class="sm-lead">${lead}</p>
+    </header>
+    <div class="sm-body">${axes}${body}</div>
+    <footer class="sm-foot">
+      ${nav}
+      <span class="sm-spacer"></span>
+      <button type="button" class="sm-btn" data-copy-spec>复制口径</button>
+      <button type="button" class="sm-btn is-primary" data-samples="${esc(st ? st.id : "")}|${esc(m ? m.id : "")}">查看真实样本</button>
+    </footer>`;
 }
 
-function renderCellSpec(root, tax, pd, cellParam, c) {
-  root.innerHTML = cellSpecHTML(tax, pd, cellParam, c.product);
-  const { st, mech, code } = parseCellParam(tax, cellParam);
-  const topPatterns = matchingPatterns(tax, st && st.id, mech && mech.id).top;
+const MOD = { el: null, back: null, list: [], key: null };
 
-  wireCopy(root, {
-    cellSpec() {
-      const lines = [
-        `${code}${st ? ` ${st.name}` : ""}${mech ? ` × ${mech.name}` : ""}`,
-        st && st.def ? `L1 环节定义：${st.def}` : "",
-        mech && mech.def ? `L2 机制定义：${mech.def}` : "",
-        ...topPatterns.map(([id, pt]) => `${id} ${pt.name}：${pt.plain || pt.def || ""}`),
-      ];
-      return lines.filter(Boolean).join("\n");
-    },
-    patSpec(btn) {
-      const card = btn.closest(".sys-pat-card");
-      if (!card) return "";
-      const pid = card.dataset.pat;
-      const pt = (tax.patterns || {})[pid];
-      if (!pt) return pid;
-      return [
-        `${pid} ${pt.name}`,
-        pt.plain ? `说明：${pt.plain}` : "",
-        pt.def ? `定义：${pt.def}` : "",
-        pt.include ? `纳入：${pt.include}` : "",
-        pt.exclude ? `排除：${pt.exclude}` : "",
-      ].filter(Boolean).join("\n");
-    },
-  });
+function specText(tax, sid, mid) {
+  const st = sid && tax.stages.find((x) => x.id === sid);
+  const m = mid && tax.mechanisms.find((x) => x.id === mid);
+  const { top } = matchingPatterns(tax, sid, mid);
+  return [
+    [st && `${st.id} ${st.name}`, m && `${m.id} ${m.name}`].filter(Boolean).join(" × "),
+    st && st.def ? `环节：${st.def}` : "",
+    m && m.def ? `错法：${m.def}` : "",
+    ...top.map(([id, pt]) => [`${id} ${pt.name}：${pt.plain || pt.def || ""}`, pt.include ? `  算进来：${pt.include}` : "", pt.exclude ? `  不算进来：${pt.exclude}` : ""].filter(Boolean).join("\n")),
+  ].filter(Boolean).join("\n");
+}
 
-  const specEl = $(".sys-spec", root);
-  specEl?.addEventListener("click", (e) => {
-    if (e.target.closest("[data-sys-back]")) {
-      E.nav?.({ view: "system", cell: null });
-      return;
-    }
-    const cellBtn = e.target.closest("[data-cell]");
-    if (cellBtn) {
-      E.nav?.({ view: "system", cell: cellBtn.dataset.cell });
-      return;
-    }
-    const jump = e.target.closest("[data-open-samples]");
-    if (jump) {
-      const [sid, mid] = jump.dataset.openSamples.split("|");
-      E.nav?.({
-        view: "samples", product: c.product, cell: null,
-        stage: sid || null, mech: mid || null,
-        p: null, q: null, w: null, split: null, model: null, scene: null, sub: null, pattern: null, date: null, case: null, trace: null,
-      });
-    }
-  });
-
-  // Wire smooth scroll + IntersectionObserver for spec TOC
-  const nav = $("#sysSpecToc", root);
-  if (nav) {
-    const links = $$("a[href^='#']", nav);
-    const targets = links.map((link) => {
-      const id = (link.getAttribute("href") || "").slice(1);
-      return { link, el: id ? document.getElementById(id) : null };
-    }).filter((item) => item.el);
-    const mark = (activeEl) => targets.forEach(({ link, el }) => {
-      if (el === activeEl) link.setAttribute("aria-current", "location");
-      else link.removeAttribute("aria-current");
-    });
-    if (targets.length) mark(targets[0].el);
-    nav.addEventListener("click", (e) => {
-      const link = e.target.closest("a[href^='#']");
-      if (!link) return;
-      const target = document.getElementById(link.getAttribute("href").slice(1));
-      if (!target) return;
-      e.preventDefault();
-      mark(target);
-      target.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-    if (typeof IntersectionObserver !== "undefined" && targets.length) {
-      const visible = new Set();
-      const obs = new IntersectionObserver((entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting) visible.add(entry.target);
-          else visible.delete(entry.target);
-        });
-        const top = targets.find((t) => visible.has(t.el));
-        if (top) mark(top.el);
-      }, { rootMargin: "-72px 0px -65% 0px", threshold: 0 });
-      targets.forEach((t) => obs.observe(t.el));
-      root._specTocObs = obs;
-    }
+function paintModal(key, swap) {
+  const [sid, mid] = key.split("|");
+  const panel = $(".sm-panel", MOD.el);
+  const i = sid && mid ? MOD.list.indexOf(`${sid}.${mid}`) : -1;
+  panel.innerHTML = cellModalHTML(E.tax, E.pd, sid || null, mid || null, { pos: i >= 0 ? { i, n: MOD.list.length } : null });
+  MOD.key = key;
+  if (swap && !REDUCED) {
+    panel.classList.remove("is-swap");
+    void panel.offsetWidth;
+    panel.classList.add("is-swap");
   }
-  window.scrollTo(0, 0);
+  $$("#fxTax .is-sel", document).forEach((x) => x.classList.remove("is-sel"));
+  if (sid && mid) $(`#fxTax .fx-g-c[data-s="${sid}"][data-m="${mid}"]`)?.classList.add("is-sel");
+}
+
+function onModalKey(e) {
+  if (!MOD.el) return;
+  if (e.key === "Escape") { e.preventDefault(); closeCellModal(); return; }
+  if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+    const btn = $(`[data-step="${e.key === "ArrowLeft" ? -1 : 1}"]`, MOD.el);
+    if (btn && !btn.disabled) { e.preventDefault(); btn.click(); }
+    return;
+  }
+  if (e.key === "Tab") {
+    const f = $$("button:not([disabled])", MOD.el).filter((x) => x.offsetParent);
+    if (!f.length) return;
+    const [first, last] = [f[0], f[f.length - 1]];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  }
+}
+
+function openCellModal(sid, mid, from) {
+  if (!E.tax) return;
+  hideTip();
+  MOD.list = $$("#fxTax .fx-g-c:not(.is-empty)").map((x) => `${x.dataset.s}.${x.dataset.m}`);
+  if (!MOD.el) {
+    MOD.back = from || document.activeElement;
+    const el = document.createElement("div");
+    el.className = "sm";
+    el.innerHTML = `<div class="sm-scrim" data-close></div><div class="sm-panel" role="dialog" aria-modal="true" aria-labelledby="smTitle"></div>`;
+    if (from) {
+      const r = from.getBoundingClientRect();
+      el.style.setProperty("--ox", `${r.left + r.width / 2}px`);
+      el.style.setProperty("--oy", `${r.top + r.height / 2}px`);
+    }
+    document.body.appendChild(el);
+    MOD.el = el;
+    document.documentElement.classList.add("is-modal");
+    document.addEventListener("keydown", onModalKey, true);
+    el.addEventListener("click", (e) => {
+      if (e.target.closest("[data-close]")) { closeCellModal(); return; }
+      const cell = e.target.closest("[data-cell]");
+      if (cell) { const [s, m] = cell.dataset.cell.split("."); paintModal(`${s}|${m}`, true); return; }
+      const step = e.target.closest("[data-step]");
+      if (step) {
+        const [s, m] = MOD.key.split("|");
+        const next = MOD.list[MOD.list.indexOf(`${s}.${m}`) + Number(step.dataset.step)];
+        if (next) { const [ns, nm] = next.split("."); paintModal(`${ns}|${nm}`, true); }
+        return;
+      }
+      const copy = e.target.closest("[data-copy-spec]");
+      if (copy) {
+        const [s, m] = MOD.key.split("|");
+        copyText(specText(E.tax, s || null, m || null)).then((ok) => flashCopy(copy, ok));
+        return;
+      }
+      const go = e.target.closest("[data-samples]");
+      if (go) {
+        const [s, m] = go.dataset.samples.split("|");
+        closeCellModal();
+        E.nav?.({ view: "samples", product: E.product, stage: s || null, mech: m || null, pattern: null, p: null, q: null, w: null, case: null, trace: null });
+      }
+    });
+    paintModal(`${sid || ""}|${mid || ""}`, false);
+    requestAnimationFrame(() => {
+      el.classList.add("is-in");
+      $(".sm-close", el)?.focus({ preventScroll: true });
+    });
+    return;
+  }
+  paintModal(`${sid || ""}|${mid || ""}`, true);
+}
+
+function closeCellModal(now = false) {
+  if (!MOD.el) return;
+  const el = MOD.el;
+  MOD.el = null;
+  document.removeEventListener("keydown", onModalKey, true);
+  document.documentElement.classList.remove("is-modal");
+  $$("#fxTax .is-sel").forEach((x) => x.classList.remove("is-sel"));
+  if (now || REDUCED) el.remove();
+  else {
+    el.classList.remove("is-in");
+    setTimeout(() => el.remove(), 240);
+  }
+  if (!now) MOD.back?.focus?.({ preventScroll: true });
 }
 
 /* ---------------------------------------------------------------- evidence closure */
@@ -645,8 +516,6 @@ function showCase(root) {
   $$("#eTabs [data-i]", root).forEach((t) => t.setAttribute("aria-selected", String(Number(t.dataset.i) === E.index)));
 }
 
-/* The full-screen walk-through; it reads the uncompacted case (every message) and pulls the case's
-   full detail for the phenomenon, the reasoning and the grading reason. */
 function theater(from, problem) {
   const g = E.goldens[E.index];
   const index = Math.max(0, E.raw.findIndex((x) => x.slug === (g && g.slug)));
@@ -745,14 +614,14 @@ function wireAnatomy(root, a) {
   });
 }
 
-/* ---------------------------------------------------------------- 聚类: hover highlight + click jump to 口径详解 */
+/* ---------------------------------------------------------------- wiring: wires, pegs, falling sparks */
 function wireCluster(tx, tax) {
   bindTips(tx, (el) => (el.closest(".fx-g") ? taxTip(tax, el) : null));
   tx.addEventListener("pointerover", (e) => {
     tx._hovering = true;
     const c = e.target.closest(".fx-g-c:not(.is-empty)");
     $$(".fx-g-row", tx).forEach((x) => x.classList.toggle("is-hl", !!c && x.dataset.s === c.dataset.s));
-    $$(".fx-g-col", tx).forEach((x) => x.classList.toggle("is-hl", !!c && x.dataset.m === c.dataset.m));
+    $$(".fx-g-col, .fx-bin", tx).forEach((x) => x.classList.toggle("is-hl", !!c && x.dataset.m === c.dataset.m));
   });
   tx.addEventListener("pointerleave", () => {
     tx._hovering = false;
@@ -760,115 +629,98 @@ function wireCluster(tx, tax) {
   });
   tx.addEventListener("click", (e) => {
     const cell = e.target.closest(".fx-g-c:not(.is-empty)");
-    if (cell) {
-      hideTip();
-      E.nav?.({ view: "system", cell: `${cell.dataset.s}.${cell.dataset.m}` });
-      return;
-    }
+    if (cell) { openCellModal(cell.dataset.s, cell.dataset.m, cell); return; }
     const row = e.target.closest(".fx-g-row[data-s]");
-    if (row) {
-      hideTip();
-      E.nav?.({ view: "system", cell: row.dataset.s });
-      return;
-    }
-    const col = e.target.closest(".fx-g-col[data-m]");
-    if (col) {
-      hideTip();
-      E.nav?.({ view: "system", cell: col.dataset.m });
-    }
+    if (row) { openCellModal(row.dataset.s, null, row); return; }
+    const col = e.target.closest(".fx-g-col[data-m], .fx-bin[data-m]");
+    if (col) openCellModal(null, col.dataset.m, col);
   });
 }
 
-/* ---------------------------------------------------------------- 评测体系 wiring: continuous wires & pulses */
-function wireFx(root, tax) {
-  clearInterval(E.fxTimer);
-  if (E.fxT) E.fxT.forEach(clearTimeout);
-  E.fxT = new Set();
-  if (E.fxObs) E.fxObs.disconnect();
+const easeInOut = (u) => (u < 0.5 ? 4 * u * u * u : 1 - (-2 * u + 2) ** 3 / 2);
+const easeIn = (u) => u * u;
 
+function wireFx(root, tax, pd) {
   const diagram = $("#fxDiagram", root);
-  const box = $("#fx", root);
-  if (!diagram || !box) return;
+  if (!diagram) return;
   const svg = $(".fx-wires", diagram);
-  const hub = $(".fx-hub", box);
-  const junction = $("#fxJunction", diagram);
+  const canvas = $(".fx-sparks", diagram);
+  const ctx = canvas.getContext("2d");
+  const hub = $(".fx-hub", diagram);
+  const ring = $(".fx-ring", diagram);
+  const tiles = $$(".fx-core i", diagram);
+  const ins = $$(".fx-in", diagram);
+  const outs = $$(".fx-out", diagram);
   const tx = $("#fxTax", diagram);
+  const pegsEl = $("#fxPegs", diagram);
+  const bins = $$(".fx-bin", diagram);
+  const model = tax ? matrixModel(tax, pd) : null;
+  const geo = { board: null, dpr: 1, w: 0, h: 0 };
+  const paths = new Map();
 
   const draw = () => {
     const h = diagram.getBoundingClientRect();
     if (!h.width) return;
-    const hr = hub.getBoundingClientRect();
-    const cy = hr.top + hr.height / 2 - h.top;
-    const curve = (x0, y0, x1, y1, id, cls) => {
-      const xm = (x0 + x1) / 2;
-      return `<path id="${id}" class="fx-w ${cls}" d="M${x0.toFixed(1)} ${y0.toFixed(1)}C${xm.toFixed(1)} ${y0.toFixed(1)} ${xm.toFixed(1)} ${y1.toFixed(1)} ${x1.toFixed(1)} ${y1.toFixed(1)}"/>`;
+    const rel = (el) => {
+      const r = el.getBoundingClientRect();
+      return { l: r.left - h.left, t: r.top - h.top, r: r.right - h.left, b: r.bottom - h.top, cx: r.left + r.width / 2 - h.left, cy: r.top + r.height / 2 - h.top, w: r.width, hgt: r.height };
     };
+    const vcurve = (x0, y0, x1, y1, id, cls) => {
+      const ym = (y0 + y1) / 2;
+      return `<path id="${id}" class="fx-w ${cls}" d="M${x0.toFixed(1)} ${y0.toFixed(1)}C${x0.toFixed(1)} ${ym.toFixed(1)} ${x1.toFixed(1)} ${ym.toFixed(1)} ${x1.toFixed(1)} ${y1.toFixed(1)}"/>`;
+    };
+    const hr = rel(hub);
     let d = "";
-    $$(".fx-in", box).forEach((b, i) => {
-      const r = b.getBoundingClientRect();
-      d += curve(r.right - h.left, r.top + r.height / 2 - h.top, hr.left - h.left + 8, cy, `fw-i${i}`, "in");
-    });
-    const outs = $$(".fx-out", box);
-    outs.forEach((b, i) => {
-      const r = b.getBoundingClientRect();
-      d += curve(hr.right - h.left - 8, cy, r.left - h.left, r.top + r.height / 2 - h.top, `fw-o${i}`, "out");
-    });
-    if (junction && outs.length >= 4) {
-      const jr = junction.getBoundingClientRect();
-      const jx = jr.left + jr.width / 2 - h.left;
-      const jyBot = jr.bottom - h.top;
-      const r3 = outs[3].getBoundingClientRect();
-      const bx = r3.left + r3.width / 2 - h.left;
-      const by = r3.bottom - h.top;
-      const jRight = jr.right - h.left;
-      const jyMid = jr.top + jr.height / 2 - h.top;
-      const rad = Math.max(0, Math.min(18, jyMid - by, bx - jRight));
-      d += `<path id="fw-b1" class="fx-w bridge" d="M${bx.toFixed(1)} ${by.toFixed(1)}L${bx.toFixed(1)} ${(jyMid - rad).toFixed(1)}Q${bx.toFixed(1)} ${jyMid.toFixed(1)} ${(bx - rad).toFixed(1)} ${jyMid.toFixed(1)}L${jRight.toFixed(1)} ${jyMid.toFixed(1)}"/>`;
-      if (tx) {
-        const tr = tx.getBoundingClientRect();
-        d += `<path id="fw-t0" class="fx-w bridge" d="M${jx.toFixed(1)} ${jyBot.toFixed(1)}L${jx.toFixed(1)} ${(tr.top - h.top).toFixed(1)}"/>`;
+    ins.forEach((b, i) => { const r = rel(b); d += vcurve(r.cx, r.b, hr.cx, hr.t + 18, `fw-i${i}`, "in"); });
+    outs.forEach((b, i) => { const r = rel(b); d += vcurve(hr.cx, hr.b - 18, r.cx, r.t, `fw-o${i}`, "out"); });
+    geo.board = null;
+    if (pegsEl && bins.length > 1) {
+      const pg = rel(pegsEl);
+      const centers = bins.map((b) => rel(b));
+      const cols = bins.length;
+      const rows = cols - 1;
+      const w = (centers[cols - 1].cx - centers[0].cx) / (cols - 1);
+      const apex = { x: (centers[0].cx + centers[cols - 1].cx) / 2, y: pg.t + 6 };
+      const gap = (pg.hgt - 18) / rows;
+      const pegY = (r) => apex.y + 14 + r * gap;
+      outs.forEach((b, i) => { const r = rel(b); d += vcurve(r.cx, r.b, apex.x, apex.y - 2, `fw-c${i}`, "funnel"); });
+      for (let r = 0; r < rows; r++) {
+        for (let k = 0; k <= r; k++) {
+          d += `<circle class="fx-peg" cx="${(apex.x + (k - r / 2) * w).toFixed(1)}" cy="${pegY(r).toFixed(1)}" r="2.6"/>`;
+        }
       }
+      const binY = bins.map((b) => $("i", b).getBoundingClientRect().top - h.top - 4);
+      geo.board = { apex, w, rows, pegY, binY };
     }
     svg.setAttribute("viewBox", `0 0 ${h.width} ${h.height}`);
     svg.innerHTML = d;
+    paths.clear();
+    $$("path[id]", svg).forEach((p) => paths.set(p.id, p));
+    geo.dpr = Math.min(2, window.devicePixelRatio || 1);
+    geo.w = h.width;
+    geo.h = h.height;
+    canvas.width = Math.round(h.width * geo.dpr);
+    canvas.height = Math.round(h.height * geo.dpr);
   };
   draw();
-  E.fxObs = new ResizeObserver(draw);
-  E.fxObs.observe(diagram);
-
+  const ro = new ResizeObserver(draw);
+  ro.observe(diagram);
   if (tx && tax) wireCluster(tx, tax);
-  if (REDUCED) return;
 
-  const ins = $$(".fx-in", box);
-  const outs = $$(".fx-out", box);
-  const ring = $(".fx-ring", box);
-  const tiles = $$(".fx-core i", box);
-  const later = (fn, ms) => {
-    const id = setTimeout(() => { E.fxT.delete(id); fn(); }, ms);
-    E.fxT.add(id);
-  };
+  const timers = new Set();
+  const later = (fn, ms) => { const id = setTimeout(() => { timers.delete(id); fn(); }, ms); timers.add(id); };
   const restart = (el, cls) => { el.classList.remove(cls); void el.offsetWidth; el.classList.add(cls); };
-  const shoot = (id, color, dur) => {
-    const path = svg.querySelector(`#${id}`);
-    if (!path) return;
-    path.style.setProperty("--c", color);
-    path.classList.add("on");
-    const trail = [3.8, 2.8, 2, 1.3].map((r, k) =>
-      `<circle class="fx-pulse" r="${r}" style="--c:${color};opacity:${(1 - k * 0.22).toFixed(2)}"><animateMotion dur="${(dur + k * 0.05).toFixed(2)}s" begin="indefinite" fill="freeze" calcMode="spline" keyTimes="0;1" keyPoints="0;1" keySplines="0.5 0 0.2 1"><mpath href="#${id}"/></animateMotion></circle>`).join("");
-    svg.insertAdjacentHTML("beforeend", `<g>${trail}</g>`);
-    const g = svg.lastElementChild;
-    [...g.children].forEach((c) => c.firstElementChild.beginElement());
-    later(() => { g.remove(); path.classList.remove("on"); }, dur * 1000 + 260);
-  };
+  const land = (el, ms = 700) => { if (!el) return; restart(el, "is-on"); later(() => el.classList.remove("is-on"), ms); };
   let rot = 0;
   let step = -1;
+  let lastHit = 0;
   const receive = () => {
+    const now = performance.now();
+    if (now - lastHit < 420) return;
+    lastHit = now;
     rot += 40;
     ring.style.transform = `rotate(${rot}deg)`;
     restart(hub, "is-hit");
-    hub.insertAdjacentHTML("beforeend", '<span class="fx-ripple"></span>');
-    const rp = hub.lastElementChild;
-    later(() => rp.remove(), 950);
     step = (step + 1) % FX_STEPS.length;
     const c = FX_STEPS[step][1];
     const lit = new Set([4]);
@@ -879,64 +731,142 @@ function wireFx(root, tax) {
       restart(t, "pop");
     });
   };
-  const land = (el) => {
-    restart(el, "is-on");
-    later(() => el.classList.remove("is-on"), 1100);
+  const hitBin = (j) => {
+    const bin = bins[j];
+    if (!bin) return;
+    land(bin, 520);
+    if (!tx || tx._hovering || !model) return;
+    const mid = bin.dataset.m;
+    const col = $(`.fx-g-col[data-m="${mid}"]`, tx);
+    const cells = $$(`.fx-g-c[data-m="${mid}"]:not(.is-empty)`, tx);
+    let cell = null;
+    if (cells.length) {
+      const ws = cells.map((c) => Math.max(1, Number(c.dataset.n) || 0));
+      let r = Math.random() * ws.reduce((a, b) => a + b, 0);
+      cell = cells.find((_, k) => (r -= ws[k]) <= 0) || cells[0];
+    }
+    col?.classList.add("is-hl");
+    cell?.classList.add("is-pulse");
+    later(() => { if (!tx._hovering) col?.classList.remove("is-hl"); cell?.classList.remove("is-pulse"); }, 760);
   };
-  const pulseCell = (idx) => {
-    if (!tx) return;
-    const cells = $$(".fx-g-c:not(.is-empty)", tx);
-    if (!cells.length) return;
-    const cell = cells[idx % cells.length];
-    cell.classList.add("is-pulse");
-    const row = !tx._hovering && $(`.fx-g-row[data-s="${cell.dataset.s}"]`, tx);
-    const col = !tx._hovering && $(`.fx-g-col[data-m="${cell.dataset.m}"]`, tx);
-    if (row) row.classList.add("is-hl");
-    if (col) col.classList.add("is-hl");
-    later(() => {
-      cell.classList.remove("is-pulse");
-      if (!tx._hovering) {
-        if (row) row.classList.remove("is-hl");
-        if (col) col.classList.remove("is-hl");
+
+  if (REDUCED) {
+    E.fx = { destroy() { ro.disconnect(); timers.forEach(clearTimeout); } };
+    return;
+  }
+
+  /* Sparks: each one slides 01 → 02 → 03 → down the funnel, then bounces through the pegs into a bin. */
+  const sparks = [];
+  const weights = model ? model.colTot.map((v) => Math.max(v, 0.0001)) : [];
+  const pickBin = () => {
+    let r = Math.random() * weights.reduce((a, b) => a + b, 0);
+    for (let j = 0; j < weights.length; j++) if ((r -= weights[j]) <= 0) return j;
+    return weights.length - 1;
+  };
+  const spawn = (i = Math.floor(Math.random() * ins.length)) => {
+    if (sparks.length > 28) return;
+    const j = Math.floor(Math.random() * outs.length);
+    land(ins[i], 600);
+    sparks.push({ i, j, phase: 0, t0: performance.now(), trail: [], bin: geo.board ? pickBin() : -1 });
+  };
+  const DUR = [720, 620, 680];
+  const along = (id, u) => {
+    const p = paths.get(id);
+    if (!p) return null;
+    const L = p.getTotalLength();
+    return p.getPointAtLength(L * u);
+  };
+  const galtonPoint = (s, u) => {
+    const b = geo.board;
+    if (!s.walk) {
+      const rights = Array.from({ length: b.rows }, (_, k) => k < s.bin);
+      for (let k = rights.length - 1; k > 0; k--) { const q = Math.floor(Math.random() * (k + 1)); [rights[k], rights[q]] = [rights[q], rights[k]]; }
+      const pts = [{ x: b.apex.x, y: b.apex.y }];
+      let r = 0;
+      for (let row = 0; row < b.rows; row++) {
+        pts.push({ x: b.apex.x + (r - row / 2) * b.w, y: b.pegY(row) - 5 });
+        if (rights[row]) r++;
       }
-    }, 900);
-  };
-  let n = 0;
-  const fire = (i, j) => {
-    const seq = n;
-    land(ins[i]);
-    shoot(`fw-i${i}`, "var(--accent)", 0.75);
-    later(receive, 720);
-    const go = (jj, delay) => {
-      later(() => shoot(`fw-o${jj}`, outs[jj].style.getPropertyValue("--c") || "var(--accent)", 0.8), delay);
-      later(() => land(outs[jj]), delay + 760);
-    };
-    go(j, 860);
-    if (i === 3) go((j + 2) % outs.length, 960);
-    if (junction) {
-      const bridgeStart = 1480;
-      later(() => shoot("fw-b1", "var(--accent)", 0.45), bridgeStart);
-      later(() => land(junction), bridgeStart + 420);
-      later(() => shoot("fw-t0", "var(--accent)", 0.35), bridgeStart + 480);
-      later(() => pulseCell(seq), bridgeStart + 820);
+      pts.push({ x: b.apex.x + (r - b.rows / 2) * b.w, y: b.binY[s.bin] });
+      s.walk = pts;
     }
+    const segs = s.walk.length - 1;
+    const f = Math.min(segs - 1e-6, u * segs);
+    const k = Math.floor(f);
+    const v = f - k;
+    const a = s.walk[k];
+    const c = s.walk[k + 1];
+    const hop = k > 0 && k < segs - 1 ? Math.sin(Math.PI * v) * 5 : 0;
+    return { x: a.x + (c.x - a.x) * v, y: a.y + (c.y - a.y) * easeIn(v) - hop };
   };
-  const cycle = () => {
-    if (!diagram.isConnected) {
-      clearInterval(E.fxTimer);
-      return;
+
+  let raf = 0;
+  let visible = true;
+  let lastSpawn = 0;
+  let accent = "";
+  const frame = (now) => {
+    raf = 0;
+    if (!diagram.isConnected) return;
+    if (!visible || document.hidden) return;
+    if (now - lastSpawn > 520) { lastSpawn = now; spawn(); accent = getComputedStyle(diagram).getPropertyValue("--accent").trim() || "#3552d8"; }
+    ctx.setTransform(geo.dpr, 0, 0, geo.dpr, 0, 0);
+    ctx.clearRect(0, 0, geo.w, geo.h);
+    for (let n = sparks.length - 1; n >= 0; n--) {
+      const s = sparks[n];
+      const el = now - s.t0;
+      let pt = null;
+      if (s.phase < 3) {
+        const u = Math.min(1, el / DUR[s.phase]);
+        const id = s.phase === 0 ? `fw-i${s.i}` : s.phase === 1 ? `fw-o${s.j}` : `fw-c${s.j}`;
+        pt = along(id, easeInOut(u));
+        if (u >= 1) {
+          if (s.phase === 0) receive();
+          if (s.phase === 1) land(outs[s.j], 520);
+          if (s.phase === 2 && !geo.board) { sparks.splice(n, 1); continue; }
+          s.phase += 1;
+          s.t0 = now;
+        }
+      } else {
+        const dur = 150 * (geo.board.rows + 2);
+        const u = Math.min(1, el / dur);
+        pt = galtonPoint(s, u);
+        if (u >= 1) { hitBin(s.bin); sparks.splice(n, 1); continue; }
+      }
+      if (!pt) { sparks.splice(n, 1); continue; }
+      s.trail.unshift({ x: pt.x, y: pt.y });
+      if (s.trail.length > 6) s.trail.pop();
+      s.trail.forEach((p, k) => {
+        ctx.globalAlpha = (1 - k / 6) * (k ? 0.35 : 0.95);
+        ctx.fillStyle = accent;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, k ? 2.4 - k * 0.25 : 3.2, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      ctx.globalAlpha = 1;
     }
-    if (!diagram.offsetParent || document.hidden) return;
-    fire(n % ins.length, (n * 3 + 1) % outs.length);
-    n++;
+    raf = requestAnimationFrame(frame);
   };
+  const kick = () => { if (!raf && visible && !document.hidden && diagram.isConnected) raf = requestAnimationFrame(frame); };
+  const io = new IntersectionObserver(([en]) => { visible = en.isIntersecting; kick(); }, { threshold: 0.05 });
+  io.observe(diagram);
+  const onVis = () => kick();
+  document.addEventListener("visibilitychange", onVis);
   let lastHover = 0;
   ins.forEach((el, i) => el.addEventListener("pointerenter", () => {
     const now = performance.now();
-    if (now - lastHover < 450) return;
+    if (now - lastHover < 300) return;
     lastHover = now;
-    fire(i, (i + 1) % outs.length);
+    spawn(i);
   }));
-  cycle();
-  E.fxTimer = setInterval(cycle, 1600);
+  kick();
+
+  E.fx = {
+    destroy() {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      io.disconnect();
+      document.removeEventListener("visibilitychange", onVis);
+      timers.forEach(clearTimeout);
+    },
+  };
 }

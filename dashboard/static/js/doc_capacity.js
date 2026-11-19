@@ -252,7 +252,7 @@ export function capacityDocHTML() {
   const sampleWallCells = SAMPLE.walls.map((w) => `<div class="cap-fig"><span class="cap-k">${w.label}</span><b class="num">${w.seconds} s</b><span class="cap-fig-detail">整批墙钟</span></div>`).join("");
 
   const sampleStageRows = SAMPLE.stages.map((s, idx) => `<tr>
-    <td><span class="cap-name" style="--c:var(--cap-c${idx + 1})"><i></i><b>${s.name}</b></span><span class="cap-sub"><code>${s.stage}</code>${s.toolCalls ? ` · 均值 ${s.toolCalls} 次工具调用` : ""}</span></td>
+    <td><span class="cap-name" style="--c:var(--cap-c${idx + 1})"><i></i><b>${s.name}</b></span>${s.toolCalls ? `<span class="cap-sub">平均每次查 ${s.toolCalls} 次原文</span>` : ""}</td>
     <td class="num">≈${fmt(s.attempts)}</td>
     <td class="num">${spanText(s.p50, (v) => fmt(v, 1))} s</td>
     <td class="num">${spanText(s.p90, (v) => fmt(v, 1))} s</td>
