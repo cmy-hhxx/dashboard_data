@@ -5,7 +5,7 @@ import test from "node:test";
 globalThis.location = { search: "" };
 globalThis.window = {};
 const { timelineCardHTML } = await import("../static/js/system_timeline.js");
-const { flowCard, cellModalHTML } = await import("../static/js/system.js");
+const { flowCard, cellModalHTML, treeModel, buildReplaySchedule } = await import("../static/js/system.js");
 const systemCss = fs.readFileSync(new URL("../static/css/system.css", import.meta.url), "utf8");
 const timelineSrc = fs.readFileSync(new URL("../static/js/system_timeline.js", import.meta.url), "utf8");
 
@@ -27,8 +27,10 @@ const SAMPLE_TAX = {
   },
   patterns: {
     "S1.M1.1": { name: "遗漏关键标的", plain: "未为点名标的规划取数", def: "用户点名标的后规划漏掉", include: "明确点名某标的却未查询", exclude: "标的无公开数据", tags: ["漏查"] },
+    "S1.M1.2": { name: "漏选基准时间", plain: "未规划对应时间段取数", def: "时间窗未纳入取数规划", include: "漏掉基准期", exclude: "无需对比历史", tags: ["漏查"] },
     "S9.M5.3": { name: "数值推算算错", plain: "百分比、倍数、估值推算本身算错", def: "终稿二次运算与原始回执矛盾", include: "公式或数量级算错", exclude: "上游数据源本身错误", tags: ["口径", "计算"] },
     "S9.M5.3.1": { name: "同比环比混算", plain: "把环比差值写成同比涨幅", def: "跨期间比较基数选错", include: "拿上期当去年同期", exclude: "源表仅提供单期数据", tags: ["口径"] },
+    "S9.M1.1": { name: "结论漏答关键问项", plain: "交付未回答子问题", def: "交付遗漏问项", include: "漏掉主问句关键项", exclude: "追问超出范围", tags: [] },
   },
   tags: [
     { id: "口径", name: "口径", def: "指标定义或比较基准偏差" },
@@ -42,9 +44,25 @@ const SAMPLE_PD = {
   },
 };
 
-test("timeline speaks plain Chinese: no meta spans, stage ids, flags or 引文核对", () => {
+const SAMPLE_CLUSTERS_PD = {
+  clusters: {
+    "S1.M1.1": 9,
+    "S1.M1.2": 5,
+    "S9.M5.3": 7,
+    "S9.M5.3.1": 5,
+    "S9.M1.1": 8,
+  },
+};
+
+test("timeline uses crisp noun titles and plain Chinese: no AI titles, meta spans or jargon", () => {
   const html = timelineCardHTML();
-  for (const bad of ['class="meta"', "tl-case-meta", "tl-global-meta", "引文核对", "tl-ev", "attribution-", "--model-requests", "--concurrency", "verifiedCompact", ".jsonl"]) {
+  assert.ok(html.includes("单条时间线"));
+  assert.ok(html.includes("整批调度"));
+  for (const bad of [
+    "一条对话怎样被评完", "一批对话怎样排队", "怎样排队", "怎样被评完",
+    'class="meta"', "tl-case-meta", "tl-global-meta", "引文核对", "tl-ev",
+    "attribution-", "--model-requests", "--concurrency", "verifiedCompact", ".jsonl",
+  ]) {
     assert.ok(!html.includes(bad), `timeline html must not contain ${bad}`);
     assert.ok(!timelineSrc.includes(bad), `timeline source must not contain ${bad}`);
   }
@@ -52,38 +70,102 @@ test("timeline speaks plain Chinese: no meta spans, stage ids, flags or 引文�
   assert.ok(html.includes('id="tl-focus"'));
 });
 
-test("system CSS centers card-head, styles the board and the dialog, drops old tl rules", () => {
+test("system CSS styles the 5-tier cluster tree and modal, removes Galton board and tl clutter", () => {
   assert.ok(systemCss.includes('.view[data-view="system"] .card-head'));
-  assert.ok(systemCss.includes(".fx-board"));
+  assert.ok(systemCss.includes(".fx-tree"));
+  assert.ok(systemCss.includes(".fx-tree-bar"));
+  assert.ok(systemCss.includes(".fx-link.is-sprout"));
+  assert.ok(systemCss.includes(".fx-tn.is-leaf"));
+  assert.ok(systemCss.includes(".fx-toast"));
   assert.ok(systemCss.includes(".sm-panel"));
-  assert.ok(!systemCss.includes(".tl-ev"));
-  assert.ok(!systemCss.includes(".tl-readout"));
-  assert.ok(!systemCss.includes(".sys-spec"));
+  assert.ok(systemCss.includes(".sm-pat.is-focus"));
+  for (const old of [".fx-board", ".fx-bin", ".fx-cl-how", ".tl-ev", ".tl-readout", ".sys-spec"]) {
+    assert.ok(!systemCss.includes(old), `system.css must remove old selector ${old}`);
+  }
 });
 
-test("flowCard stacks 01→04 vertically with a Galton board whose bins align with matrix columns", () => {
-  const html = flowCard(SAMPLE_TAX, SAMPLE_PD);
+test("flowCard builds a centered 5-tier cluster tree and drops prose cl-how and Galton board", () => {
+  const html = flowCard(SAMPLE_TAX, SAMPLE_CLUSTERS_PD);
   assert.ok(html.includes('id="fxDiagram"'));
   assert.ok(html.includes('class="fx-sparks"'));
-  assert.ok(html.includes('id="fxBoard"'));
-  assert.equal((html.match(/class="fx-bin"/g) || []).length, SAMPLE_TAX.mechanisms.length);
-  assert.ok(html.includes("fx-cl-how"));
-  assert.ok(!html.includes("Compact"));
+  assert.ok(html.includes('id="fxTree"'));
+  assert.ok(html.includes('id="fxTreeBar"'));
+  assert.ok(html.includes('id="fxPause"'));
+  assert.ok(html.includes('id="fxReplay"'));
+  assert.ok(html.includes("fx-tn is-root"));
+  assert.ok(html.includes("fx-tn is-phase"));
+  assert.ok(html.includes("fx-tn is-stage"));
+  assert.ok(html.includes("fx-tn is-cell"));
+  assert.ok(html.includes("fx-tn is-leaf"));
+  for (const gone of ["fx-cl-how", "fx-board", "fx-bin", "Compact"]) {
+    assert.ok(!html.includes(gone), `flowCard must not contain ${gone}`);
+  }
   assert.ok(html.includes('<button type="button" class="fx-g-c'));
   assert.ok(html.includes('data-s="S9" data-m="M5"'));
 });
 
-test("cellModalHTML explains a cell, a stage and a mechanism without leaving the page", () => {
-  const cell = cellModalHTML(SAMPLE_TAX, SAMPLE_PD, "S9", "M5", { pos: { i: 1, n: 2 } });
+test("treeModel rolls up clusters, supports matrix/patterns fallbacks, and preserves planar phase order", () => {
+  const mClusters = treeModel(SAMPLE_TAX, SAMPLE_CLUSTERS_PD);
+  assert.equal(mClusters.unit, "问题");
+  assert.equal(mClusters.root.n, 34);
+  assert.equal(mClusters.leaves.length, 4);
+  assert.equal(mClusters.byId.get("S9.M5.3").n, 12);
+  assert.equal(mClusters.byId.get("ph:deliver").n, 20);
+  assert.deepEqual(
+    mClusters.stages.map((s) => s.id),
+    mClusters.phases.flatMap((p) => p.children.map((s) => s.id)),
+  );
+
+  const mMatrix = treeModel(SAMPLE_TAX, SAMPLE_PD);
+  assert.equal(mMatrix.unit, "问题");
+  assert.equal(mMatrix.root.n, 16);
+
+  const mPayload = treeModel(SAMPLE_TAX, { patterns: [{ id: "S1.M1.1", n: 3 }, { id: "S9.M5.3", n: 6 }] });
+  assert.equal(mPayload.root.n, 9);
+
+  const mSchema = treeModel(SAMPLE_TAX, null);
+  assert.equal(mSchema.unit, "模式");
+  assert.equal(mSchema.root.n, mSchema.leaves.length);
+});
+
+test("buildReplaySchedule sums exactly to each leaf count and always sprouts unborn leaves first", () => {
+  const model = treeModel(SAMPLE_TAX, SAMPLE_CLUSTERS_PD);
+  const { seedMap, events } = buildReplaySchedule(model);
+  const totals = new Map();
+  const seenUnborn = new Set();
+
+  model.leaves.forEach((lf) => totals.set(lf.id, seedMap.get(lf.id) || 0));
+  const unbornIds = new Set(model.leaves.filter((lf) => (seedMap.get(lf.id) || 0) === 0).map((lf) => lf.id));
+  assert.ok(unbornIds.size >= 1, "at least one leaf should sprout dynamically");
+
+  events.forEach((ev) => {
+    totals.set(ev.leaf.id, (totals.get(ev.leaf.id) || 0) + ev.delta);
+    if (ev.isNew) {
+      assert.ok(unbornIds.has(ev.leaf.id), "only unborn leaves emit isNew sprout events");
+      assert.ok(!seenUnborn.has(ev.leaf.id), "each unborn leaf sprouts only once");
+      seenUnborn.add(ev.leaf.id);
+    } else if (unbornIds.has(ev.leaf.id)) {
+      assert.ok(seenUnborn.has(ev.leaf.id), `follow-up match for ${ev.leaf.id} must come after its sprout`);
+    }
+  });
+
+  assert.equal(seenUnborn.size, unbornIds.size, "all unborn leaves must sprout");
+  model.leaves.forEach((lf) => assert.equal(totals.get(lf.id), lf.n, `sum for ${lf.id} must equal exact count`));
+});
+
+test("cellModalHTML explains a cell, stage, mechanism, and highlights focused pattern", () => {
+  const cell = cellModalHTML(SAMPLE_TAX, SAMPLE_CLUSTERS_PD, "S9", "M5", { pos: { i: 1, n: 2 }, pattern: "S9.M5.3" });
   assert.ok(cell.includes("答案合成 × 加工计算错误"));
   assert.ok(cell.includes("data-close"));
-  assert.ok(cell.includes('data-samples="S9|M5"'));
+  assert.ok(cell.includes('data-samples="S9|M5|S9.M5.3"'));
   assert.ok(cell.includes('data-step="-1"'));
   assert.ok(cell.includes("终稿整合或推算过程中的计算错误"));
   assert.ok(cell.includes("公式或数量级算错"));
   assert.ok(cell.includes("上游数据源本身错误"));
   assert.ok(cell.includes("同比环比混算"));
   assert.ok(cell.includes(">12<"));
+  assert.ok(cell.includes("sm-pat is-focus"));
+  assert.ok(cell.includes("sm-pat-n"));
 
   const stage = cellModalHTML(SAMPLE_TAX, SAMPLE_PD, "S9", null);
   assert.ok(stage.includes('data-cell="S9.M5"'));

@@ -3751,7 +3751,12 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
             },
             "taxonomy": taxonomy_out(taxonomy, used_patterns) if taxonomy["stages"] else None,
             "system": system_facts(all_samples, golden_pool),
-            "products": {product: {"label": PRODUCTS[product]["label"]} for product in products},
+            "products": {product: {
+                "label": PRODUCTS[product]["label"],
+                # Clustered problems per pattern path: the 评测体系 tree replays these exact counts
+                # without loading the product payload.
+                "clusters": {p["id"]: p["n"] for p in (products[product] or {}).get("patterns") or [] if p.get("n")},
+            } for product in products},
         }
         available = [product for product in PRODUCTS if product in samples]
         indexes = {}

@@ -34,17 +34,16 @@
 .role .n { font-size: var(--fs-body); color: var(--ink-2); }
 
 /* ==========================================================================
-   评测体系: one vertical slide (01 → 02 → 03 → Galton board → matrix) + centered cell dialog
+   评测体系: one vertical slide (01 → 02 → 03 → 04 5-tier cluster tree → matrix) + centered cell dialog
    ========================================================================== */
 .view[data-view="system"] .card-head { justify-content: center; text-align: center; }
 
-.fx-diagram { position: relative; display: grid; gap: 56px; padding-top: var(--sp-2); }
+.fx-diagram { position: relative; display: grid; gap: 48px; padding-top: var(--sp-2); }
 .fx-wires, .fx-sparks { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
 .fx-wires { z-index: 0; }
 .fx-sparks { z-index: 3; }
 .fx-w { fill: none; stroke: var(--t4); stroke-width: 1.25; stroke-dasharray: 3 5; stroke-linecap: round; }
 .fx-w.funnel { stroke: color-mix(in oklab, var(--accent) 28%, var(--t4)); }
-.fx-peg { fill: color-mix(in oklab, var(--ink) 28%, var(--card)); }
 
 .fx-stage { position: relative; z-index: 1; display: grid; justify-items: center; gap: var(--sp-4); min-width: 0; }
 .fx-label {
@@ -92,41 +91,126 @@
 @keyframes fx-pop { from { transform: scale(0.5); opacity: 0.4; } }
 @keyframes fx-squish { 35% { transform: scale(0.95, 1.04); } 70% { transform: scale(1.03, 0.97); } }
 
-/* 04: Galton board above the matrix; both share one column grid */
+/* 04: Center-aligned 5-tier living cluster tree + live bridge bar + matrix */
 .fx-tax { justify-items: stretch; gap: var(--sp-5); }
 .fx-tax > .fx-label { justify-self: center; }
-.fx-board, .fx-g { grid-template-columns: 44px minmax(120px, 168px) repeat(var(--cols), minmax(0, 1fr)); column-gap: 2px; }
-.fx-board { display: grid; grid-template-rows: 184px 76px; margin-top: calc(-1 * var(--sp-2)); }
-.fx-pegs { grid-column: 3 / -1; grid-row: 1; }
-.fx-board-k { grid-column: 1 / 3; grid-row: 2; align-self: end; padding: 0 var(--sp-2) var(--sp-1); font-size: var(--fs-small); color: var(--muted); }
-.fx-bin {
-  grid-row: 2; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 6px;
-  padding: 0 var(--sp-3); cursor: pointer; border-radius: 8px 8px 0 0;
-  box-shadow: inset 0 -1px 0 color-mix(in oklab, var(--ink) 12%, transparent);
-  transition: background 180ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-.fx-bin + .fx-bin { box-shadow: inset 1px 0 0 color-mix(in oklab, var(--ink) 7%, transparent), inset 0 -1px 0 color-mix(in oklab, var(--ink) 12%, transparent); }
-.fx-bin b { font-size: var(--fs-small); font-weight: var(--w-medium); color: var(--ink-2); font-variant-numeric: tabular-nums; }
-.fx-bin i {
-  display: block; width: min(100%, 64px); height: calc(4px + var(--v) * 48px); border-radius: 6px 6px 2px 2px;
-  background: color-mix(in oklab, var(--accent) calc(20% + var(--v) * 60%), var(--well));
-  transform-origin: 50% 100%;
-  transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1), background 260ms cubic-bezier(0.22, 1, 0.36, 1);
-  animation: fx-grow 720ms cubic-bezier(0.22, 1, 0.36, 1) backwards; animation-delay: calc(var(--j) * 55ms);
-}
-.fx-bin:hover, .fx-bin.is-hl { background: var(--hover); }
-.fx-bin.is-on i { transform: scaleY(1.1); background: var(--accent); }
-@keyframes fx-grow { from { transform: scaleY(0); } }
 
-.fx-cl-how { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-3); }
-.fx-how-step { display: grid; gap: var(--sp-2); align-content: start; padding: var(--sp-4) var(--sp-5); border-radius: var(--r-well); background: var(--well); }
-.fx-how-top { display: flex; align-items: baseline; gap: var(--sp-2); }
-.fx-how-top .num { font: var(--w-medium) var(--fs-small)/1 var(--mono); color: var(--accent); }
-.fx-how-top b { font-size: var(--fs-body); font-weight: var(--w-title); color: var(--ink); }
-.fx-how-step p { margin: 0; font-size: var(--fs-body); line-height: 1.65; color: var(--ink-2); }
+.fx-tree-wrap { display: flex; justify-content: center; overflow-x: auto; padding: var(--sp-1) 0; }
+.fx-tree { display: block; width: 100%; max-width: 1280px; height: auto; overflow: visible; user-select: none; }
+.fx-tier-line { stroke: color-mix(in oklab, var(--ink) 4.5%, transparent); stroke-width: 1; }
+.fx-tier-lbl { font-size: 11px; fill: var(--muted); letter-spacing: 0.04em; }
+
+.fx-link {
+  fill: none; stroke: color-mix(in oklab, var(--ink) 14%, var(--card)); stroke-linecap: round;
+  transition: stroke 200ms cubic-bezier(0.22, 1, 0.36, 1), stroke-width 200ms, opacity 240ms;
+}
+.fx-link.r1 { stroke-width: 1.8; }
+.fx-link.r2 { stroke-width: 1.5; }
+.fx-link.r3 { stroke-width: 1.25; }
+.fx-link.r4 { stroke-width: 1.1; stroke: color-mix(in oklab, var(--ink) 17%, var(--card)); }
+.fx-link.is-lit, .fx-link.is-hl { stroke: var(--accent); stroke-width: 2.1; }
+.fx-link.is-hidden { opacity: 0; pointer-events: none; }
+.fx-link.is-sprout {
+  stroke: var(--loc-ulq); stroke-width: 2.1; stroke-dasharray: 1; stroke-dashoffset: 1;
+  animation: fx-branch-draw 460ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+@keyframes fx-branch-draw { to { stroke-dashoffset: 0; } }
+
+.fx-tn {
+  transform-box: fill-box; transform-origin: center;
+  transition: opacity 220ms cubic-bezier(0.22, 1, 0.36, 1), transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.fx-tn[role="button"] { cursor: pointer; }
+.fx-tn:focus { outline: none; }
+.fx-tn:focus-visible rect, .fx-tn:focus-visible circle:first-child { stroke: var(--accent); stroke-width: 2; }
+.fx-tn.is-hidden { opacity: 0; pointer-events: none; transform: scale(0.3); }
+.fx-tn.is-sprout { animation: fx-leaf-bloom 620ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.fx-tn.is-hit { animation: fx-node-hit 340ms cubic-bezier(0.22, 1, 0.36, 1); }
+@keyframes fx-leaf-bloom { 0% { opacity: 0; transform: scale(0.25); } 58% { opacity: 1; transform: scale(1.22); } 100% { opacity: 1; transform: scale(1); } }
+@keyframes fx-node-hit { 40% { transform: scale(1.08); } }
+
+.fx-tn.is-root rect {
+  fill: var(--lift); stroke: color-mix(in oklab, var(--ink) 12%, transparent); stroke-width: 1;
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.06)); transition: stroke 180ms, fill 180ms;
+}
+.fx-tn.is-root.is-on rect { stroke: var(--accent); stroke-width: 1.5; fill: color-mix(in oklab, var(--accent) 6%, var(--lift)); }
+.fx-tn-k { font-size: 13px; fill: var(--muted); font-weight: var(--w-medium); }
+.fx-tn-big { font-size: 16px; fill: var(--ink); font-weight: var(--w-title); font-family: var(--mono); }
+
+.fx-tn.is-phase rect { fill: var(--well); stroke: color-mix(in oklab, var(--ink) 8%, transparent); stroke-width: 1; transition: stroke 180ms, fill 180ms; }
+.fx-tn.is-phase.is-on rect, .fx-tn.is-phase.is-hl rect { fill: color-mix(in oklab, var(--accent) 10%, var(--lift)); stroke: var(--accent); }
+.fx-tn-name { font-size: 12px; fill: var(--ink-2); font-weight: var(--w-medium); }
+.fx-tn-num { font-size: 12px; fill: var(--ink); font-weight: var(--w-title); font-family: var(--mono); }
+
+.fx-tn.is-stage rect { fill: var(--lift); stroke: color-mix(in oklab, var(--ink) 10%, transparent); stroke-width: 1; transition: stroke 180ms, fill 180ms; }
+.fx-tn.is-stage:hover rect, .fx-tn.is-stage.is-hl rect, .fx-tn.is-stage.is-sel rect {
+  fill: color-mix(in oklab, var(--accent) 8%, var(--lift)); stroke: var(--accent); stroke-width: 1.4;
+}
+.fx-tn.is-stage.is-on rect { stroke: var(--accent); }
+.fx-tn.is-stage .fx-tn-name { fill: var(--ink); }
+.fx-tn.is-stage .fx-tn-num { font-size: 11px; fill: var(--muted); }
+
+.fx-tn.is-cell rect, .fx-tn.is-cell circle {
+  fill: var(--well); stroke: color-mix(in oklab, var(--ink) 11%, transparent); stroke-width: 1; transition: stroke 180ms, fill 180ms;
+}
+.fx-tn.is-cell.is-sprout rect, .fx-tn.is-cell.is-sprout circle {
+  stroke: var(--loc-ulq); fill: color-mix(in oklab, var(--loc-ulq) 12%, var(--lift));
+}
+.fx-tn.is-cell:hover rect, .fx-tn.is-cell:hover circle, .fx-tn.is-cell.is-hl rect, .fx-tn.is-cell.is-hl circle, .fx-tn.is-cell.is-sel rect, .fx-tn.is-cell.is-sel circle, .fx-tn.is-cell.is-on rect, .fx-tn.is-cell.is-on circle {
+  fill: color-mix(in oklab, var(--accent) 12%, var(--lift)); stroke: var(--accent); stroke-width: 1.4;
+}
+.fx-tn-code { font: var(--w-medium) 10px var(--mono); fill: var(--ink-2); }
+.fx-tn-cnum { font: 10px var(--mono); fill: var(--muted); }
+
+.fx-tn.is-leaf circle:first-child {
+  fill: var(--accent); stroke: var(--card); stroke-width: 1.5;
+  transition: r 260ms cubic-bezier(0.22, 1, 0.36, 1), fill 240ms, stroke 180ms, transform 180ms;
+  transform-box: fill-box; transform-origin: center;
+}
+.fx-tn-hit { fill: transparent; stroke: none; }
+.fx-tn.is-leaf.is-sprout circle:first-child { fill: var(--loc-ulq); }
+.fx-tn.is-leaf:hover circle:first-child, .fx-tn.is-leaf.is-hl circle:first-child, .fx-tn.is-leaf.is-sel circle:first-child {
+  stroke: var(--ink); stroke-width: 2; transform: scale(1.25);
+}
+.fx-tn-lnum { font: 10px var(--mono); fill: var(--muted); pointer-events: none; }
+
+.fx-ripple { fill: none; stroke-width: 1.8; pointer-events: none; transform-box: fill-box; transform-origin: center; }
+.fx-ripple.is-sprout { stroke: var(--loc-ulq); animation: fx-ripple-out 900ms cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+.fx-ripple.is-hit { stroke: var(--accent); animation: fx-ripple-hit 620ms cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+@keyframes fx-ripple-out { from { opacity: 0.9; transform: scale(1); stroke-width: 2.2; } to { opacity: 0; transform: scale(3.4); stroke-width: 0.4; } }
+@keyframes fx-ripple-hit { from { opacity: 0.7; transform: scale(1); } to { opacity: 0; transform: scale(2.2); } }
+
+.fx-toast { pointer-events: none; animation: fx-toast-life 1750ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.fx-toast-stem { stroke: color-mix(in oklab, var(--loc-ulq) 55%, transparent); stroke-width: 1; stroke-dasharray: 2 2; }
+.fx-toast rect { fill: var(--lift); stroke: color-mix(in oklab, var(--loc-ulq) 46%, transparent); stroke-width: 1; filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.1)); }
+.fx-toast text { font-size: 11px; font-weight: var(--w-medium); fill: var(--loc-ulq); }
+@keyframes fx-toast-life { 0% { opacity: 0; transform: translateY(5px); } 16% { opacity: 1; transform: translateY(0); } 80% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(-3px); } }
+
+.fx-tree-bar {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--sp-5);
+  width: min(960px, 100%); margin: 0 auto; padding: var(--sp-2) var(--sp-4);
+  border-radius: 12px; background: var(--well);
+}
+.fx-stats { display: inline-flex; align-items: baseline; gap: var(--sp-5); flex-wrap: wrap; }
+.fx-stat { display: inline-flex; align-items: baseline; gap: var(--sp-2); font-size: var(--fs-small); color: var(--muted); white-space: nowrap; }
+.fx-stat b { font-size: var(--fs-body); font-weight: var(--w-title); color: var(--ink); font-family: var(--mono); }
+.fx-stat .faint { font-size: var(--fs-meta); font-family: var(--mono); }
+.fx-feed { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-width: 0; font-size: var(--fs-small); color: var(--ink-2); }
+.fx-feed-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); transition: background 220ms; }
+.fx-feed.is-sprout { color: var(--loc-ulq); }
+.fx-feed.is-sprout .fx-feed-dot { background: var(--loc-ulq); }
+.fx-feed-txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fx-ctls { display: inline-flex; align-items: center; gap: var(--sp-2); }
+.fx-ctl {
+  height: 28px; padding: 0 var(--sp-3); border-radius: 7px; background: var(--card); color: var(--ink-2);
+  font-size: var(--fs-meta); font-weight: var(--w-medium); transition: background var(--snap), color var(--snap), transform var(--snap);
+}
+.fx-ctl:hover { background: var(--lift); color: var(--ink); }
+.fx-ctl:active { transform: scale(0.96); }
+.fx-ctl[aria-pressed="true"] { background: var(--ink); color: var(--card); }
 
 .fx-gw { display: grid; min-width: 0; }
-.fx-g { display: grid; row-gap: 2px; align-items: stretch; }
+.fx-g { display: grid; grid-template-columns: 44px minmax(120px, 168px) repeat(var(--cols), minmax(0, 1fr)); column-gap: 2px; row-gap: 2px; align-items: stretch; }
 .fx-g-col, .fx-g-row {
   display: flex; align-items: center; gap: 6px; min-width: 0; border-radius: var(--r-chip);
   color: var(--ink-2); font-size: var(--fs-small); text-align: left; cursor: pointer;
@@ -141,28 +225,26 @@
   display: grid; place-items: center; height: 34px; border-radius: 5px;
   background: color-mix(in oklab, var(--accent) calc(6% + var(--h, 0) * 74%), var(--well));
   color: var(--ink-2);
-  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 160ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 160ms cubic-bezier(0.22, 1, 0.36, 1), background 220ms;
 }
 .fx-g-c > b { font-size: var(--fs-meta); font-weight: var(--w-medium); font-variant-numeric: tabular-nums; }
 .fx-g-c.is-hot { color: var(--card); }
 .fx-g-c.is-empty { background: var(--well); opacity: 0.5; }
 .fx-g-c:not(.is-empty) { cursor: pointer; }
-.fx-g-c:not(.is-empty):hover, .fx-g-c.is-pulse, .fx-g-c.is-sel {
+.fx-g-c:not(.is-empty):hover, .fx-g-c.is-pulse, .fx-g-c.is-sel, .fx-g-c.is-hl {
   transform: scale(1.06); box-shadow: 0 0 0 1.5px var(--card), 0 0 0 3px var(--accent); position: relative; z-index: 1;
 }
 
-@media (max-width: 1180px) {
-  .fx-cl-how { grid-template-columns: minmax(0, 1fr); }
-}
 @media (max-width: 860px) {
   .echo { height: auto; }
   .echo-main { grid-template-rows: none; }
   #anatomyBody { overflow: visible; }
-  .fx-diagram { gap: 40px; }
+  .fx-diagram { gap: 36px; }
   .fx-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .fx-board, .fx-g { grid-template-columns: 0 minmax(96px, 120px) repeat(var(--cols), minmax(0, 1fr)); }
-  .fx-g { overflow-x: auto; }
-  .fx-board-k { display: none; }
+  .fx-tree-wrap { justify-content: flex-start; }
+  .fx-tree { min-width: 760px; }
+  .fx-tree-bar { grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); justify-items: center; padding: var(--sp-3); }
+  .fx-g { grid-template-columns: 0 minmax(96px, 120px) repeat(var(--cols), minmax(0, 1fr)); overflow-x: auto; }
   .fx-g-ph { visibility: hidden; }
 }
 
@@ -213,10 +295,12 @@
 .sm-sec { display: grid; gap: var(--sp-3); }
 .sm-sec h3 { margin: 0; font-size: var(--fs-title); font-weight: var(--w-title); color: var(--ink); }
 .sm-pats { display: grid; gap: var(--sp-3); margin: 0; padding: 0; list-style: none; }
-.sm-pat { display: grid; gap: var(--sp-3); padding: var(--sp-5); border-radius: 14px; background: var(--well); }
+.sm-pat { display: grid; gap: var(--sp-3); padding: var(--sp-5); border-radius: 14px; background: var(--well); transition: background 180ms, box-shadow 180ms; }
+.sm-pat.is-focus { background: color-mix(in oklab, var(--accent) 8%, var(--well)); box-shadow: inset 0 0 0 1.5px var(--accent); }
 .sm-pat-head { display: flex; align-items: baseline; gap: var(--sp-3); }
 .sm-pat-head code { font: var(--w-medium) var(--fs-small) var(--mono); color: var(--accent); }
 .sm-pat-head b { font-size: var(--fs-title); font-weight: var(--w-title); color: var(--ink); }
+.sm-pat-n { margin-left: auto; font: var(--w-medium) var(--fs-meta) var(--mono); color: var(--muted); }
 .sm-pat > p { margin: 0; font-size: var(--fs-body); line-height: 1.7; color: var(--ink); }
 .sm-bounds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-2); }
 .sm-bounds > div { display: grid; gap: var(--sp-1); align-content: start; padding: var(--sp-3) var(--sp-4); border-radius: 10px; background: var(--card); }
@@ -568,7 +652,7 @@
 }
 
 /* ==========================================================================
-   归因时序 (system_timeline.js): 单条时间线 + 整批排队
+   归因时序 (system_timeline.js): 单条时间线 + 整批调度
    ========================================================================== */
 .tl-card {
   --c-model: var(--accent);

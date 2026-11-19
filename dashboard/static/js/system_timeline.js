@@ -1,7 +1,7 @@
 /* 归因时序: embedded in the 评测体系 page after 证据闭环.
-   01 一条对话怎样被评完 — a Gantt that plays itself once it scrolls into view, a five-step stepper that
+   01 单条时间线 — a Gantt that plays itself once it scrolls into view, a five-step stepper that
       fills in sync with the playhead, a failure simulation and one plain-language focus panel.
-   02 一批对话怎样排队 — a 16-conversation simulation whose bars grow with the playhead.
+   02 整批调度 — a 16-conversation simulation whose bars grow with the playhead.
    Every label is plain Chinese: no stage ids, file paths or command-line flags. */
 import { $, $$, segmented, REDUCED } from "./core.js";
 
@@ -58,9 +58,9 @@ export function timelineCardHTML() {
     <header class="card-head"><h2>归因时序</h2></header>
 
     <div class="tl-sections">
-      <section class="tl-sec" aria-label="一条对话怎样被评完">
+      <section class="tl-sec" aria-label="单条时间线">
         <div class="tl-subhead">
-          <h3><span class="tl-num num">01</span>一条对话怎样被评完</h3>
+          <h3><span class="tl-num num">01</span>单条时间线</h3>
           <div class="tl-end">
             <div class="seg" id="tl-lens-seg" role="group" aria-label="视角">
               <span class="seg-knob" aria-hidden="true"></span>
@@ -101,9 +101,9 @@ export function timelineCardHTML() {
         </div>
       </section>
 
-      <section class="tl-sec" aria-label="一批对话怎样排队">
+      <section class="tl-sec" aria-label="整批调度">
         <div class="tl-subhead">
-          <h3><span class="tl-num num">02</span>一批对话怎样排队</h3>
+          <h3><span class="tl-num num">02</span>整批调度</h3>
           <div class="tl-end">
             <div class="tl-step"><span class="tl-step-k">同时处理</span><button type="button" data-tl-g="conc" data-d="-1" aria-label="减少同时处理的对话">−</button><b class="num" id="tl-v-conc">6</b><button type="button" data-tl-g="conc" data-d="1" aria-label="增加同时处理的对话">+</button></div>
             <div class="tl-step"><span class="tl-step-k">请求上限</span><button type="button" data-tl-g="req" data-d="-2" aria-label="降低请求上限">−</button><b class="num" id="tl-v-req">12</b><button type="button" data-tl-g="req" data-d="2" aria-label="提高请求上限">+</button></div>
@@ -541,7 +541,7 @@ export function wireTimeline(root) {
     refreshCase();
   });
 
-  /* 02 · 一批对话怎样排队 */
+  /* 02 · 整批调度 */
   function rng(seed) {
     let s = seed;
     return () => {

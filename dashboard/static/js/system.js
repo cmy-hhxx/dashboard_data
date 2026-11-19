@@ -1,7 +1,4 @@
-/* 评测体系: one vertical slide. A conversation (01) pours into the compression hub (02), fans out into
-   the four attribution outputs (03), then funnels into a Galton board whose pegs scatter every problem
-   into one bin per failure mechanism — bins that sit exactly above the cluster matrix columns (04).
-   A cell opens a centered explanation dialog instead of leaving the page.
+/* 评测体系: one vertical slide (01 → 02 → 03 → 04 5-tier cluster tree → matrix) + centered cell dialog.
    Below: evidence closure (golden traces) and the attribution timeline. */
 import {
   $, $$, esc, fmt, SEV, sevColor, KIND, getJSON,
@@ -93,9 +90,9 @@ function buildTargets(root) {
   return $$(".bento > .card", root).flatMap((card) => [
     { el: card, kind: "frame", label: "Card" },
     { el: $(".card-head h2", card), kind: "text", label: "Heading" },
-    ...$$(".fx-stage > .fx-label, .fx-box, .fx-hub, .fx-cl-how, .fx-board, .fx-g, .echo-bar, .anatomy .rail, .anatomy .aprobs", card)
-      .map((el) => ({ el, kind: el.matches(".fx-label") ? "text" : el.matches(".fx-g, .fx-board, .fx-cl-how, .rail, .aprobs") ? "grid" : "block",
-        label: el.matches(".fx-g") ? "Heatmap" : el.matches(".fx-board") ? "Board" : el.matches(".fx-cl-how") ? "Method" : el.matches(".rail") ? "Messages" : el.matches(".aprobs") ? "Problems" : el.matches(".fx-label") ? "Label" : el.matches(".fx-hub") ? "Hub" : "Block" })),
+    ...$$(".fx-stage > .fx-label, .fx-box, .fx-hub, .fx-tree-wrap, .fx-tree-bar, .fx-g, .echo-bar, .anatomy .rail, .anatomy .aprobs", card)
+      .map((el) => ({ el, kind: el.matches(".fx-label") ? "text" : el.matches(".fx-g, .fx-tree-wrap, .rail, .aprobs") ? "grid" : "block",
+        label: el.matches(".fx-g") ? "Heatmap" : el.matches(".fx-tree-wrap") ? "Tree" : el.matches(".fx-tree-bar") ? "Controls" : el.matches(".rail") ? "Messages" : el.matches(".aprobs") ? "Problems" : el.matches(".fx-label") ? "Label" : el.matches(".fx-hub") ? "Hub" : "Block" })),
   ].filter((t) => t.el));
 }
 
@@ -121,10 +118,35 @@ const byPat = (a, b) => {
 const l3 = (tax) => Object.entries((tax && tax.patterns) || {}).filter(([id]) => id.split(".").length === 3);
 const l4 = (tax) => Object.entries((tax && tax.patterns) || {}).filter(([id]) => id.split(".").length === 4);
 
-/* Counts per cell: problems from the batch when there is one, else how many patterns the cell defines. */
+/* Accept either the data.json shell (`clusters`: {path: n}) or a loaded product payload (`patterns`: [{id, n}]). */
+function clusterMap(pd) {
+  if (!pd) return null;
+  if (pd.clusters && Object.keys(pd.clusters).length) return pd.clusters;
+  if (Array.isArray(pd.patterns) && pd.patterns.length) {
+    const out = {};
+    pd.patterns.forEach((p) => {
+      if (p && p.id && Number(p.n) > 0) out[p.id] = Number(p.n);
+    });
+    if (Object.keys(out).length) return out;
+  }
+  return null;
+}
+
+/* Counts per cell: clustered problems when available, else batch matrix, else defined patterns. */
 function cellCounts(tax, pd) {
   const pats = l3(tax);
   const byPattern = (sid, mid) => pats.filter(([id]) => id.startsWith(`${sid}.${mid}.`)).length;
+  const cl = clusterMap(pd);
+  if (cl) {
+    const cells = {};
+    Object.entries(cl).forEach(([path, rawN]) => {
+      const n = Number(rawN) || 0;
+      if (n <= 0) return;
+      const [s, m] = String(path).split(".");
+      if (s && m) cells[`${s}.${m}`] = (cells[`${s}.${m}`] || 0) + n;
+    });
+    return { unit: "问题", n: (sid, mid) => cells[`${sid}.${mid}`] || 0, has: byPattern };
+  }
   const mx = pd && pd.matrix;
   if (mx && Object.keys(mx).length) {
     return { unit: "问题", n: (sid, mid) => ((mx[sid] || {})[mid] || {}).n || 0, has: byPattern };
@@ -137,12 +159,270 @@ function matrixModel(tax, pd) {
   const mechs = (tax.mechanisms || []).slice().sort(taxoNum);
   const cc = cellCounts(tax, pd);
   let max = 0;
-  const colTot = mechs.map((m) => stages.reduce((s, st) => {
-    const v = cc.n(st.id, m.id);
-    max = Math.max(max, v);
-    return s + v;
-  }, 0));
-  return { stages, mechs, cc, max, colTot, maxCol: Math.max(1, ...colTot) };
+  stages.forEach((st) => mechs.forEach((m) => { max = Math.max(max, cc.n(st.id, m.id)); }));
+  return { stages, mechs, cc, max };
+}
+
+/* 5-tier cluster tree: 全部问题 → 阶段 → 环节 → 错法 → 标准模式 (leaves).
+   Keeps phases & stages in non-crossing planar order (phase order -> stage order -> mech -> pattern). */
+export function treeModel(tax, pd) {
+  const root = { id: "root", row: 0, name: "全部问题", children: [], n: 0, parent: null };
+  if (!tax) {
+    return { root, all: [root], phases: [], stages: [], cells: [], leaves: [], byId: new Map([["root", root]]), maxLeaf: 1, unit: "问题" };
+  }
+  const cl = clusterMap(pd);
+  const mx = !cl && pd && pd.matrix && Object.keys(pd.matrix).length ? pd.matrix : null;
+  const unit = cl || mx ? "问题" : "模式";
+  const leaves = new Map();
+
+  if (cl) {
+    Object.entries(cl).forEach(([path, rawN]) => {
+      const n = Number(rawN) || 0;
+      const p = String(path).split(".");
+      if (p.length < 2 || n <= 0) return;
+      const id = p.length >= 3 ? p.slice(0, 3).join(".") : `${p[0]}.${p[1]}.~`;
+      leaves.set(id, (leaves.get(id) || 0) + n);
+    });
+  } else if (mx) {
+    const allL3 = l3(tax).sort(byPat);
+    Object.entries(mx).forEach(([s, mechs]) => {
+      Object.entries(mechs || {}).forEach(([m, info]) => {
+        const n = Number(info && info.n) || 0;
+        if (n <= 0) return;
+        const pats = allL3.filter(([id]) => id.startsWith(`${s}.${m}.`));
+        if (!pats.length) {
+          leaves.set(`${s}.${m}.~`, (leaves.get(`${s}.${m}.~`) || 0) + n);
+          return;
+        }
+        const base = Math.floor(n / pats.length);
+        const rem = n % pats.length;
+        pats.forEach(([id], idx) => {
+          const share = base + (idx < rem ? 1 : 0);
+          if (share > 0) leaves.set(id, (leaves.get(id) || 0) + share);
+        });
+      });
+    });
+  } else {
+    l3(tax).forEach(([id]) => leaves.set(id, 1));
+  }
+
+  const stageById = new Map((tax.stages || []).map((s, idx) => [s.id, { ...s, _idx: idx }]));
+  const mechById = new Map((tax.mechanisms || []).map((m) => [m.id, m]));
+  const stageNodes = new Map();
+  [...leaves.entries()].forEach(([id, n]) => {
+    const [s, m] = id.split(".");
+    const st = stageById.get(s);
+    if (!st) return;
+    let sn = stageNodes.get(s);
+    if (!sn) {
+      sn = { id: s, row: 2, name: st.name, s, phase: st.phase, _idx: st._idx, children: [], n: 0, parent: null };
+      stageNodes.set(s, sn);
+    }
+    let cn = sn.children.find((c) => c.m === m);
+    if (!cn) {
+      cn = { id: `${s}.${m}`, row: 3, name: (mechById.get(m) || {}).name || m, s, m, children: [], n: 0, parent: sn };
+      sn.children.push(cn);
+    }
+    const pt = (tax.patterns || {})[id];
+    cn.children.push({ id, row: 4, name: (pt && pt.name) || "未细分", plain: pt && pt.plain, s, m, children: [], n, parent: cn });
+  });
+
+  const phases = (tax.phases || []).map((ph) => ({ id: `ph:${ph.id}`, row: 1, name: ph.name, phase: ph.id, children: [], n: 0, parent: root }));
+  const phaseById = new Map(phases.map((ph) => [ph.phase, ph]));
+  const orphanStages = [];
+
+  [...stageNodes.values()]
+    .sort((a, b) => a._idx - b._idx)
+    .forEach((sn) => {
+      sn.children.sort((a, b) => (Number(a.m.slice(1)) - Number(b.m.slice(1))) || a.m.localeCompare(b.m));
+      sn.children.forEach((cn) => {
+        cn.children.sort((a, b) => byPat([a.id], [b.id]));
+        cn.n = cn.children.reduce((t, x) => t + x.n, 0);
+      });
+      sn.n = sn.children.reduce((t, x) => t + x.n, 0);
+      const ph = phaseById.get(sn.phase);
+      if (ph) {
+        sn.parent = ph;
+        ph.children.push(sn);
+      } else {
+        sn.parent = root;
+        orphanStages.push(sn);
+      }
+    });
+
+  const activePhases = phases.filter((ph) => {
+    ph.n = ph.children.reduce((t, x) => t + x.n, 0);
+    return ph.children.length > 0;
+  });
+  root.children = [...activePhases, ...orphanStages];
+  root.n = root.children.reduce((t, x) => t + x.n, 0);
+
+  const stages = [...activePhases.flatMap((ph) => ph.children), ...orphanStages];
+  const cells = stages.flatMap((sn) => sn.children);
+  const leafList = cells.flatMap((cn) => cn.children);
+  const all = [root, ...activePhases, ...stages, ...cells, ...leafList];
+  const byId = new Map(all.map((n) => [n.id, n]));
+  const maxLeaf = Math.max(1, ...leafList.map((l) => l.n));
+  return { root, all, phases: activePhases, stages, cells, leaves: leafList, byId, maxLeaf, unit };
+}
+
+const TREE_W = 1280;
+const TREE_H = 432;
+const TREE_PAD = 64;
+const TREE_Y = [32, 108, 192, 278, 352];
+const TIERS = [["总计", TREE_Y[0]], ["阶段", TREE_Y[1]], ["环节", TREE_Y[2]], ["错法", TREE_Y[3]], ["模式", TREE_Y[4]]];
+
+function relaxX(nodes, minGap, minX, maxX) {
+  if (!nodes.length) return;
+  if (nodes.length === 1) {
+    nodes[0].x = Math.max(minX, Math.min(maxX, nodes[0].x));
+    return;
+  }
+  const span = Math.max(0, maxX - minX);
+  const step = Math.min(minGap, span / Math.max(1, nodes.length - 1));
+  for (let pass = 0; pass < 4; pass++) {
+    nodes[0].x = Math.max(minX, nodes[0].x);
+    for (let i = 1; i < nodes.length; i++) {
+      if (nodes[i].x - nodes[i - 1].x < step) nodes[i].x = nodes[i - 1].x + step;
+    }
+    nodes[nodes.length - 1].x = Math.min(maxX, nodes[nodes.length - 1].x);
+    for (let i = nodes.length - 2; i >= 0; i--) {
+      if (nodes[i + 1].x - nodes[i].x < step) nodes[i].x = nodes[i + 1].x - step;
+    }
+    nodes[0].x = Math.max(minX, nodes[0].x);
+  }
+}
+
+/* Center-aligned tidy layout with anti-collision relaxation on every tier. */
+function layoutTree(model, W = TREE_W) {
+  const usable = W - TREE_PAD * 2;
+  const stages = model.stages;
+  model.root.x = W / 2;
+  model.root.y = TREE_Y[0];
+  if (!stages.length) return { ...model, cellMode: "pill", cellW: 52, minLeafDx: 48, showLeafNums: false };
+
+  const contentW = stages.length <= 7 ? Math.min(usable, Math.max(440, stages.length * 150)) : usable;
+  const minSpan = Math.min(84, contentW / stages.length);
+  const extra = Math.max(0, contentW - stages.length * minSpan);
+  const leafCounts = stages.map((sn) => Math.max(1, sn.children.reduce((t, c) => t + c.children.length, 0)));
+  const weights = leafCounts.map((c) => Math.max(0, c - 1));
+  const wSum = weights.reduce((a, b) => a + b, 0);
+
+  let x = (W - contentW) / 2;
+  stages.forEach((sn, i) => {
+    const span = wSum > 0 ? minSpan + extra * (weights[i] / wSum) : contentW / stages.length;
+    sn.x = x + span / 2;
+    sn.span = span;
+    sn.w = Math.min(92, Math.max(66, span - 6));
+    const padIn = Math.min(18, span * 0.16);
+    const leaves = sn.children.flatMap((c) => c.children);
+    leaves.forEach((lf, k) => {
+      lf.x = x + padIn + ((k + 0.5) * Math.max(1, span - padIn * 2)) / leaves.length;
+    });
+    sn.children.forEach((cn) => {
+      cn.x = cn.children.reduce((t, l) => t + l.x, 0) / cn.children.length;
+    });
+    x += span;
+  });
+
+  relaxX(stages, 72, 92, W - 92);
+
+  model.phases.forEach((ph) => {
+    const first = ph.children[0];
+    const last = ph.children[ph.children.length - 1];
+    ph.x = (first.x + last.x) / 2;
+  });
+  relaxX(model.phases, 118, 118, W - 118);
+
+  const cells = model.cells;
+  const cellMode = cells.length <= 20 ? "pill" : "circle";
+  const cellW = cellMode === "pill" ? Math.min(48, Math.max(40, (W - 180) / Math.max(1, cells.length) - 8)) : 24;
+  if (cellMode === "pill") relaxX(cells, cellW + 12, 92, W - 92);
+  else {
+    const cellR = Math.max(9.5, Math.min(12.5, (contentW / Math.max(1, cells.length)) * 0.42));
+    cells.forEach((cn) => { cn.r = cellR; });
+    relaxX(cells, cellR * 2 + 4, 78, W - 78);
+  }
+
+  const leaves = model.leaves;
+  let minInitDx = leaves.length > 1 ? Infinity : 48;
+  for (let i = 1; i < leaves.length; i++) minInitDx = Math.min(minInitDx, leaves[i].x - leaves[i - 1].x);
+  const maxR = Math.max(3.5, Math.min(10.5, minInitDx * 0.34));
+  const minR = Math.max(2.6, maxR * 0.48);
+  relaxX(leaves, maxR * 2 + 4, 72, W - 72);
+
+  let minFinalDx = leaves.length > 1 ? Infinity : 48;
+  for (let i = 1; i < leaves.length; i++) minFinalDx = Math.min(minFinalDx, leaves[i].x - leaves[i - 1].x);
+  const leafRadius = (count) => {
+    if (count <= 0) return minR;
+    return minR + Math.sqrt(Math.min(1, count / model.maxLeaf)) * (maxR - minR);
+  };
+  leaves.forEach((lf) => { lf.r = leafRadius(lf.n); });
+  model.all.forEach((n) => { n.y = TREE_Y[n.row]; });
+  const showLeafNums = leaves.length <= 24 && minFinalDx >= 26;
+  return { ...model, cellMode, cellW, maxR, minR, leafRadius, minFinalDx, showLeafNums };
+}
+
+const nodeHalf = (n, cellMode) => (n.row === 0 ? 21 : n.row === 1 ? 15 : n.row === 2 ? 22 : n.row === 3 ? (cellMode === "pill" ? 12 : n.r || 11) : n.r || 5);
+
+function linkCurve(n, cellMode) {
+  const p = n.parent;
+  const y0 = p.y + nodeHalf(p, cellMode);
+  const y1 = n.y - nodeHalf(n, cellMode);
+  const ym = (y0 + y1) / 2;
+  return { x0: p.x, y0, ym, x1: n.x, y1 };
+}
+
+function treeSVG(model, W = TREE_W) {
+  const tiers = TIERS.map(([lbl, y]) =>
+    `<line class="fx-tier-line" x1="50" y1="${y}" x2="${W - 24}" y2="${y}"/><text class="fx-tier-lbl" x="12" y="${y + 4}">${lbl}</text>`
+  ).join("");
+
+  const links = model.all.filter((n) => n.parent).map((n) => {
+    const c = linkCurve(n, model.cellMode);
+    return `<path class="fx-link r${n.row}" data-link="${esc(n.id)}" pathLength="1" d="M${c.x0.toFixed(1)} ${c.y0.toFixed(1)}C${c.x0.toFixed(1)} ${c.ym.toFixed(1)} ${c.x1.toFixed(1)} ${c.ym.toFixed(1)} ${c.x1.toFixed(1)} ${c.y1.toFixed(1)}"/>`;
+  }).join("");
+
+  const nodes = model.all.map((n) => {
+    const at = `data-node="${esc(n.id)}" data-tip="t"`;
+    if (n.row === 0) {
+      return `<g class="fx-tn is-root" ${at}><rect x="${(n.x - 110).toFixed(1)}" y="${n.y - 21}" width="220" height="42" rx="21"/>
+        <text class="fx-tn-k" x="${(n.x - 88).toFixed(1)}" y="${n.y + 5}">全部问题</text>
+        <text class="fx-tn-big num" x="${(n.x + 88).toFixed(1)}" y="${n.y + 6}" text-anchor="end" data-num="root">${fmt(n.n)}</text></g>`;
+    }
+    if (n.row === 1) {
+      return `<g class="fx-tn is-phase" ${at}><rect x="${(n.x - 54).toFixed(1)}" y="${n.y - 15}" width="108" height="30" rx="15"/>
+        <text class="fx-tn-name" x="${(n.x - 38).toFixed(1)}" y="${n.y + 4.5}">${esc(n.name)}</text>
+        <text class="fx-tn-num num" x="${(n.x + 39).toFixed(1)}" y="${n.y + 4.5}" text-anchor="end" data-num="${esc(n.id)}">${fmt(n.n)}</text></g>`;
+    }
+    if (n.row === 2) {
+      const w = n.w || 78;
+      return `<g class="fx-tn is-stage" ${at} role="button" tabindex="0" aria-label="${esc(`${n.name}：${fmt(n.n)}，查看口径`)}"><rect x="${(n.x - w / 2).toFixed(1)}" y="${n.y - 22}" width="${w.toFixed(1)}" height="44" rx="11"/>
+        <text class="fx-tn-name" x="${n.x.toFixed(1)}" y="${n.y - 3}" text-anchor="middle">${esc(n.name)}</text>
+        <text class="fx-tn-num num" x="${n.x.toFixed(1)}" y="${n.y + 13}" text-anchor="middle" data-num="${esc(n.id)}">${fmt(n.n)}</text></g>`;
+    }
+    if (n.row === 3) {
+      if (model.cellMode === "pill") {
+        const w = model.cellW;
+        return `<g class="fx-tn is-cell" ${at} role="button" tabindex="0" aria-label="${esc(`${n.id} ${n.name}：查看口径`)}"><rect x="${(n.x - w / 2).toFixed(1)}" y="${n.y - 12}" width="${w.toFixed(1)}" height="24" rx="8"/>
+          <text class="fx-tn-code" x="${(n.x - w / 2 + 7).toFixed(1)}" y="${n.y + 4}">${esc(n.m)}</text>
+          <text class="fx-tn-cnum num" x="${(n.x + w / 2 - 7).toFixed(1)}" y="${n.y + 4}" text-anchor="end" data-num="${esc(n.id)}">${fmt(n.n)}</text></g>`;
+      }
+      const r = n.r || 11;
+      return `<g class="fx-tn is-cell is-circle" ${at} role="button" tabindex="0" aria-label="${esc(`${n.id} ${n.name}：查看口径`)}"><circle cx="${n.x.toFixed(1)}" cy="${n.y}" r="${r.toFixed(1)}"/>
+        <text class="fx-tn-code" x="${n.x.toFixed(1)}" y="${n.y + 3.5}" text-anchor="middle">${esc(n.m)}</text></g>`;
+    }
+    const lbl = model.showLeafNums ? `<text class="fx-tn-lnum num" x="${n.x.toFixed(1)}" y="${(n.y + model.maxR + 13).toFixed(1)}" text-anchor="middle" data-num="${esc(n.id)}">${fmt(n.n)}</text>` : "";
+    return `<g class="fx-tn is-leaf" ${at} role="button" tabindex="0" aria-label="${esc(`${n.name}：查看口径`)}"><circle cx="${n.x.toFixed(1)}" cy="${n.y}" r="${n.r.toFixed(1)}"/><circle class="fx-tn-hit" cx="${n.x.toFixed(1)}" cy="${n.y}" r="14"/>${lbl}</g>`;
+  }).join("");
+
+  return `<svg class="fx-tree" id="fxTree" viewBox="0 0 ${W} ${TREE_H}" width="${W}" height="${TREE_H}" role="img" aria-label="聚类树：全部问题按阶段、环节、错法逐层展开到标准模式">
+    <g class="fx-tiers" aria-hidden="true">${tiers}</g>
+    <g class="fx-links">${links}</g>
+    <g class="fx-nodes">${nodes}</g>
+    <g class="fx-fx" aria-hidden="true"></g>
+    <g class="fx-toasts" aria-hidden="true"></g>
+  </svg>`;
 }
 
 export function flowCard(tax, pd) {
@@ -162,42 +442,40 @@ export function flowCard(tax, pd) {
     return `<div class="fx-box fx-out" data-o="${i}" style="--c:${c}" title="${tip}">${ico}<b>${t}</b></div>`;
   }).join("");
 
-  const clHow = `<div class="fx-cl-how">
-    <div class="fx-how-step"><div class="fx-how-top"><span class="num">01</span><b>先看出在哪一步</b></div>
-      <p>按归因认定的责任组件，把问题落到「规划、请求、执行、交付」下的某个环节，这是矩阵的行。</p></div>
-    <div class="fx-how-step"><div class="fx-how-top"><span class="num">02</span><b>再看错在哪种方式</b></div>
-      <p>同一环节里，按错法再分一次，比如没去做、找错了对象、算错了、没依据就下结论，这是矩阵的列。</p></div>
-    <div class="fx-how-step"><div class="fx-how-top"><span class="num">03</span><b>最后归进标准模式</b></div>
-      <p>同一格里相似的问题合成一种标准模式，写清收什么、不收什么；对不上任何模式的问题保持「未聚类」。</p></div>
-  </div>`;
+  const model = tax ? layoutTree(treeModel(tax, pd), TREE_W) : null;
+  const hasTree = !!(model && model.leaves.length);
+  const treeBlock = hasTree
+    ? `<div class="fx-tree-wrap">${treeSVG(model, TREE_W)}</div>
+      <div class="fx-tree-bar" id="fxTreeBar">
+        <div class="fx-stats">
+          <div class="fx-stat"><span>已归入</span><b class="num" id="fxStatProb">${fmt(model.root.n)}</b><span class="faint num"> / ${fmt(model.root.n)}</span></div>
+          <div class="fx-stat"><span>标准模式</span><b class="num" id="fxStatLeaf">${fmt(model.leaves.length)}</b><span class="faint num"> / ${fmt(model.leaves.length)}</span></div>
+        </div>
+        <div class="fx-feed" id="fxFeed" aria-live="polite"><span class="fx-feed-dot" aria-hidden="true"></span><span class="fx-feed-txt">${model.unit === "问题" ? "问题汇总就绪" : "模式树就绪"}</span></div>
+        <div class="fx-ctls">
+          <button type="button" class="fx-ctl" id="fxPause" aria-pressed="false">暂停</button>
+          <button type="button" class="fx-ctl" id="fxReplay">重播</button>
+        </div>
+      </div>
+      ${taxGrid(tax, pd)}`
+    : `<div class="empty">聚类树待接入</div>`;
 
   return `<article class="card fx-card" style="--span:12">
     <header class="card-head"><h2>评测体系</h2></header>
     <div class="fx-diagram" id="fxDiagram">
       <svg class="fx-wires" aria-hidden="true"></svg>
       <canvas class="fx-sparks" aria-hidden="true"></canvas>
-      <section class="fx-stage"><div class="fx-label"><span class="num">01</span>一段对话</div><div class="fx-row">${ins}</div></section>
-      <section class="fx-stage fx-mid"><div class="fx-label"><span class="num">02</span>压缩成要点</div>
+      <section class="fx-stage"><div class="fx-label"><span class="num">01</span>原始对话</div><div class="fx-row">${ins}</div></section>
+      <section class="fx-stage fx-mid"><div class="fx-label"><span class="num">02</span>轨迹压缩</div>
         <div class="fx-hub"><span class="fx-orbit"><i></i></span><svg class="fx-ring" viewBox="-80 -80 160 160" aria-hidden="true">${ticks}</svg><span class="fx-core"><span>${tiles}</span></span></div>
       </section>
-      <section class="fx-stage"><div class="fx-label"><span class="num">03</span>找出问题</div><div class="fx-row">${outs}</div></section>
+      <section class="fx-stage"><div class="fx-label"><span class="num">03</span>问题归因</div><div class="fx-row">${outs}</div></section>
       <section class="fx-stage fx-tax" id="fxTax">
-        <div class="fx-label"><span class="num">04</span>落进分类</div>
-        ${tax ? `${taxBoard(tax, pd)}${clHow}${taxGrid(tax, pd)}` : `${clHow}<div class="empty">聚类矩阵待接入</div>`}
+        <div class="fx-label"><span class="num">04</span>层级聚类</div>
+        ${treeBlock}
       </section>
     </div>
   </article>`;
-}
-
-/* The Galton board: pegs are drawn into the shared SVG, bins share the matrix's column grid so every
-   bin stands right above its own mechanism column. */
-function taxBoard(tax, pd) {
-  const { mechs, cc, colTot, maxCol } = matrixModel(tax, pd);
-  return `<div class="fx-board" id="fxBoard" style="--cols:${mechs.length}">
-    <div class="fx-pegs" id="fxPegs" aria-hidden="true"></div>
-    <span class="fx-board-k">${cc.unit === "问题" ? "每种错法的问题数" : "每种错法的模式数"}</span>
-    ${mechs.map((m, j) => `<div class="fx-bin" data-m="${m.id}" style="--v:${(colTot[j] / maxCol).toFixed(3)};--j:${j}"><b class="num">${fmt(colTot[j])}</b><i></i></div>`).join("")}
-  </div>`;
 }
 
 function taxGrid(tax, pd) {
@@ -211,14 +489,27 @@ function taxGrid(tax, pd) {
     return list.map((st, i) => `${i === 0 ? `<span class="fx-g-ph" style="grid-row:span ${list.length}">${esc(ph.name)}</span>` : ""}<button type="button" class="fx-g-row" data-s="${st.id}" data-tip="s" aria-label="${esc(`${st.name}：查看口径`)}"><code>${st.id}</code><span>${esc(st.name)}</span></button>${mechs.map((m) => {
       const v = cc.n(st.id, m.id);
       return v || cc.has(st.id, m.id)
-        ? `<button type="button" class="fx-g-c${Number(heat(v)) > 0.62 ? " is-hot" : ""}" data-s="${st.id}" data-m="${m.id}" data-n="${v}" data-tip="c" style="--h:${heat(v)}" aria-label="${esc(`${st.name} × ${m.name}：${fmt(v)} 个${cc.unit}，查看口径`)}"><b class="num">${v ? fmt(v) : "·"}</b></button>`
+        ? `<button type="button" class="fx-g-c${Number(heat(v)) > 0.62 ? " is-hot" : ""}" data-s="${st.id}" data-m="${m.id}" data-n="${v}" data-max="${max}" data-tip="c" style="--h:${heat(v)}" aria-label="${esc(`${st.name} × ${m.name}：${fmt(v)} 个${cc.unit}，查看口径`)}"><b class="num">${v ? fmt(v) : "·"}</b></button>`
         : `<span class="fx-g-c is-empty" data-s="${st.id}" data-m="${m.id}"></span>`;
     }).join("")}`).join("");
   }).join("");
   return `<div class="fx-gw" data-unit="${cc.unit}"><div class="fx-g" style="--cols:${mechs.length}">${head}${body}</div></div>`;
 }
 
-function taxTip(tax, el) {
+function taxTip(tax, el, state) {
+  const tid = el.dataset.node;
+  if (tid && state && state.model) {
+    const n = state.model.byId.get(tid);
+    if (!n) return null;
+    const now = state.live.get(n.id) ?? n.n;
+    const isHidden = el.classList.contains("is-hidden");
+    const rowLabel = state.model.unit === "问题" ? "问题" : "模式";
+    const sub = n.row === 4 && n.plain ? `<div class="t-note">${esc(n.plain)}</div>` : n.row === 3 ? `<div class="t-note">${esc(n.s)} × ${esc(n.m)}</div>` : "";
+    const countRow = isHidden
+      ? `<div class="t-row">${rowLabel}<b class="num">待生成</b></div>`
+      : `<div class="t-row">${rowLabel}<b class="num">${fmt(now)}${now !== n.n ? ` / ${fmt(n.n)}` : ""}</b></div>`;
+    return `<div class="t-head">${n.row >= 3 ? `<code>${esc(n.id)}</code> ` : ""}${esc(n.name)}</div>${countRow}${sub}`;
+  }
   const sid = el.dataset.s || null;
   const mid = el.dataset.m || null;
   const st = sid && tax.stages.find((x) => x.id === sid);
@@ -243,7 +534,35 @@ function matchingPatterns(tax, sid, mid) {
   return { top, byParent };
 }
 
+function patternCounts(pd) {
+  const cl = clusterMap(pd);
+  if (!cl) return null;
+  const counts = new Map();
+  Object.entries(cl).forEach(([path, rawN]) => {
+    const n = Number(rawN) || 0;
+    if (n <= 0) return;
+    counts.set(path, (counts.get(path) || 0) + n);
+    const parts = String(path).split(".");
+    if (parts.length >= 4) {
+      const p3 = parts.slice(0, 3).join(".");
+      counts.set(p3, (counts.get(p3) || 0) + n);
+    }
+  });
+  return counts;
+}
+
 function batchCountOf(pd, sid, mid) {
+  const cl = clusterMap(pd);
+  if (cl) {
+    let total = 0;
+    Object.entries(cl).forEach(([path, rawN]) => {
+      const [s, m] = String(path).split(".");
+      if (sid && s !== sid) return;
+      if (mid && m !== mid) return;
+      total += Number(rawN) || 0;
+    });
+    return total;
+  }
   const mx = pd && pd.matrix;
   if (!mx || !Object.keys(mx).length) return null;
   let total = 0;
@@ -263,12 +582,13 @@ const ICON_L = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d=
 const ICON_R = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 /* Pure markup for one cell (S × M), one stage (S) or one mechanism (M); exported for tests. */
-export function cellModalHTML(tax, pd, sid, mid, { pos = null } = {}) {
+export function cellModalHTML(tax, pd, sid, mid, { pos = null, pattern = null } = {}) {
   const st = sid ? (tax.stages || []).find((x) => x.id === sid) : null;
   const m = mid ? (tax.mechanisms || []).find((x) => x.id === mid) : null;
   if (!st && !m) return `<div class="sm-body"><p class="sm-lead">没有找到这一格的口径。</p></div>`;
   const cc = cellCounts(tax, pd);
   const n = batchCountOf(pd, st && st.id, m && m.id);
+  const pCounts = patternCounts(pd);
   const { top, byParent } = matchingPatterns(tax, st && st.id, m && m.id);
   const title = st && m ? `${st.name} × ${m.name}` : (st || m).name;
   const coord = [st && st.id, m && m.id].filter(Boolean).map((c) => `<code>${esc(c)}</code>`).join('<i aria-hidden="true">×</i>');
@@ -289,8 +609,10 @@ export function cellModalHTML(tax, pd, sid, mid, { pos = null } = {}) {
   if (st && m) {
     body = top.length ? `<section class="sm-sec"><h3>这一格收哪些问题</h3><ol class="sm-pats">${top.map(([pid, pt]) => {
       const subs = byParent.get(pid) || [];
-      return `<li class="sm-pat">
-        <div class="sm-pat-head"><code>${esc(pid)}</code><b>${esc(pt.name || pid)}</b></div>
+      const pn = pCounts ? pCounts.get(pid) || 0 : 0;
+      const focus = pattern === pid ? " is-focus" : "";
+      return `<li class="sm-pat${focus}" data-pid="${esc(pid)}">
+        <div class="sm-pat-head"><code>${esc(pid)}</code><b>${esc(pt.name || pid)}</b>${pn ? `<span class="sm-pat-n num">${fmt(pn)}</span>` : ""}</div>
         ${pt.plain || pt.def ? `<p>${esc(pt.plain || pt.def)}</p>` : ""}
         ${pt.include || pt.exclude ? `<div class="sm-bounds">
           <div><span>算进来</span><p>${esc(pt.include || "—")}</p></div>
@@ -327,7 +649,7 @@ export function cellModalHTML(tax, pd, sid, mid, { pos = null } = {}) {
       ${nav}
       <span class="sm-spacer"></span>
       <button type="button" class="sm-btn" data-copy-spec>复制口径</button>
-      <button type="button" class="sm-btn is-primary" data-samples="${esc(st ? st.id : "")}|${esc(m ? m.id : "")}">查看真实样本</button>
+      <button type="button" class="sm-btn is-primary" data-samples="${esc(st ? st.id : "")}|${esc(m ? m.id : "")}|${esc(pattern || "")}">查看真实样本</button>
     </footer>`;
 }
 
@@ -345,11 +667,11 @@ function specText(tax, sid, mid) {
   ].filter(Boolean).join("\n");
 }
 
-function paintModal(key, swap) {
+function paintModal(key, swap, pattern = null) {
   const [sid, mid] = key.split("|");
   const panel = $(".sm-panel", MOD.el);
   const i = sid && mid ? MOD.list.indexOf(`${sid}.${mid}`) : -1;
-  panel.innerHTML = cellModalHTML(E.tax, E.pd, sid || null, mid || null, { pos: i >= 0 ? { i, n: MOD.list.length } : null });
+  panel.innerHTML = cellModalHTML(E.tax, E.pd, sid || null, mid || null, { pos: i >= 0 ? { i, n: MOD.list.length } : null, pattern });
   MOD.key = key;
   if (swap && !REDUCED) {
     panel.classList.remove("is-swap");
@@ -358,6 +680,14 @@ function paintModal(key, swap) {
   }
   $$("#fxTax .is-sel", document).forEach((x) => x.classList.remove("is-sel"));
   if (sid && mid) $(`#fxTax .fx-g-c[data-s="${sid}"][data-m="${mid}"]`)?.classList.add("is-sel");
+  const treeTarget = pattern ? `${pattern}` : sid && mid ? `${sid}.${mid}` : sid;
+  if (treeTarget) $(`#fxTree .fx-tn[data-node="${treeTarget}"]`)?.classList.add("is-sel");
+  if (pattern) {
+    requestAnimationFrame(() => {
+      const hit = $(".sm-pat.is-focus", panel);
+      hit?.scrollIntoView?.({ block: "nearest", behavior: REDUCED ? "auto" : "smooth" });
+    });
+  }
 }
 
 function onModalKey(e) {
@@ -377,7 +707,7 @@ function onModalKey(e) {
   }
 }
 
-function openCellModal(sid, mid, from) {
+function openCellModal(sid, mid, from, pattern = null) {
   if (!E.tax) return;
   hideTip();
   MOD.list = $$("#fxTax .fx-g-c:not(.is-empty)").map((x) => `${x.dataset.s}.${x.dataset.m}`);
@@ -414,19 +744,19 @@ function openCellModal(sid, mid, from) {
       }
       const go = e.target.closest("[data-samples]");
       if (go) {
-        const [s, m] = go.dataset.samples.split("|");
+        const [s, m, pat] = go.dataset.samples.split("|");
         closeCellModal();
-        E.nav?.({ view: "samples", product: E.product, stage: s || null, mech: m || null, pattern: null, p: null, q: null, w: null, case: null, trace: null });
+        E.nav?.({ view: "samples", product: E.product, stage: s || null, mech: m || null, pattern: pat || null, p: null, q: null, w: null, case: null, trace: null });
       }
     });
-    paintModal(`${sid || ""}|${mid || ""}`, false);
+    paintModal(`${sid || ""}|${mid || ""}`, false, pattern);
     requestAnimationFrame(() => {
       el.classList.add("is-in");
       $(".sm-close", el)?.focus({ preventScroll: true });
     });
     return;
   }
-  paintModal(`${sid || ""}|${mid || ""}`, true);
+  paintModal(`${sid || ""}|${mid || ""}`, true, pattern);
 }
 
 function closeCellModal(now = false) {
@@ -614,31 +944,241 @@ function wireAnatomy(root, a) {
   });
 }
 
-/* ---------------------------------------------------------------- wiring: wires, pegs, falling sparks */
-function wireCluster(tx, tax) {
-  bindTips(tx, (el) => (el.closest(".fx-g") ? taxTip(tax, el) : null));
-  tx.addEventListener("pointerover", (e) => {
-    tx._hovering = true;
-    const c = e.target.closest(".fx-g-c:not(.is-empty)");
-    $$(".fx-g-row", tx).forEach((x) => x.classList.toggle("is-hl", !!c && x.dataset.s === c.dataset.s));
-    $$(".fx-g-col, .fx-bin", tx).forEach((x) => x.classList.toggle("is-hl", !!c && x.dataset.m === c.dataset.m));
+/* ---------------------------------------------------------------- wiring: living tree, matrix sync, sparks */
+const SVG_NS = "http://www.w3.org/2000/svg";
+const shortName = (s, max = 12) => (String(s || "").length > max ? `${String(s).slice(0, max)}…` : String(s || ""));
+
+function svgEl(tag, attrs, text) {
+  const el = document.createElementNS(SVG_NS, tag);
+  if (attrs) Object.entries(attrs).forEach(([k, v]) => { if (v != null) el.setAttribute(k, String(v)); });
+  if (text != null) el.textContent = String(text);
+  return el;
+}
+
+function prng(seed) {
+  let s = seed >>> 0;
+  return () => {
+    s = (s * 1664525 + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+}
+
+/* Deterministic schedule guaranteeing seed + sum(deltas) === leaf.n for every leaf,
+   and ensuring every unborn leaf's sprout spark precedes its follow-up match sparks. */
+export function buildReplaySchedule(model) {
+  const leaves = model.leaves || [];
+  const rand = prng(42);
+  const seedMap = new Map();
+  if (!leaves.length) return { seedMap, events: [] };
+
+  const seededIds = new Set();
+  const maxSeed = leaves.length >= 2 ? Math.max(1, Math.min(leaves.length - 1, Math.round(leaves.length * 0.38))) : 0;
+  if (maxSeed > 0) {
+    const byCount = leaves.slice().sort((a, b) => b.n - a.n);
+    const seenPhase = new Set();
+    byCount.forEach((lf) => {
+      if (seededIds.size >= maxSeed) return;
+      const phId = lf.parent?.parent?.parent?.id || "root";
+      if (!seenPhase.has(phId)) {
+        seenPhase.add(phId);
+        seededIds.add(lf.id);
+      }
+    });
+    byCount.forEach((lf) => {
+      if (seededIds.size < maxSeed) seededIds.add(lf.id);
+    });
+  }
+
+  const unbornLeaves = [];
+  const phaseBuckets = (model.phases.length ? model.phases : [{ children: model.stages }])
+    .map((ph) => {
+      const list = [];
+      (ph.children || []).forEach((sn) => (sn.children || []).forEach((cn) => (cn.children || []).forEach((lf) => {
+        if (!seededIds.has(lf.id)) list.push(lf);
+      })));
+      return list;
+    });
+  let more = true;
+  while (more) {
+    more = false;
+    phaseBuckets.forEach((q) => {
+      if (q.length) {
+        unbornLeaves.push(q.shift());
+        more = true;
+      }
+    });
+  }
+  leaves.forEach((lf) => {
+    if (!seededIds.has(lf.id) && !unbornLeaves.includes(lf)) unbornLeaves.push(lf);
   });
+
+  const splitChunks = (rem, maxK) => {
+    if (rem <= 0) return [];
+    const k = Math.min(rem, maxK);
+    const base = Math.floor(rem / k);
+    const extra = rem % k;
+    return Array.from({ length: k }, (_, i) => base + (i < extra ? 1 : 0));
+  };
+
+  const matchBudget = Math.max(12, Math.min(48, 62 - unbornLeaves.length));
+  const maxMatchPerLeaf = Math.max(1, Math.min(3, Math.ceil(matchBudget / Math.max(1, leaves.length))));
+  const seededMatches = [];
+  const sprouts = [];
+  const followupsBySprout = new Map();
+
+  leaves.forEach((lf) => {
+    if (seededIds.has(lf.id)) {
+      const init = lf.n <= 1 ? lf.n : Math.max(1, Math.round(lf.n * 0.25));
+      seedMap.set(lf.id, init);
+      splitChunks(lf.n - init, maxMatchPerLeaf).forEach((delta) => {
+        seededMatches.push({ leaf: lf, delta, isNew: false });
+      });
+    } else {
+      seedMap.set(lf.id, 0);
+    }
+  });
+
+  unbornLeaves.forEach((lf, idx) => {
+    const firstDelta = lf.n <= 1 ? lf.n : Math.min(lf.n, Math.max(1, Math.round(lf.n * 0.34)));
+    sprouts.push({ leaf: lf, delta: firstDelta, isNew: true });
+    const chunks = splitChunks(lf.n - firstDelta, Math.min(2, maxMatchPerLeaf)).map((delta) => ({ leaf: lf, delta, isNew: false }));
+    followupsBySprout.set(idx, chunks);
+  });
+
+  for (let i = seededMatches.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [seededMatches[i], seededMatches[j]] = [seededMatches[j], seededMatches[i]];
+  }
+
+  const S = sprouts.length;
+  const buckets = Array.from({ length: S + 1 }, () => []);
+  seededMatches.forEach((ev, k) => {
+    const b = k < 2 && S > 0 ? 0 : Math.floor(rand() * (S + 1));
+    buckets[b].push(ev);
+  });
+  followupsBySprout.forEach((chunks, sIdx) => {
+    chunks.forEach((ev) => {
+      const minB = sIdx + 1;
+      const b = minB + Math.floor(rand() * (S + 1 - minB));
+      buckets[b].push(ev);
+    });
+  });
+
+  const events = [];
+  for (let b = 0; b <= S; b++) {
+    const bk = buckets[b];
+    for (let i = bk.length - 1; i > 0; i--) {
+      const j = Math.floor(rand() * (i + 1));
+      [bk[i], bk[j]] = [bk[j], bk[i]];
+    }
+    bk.forEach((ev) => events.push(ev));
+    if (b < S) events.push(sprouts[b]);
+  }
+  return { seedMap, events };
+}
+
+function wireCluster(tx, tax, state) {
+  bindTips(tx, (el) => (el.closest(".fx-g") || el.closest(".fx-tree") ? taxTip(tax, el, state) : null));
+  const clearHl = () => $$(".is-hl", tx).forEach((x) => x.classList.remove("is-hl"));
+  const hlAncestors = (node) => {
+    for (let cur = node; cur; cur = cur.parent) {
+      $(`#fxTree .fx-tn[data-node="${cur.id}"]`, tx)?.classList.add("is-hl");
+      if (cur.parent) $(`#fxTree .fx-link[data-link="${cur.id}"]`, tx)?.classList.add("is-hl");
+    }
+  };
+  const hlSubtree = (node) => {
+    $(`#fxTree .fx-tn[data-node="${node.id}"]`, tx)?.classList.add("is-hl");
+    (node.children || []).forEach((ch) => {
+      $(`#fxTree .fx-link[data-link="${ch.id}"]`, tx)?.classList.add("is-hl");
+      hlSubtree(ch);
+    });
+  };
+
+  tx.addEventListener("pointerover", (e) => {
+    tx._hovering = !!e.target.closest(".fx-tree, .fx-g, .fx-tree-bar");
+    clearHl();
+    const tn = e.target.closest(".fx-tn[data-node]");
+    if (tn && state?.model) {
+      const n = state.model.byId.get(tn.dataset.node);
+      if (n) {
+        hlAncestors(n);
+        if (n.s) $(`.fx-g-row[data-s="${n.s}"]`, tx)?.classList.add("is-hl");
+        if (n.m) $(`.fx-g-col[data-m="${n.m}"]`, tx)?.classList.add("is-hl");
+        if (n.s && n.m) $(`.fx-g-c[data-s="${n.s}"][data-m="${n.m}"]`, tx)?.classList.add("is-hl");
+      }
+      return;
+    }
+    const c = e.target.closest(".fx-g-c:not(.is-empty)");
+    if (c) {
+      $(`.fx-g-row[data-s="${c.dataset.s}"]`, tx)?.classList.add("is-hl");
+      $(`.fx-g-col[data-m="${c.dataset.m}"]`, tx)?.classList.add("is-hl");
+      const cellNode = state?.model?.byId.get(`${c.dataset.s}.${c.dataset.m}`);
+      if (cellNode) { hlAncestors(cellNode); hlSubtree(cellNode); }
+      return;
+    }
+    const row = e.target.closest(".fx-g-row[data-s]");
+    if (row) {
+      row.classList.add("is-hl");
+      const stNode = state?.model?.byId.get(row.dataset.s);
+      if (stNode) { hlAncestors(stNode); hlSubtree(stNode); }
+      return;
+    }
+    const col = e.target.closest(".fx-g-col[data-m]");
+    if (col && state?.model) {
+      col.classList.add("is-hl");
+      state.model.cells.filter((cn) => cn.m === col.dataset.m).forEach((cn) => {
+        hlAncestors(cn);
+        hlSubtree(cn);
+      });
+    }
+  });
+
   tx.addEventListener("pointerleave", () => {
     tx._hovering = false;
-    $$(".is-hl", tx).forEach((x) => x.classList.remove("is-hl"));
+    clearHl();
   });
+
+  const activateTree = (tn) => {
+    if (!tn || !state?.model) return false;
+    const n = state.model.byId.get(tn.dataset.node);
+    if (!n) return false;
+    if (n.row === 2) { openCellModal(n.s, null, tn); return true; }
+    if (n.row === 3) { openCellModal(n.s, n.m, tn); return true; }
+    if (n.row === 4) { openCellModal(n.s, n.m, tn, n.id.endsWith(".~") ? null : n.id); return true; }
+    return false;
+  };
+
   tx.addEventListener("click", (e) => {
+    const tn = e.target.closest(".fx-tn[data-node]");
+    if (activateTree(tn)) return;
     const cell = e.target.closest(".fx-g-c:not(.is-empty)");
     if (cell) { openCellModal(cell.dataset.s, cell.dataset.m, cell); return; }
     const row = e.target.closest(".fx-g-row[data-s]");
     if (row) { openCellModal(row.dataset.s, null, row); return; }
-    const col = e.target.closest(".fx-g-col[data-m], .fx-bin[data-m]");
+    const col = e.target.closest(".fx-g-col[data-m]");
     if (col) openCellModal(null, col.dataset.m, col);
+  });
+
+  tx.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const tn = e.target.closest('.fx-tn[role="button"]');
+    if (!tn) return;
+    e.preventDefault();
+    activateTree(tn);
   });
 }
 
 const easeInOut = (u) => (u < 0.5 ? 4 * u * u * u : 1 - (-2 * u + 2) ** 3 / 2);
-const easeIn = (u) => u * u;
+
+function evalVBezier(seg, u) {
+  const m = 1 - u;
+  const m2 = m * m;
+  const u2 = u * u;
+  return {
+    x: m2 * m * seg.x0 + 3 * m2 * u * seg.x0 + 3 * m * u2 * seg.x1 + u2 * u * seg.x1,
+    y: m2 * m * seg.y0 + 3 * m2 * u * seg.ym + 3 * m * u2 * seg.ym + u2 * u * seg.y1,
+  };
+}
 
 function wireFx(root, tax, pd) {
   const diagram = $("#fxDiagram", root);
@@ -652,10 +1192,43 @@ function wireFx(root, tax, pd) {
   const ins = $$(".fx-in", diagram);
   const outs = $$(".fx-out", diagram);
   const tx = $("#fxTax", diagram);
-  const pegsEl = $("#fxPegs", diagram);
-  const bins = $$(".fx-bin", diagram);
-  const model = tax ? matrixModel(tax, pd) : null;
-  const geo = { board: null, dpr: 1, w: 0, h: 0 };
+  const treeSvg = $("#fxTree", diagram);
+  const fxLayer = treeSvg ? $(".fx-fx", treeSvg) : null;
+  const toastLayer = treeSvg ? $(".fx-toasts", treeSvg) : null;
+  const statProb = $("#fxStatProb", diagram);
+  const statLeaf = $("#fxStatLeaf", diagram);
+  const feedEl = $("#fxFeed", diagram);
+  const feedTxt = feedEl ? $(".fx-feed-txt", feedEl) : null;
+  const pauseBtn = $("#fxPause", diagram);
+  const replayBtn = $("#fxReplay", diagram);
+
+  const matModel = tax ? matrixModel(tax, pd) : null;
+  const tree = tax && treeSvg ? layoutTree(treeModel(tax, pd), TREE_W) : null;
+  const live = new Map();
+  if (tree) tree.all.forEach((n) => live.set(n.id, n.n));
+  const fxState = { model: tree, live };
+
+  const nodeElMap = new Map();
+  const numElMap = new Map();
+  const linkElMap = new Map();
+  const leafCircleMap = new Map();
+  if (treeSvg) {
+    $$(".fx-tn[data-node]", treeSvg).forEach((el) => {
+      nodeElMap.set(el.dataset.node, el);
+      if (el.classList.contains("is-leaf")) leafCircleMap.set(el.dataset.node, el.querySelector("circle"));
+    });
+    $$("[data-num]", treeSvg).forEach((el) => numElMap.set(el.dataset.num, el));
+    $$(".fx-link[data-link]", treeSvg).forEach((el) => linkElMap.set(el.dataset.link, el));
+  }
+
+  const cellEls = new Map();
+  if (tx) {
+    $$(".fx-g-c[data-s][data-m]:not(.is-empty)", tx).forEach((el) => {
+      cellEls.set(`${el.dataset.s}.${el.dataset.m}`, { el, b: el.querySelector("b") });
+    });
+  }
+
+  const geo = { dpr: 1, w: 0, h: 0, hasTree: false, links: new Map() };
   const paths = new Map();
 
   const draw = () => {
@@ -673,25 +1246,30 @@ function wireFx(root, tax, pd) {
     let d = "";
     ins.forEach((b, i) => { const r = rel(b); d += vcurve(r.cx, r.b, hr.cx, hr.t + 18, `fw-i${i}`, "in"); });
     outs.forEach((b, i) => { const r = rel(b); d += vcurve(hr.cx, hr.b - 18, r.cx, r.t, `fw-o${i}`, "out"); });
-    geo.board = null;
-    if (pegsEl && bins.length > 1) {
-      const pg = rel(pegsEl);
-      const centers = bins.map((b) => rel(b));
-      const cols = bins.length;
-      const rows = cols - 1;
-      const w = (centers[cols - 1].cx - centers[0].cx) / (cols - 1);
-      const apex = { x: (centers[0].cx + centers[cols - 1].cx) / 2, y: pg.t + 6 };
-      const gap = (pg.hgt - 18) / rows;
-      const pegY = (r) => apex.y + 14 + r * gap;
-      outs.forEach((b, i) => { const r = rel(b); d += vcurve(r.cx, r.b, apex.x, apex.y - 2, `fw-c${i}`, "funnel"); });
-      for (let r = 0; r < rows; r++) {
-        for (let k = 0; k <= r; k++) {
-          d += `<circle class="fx-peg" cx="${(apex.x + (k - r / 2) * w).toFixed(1)}" cy="${pegY(r).toFixed(1)}" r="2.6"/>`;
-        }
+
+    geo.links.clear();
+    geo.hasTree = false;
+    if (tree && treeSvg) {
+      const tr = treeSvg.getBoundingClientRect();
+      if (tr.width > 0 && tr.height > 0) {
+        const sx = tr.width / TREE_W;
+        const sy = tr.height / TREE_H;
+        const mapPt = (nx, ny) => ({ x: tr.left - h.left + nx * sx, y: tr.top - h.top + ny * sy });
+        const rootTop = mapPt(tree.root.x, tree.root.y - 21);
+        outs.forEach((b, i) => {
+          const r = rel(b);
+          d += vcurve(r.cx, r.b, rootTop.x, rootTop.y, `fw-c${i}`, "funnel");
+        });
+        tree.all.filter((n) => n.parent).forEach((n) => {
+          const c = linkCurve(n, tree.cellMode);
+          const p0 = mapPt(c.x0, c.y0);
+          const p1 = mapPt(c.x1, c.y1);
+          geo.links.set(n.id, { x0: p0.x, y0: p0.y, ym: (p0.y + p1.y) / 2, x1: p1.x, y1: p1.y });
+        });
+        geo.hasTree = true;
       }
-      const binY = bins.map((b) => $("i", b).getBoundingClientRect().top - h.top - 4);
-      geo.board = { apex, w, rows, pegY, binY };
     }
+
     svg.setAttribute("viewBox", `0 0 ${h.width} ${h.height}`);
     svg.innerHTML = d;
     paths.clear();
@@ -705,12 +1283,72 @@ function wireFx(root, tax, pd) {
   draw();
   const ro = new ResizeObserver(draw);
   ro.observe(diagram);
-  if (tx && tax) wireCluster(tx, tax);
+  if (tx && tax) wireCluster(tx, tax, fxState);
 
   const timers = new Set();
   const later = (fn, ms) => { const id = setTimeout(() => { timers.delete(id); fn(); }, ms); timers.add(id); };
-  const restart = (el, cls) => { el.classList.remove(cls); void el.offsetWidth; el.classList.add(cls); };
+  const restart = (el, cls) => { if (!el) return; el.classList.remove(cls); void el.offsetWidth; el.classList.add(cls); };
   const land = (el, ms = 700) => { if (!el) return; restart(el, "is-on"); later(() => el.classList.remove("is-on"), ms); };
+
+  const updateMatrixCell = (key, val, pulse) => {
+    const entry = cellEls.get(key);
+    if (!entry) return;
+    const baseMax = matModel ? matModel.max : 1;
+    const h = baseMax ? Math.sqrt(val / baseMax) : 0;
+    entry.el.dataset.n = String(val);
+    entry.el.style.setProperty("--h", h.toFixed(3));
+    entry.el.classList.toggle("is-hot", h > 0.62);
+    if (entry.b) entry.b.textContent = val ? fmt(val) : "·";
+    if (pulse && tx && !tx._hovering) {
+      entry.el.classList.add("is-pulse");
+      later(() => entry.el.classList.remove("is-pulse"), 520);
+    }
+  };
+
+  const syncAllNodes = () => {
+    if (!tree) return;
+    tree.all.forEach((n) => {
+      const val = live.get(n.id) || 0;
+      const numEl = numElMap.get(n.id);
+      if (numEl) numEl.textContent = fmt(val);
+    });
+    let visibleLeaves = 0;
+    tree.leaves.forEach((lf) => {
+      const val = live.get(lf.id) || 0;
+      const hidden = nodeElMap.get(lf.id)?.classList.contains("is-hidden");
+      if (!hidden) visibleLeaves++;
+      const c = leafCircleMap.get(lf.id);
+      if (c) c.setAttribute("r", tree.leafRadius(val).toFixed(1));
+    });
+    if (statProb) statProb.textContent = fmt(live.get("root") || 0);
+    if (statLeaf) statLeaf.textContent = fmt(visibleLeaves);
+  };
+
+  const snapToFinal = () => {
+    if (!tree) return;
+    tree.all.forEach((n) => live.set(n.id, n.n));
+    nodeElMap.forEach((el) => el.classList.remove("is-hidden", "is-sprout", "is-hit"));
+    linkElMap.forEach((el) => el.classList.remove("is-hidden", "is-sprout", "is-lit"));
+    const cellTots = new Map();
+    tree.cells.forEach((cn) => cellTots.set(cn.id, (cellTots.get(cn.id) || 0) + cn.n));
+    cellEls.forEach((_, key) => {
+      const val = cellTots.get(key) ?? (matModel ? matModel.cc.n(...key.split(".")) : 0);
+      updateMatrixCell(key, val, false);
+    });
+    syncAllNodes();
+    if (feedEl && feedTxt) {
+      feedEl.classList.remove("is-sprout");
+      feedTxt.textContent = `已归入全部 ${fmt(tree.root.n)} 条${tree.unit === "问题" ? "问题" : "模式"} · 共 ${tree.leaves.length} 种标准模式`;
+    }
+  };
+
+  const still = REDUCED || document.documentElement.hasAttribute("data-still");
+  if (still || !tree || !tree.leaves.length) {
+    snapToFinal();
+    E.fx = { destroy() { ro.disconnect(); timers.forEach(clearTimeout); } };
+    return;
+  }
+
   let rot = 0;
   let step = -1;
   let lastHit = 0;
@@ -731,89 +1369,284 @@ function wireFx(root, tax, pd) {
       restart(t, "pop");
     });
   };
-  const hitBin = (j) => {
-    const bin = bins[j];
-    if (!bin) return;
-    land(bin, 520);
-    if (!tx || tx._hovering || !model) return;
-    const mid = bin.dataset.m;
-    const col = $(`.fx-g-col[data-m="${mid}"]`, tx);
-    const cells = $$(`.fx-g-c[data-m="${mid}"]:not(.is-empty)`, tx);
-    let cell = null;
-    if (cells.length) {
-      const ws = cells.map((c) => Math.max(1, Number(c.dataset.n) || 0));
-      let r = Math.random() * ws.reduce((a, b) => a + b, 0);
-      cell = cells.find((_, k) => (r -= ws[k]) <= 0) || cells[0];
-    }
-    col?.classList.add("is-hl");
-    cell?.classList.add("is-pulse");
-    later(() => { if (!tx._hovering) col?.classList.remove("is-hl"); cell?.classList.remove("is-pulse"); }, 760);
-  };
 
-  if (REDUCED) {
-    E.fx = { destroy() { ro.disconnect(); timers.forEach(clearTimeout); } };
-    return;
-  }
-
-  /* Sparks: each one slides 01 → 02 → 03 → down the funnel, then bounces through the pegs into a bin. */
+  const schedule = buildReplaySchedule(tree);
   const sparks = [];
-  const weights = model ? model.colTot.map((v) => Math.max(v, 0.0001)) : [];
-  const pickBin = () => {
-    let r = Math.random() * weights.reduce((a, b) => a + b, 0);
-    for (let j = 0; j < weights.length; j++) if ((r -= weights[j]) <= 0) return j;
-    return weights.length - 1;
+  const activeToasts = [];
+  let evIdx = 0;
+  let phaseState = "replay"; // "replay" | "hold"
+  let holdSince = 0;
+  let paused = false;
+  let pauseStarted = 0;
+  let visible = true;
+  let raf = 0;
+  let lastSpawn = 0;
+  let lastFrame = 0;
+  let accent = "";
+  let sproutCol = "";
+
+  const clearFX = () => {
+    if (fxLayer) fxLayer.textContent = "";
+    if (toastLayer) toastLayer.textContent = "";
+    activeToasts.length = 0;
   };
-  const spawn = (i = Math.floor(Math.random() * ins.length)) => {
-    if (sparks.length > 28) return;
-    const j = Math.floor(Math.random() * outs.length);
-    land(ins[i], 600);
-    sparks.push({ i, j, phase: 0, t0: performance.now(), trail: [], bin: geo.board ? pickBin() : -1 });
+
+  const spawnRipple = (x, y, baseR, isSprout) => {
+    if (!fxLayer) return;
+    const c = svgEl("circle", {
+      class: `fx-ripple${isSprout ? " is-sprout" : " is-hit"}`,
+      cx: x.toFixed(1), cy: y.toFixed(1), r: Math.max(5, baseR).toFixed(1),
+    });
+    fxLayer.appendChild(c);
+    later(() => c.remove(), isSprout ? 920 : 640);
   };
-  const DUR = [720, 620, 680];
+
+  const spawnToast = (leaf) => {
+    if (!toastLayer) return;
+    const text = `+ 新叶子 · ${shortName(leaf.name, 9)}`;
+    const w = Math.max(118, Math.min(204, Math.round(text.length * 10.5 + 28)));
+    const tx = Math.max(w / 2 + 12, Math.min(TREE_W - w / 2 - 12, leaf.x));
+    const ty = 403;
+    for (let i = activeToasts.length - 1; i >= 0; i--) {
+      const other = activeToasts[i];
+      if (Math.abs(other.x - tx) < 185 || activeToasts.length >= 2) {
+        other.el.remove();
+        activeToasts.splice(i, 1);
+      }
+    }
+    const g = svgEl("g", { class: "fx-toast" });
+    const l0y = (tree.showLeafNums ? leaf.y + tree.maxR + 17 : leaf.y + Math.max(4, leaf.r) + 3).toFixed(1);
+    g.appendChild(svgEl("line", { class: "fx-toast-stem", x1: leaf.x.toFixed(1), y1: l0y, x2: tx.toFixed(1), y2: ty - 12 }));
+    g.appendChild(svgEl("rect", { x: (tx - w / 2).toFixed(1), y: ty - 12, width: w, height: 24, rx: 12 }));
+    g.appendChild(svgEl("text", { x: tx.toFixed(1), y: ty + 4, "text-anchor": "middle" }, text));
+    toastLayer.appendChild(g);
+    const entry = { el: g, x: tx };
+    activeToasts.push(entry);
+    later(() => {
+      g.remove();
+      const idx = activeToasts.indexOf(entry);
+      if (idx >= 0) activeToasts.splice(idx, 1);
+    }, 1750);
+  };
+
+  const lightLink = (id, ms = 360) => {
+    const el = linkElMap.get(id);
+    if (!el || el.classList.contains("is-hidden")) return;
+    el.classList.add("is-lit");
+    later(() => el.classList.remove("is-lit"), ms);
+  };
+
+  const revealCellBranch = (cellNode) => {
+    if (!cellNode) return;
+    const cellEl = nodeElMap.get(cellNode.id);
+    const linkEl = linkElMap.get(cellNode.id);
+    if (cellEl && cellEl.classList.contains("is-hidden")) {
+      cellEl.classList.remove("is-hidden");
+      restart(cellEl, "is-sprout");
+    }
+    if (linkEl && linkEl.classList.contains("is-hidden")) {
+      linkEl.classList.remove("is-hidden");
+      restart(linkEl, "is-sprout");
+    }
+  };
+
+  const revealLeafBranch = (leaf) => {
+    revealCellBranch(leaf.parent);
+    const linkEl = linkElMap.get(leaf.id);
+    if (linkEl && linkEl.classList.contains("is-hidden")) {
+      linkEl.classList.remove("is-hidden");
+      restart(linkEl, "is-sprout");
+    }
+  };
+
+  const applyArrival = (ev) => {
+    const lf = ev.leaf;
+    const leafEl = nodeElMap.get(lf.id);
+    const cellNode = lf.parent;
+    const stageNode = cellNode?.parent;
+    const phaseNode = stageNode?.parent;
+
+    const wasHidden = !!(leafEl && leafEl.classList.contains("is-hidden"));
+    if (wasHidden) {
+      revealCellBranch(cellNode);
+      linkElMap.get(lf.id)?.classList.remove("is-hidden");
+      leafEl.classList.remove("is-hidden");
+      restart(leafEl, "is-sprout");
+      spawnRipple(lf.x, lf.y, 7, true);
+      spawnToast(lf);
+    } else if (leafEl) {
+      restart(leafEl, "is-hit");
+      if (ev.delta > 0) spawnRipple(lf.x, lf.y, tree.leafRadius(live.get(lf.id) || lf.n), false);
+    }
+
+    if (ev.delta > 0) {
+      [lf, cellNode, stageNode, phaseNode, tree.root].forEach((node) => {
+        if (!node) return;
+        const next = (live.get(node.id) || 0) + ev.delta;
+        live.set(node.id, next);
+        const numEl = numElMap.get(node.id);
+        if (numEl) numEl.textContent = fmt(next);
+        if (node.row >= 1 && node.row <= 3) land(nodeElMap.get(node.id), 380);
+      });
+      land(nodeElMap.get("root"), 340);
+
+      const newLeafVal = live.get(lf.id) || 0;
+      const c = leafCircleMap.get(lf.id);
+      if (c) c.setAttribute("r", tree.leafRadius(newLeafVal).toFixed(1));
+
+      if (statProb) statProb.textContent = fmt(live.get("root") || 0);
+      if (statLeaf && wasHidden) {
+        const curShown = tree.leaves.reduce((acc, x) => acc + (nodeElMap.get(x.id)?.classList.contains("is-hidden") ? 0 : 1), 0);
+        statLeaf.textContent = fmt(curShown);
+      }
+      if (cellNode) {
+        const nextCell = live.get(cellNode.id) || 0;
+        updateMatrixCell(`${lf.s}.${lf.m}`, nextCell, true);
+      }
+      if (feedEl && feedTxt) {
+        feedEl.classList.toggle("is-sprout", wasHidden || ev.isNew);
+        feedTxt.textContent = wasHidden || ev.isNew
+          ? `新增叶子 · ${shortName(lf.name, 14)} (+${fmt(ev.delta)})`
+          : `归入模式 · ${shortName(lf.name, 14)} +${fmt(ev.delta)}`;
+      }
+    }
+  };
+
+  const initSeed = () => {
+    timers.forEach(clearTimeout);
+    timers.clear();
+    sparks.length = 0;
+    clearFX();
+    evIdx = 0;
+    phaseState = "replay";
+    holdSince = 0;
+    lastSpawn = 0;
+
+    tree.all.forEach((n) => live.set(n.id, 0));
+    cellEls.forEach((_, key) => updateMatrixCell(key, 0, false));
+
+    let shownLeaves = 0;
+    const cellHasSeeded = new Set();
+    tree.leaves.forEach((lf) => {
+      const sVal = schedule.seedMap.get(lf.id) || 0;
+      const leafEl = nodeElMap.get(lf.id);
+      const linkEl = linkElMap.get(lf.id);
+      leafEl?.classList.remove("is-sprout", "is-hit");
+      linkEl?.classList.remove("is-sprout", "is-lit");
+      if (sVal > 0) {
+        shownLeaves++;
+        cellHasSeeded.add(lf.parent.id);
+        leafEl?.classList.remove("is-hidden");
+        linkEl?.classList.remove("is-hidden");
+        for (let cur = lf; cur; cur = cur.parent) live.set(cur.id, (live.get(cur.id) || 0) + sVal);
+      } else {
+        leafEl?.classList.add("is-hidden");
+        linkEl?.classList.add("is-hidden");
+      }
+    });
+
+    tree.cells.forEach((cn) => {
+      const cEl = nodeElMap.get(cn.id);
+      const lEl = linkElMap.get(cn.id);
+      cEl?.classList.remove("is-sprout", "is-hit");
+      lEl?.classList.remove("is-sprout", "is-lit");
+      const active = cellHasSeeded.has(cn.id);
+      cEl?.classList.toggle("is-hidden", !active);
+      lEl?.classList.toggle("is-hidden", !active);
+      updateMatrixCell(`${cn.s}.${cn.m}`, live.get(cn.id) || 0, false);
+    });
+
+    syncAllNodes();
+    if (statLeaf) statLeaf.textContent = fmt(shownLeaves);
+    if (feedEl && feedTxt) {
+      feedEl.classList.remove("is-sprout");
+      feedTxt.textContent = "等待问题落入聚类树…";
+    }
+  };
+
+  initSeed();
+
+  const DUR = [680, 560, 520];
+  const HOP_DUR = [260, 240, 240, 280];
+  const spawnInterval = Math.max(150, Math.min(250, Math.round(11500 / Math.max(18, schedule.events.length))));
+
   const along = (id, u) => {
     const p = paths.get(id);
     if (!p) return null;
-    const L = p.getTotalLength();
-    return p.getPointAtLength(L * u);
-  };
-  const galtonPoint = (s, u) => {
-    const b = geo.board;
-    if (!s.walk) {
-      const rights = Array.from({ length: b.rows }, (_, k) => k < s.bin);
-      for (let k = rights.length - 1; k > 0; k--) { const q = Math.floor(Math.random() * (k + 1)); [rights[k], rights[q]] = [rights[q], rights[k]]; }
-      const pts = [{ x: b.apex.x, y: b.apex.y }];
-      let r = 0;
-      for (let row = 0; row < b.rows; row++) {
-        pts.push({ x: b.apex.x + (r - row / 2) * b.w, y: b.pegY(row) - 5 });
-        if (rights[row]) r++;
-      }
-      pts.push({ x: b.apex.x + (r - b.rows / 2) * b.w, y: b.binY[s.bin] });
-      s.walk = pts;
-    }
-    const segs = s.walk.length - 1;
-    const f = Math.min(segs - 1e-6, u * segs);
-    const k = Math.floor(f);
-    const v = f - k;
-    const a = s.walk[k];
-    const c = s.walk[k + 1];
-    const hop = k > 0 && k < segs - 1 ? Math.sin(Math.PI * v) * 5 : 0;
-    return { x: a.x + (c.x - a.x) * v, y: a.y + (c.y - a.y) * easeIn(v) - hop };
+    return p.getPointAtLength(p.getTotalLength() * u);
   };
 
-  let raf = 0;
-  let visible = true;
-  let lastSpawn = 0;
-  let accent = "";
+  const makeChain = (leaf) => {
+    const chain = [];
+    for (let cur = leaf; cur && cur.parent; cur = cur.parent) chain.unshift(cur.id);
+    return chain; // [ph, stage, cell, leaf] (or [stage, cell, leaf] if orphan)
+  };
+
+  const refreshColors = () => {
+    const cs = getComputedStyle(diagram);
+    accent = cs.getPropertyValue("--accent").trim() || "#3552d8";
+    sproutCol = cs.getPropertyValue("--loc-ulq").trim() || "#1d7d72";
+  };
+
+  const spawn = (forcedInput, forcedEv) => {
+    if (sparks.length > 30) return;
+    const ev = forcedEv || (phaseState === "replay" && evIdx < schedule.events.length ? schedule.events[evIdx++] : null);
+    if (!ev) return;
+    refreshColors();
+    const i = forcedInput != null ? forcedInput : Math.floor(Math.random() * ins.length);
+    const j = Math.floor(Math.random() * outs.length);
+    land(ins[i], 560);
+    sparks.push({
+      i, j,
+      ev,
+      chain: makeChain(ev.leaf),
+      phase: 0,
+      hop: 0,
+      t0: performance.now(),
+      trail: [],
+    });
+  };
+
+  const shiftTiming = (delta) => {
+    sparks.forEach((s) => { s.t0 += delta; });
+    if (lastSpawn) lastSpawn += delta;
+    if (holdSince) holdSince += delta;
+  };
+
   const frame = (now) => {
     raf = 0;
-    if (!diagram.isConnected) return;
-    if (!visible || document.hidden) return;
-    if (now - lastSpawn > 520) { lastSpawn = now; spawn(); accent = getComputedStyle(diagram).getPropertyValue("--accent").trim() || "#3552d8"; }
+    if (!diagram.isConnected || paused || !visible || document.hidden) return;
+    if (lastFrame && now - lastFrame > 180) shiftTiming(now - lastFrame - 16);
+    lastFrame = now;
+
+    if (!accent) refreshColors();
+
+    if (phaseState === "replay") {
+      if (evIdx < schedule.events.length && (!lastSpawn || now - lastSpawn >= spawnInterval)) {
+        lastSpawn = now;
+        spawn();
+      } else if (evIdx >= schedule.events.length && !sparks.some((s) => s.ev.delta > 0)) {
+        phaseState = "hold";
+        holdSince = now;
+        snapToFinal();
+      }
+    } else if (phaseState === "hold") {
+      if (now - lastSpawn > 760 && tree.leaves.length) {
+        lastSpawn = now;
+        const lf = tree.leaves[Math.floor(Math.random() * tree.leaves.length)];
+        spawn(undefined, { leaf: lf, delta: 0, isNew: false });
+      }
+      if (holdSince && now - holdSince > 6000 && !tx?._hovering && !MOD.el) {
+        initSeed();
+      }
+    }
+
     ctx.setTransform(geo.dpr, 0, 0, geo.dpr, 0, 0);
     ctx.clearRect(0, 0, geo.w, geo.h);
+
     for (let n = sparks.length - 1; n >= 0; n--) {
       const s = sparks[n];
-      const el = now - s.t0;
+      const el = Math.max(0, now - s.t0);
       let pt = null;
       if (s.phase < 3) {
         const u = Math.min(1, el / DUR[s.phase]);
@@ -821,43 +1654,116 @@ function wireFx(root, tax, pd) {
         pt = along(id, easeInOut(u));
         if (u >= 1) {
           if (s.phase === 0) receive();
-          if (s.phase === 1) land(outs[s.j], 520);
-          if (s.phase === 2 && !geo.board) { sparks.splice(n, 1); continue; }
+          if (s.phase === 1) land(outs[s.j], 480);
+          if (s.phase === 2) {
+            if (!geo.hasTree) { sparks.splice(n, 1); continue; }
+            land(nodeElMap.get("root"), 280);
+            if (s.chain.length) lightLink(s.chain[0], 300);
+          }
           s.phase += 1;
           s.t0 = now;
         }
       } else {
-        const dur = 150 * (geo.board.rows + 2);
+        const linkId = s.chain[s.hop];
+        const seg = linkId && geo.links.get(linkId);
+        if (!seg) { sparks.splice(n, 1); continue; }
+        const dur = HOP_DUR[Math.min(s.hop, HOP_DUR.length - 1)];
         const u = Math.min(1, el / dur);
-        pt = galtonPoint(s, u);
-        if (u >= 1) { hitBin(s.bin); sparks.splice(n, 1); continue; }
+        pt = evalVBezier(seg, easeInOut(u));
+        if (u >= 1) {
+          if (s.hop < s.chain.length - 1) {
+            const curId = s.chain[s.hop];
+            const nextId = s.chain[s.hop + 1];
+            const curNode = tree.byId.get(curId);
+            const nextNode = tree.byId.get(nextId);
+            if (curNode && !nodeElMap.get(curId)?.classList.contains("is-hidden")) {
+              land(nodeElMap.get(curId), 280);
+            }
+            if (s.ev.isNew && nextNode) {
+              if (nextNode.row === 3) revealCellBranch(nextNode);
+              else if (nextNode.row === 4) revealLeafBranch(nextNode);
+            }
+            lightLink(nextId, 300);
+            s.hop += 1;
+            s.t0 = now;
+          } else {
+            applyArrival(s.ev);
+            sparks.splice(n, 1);
+            continue;
+          }
+        }
       }
       if (!pt) { sparks.splice(n, 1); continue; }
+      const col = s.phase === 3 && s.ev.isNew ? sproutCol : accent;
       s.trail.unshift({ x: pt.x, y: pt.y });
       if (s.trail.length > 6) s.trail.pop();
       s.trail.forEach((p, k) => {
         ctx.globalAlpha = (1 - k / 6) * (k ? 0.35 : 0.95);
-        ctx.fillStyle = accent;
+        ctx.fillStyle = col;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, k ? 2.4 - k * 0.25 : 3.2, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, k ? 2.4 - k * 0.25 : (s.phase === 3 && s.ev.isNew ? 3.8 : 3.2), 0, Math.PI * 2);
         ctx.fill();
       });
       ctx.globalAlpha = 1;
     }
+
     raf = requestAnimationFrame(frame);
   };
-  const kick = () => { if (!raf && visible && !document.hidden && diagram.isConnected) raf = requestAnimationFrame(frame); };
+
+  const kick = () => {
+    if (!raf && !paused && visible && !document.hidden && diagram.isConnected) {
+      lastFrame = 0;
+      raf = requestAnimationFrame(frame);
+    }
+  };
+
+  pauseBtn?.addEventListener("click", () => {
+    paused = !paused;
+    pauseBtn.setAttribute("aria-pressed", String(paused));
+    pauseBtn.textContent = paused ? "继续" : "暂停";
+    if (paused) {
+      pauseStarted = performance.now();
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    } else {
+      if (pauseStarted) shiftTiming(performance.now() - pauseStarted);
+      pauseStarted = 0;
+      kick();
+    }
+  });
+
+  replayBtn?.addEventListener("click", () => {
+    paused = false;
+    pauseStarted = 0;
+    if (pauseBtn) {
+      pauseBtn.setAttribute("aria-pressed", "false");
+      pauseBtn.textContent = "暂停";
+    }
+    initSeed();
+    kick();
+  });
+
   const io = new IntersectionObserver(([en]) => { visible = en.isIntersecting; kick(); }, { threshold: 0.05 });
   io.observe(diagram);
-  const onVis = () => kick();
+  const onVis = () => {
+    if (document.hidden && !pauseStarted) pauseStarted = performance.now();
+    else if (!document.hidden && !paused && pauseStarted) {
+      shiftTiming(performance.now() - pauseStarted);
+      pauseStarted = 0;
+    }
+    kick();
+  };
   document.addEventListener("visibilitychange", onVis);
+
   let lastHover = 0;
   ins.forEach((el, i) => el.addEventListener("pointerenter", () => {
+    if (paused) return;
     const now = performance.now();
-    if (now - lastHover < 300) return;
+    if (now - lastHover < 320 || !tree.leaves.length) return;
     lastHover = now;
-    spawn(i);
+    const lf = tree.leaves[Math.floor(Math.random() * tree.leaves.length)];
+    spawn(i, { leaf: lf, delta: 0, isNew: false });
   }));
+
   kick();
 
   E.fx = {
