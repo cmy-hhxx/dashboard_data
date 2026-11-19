@@ -2030,6 +2030,7 @@ export function mountFxDiagram(root, tax, pd, {
   treeW = horizontal ? HTREE_W : TREE_W,
   treeH = HTREE_H,
   liveControl = false,
+  onLiveTick = null,
   nav = null,
   product = null,
 } = {}) {
@@ -2525,6 +2526,35 @@ export function mountFxDiagram(root, tax, pd, {
     }
   };
 
+  const spawnPoolDanmu = (delta, isRefresh = false) => {
+    if (!poolEl || !(delta > 0) || typeof document === "undefined" || typeof document.createElement !== "function") return;
+    const badge = document.createElement("span");
+    badge.className = `fx-pool-danmu num${isRefresh ? " is-refresh" : ""}`;
+    badge.setAttribute("aria-hidden", "true");
+    badge.textContent = `+${fmt(Math.round(delta))}`;
+    poolEl.appendChild(badge);
+    if (poolNumEl) {
+      restart(poolNumEl, "is-tick");
+      later(() => poolNumEl.classList.remove("is-tick"), 380);
+    }
+    later(() => badge.remove(), isRefresh ? 2200 : 1250);
+  };
+
+  const spawnLiveNodeDanmu = (node, delta, isRefresh = false) => {
+    if (!toastLayer || !node || !(delta > 0)) return;
+    const text = `+${fmt(Math.round(delta))}`;
+    const nx = Number(node.x) || 60;
+    const ny = Number(node.y) || 60;
+    const tx = node.row === 0 ? nx : node.row === 4 && horizontal ? Math.min(treeW - 28, nx + (Number(node.barW) || 24) + 26) : nx;
+    const ty = node.row === 0 ? ny - (Number(node.hh) || 24) + 12 : ny - 10;
+    const g = svgEl("g", { class: `fx-live-danmu${isRefresh ? " is-refresh" : ""}` });
+    const w = Math.max(32, 14 + text.length * 7.5);
+    g.appendChild(svgEl("rect", { x: (tx - w / 2).toFixed(1), y: (ty - 10).toFixed(1), width: w.toFixed(1), height: "19", rx: "9.5" }));
+    g.appendChild(svgEl("text", { x: tx.toFixed(1), y: (ty + 3).toFixed(1), "text-anchor": "middle" }, text));
+    toastLayer.appendChild(g);
+    later(() => g.remove(), isRefresh ? 2200 : 1350);
+  };
+
   const applyArrival = (ev) => {
     const lf = ev.leaf;
     const leafEl = nodeElMap.get(lf.id);
@@ -2543,6 +2573,22 @@ export function mountFxDiagram(root, tax, pd, {
     }
 
     if (ev.delta > 0) {
+      if (liveControl) {
+        for (let cur = lf; cur; cur = cur.parent) {
+          const nextVal = (live.get(cur.id) ?? cur.n ?? 0) + ev.delta;
+          live.set(cur.id, nextVal);
+          if (cur === lf) liveLeaf.set(lf.id, nextVal);
+          const numEl = numElMap.get(cur.id);
+          if (numEl) numEl.textContent = numEl.dataset.compact === "1" ? barCountText(nextVal) : fmt(nextVal);
+          if (cur.row >= 1) land(nodeElMap.get(cur.id), 440);
+        }
+        land(nodeElMap.get("root"), 400);
+        spawnLiveNodeDanmu(lf, ev.delta, false);
+        if (typeof onLiveTick === "function") {
+          onLiveTick({ kind: "cluster", delta: ev.delta, leaf: lf });
+        }
+        return;
+      }
       liveLeaf.set(lf.id, (liveLeaf.get(lf.id) || 0) + ev.delta);
       recomputeLive();
       syncAllNodes();
@@ -2647,7 +2693,19 @@ export function mountFxDiagram(root, tax, pd, {
     sproutCol = cs.getPropertyValue("--loc-ulq").trim() || "#1d7d72";
   };
 
-  const liveCtl = { ratio: 0, running: false, rateInterval: 0, nextRateAt: 0, done: false };
+  const liveCtl = {
+    ratio: 0,
+    running: false,
+    rateInterval: 0,
+    nextRateAt: 0,
+    clusterInterval: 0,
+    nextClusterAt: 0,
+    done: false,
+    seeded: false,
+    simPending: 0,
+    simAttr: 0,
+    simCluster: 0,
+  };
   const getCap = () => schedule.events.length;
 
   const spawn = (forcedInput, forcedEv, forcedOut = null, delayMs = 0, kind = "full") => {
@@ -2741,10 +2799,15 @@ export function mountFxDiagram(root, tax, pd, {
     if (!accent) refreshColors();
 
     if (liveControl) {
-      if (liveCtl.running && liveCtl.rateInterval > 0 && now >= liveCtl.nextRateAt && sparks.length < 14 && tree.leaves.length) {
-        liveCtl.nextRateAt = now + liveCtl.rateInterval;
+      if (liveCtl.running && liveCtl.rateInterval > 0 && now >= liveCtl.nextRateAt && sparks.length < 16 && tree.leaves.length) {
+        liveCtl.nextRateAt = now + liveCtl.rateInterval * (0.82 + Math.random() * 0.36);
         const lf = tree.leaves[Math.floor(Math.random() * tree.leaves.length)];
-        spawn(null, { leaf: lf, delta: 0, isNew: false }, null, 0, poolEl ? "attr" : "full");
+        spawn(null, { leaf: lf, delta: 1, poolDelta: 1, isNew: false }, null, 0, poolEl ? "attr" : "full");
+      }
+      if (liveCtl.running && poolEl && liveCtl.clusterInterval > 0 && now >= liveCtl.nextClusterAt && sparks.length < 16 && tree.leaves.length) {
+        liveCtl.nextClusterAt = now + liveCtl.clusterInterval * (0.85 + Math.random() * 0.35);
+        const lf = tree.leaves[Math.floor(Math.random() * tree.leaves.length)];
+        spawn(0, { leaf: lf, delta: 1, isNew: false }, 0, 0, "cluster");
       }
       if (!liveCtl.running && !sparks.length) {
         poolEl?.classList.remove("is-flushing");
@@ -2826,6 +2889,21 @@ export function mountFxDiagram(root, tax, pd, {
           if (s.phase === 2) {
             if (s.kind === "attr") {
               land(poolEl, 420);
+              const gain = Math.max(1, Number(s.ev?.poolDelta) || 1);
+              if (liveControl && liveCtl.running) {
+                liveCtl.simPending += gain;
+                liveCtl.simAttr += gain;
+                updatePool({
+                  pending: liveCtl.simPending,
+                  attrTraces: liveCtl.simAttr,
+                  clusterTraces: liveCtl.simCluster,
+                  flushing: sparks.some((sp) => sp.kind === "cluster"),
+                });
+                spawnPoolDanmu(gain, false);
+                if (typeof onLiveTick === "function") {
+                  onLiveTick({ kind: "attr", delta: gain, pending: liveCtl.simPending });
+                }
+              }
               sparks.splice(n, 1);
               continue;
             }
@@ -2946,6 +3024,7 @@ export function mountFxDiagram(root, tax, pd, {
       done = false,
     } = {}) {
       const clamped = Math.max(0, Math.min(1, Number(ratio) || 0));
+      const wasRunning = liveCtl.running;
       liveCtl.ratio = clamped;
       liveCtl.running = !!running;
       liveCtl.done = !!done;
@@ -2953,15 +3032,31 @@ export function mountFxDiagram(root, tax, pd, {
 
       const dAttr = Math.max(0, Math.round(Number(deltaAttr) || 0));
       const dCl = Math.max(0, Math.round(Number(deltaCluster) || 0));
+      const rawP = Math.max(0, Math.round(Number(pending) || 0));
+      const rawA = Math.max(0, Math.round(Number(attrTraces) || 0));
+      const rawC = Math.max(0, Math.round(Number(clusterTraces) || 0));
+      if (!liveCtl.seeded || !running) {
+        liveCtl.simPending = rawP;
+        liveCtl.simAttr = rawA;
+        liveCtl.simCluster = rawC;
+        liveCtl.seeded = true;
+      } else {
+        liveCtl.simPending = rawP < liveCtl.simPending - 50 ? rawP : Math.max(liveCtl.simPending, rawP);
+        liveCtl.simAttr = Math.max(liveCtl.simAttr, rawA);
+        liveCtl.simCluster = Math.max(liveCtl.simCluster, rawC);
+      }
       updatePool({
-        pending,
-        attrTraces,
-        clusterTraces,
+        pending: liveCtl.simPending,
+        attrTraces: liveCtl.simAttr,
+        clusterTraces: liveCtl.simCluster,
         flushing: dCl > 0 || sparks.some((s) => s.kind === "cluster"),
       });
+      if (dAttr > 0) spawnPoolDanmu(dAttr, true);
+      if (dCl > 0 && tree?.root) spawnLiveNodeDanmu(tree.root, dCl, true);
 
       const r = Math.max(0, Number(rate) || 0);
-      liveCtl.rateInterval = running && r > 0 ? Math.max(320, Math.min(3600, 60000 / r)) : 0;
+      liveCtl.rateInterval = running ? Math.max(460, Math.min(1350, 60000 / Math.max(r, 48))) : 0;
+      liveCtl.clusterInterval = running ? Math.max(1150, Math.min(2400, liveCtl.rateInterval * 1.85)) : 0;
 
       if (!running && dAttr === 0) {
         for (let i = sparks.length - 1; i >= 0; i--) {
@@ -2971,23 +3066,36 @@ export function mountFxDiagram(root, tax, pd, {
 
       const span = Math.max(2000, Number(windowMs) || 14000);
       if (dAttr > 0 && tree.leaves.length) {
-        const count = Math.min(36, Math.max(1, dAttr));
+        const count = Math.min(20, Math.max(1, dAttr));
         for (let k = 0; k < count; k++) {
           const lf = tree.leaves[Math.floor(Math.random() * tree.leaves.length)];
           const delay = (span * k) / count;
-          spawn(k % ins.length, { leaf: lf, delta: 0, isNew: false }, k % outs.length, delay, poolEl ? "attr" : "full");
+          spawn(k % ins.length, { leaf: lf, delta: 1, poolDelta: 1, isNew: false }, k % outs.length, delay, poolEl ? "attr" : "full");
         }
-        liveCtl.nextRateAt = simNow + span;
+        liveCtl.nextRateAt = simNow + Math.min(1800, span * 0.25);
+      } else if (running && !wasRunning && tree.leaves.length) {
+        // Immediate wave on start so the pipeline feels actively in-flight right away
+        for (let k = 0; k < 3; k++) {
+          const lf = tree.leaves[Math.floor(Math.random() * tree.leaves.length)];
+          spawn(k % ins.length, { leaf: lf, delta: 1, poolDelta: 1, isNew: false }, k % outs.length, k * 280, poolEl ? "attr" : "full");
+        }
+        if (poolEl) {
+          const lf = tree.leaves[Math.floor(Math.random() * tree.leaves.length)];
+          spawn(0, { leaf: lf, delta: 1, isNew: false }, 0, 420, "cluster");
+        }
+        liveCtl.nextRateAt = simNow + 900;
+        liveCtl.nextClusterAt = simNow + 1500;
       }
 
       if (dCl > 0 && tree.leaves.length) {
-        const count = Math.min(48, Math.max(1, dCl));
-        const flushSpan = Math.min(12000, span);
+        const count = Math.min(24, Math.max(1, dCl));
+        const flushSpan = Math.min(10000, span);
         for (let k = 0; k < count; k++) {
           const lf = tree.leaves[Math.floor(Math.random() * tree.leaves.length)];
           const delay = (flushSpan * k) / count;
-          spawn(0, { leaf: lf, delta: 0, isNew: false }, 0, delay, poolEl ? "cluster" : "full");
+          spawn(0, { leaf: lf, delta: 1, isNew: false }, 0, delay, poolEl ? "cluster" : "full");
         }
+        liveCtl.nextClusterAt = simNow + Math.min(2200, flushSpan * 0.3);
       }
 
       const active = liveCtl.running || sparks.length > 0;
@@ -2998,7 +3106,8 @@ export function mountFxDiagram(root, tax, pd, {
         ctx.clearRect(0, 0, geo.w, geo.h);
         return;
       }
-      if (liveCtl.running && dAttr === 0 && liveCtl.nextRateAt < simNow) liveCtl.nextRateAt = simNow + 240;
+      if (liveCtl.running && dAttr === 0 && liveCtl.nextRateAt < simNow) liveCtl.nextRateAt = simNow + 180;
+      if (liveCtl.running && dCl === 0 && liveCtl.nextClusterAt < simNow) liveCtl.nextClusterAt = simNow + 680;
       kick();
     },
     destroy() {

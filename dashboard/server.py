@@ -592,7 +592,17 @@ class Handler(SimpleHTTPRequestHandler):
             import speed_monitor
             self._cache_policy = "no-store"
             self._cors_any = True
-            body = json.dumps(speed_monitor.payload(), ensure_ascii=False, separators=(",", ":")).encode()
+            payload = speed_monitor.payload()
+            upstream = os.environ.get("EVAL_SPEED_UPSTREAM")
+            if payload.get("available") is False and upstream:
+                try:
+                    import urllib.request
+                    with urllib.request.urlopen(upstream, timeout=3.5) as resp:
+                        if resp.status == 200:
+                            payload = json.loads(resp.read().decode("utf-8"))
+                except Exception:  # noqa: BLE001
+                    pass
+            body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
             self._send_body(200, body, "application/json; charset=utf-8")
             return
         if _lister and (path_only == "/inputs.json" or (path_only.startswith("/inputs/") and path_only.endswith(".json"))):

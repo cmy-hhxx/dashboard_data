@@ -493,8 +493,8 @@ test("daily top model computes top 10 most frequent and top 10 most dropped prob
 
   const html = dailyTopHTML(model, "2026-11-17");
   assert.match(html, /class="mxd-heat"/);
-  assert.equal((html.match(/data-daily-day="/g) || []).length, 2);
-  assert.equal((html.match(/class="mxd-day is-void"/g) || []).length, 8, "pads the 10-column row to a full rectangle");
+  assert.equal((html.match(/data-daily-day="/g) || []).length, 2, "two evaluated days in 2026-11 are interactive buttons");
+  assert.equal((html.match(/class="mxd-day is-empty"/g) || []).length, 28, "remaining 28 days of November render as complete calendar month slots");
   assert.doesNotMatch(html, /mxd-day-val/, "date heatmap cells only show the date without numbers");
   assert.equal((html.match(/class="mxd-row is-top"/g) || []).length, 10);
   assert.equal((html.match(/class="mxd-row is-drop"/g) || []).length, 10);
@@ -508,21 +508,38 @@ test("daily top model computes top 10 most frequent and top 10 most dropped prob
   assert.match(html, /data-daily-zoom aria-pressed="false"/);
   assert.doesNotMatch(html, /<h3|<h4|<small|<p\b/, "no secondary headings or small-print notes allowed");
 
-  // 30-day pagination (10 × 3): 48 days split into [18 older days, 30 latest days]
-  const pages48 = buildHeatPages(Array.from({ length: 48 }, (_, i) => ({ date: `2026-10-${String(i + 1).padStart(2, "0")}` })));
-  assert.equal(pages48.length, 2);
-  assert.equal(pages48[0].length, 18);
-  assert.equal(pages48[1].length, 30);
+  // Full calendar month pagination: dates in Oct (31 days) and Nov (30 days) split into 2 full calendar months
+  const pagesOctNov = buildHeatPages([
+    { date: "2026-10-15" },
+    { date: "2026-10-31" },
+    { date: "2026-11-01" },
+    { date: "2026-11-17" },
+  ]);
+  assert.equal(pagesOctNov.length, 2);
+  assert.equal(pagesOctNov[0].length, 31, "October has 31 calendar days");
+  assert.equal(pagesOctNov[0][0].date, "2026-10-01");
+  assert.equal(pagesOctNov[0][30].date, "2026-10-31");
+  assert.equal(pagesOctNov[1].length, 30, "November has 30 calendar days");
+  assert.equal(pagesOctNov[1][0].date, "2026-11-01");
+  assert.equal(pagesOctNov[1][29].date, "2026-11-30");
 
-  // Centered floating modal when clicking a date cell
+  // Centered floating detail card when clicking a date cell, with clickable P0-P4 severity highlight
   const modalHtml = dayModalHTML(model.byDate.get("2026-11-17"));
-  assert.match(modalHtml, /class="mxd-modal-backdrop"/);
+  assert.match(modalHtml, /class="mxd-modal-backdrop mxd-pop-anchor"/);
   assert.match(modalHtml, /2026-11-17/);
+  assert.match(modalHtml, /当日最多/);
+  assert.match(modalHtml, /下降最多/);
+  assert.match(modalHtml, /data-daily-sev="P0"/);
+  assert.match(modalHtml, /data-daily-sev="P4"/);
   for (const label of ["P0", "P1", "P2", "P3", "P4", "无问题"]) {
     assert.ok(modalHtml.includes(label), `day modal includes ${label}`);
   }
+  const modalHtmlP0 = dayModalHTML(model.byDate.get("2026-11-17"), "P0");
+  assert.match(modalHtmlP0, /mxd-tip-arc is-active" data-daily-sev="P0"/);
+  assert.match(modalHtmlP0, /mxd-tip-center is-sev-focus/);
+  assert.match(html, /data-daily-month="2026-10"/, "month pager always allows navigating to previous calendar months");
 
-  // Beginner-friendly structured tooltips with 6-bucket (P0–P4 + 无问题) SVG donut ring and explicit + / - signs
+  // Beginner-friendly structured tooltips with explicit + / - signs
   const dayTip = resolveDailyTip({
     dataset: {
       mxdTipKind: "day",
@@ -544,12 +561,12 @@ test("daily top model computes top 10 most frequent and top 10 most dropped prob
   }
   assert.match(dayTip, /631 Trace/);
   const topTip = resolveDailyTip({ dataset: { mxdTipKind: "top", name: "问题模式12", stage: "取数规划", prev: "80", count: "95", delta: "15", sevs: "1,4,30,20,40", prevSevs: "1,4,20,20,35", plain: "现象12" } });
-  assert.match(topTip, /变化 <b class="num is-up">\+15<\/b>/);
-  assert.match(topTip, /\+10/);
+  assert.match(topTip, /<span>较前日变化<\/span><b class="num is-up">\+15<\/b>/);
+  assert.match(topTip, /\(\+10\)/);
   assert.match(topTip, /<div class="t-note">现象12<\/div>/);
   const dropTip = resolveDailyTip({ dataset: { mxdTipKind: "drop", name: "问题模式12", stage: "取数规划", prev: "95", count: "71", drop: "24", dropPct: "25%", sevs: "1,4,20,16,30", prevSevs: "1,4,30,20,40", plain: "现象12" } });
-  assert.match(dropTip, /下降 <b class="num is-down">-24 \(-25%\)<\/b>/);
-  assert.match(dropTip, /-10/);
+  assert.match(dropTip, /<span>较前日下降<\/span><b class="num is-down">-24 \(-25%\)<\/b>/);
+  assert.match(dropTip, /\(-10\)/);
 
   let clickedHandler = null;
   const dayBtns = [{ dataset: { dailyDay: "2026-11-16" }, classList: { toggle() {} }, setAttribute() {} },
@@ -570,7 +587,7 @@ test("daily top model computes top 10 most frequent and top 10 most dropped prob
   clickedHandler({ target: { closest: (sel) => (sel === "[data-daily-day]" ? dayBtns[0] : null) } });
   assert.equal(state.dailyDay, "2026-11-16");
   assert.equal(state.dailyModalDate, "2026-11-16");
-  assert.match(modalSlotEl.innerHTML, /class="mxd-modal-backdrop"/);
+  assert.match(modalSlotEl.innerHTML, /mxd-modal-backdrop/);
   assert.match(boardsEl.innerHTML, /2026-11-16 出现最多 TOP 10/);
   const rowTarget = { dataset: { dailyCode: "S1.M1.12", dailyName: "问题模式12" } };
   clickedHandler({ target: { closest: (sel) => (sel === "[data-daily-code]" ? rowTarget : null) } });

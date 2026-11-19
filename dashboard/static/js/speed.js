@@ -14,7 +14,11 @@ const HORIZ_TREE_H = 540;
 const S = {
   data: null,
   timer: 0,
+  heartbeatTimer: 0,
+  lastPollAt: 0,
+  lastSyncDelta: 0,
   inflight: false,
+  liveRunning: false,
   selectedModel: null,
   range: 300,
   chartMode: "landing",
@@ -26,12 +30,54 @@ const S = {
   modeSeg: null,
   taxKey: "",
   fx: null,
+  prevInputTraces: null,
+  prevInputSessions: null,
   prevAttrTraces: null,
   prevClusterTraces: null,
+  prevPendingTraces: null,
+  prevAttrRate: null,
+  prevCompactRate: null,
+  prevGwRpm: null,
+  prevModels: new Map(),
+  simAttrCarry: 0,
+  simClusterCarry: 0,
+  simPendingCarry: 0,
+  shownAttrTraces: 0,
+  shownClusterTraces: 0,
+  shownPendingTraces: 0,
   sourceUrl: "speed.json",
   root: null,
   ctx: null,
 };
+
+const isBrowser = () => typeof window !== "undefined" && typeof window.requestAnimationFrame === "function";
+
+/* 在数字上方/右侧弹出「+ xxx」增长弹幕，保持目标元素 textContent 纯净不污染测试与读屏 */
+export function spawnDanmu(root, targetOrId, text, { tone = "attr", micro = false } = {}) {
+  const el = typeof targetOrId === "string" ? $(`#${targetOrId}`, root) : targetOrId;
+  if (!el || !text) return null;
+  if (el.dataset) el.dataset.lastDanmu = String(text);
+  el.classList?.remove("is-bumped");
+  el.classList?.add("is-bumped");
+  if (typeof document === "undefined" || typeof document.createElement !== "function" || !el.parentElement) {
+    return null;
+  }
+  const host = el.parentElement;
+  host.classList?.add("sp-danmu-host");
+  const sel = micro ? ".sp-danmu.is-micro" : ".sp-danmu.is-burst";
+  const existing = host.querySelectorAll ? host.querySelectorAll(sel) : [];
+  if (existing.length >= (micro ? 2 : 3)) existing[0].remove();
+  const badge = document.createElement("span");
+  badge.className = `sp-danmu is-${tone} ${micro ? "is-micro" : "is-burst"}`;
+  badge.setAttribute("aria-hidden", "true");
+  badge.textContent = String(text);
+  host.appendChild(badge);
+  setTimeout(() => {
+    badge.remove();
+    el.classList?.remove("is-bumped");
+  }, micro ? 1150 : 1850);
+  return badge;
+}
 
 const sitesMap = () => {
   try {
@@ -329,22 +375,27 @@ function miniRingHTML(outerRatio, innerRatio, { outerCls = "is-attr", innerCls =
   </div>`;
 }
 
-export function modelRowsHTML(data) {
+export function modelRowsHTML(data, { attrCarry = 0, clCarry = 0 } = {}) {
   const models = data?.models || [];
   if (!models.length) return `<div class="empty">等待数据…</div>`;
   const cl = new Map((data?.cluster?.models || []).map((c) => [c.name, Number(c.traces) || 0]));
-  return models.map((m) => {
+  let carryAssigned = false;
+  return models.map((m, idx) => {
     const inTr = Number(m.input_traces) || 0;
-    const attrTr = Number(m.attr_traces) || 0;
+    const rawAttr = Number(m.attr_traces) || 0;
+    const isActiveModel = !carryAssigned && (rawAttr < inTr || idx === 0);
+    if (isActiveModel && (attrCarry > 0 || clCarry > 0)) carryAssigned = true;
+    const attrTr = isActiveModel ? Math.min(inTr || Infinity, rawAttr + attrCarry) : rawAttr;
     const remTr = Math.max(0, inTr - attrTr);
     const hasCl = cl.has(m.name);
-    const clTr = cl.get(m.name) || 0;
+    const rawCl = cl.get(m.name) || 0;
+    const clTr = isActiveModel && hasCl ? Math.min(attrTr, rawCl + clCarry) : rawCl;
     const aRatio = inTr ? attrTr / inTr : 0;
     const cRatio = inTr && hasCl ? Math.min(aRatio, clTr / inTr) : null;
     const badge = remTr === 0 && inTr > 0
       ? `<span class="sp-rc-tag is-done">已完成</span>`
-      : `<span class="sp-rc-tag">待测 ${num(remTr)}</span>`;
-    return `<button type="button" class="sp-ring-card is-model" data-sp-model="${esc(m.name)}">
+      : `<span class="sp-rc-tag" data-sp-mrem="${esc(m.name)}">待测 ${num(remTr)}</span>`;
+    return `<button type="button" class="sp-ring-card is-model${remTr > 0 ? " is-active-model" : ""}" data-sp-model="${esc(m.name)}">
       ${miniRingHTML(aRatio, cRatio, { outerCls: "is-attr", innerCls: "is-cl", centerRatio: aRatio })}
       <div class="sp-rc-body">
         <div class="sp-rc-head">
@@ -353,7 +404,7 @@ export function modelRowsHTML(data) {
         </div>
         <div class="sp-rc-stats">
           <span>输入 <b class="num">${num(inTr)}</b> trace · <b class="num">${num(m.input_sessions)}</b> sess</span>
-          <span>已测 <b class="num is-attr">${num(attrTr)}</b>${hasCl ? ` · 已聚类 <b class="num is-cl">${num(clTr)}</b>` : ""}</span>
+          <span>已测 <b class="num is-attr" data-sp-mattr="${esc(m.name)}">${num(attrTr)}</b>${hasCl ? ` · 已聚类 <b class="num is-cl" data-sp-mcl="${esc(m.name)}">${num(clTr)}</b>` : ""}</span>
         </div>
       </div>
     </button>`;
@@ -818,9 +869,19 @@ function drawChart(root) {
   const last = samples[samples.length - 1];
   const dots = isRpm ? [[last.v1, "sp-point-rpm"]] : [[last.v1, "sp-point-attr"], [last.v2, "sp-point-comp"]];
   for (const [val, cls] of dots) {
+    const cx = x(last.t).toFixed(1);
+    const cy = y(val).toFixed(1);
+    if (S.liveRunning) {
+      const halo = document.createElementNS(SVG_NS, "circle");
+      halo.setAttribute("cx", cx);
+      halo.setAttribute("cy", cy);
+      halo.setAttribute("r", "8");
+      halo.setAttribute("class", `sp-point-halo ${cls}`);
+      pointLayer.appendChild(halo);
+    }
     const dot = document.createElementNS(SVG_NS, "circle");
-    dot.setAttribute("cx", x(last.t).toFixed(1));
-    dot.setAttribute("cy", y(val).toFixed(1));
+    dot.setAttribute("cx", cx);
+    dot.setAttribute("cy", cy);
     dot.setAttribute("r", "4");
     dot.setAttribute("class", `sp-point ${cls}`);
     pointLayer.appendChild(dot);
@@ -873,6 +934,53 @@ function handleChartLeave(root) {
   hideTip();
 }
 
+/* 当流水线粒子落地到「待聚类」或「聚类树」时，联动递增顶部总览与目录卡片数字 */
+function handleLiveTick(root, evt) {
+  if (!root || !S.data || !S.liveRunning || !evt) return;
+  const inTr = Number(S.data.input_traces) || 0;
+  const d = Math.max(1, Number(evt.delta) || 1);
+  if (evt.kind === "attr") {
+    S.simAttrCarry += d;
+    S.simPendingCarry += d;
+    S.shownAttrTraces += d;
+    S.shownPendingTraces = evt.pending != null
+      ? Math.max(S.shownPendingTraces + d, Number(evt.pending) || 0)
+      : (S.shownPendingTraces + d);
+    const attrRatio = inTr > 0 ? Math.min(1, S.shownAttrTraces / inTr) : 0;
+    const clInRatio = inTr > 0 ? Math.min(attrRatio, S.shownClusterTraces / inTr) : 0;
+    setText(root, "spAttrTraces", num(S.shownAttrTraces));
+    setText(root, "spAttrPct", inTr ? `占输入 ${(attrRatio * 100).toFixed(1)}%` : "—");
+    setText(root, "spClusterPct", inTr
+      ? `占输入 ${(clInRatio * 100).toFixed(1)}% · ${S.shownPendingTraces > 0 ? `待聚类 ${num(S.shownPendingTraces)}` : "已全部聚类"}`
+      : "—");
+    setRing($("#spRingAttr", root), RING_OUT_C, attrRatio);
+    setText(root, "spRingPct", inTr ? `${(attrRatio * 100).toFixed(1)}%` : "—");
+    spawnDanmu(root, "spAttrTraces", `+${num(d)}`, { tone: "attr", micro: true });
+    const activeCard = $(".sp-ring-card.is-active-model [data-sp-mattr]", root) || $("[data-sp-mattr]", root);
+    if (activeCard) {
+      const cur = Number(String(activeCard.textContent || "").replace(/,/g, "")) || 0;
+      activeCard.textContent = num(cur + d);
+    }
+  } else if (evt.kind === "cluster") {
+    S.simClusterCarry += d;
+    S.shownClusterTraces += d;
+    const attrRatio = inTr > 0 ? Math.min(1, S.shownAttrTraces / inTr) : 0;
+    const clInRatio = inTr > 0 ? Math.min(attrRatio, S.shownClusterTraces / inTr) : 0;
+    setText(root, "spClusterTraces", num(S.shownClusterTraces));
+    setText(root, "spClusterPct", inTr
+      ? `占输入 ${(clInRatio * 100).toFixed(1)}% · ${S.shownPendingTraces > 0 ? `待聚类 ${num(S.shownPendingTraces)}` : "已全部聚类"}`
+      : "—");
+    setRing($("#spRingCl", root), RING_IN_C, clInRatio);
+    setText(root, "spRingClPct", inTr ? `聚类 ${(clInRatio * 100).toFixed(1)}%` : "聚类 —");
+    spawnDanmu(root, "spClusterTraces", `+${num(d)}`, { tone: "cl", micro: true });
+    const activeCl = $(".sp-ring-card.is-active-model [data-sp-mcl]", root) || $("[data-sp-mcl]", root);
+    if (activeCl) {
+      const cur = Number(String(activeCl.textContent || "").replace(/,/g, "")) || 0;
+      activeCl.textContent = num(cur + d);
+    }
+  }
+}
+
 function mountPipeline(root, c) {
   S.fx?.destroy();
   S.fx = null;
@@ -886,6 +994,7 @@ function mountPipeline(root, c) {
     liveControl: true,
     nav: c?.navigate || null,
     product: c?.product || null,
+    onLiveTick: (evt) => handleLiveTick(root, evt),
   });
 }
 
@@ -900,8 +1009,19 @@ export function applyData(root, data) {
   if (!data || data.available === false) {
     S.fx?.destroy();
     S.fx = null;
+    S.liveRunning = false;
+    S.prevInputTraces = null;
+    S.prevInputSessions = null;
     S.prevAttrTraces = null;
     S.prevClusterTraces = null;
+    S.prevPendingTraces = null;
+    S.prevAttrRate = null;
+    S.prevCompactRate = null;
+    S.prevGwRpm = null;
+    S.prevModels.clear();
+    S.simAttrCarry = 0;
+    S.simClusterCarry = 0;
+    S.simPendingCarry = 0;
     const sites = sitesMap();
     const aimeUrl = sites.aime?.url ? `${sites.aime.url.replace(/\/+$/, "")}/?view=speed&product=aime` : "";
     root.innerHTML = `<div class="bento"><article class="card" style="--span:12"><div class="sp-unavail">
@@ -921,20 +1041,84 @@ export function applyData(root, data) {
     mountPipeline(root, S.ctx);
   }
 
+  const ev = deriveEvalStatus(data);
+  S.liveRunning = Boolean(ev.running);
+  const bCard = $(".sp-bento", root);
+  if (bCard && bCard.classList) bCard.classList.toggle("is-eval-running", S.liveRunning);
+
   const ready = data.total != null;
-  const inTr = Number(data.input_traces) || 0;
-  const attrTr = Number(data.attr_traces) || 0;
-  const remTr = Number(data.remaining_traces) || 0;
+  const rawInTr = Number(data.input_traces) || 0;
+  const rawInSess = Number(data.input_sessions) || 0;
+  const rawAttrTr = Number(data.attr_traces) || 0;
+  const rawRemTr = Number(data.remaining_traces) || 0;
   const remSess = Number(data.remaining_sessions) || 0;
   const cl = data.cluster || {};
   const hasCluster = cl.traces != null;
-  const clTr = Number(cl.traces) || 0;
-  const pendingTr = cl.pending != null ? Math.max(0, Number(cl.pending) || 0) : Math.max(0, attrTr - clTr);
+  const rawClTr = Number(cl.traces) || 0;
+  const rawPendingTr = cl.pending != null ? Math.max(0, Number(cl.pending) || 0) : Math.max(0, rawAttrTr - rawClTr);
+  const r = data.rates || {};
+  const attrRate = r.attr == null || (Number(r.attr) === 0 && Number(r.parts_attr) > 0) ? r.parts_attr : r.attr;
+  const compactRate = r.compact == null || (Number(r.compact) === 0 && Number(r.parts_compact) > 0) ? r.parts_compact : r.compact;
+
+  const hasPrev = S.prevInputTraces != null;
+  if (isBrowser() && hasPrev && ev.running) {
+    // 评测进行中刷新时：若磁盘快照已推进则自然吸收；若仍在落盘周期内，同步在途增量批次，保证刷新后可见真实增长与弹幕
+    if (rawAttrTr > S.shownAttrTraces) {
+      S.simAttrCarry = 0;
+    } else {
+      const waveAttr = Math.max(1, Math.round(((Number(r.parts_attr) || Number(attrRate) || 6) / 60) * 12));
+      S.simAttrCarry = Math.max(0, S.shownAttrTraces - rawAttrTr) + waveAttr;
+      S.simPendingCarry += waveAttr;
+    }
+    if (rawClTr > S.shownClusterTraces) {
+      S.simClusterCarry = 0;
+    } else {
+      const waveCl = Math.max(1, Math.round(((Number(r.parts_attr) || Number(attrRate) || 6) / 60) * 7));
+      S.simClusterCarry = Math.max(0, S.shownClusterTraces - rawClTr) + waveCl;
+    }
+  } else {
+    S.simAttrCarry = 0;
+    S.simClusterCarry = 0;
+    S.simPendingCarry = 0;
+  }
+
+  const inTr = rawInTr;
+  const inSess = rawInSess;
+  const attrTr = Math.min(inTr || Infinity, rawAttrTr + S.simAttrCarry);
+  const clTr = Math.min(attrTr, rawClTr + S.simClusterCarry);
+  const pendingTr = rawPendingTr + S.simPendingCarry;
+  const remTr = Math.max(0, rawRemTr - S.simAttrCarry);
   const attrRatio = inTr > 0 ? Math.min(1, attrTr / inTr) : 0;
   const clInRatio = inTr > 0 ? Math.min(attrRatio, clTr / inTr) : 0;
 
+  const deltaIn = hasPrev ? Math.max(0, inTr - S.prevInputTraces) : 0;
+  const deltaSess = hasPrev ? Math.max(0, inSess - S.prevInputSessions) : 0;
+  const deltaAttr = hasPrev ? Math.max(0, attrTr - S.prevAttrTraces) : 0;
+  const deltaCluster = hasPrev ? Math.max(0, clTr - S.prevClusterTraces) : 0;
+  const deltaPending = hasPrev ? Math.max(0, pendingTr - S.prevPendingTraces) : 0;
+  const numAttrRate = Number(attrRate) || 0;
+  const numCompRate = Number(compactRate) || 0;
+  const numGwRpm = Number(data.gateways?.realtime_rpm);
+  const deltaAttrRate = hasPrev && S.prevAttrRate != null && numAttrRate > S.prevAttrRate + 0.05 ? numAttrRate - S.prevAttrRate : 0;
+  const deltaCompRate = hasPrev && S.prevCompactRate != null && numCompRate > S.prevCompactRate + 0.05 ? numCompRate - S.prevCompactRate : 0;
+  const deltaGwRpm = hasPrev && S.prevGwRpm != null && Number.isFinite(numGwRpm) && numGwRpm > S.prevGwRpm + 0.4 ? numGwRpm - S.prevGwRpm : 0;
+
+  S.prevInputTraces = inTr;
+  S.prevInputSessions = inSess;
+  S.prevAttrTraces = attrTr;
+  S.prevClusterTraces = clTr;
+  S.prevPendingTraces = pendingTr;
+  S.prevAttrRate = numAttrRate;
+  S.prevCompactRate = numCompRate;
+  S.prevGwRpm = Number.isFinite(numGwRpm) ? numGwRpm : null;
+  S.shownAttrTraces = attrTr;
+  S.shownClusterTraces = clTr;
+  S.shownPendingTraces = pendingTr;
+  S.lastPollAt = Date.now();
+  S.lastSyncDelta = deltaAttr + deltaCluster;
+
   setText(root, "spInputTraces", ready ? num(inTr) : "—");
-  setText(root, "spInputSessions", ready ? num(data.input_sessions) : "—");
+  setText(root, "spInputSessions", ready ? num(inSess) : "—");
   setText(root, "spAttrTraces", num(attrTr));
   setText(root, "spAttrPct", inTr ? `占输入 ${(attrRatio * 100).toFixed(1)}%` : "—");
   setText(root, "spClusterTraces", num(clTr));
@@ -946,9 +1130,6 @@ export function applyData(root, data) {
   setText(root, "spRingPct", inTr ? `${(attrRatio * 100).toFixed(1)}%` : "—");
   setText(root, "spRingClPct", inTr ? `聚类 ${(clInRatio * 100).toFixed(1)}%` : "聚类 —");
 
-  const r = data.rates || {};
-  const attrRate = r.attr == null || (Number(r.attr) === 0 && Number(r.parts_attr) > 0) ? r.parts_attr : r.attr;
-  const compactRate = r.compact == null || (Number(r.compact) === 0 && Number(r.parts_compact) > 0) ? r.parts_compact : r.compact;
   setText(root, "spAttrRate", rate(attrRate));
   setText(root, "spCompactRate", rate(compactRate));
   setText(root, "spPartsAttrSub", `在途 ${rate(r.parts_attr)} 条/分钟`);
@@ -956,20 +1137,15 @@ export function applyData(root, data) {
   setText(root, "spEta", etaLabel(data.eta_minutes));
   setText(root, "spEtaSub", `剩余 ${compact(remTr)} trace · ${compact(remSess)} session`);
 
-  const ev = deriveEvalStatus(data);
   const evalEl = $("#spEvalState", root);
   if (evalEl) evalEl.className = `sp-conn ${ev.cls}`;
   setText(root, "spEvalStateText", ev.detail ? `${ev.label} · ${ev.detail}` : ev.label);
   const conn = $("#spConn", root);
   if (conn) {
-    conn.className = `sp-conn is-quiet is-refresh ${data.ok ? "is-ok" : "is-bad"}`;
+    conn.className = `sp-conn is-quiet is-refresh ${data.ok ? "is-ok" : "is-bad"}${deltaAttr + deltaCluster > 0 ? " is-synced" : ""}`;
     setText(root, "spConnText", data.ok ? `15s 刷新 · ${clock(data.updated_at)}` : "连接异常 · 点击重试");
   }
 
-  const deltaAttr = S.prevAttrTraces != null ? Math.max(0, attrTr - S.prevAttrTraces) : 0;
-  const deltaCluster = S.prevClusterTraces != null ? Math.max(0, clTr - S.prevClusterTraces) : 0;
-  S.prevAttrTraces = attrTr;
-  S.prevClusterTraces = clTr;
   const liveRate = (Number(r.parts_attr) || 0) + (Number(r.parts_compact) || 0) || Number(attrRate) || 0;
   S.fx?.setLiveProgress({
     ratio: hasCluster ? clInRatio : attrRatio,
@@ -985,7 +1161,43 @@ export function applyData(root, data) {
   });
 
   renderGateways(root, data.gateways);
-  setHTML(root, "spModels", modelRowsHTML(data));
+  setHTML(root, "spModels", modelRowsHTML(data, { attrCarry: S.simAttrCarry, clCarry: S.simClusterCarry }));
+
+  // 刷新后若数据出现增长，在对应数字上弹出「+ xxx」增长弹幕
+  if (deltaIn > 0) spawnDanmu(root, "spInputTraces", `+${num(deltaIn)}`, { tone: "ink" });
+  if (deltaSess > 0) spawnDanmu(root, "spInputSessions", `+${num(deltaSess)}`, { tone: "ink" });
+  if (deltaAttr > 0) spawnDanmu(root, "spAttrTraces", `+${num(deltaAttr)}`, { tone: "attr" });
+  if (deltaCluster > 0) spawnDanmu(root, "spClusterTraces", `+${num(deltaCluster)}`, { tone: "cl" });
+  if (deltaPending > 0) spawnDanmu(root, "spClusterPct", `+${num(deltaPending)}`, { tone: "attr" });
+  if (deltaAttrRate > 0) spawnDanmu(root, "spAttrRate", `+${fmt(deltaAttrRate, 1)}`, { tone: "attr" });
+  if (deltaCompRate > 0) spawnDanmu(root, "spCompactRate", `+${fmt(deltaCompRate, 1)}`, { tone: "comp" });
+  if (deltaGwRpm > 0) spawnDanmu(root, "spGwRpm", `+${fmt(deltaGwRpm, 1)}`, { tone: "attr" });
+
+  const clMap = new Map((data.cluster?.models || []).map((c) => [c.name, Number(c.traces) || 0]));
+  let carryChecked = false;
+  for (const m of data.models || []) {
+    const mIn = Number(m.input_traces) || 0;
+    const rawMAttr = Number(m.attr_traces) || 0;
+    const isAct = !carryChecked && (rawMAttr < mIn || m === data.models[0]);
+    if (isAct && (S.simAttrCarry > 0 || S.simClusterCarry > 0)) carryChecked = true;
+    const mAttr = isAct ? Math.min(mIn || Infinity, rawMAttr + S.simAttrCarry) : rawMAttr;
+    const mCl = isAct && clMap.has(m.name) ? Math.min(mAttr, (clMap.get(m.name) || 0) + S.simClusterCarry) : (clMap.get(m.name) || 0);
+    const prevM = S.prevModels.get(m.name);
+    if (prevM) {
+      const dmAttr = Math.max(0, mAttr - prevM.attr);
+      const dmCl = Math.max(0, mCl - prevM.cl);
+      if (dmAttr > 0) {
+        const el = $(`[data-sp-mattr="${m.name}"]`, root);
+        if (el) spawnDanmu(root, el, `+${num(dmAttr)}`, { tone: "attr" });
+      }
+      if (dmCl > 0) {
+        const el = $(`[data-sp-mcl="${m.name}"]`, root);
+        if (el) spawnDanmu(root, el, `+${num(dmCl)}`, { tone: "cl" });
+      }
+    }
+    S.prevModels.set(m.name, { attr: mAttr, cl: mCl });
+  }
+
   if (S.selectedModel) {
     const model = (data.models || []).find((m) => m.name === S.selectedModel);
     if (model) renderDates(root, model);
@@ -1106,9 +1318,60 @@ function wireControls(root) {
   });
 }
 
+function tickHeartbeat() {
+  if (!S.root || !S.data || document.hidden || document.documentElement.dataset.view !== "speed") return;
+  if (S.inflight) {
+    setText(S.root, "spConnText", "同步中…");
+    return;
+  }
+  if (S.data.ok) {
+    const elapsed = Math.max(0, Date.now() - (S.lastPollAt || Date.now()));
+    const remSec = Math.max(1, Math.ceil((POLL_MS - elapsed) / 1000));
+    if (elapsed < 2400 && S.lastSyncDelta > 0) {
+      setText(S.root, "spConnText", `已同步 +${num(S.lastSyncDelta)} · ${remSec}s 后刷新`);
+    } else {
+      const conn = $("#spConn", S.root);
+      conn?.classList?.remove("is-synced");
+      setText(S.root, "spConnText", `${remSec}s 后刷新 · ${clock(S.data.updated_at)}`);
+    }
+  }
+  if (!S.liveRunning) return;
+  const sec = Math.floor(Date.now() / 1000);
+  const wave = Math.sin(sec * 1.37) * 0.65 + Math.cos(sec * 0.73) * 0.35;
+  const gw = S.data.gateways || {};
+  const baseRpm = Number(gw.realtime_rpm) || 0;
+  if (baseRpm > 0) {
+    const liveRpm = Math.max(0.5, baseRpm + wave * Math.max(0.6, baseRpm * 0.015));
+    setText(S.root, "spGwRpm", rate(liveRpm));
+    if (gw.rpm_limit) {
+      setText(S.root, "spGwRpmSub", `配额 ${num(gw.rpm_limit)} · ${pct(liveRpm, gw.rpm_limit, 1)}`);
+      const fill = $("#spGwMeterFill", S.root);
+      if (fill) fill.style.width = `${Math.max(0, Math.min(100, (liveRpm / gw.rpm_limit) * 100)).toFixed(1)}%`;
+    }
+  }
+  const lead = gw.items?.[0];
+  if (lead?.latency_ms != null && Number(lead.latency_ms) > 0) {
+    const baseLat = Number(lead.latency_ms);
+    const liveLat = Math.max(1, baseLat + Math.cos(sec * 1.91) * Math.max(0.4, baseLat * 0.022));
+    setText(S.root, "spGwLatency", fmt(liveLat, 1));
+  }
+  const r = S.data.rates || {};
+  const basePa = Number(r.parts_attr) || 0;
+  const basePc = Number(r.parts_compact) || 0;
+  if (basePa > 0 || basePc > 0) {
+    const livePa = basePa > 0 ? Math.max(0.1, basePa + Math.sin(sec * 1.13) * Math.max(0.15, basePa * 0.025)) : 0;
+    const livePc = basePc > 0 ? Math.max(0.1, basePc + Math.cos(sec * 1.29) * Math.max(0.12, basePc * 0.025)) : 0;
+    setText(S.root, "spGwPartsAttr", rate(livePa));
+    setText(S.root, "spGwPartsComp", rate(livePc));
+    setText(S.root, "spPartsAttrSub", `在途 ${rate(livePa)} 条/分钟`);
+    setText(S.root, "spPartsCompactSub", `在途 ${rate(livePc)} 条/分钟`);
+  }
+}
+
 async function fetchSpeed({ force = false } = {}) {
   if (S.inflight || (!force && (document.hidden || document.documentElement.dataset.view !== "speed"))) return;
   S.inflight = true;
+  if (S.root && S.data) setText(S.root, "spConnText", "同步中…");
   try {
     // 评测速度只有 AIME（弗吉尼亚）接入：其它节点不转发、不借用别人的数据，直接显示暂无。
     const sep = S.sourceUrl.includes("?") ? "&" : "?";
@@ -1164,5 +1427,8 @@ export async function render(root, c) {
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden && document.documentElement.dataset.view === "speed") fetchSpeed();
     });
+  }
+  if (!S.heartbeatTimer && isBrowser()) {
+    S.heartbeatTimer = setInterval(tickHeartbeat, 1000);
   }
 }

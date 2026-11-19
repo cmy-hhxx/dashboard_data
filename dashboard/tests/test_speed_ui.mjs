@@ -190,10 +190,22 @@ test("applyData updates concentric rings and KPI counters from real numbers", ()
   assert.equal(byId.get("spEvalStateText").textContent, "中断中 · 调度暂停");
   // When input_traces grows, both evaluated and clustered ratios must adjust downward proportionally.
   applyData(root, { ...PAYLOAD, input_traces: 1500, remaining_traces: 750 });
+  assert.equal(byId.get("spInputTraces").dataset.lastDanmu, "+500");
   assert.equal(byId.get("spRingPct").textContent, "50.0%");
   assert.equal(byId.get("spRingClPct").textContent, "聚类 40.0%");
   const grownOutOff = Number(byId.get("spRingAttr").getAttribute("stroke-dashoffset"));
   const grownInOff = Number(byId.get("spRingCl").getAttribute("stroke-dashoffset"));
   assert.ok(Math.abs(grownOutOff - 2 * Math.PI * 64 * 0.5) < 0.05);
   assert.ok(Math.abs(grownInOff - 2 * Math.PI * 49 * 0.6) < 0.05);
+  // When attr_traces and cluster.traces grow on refresh, + xxx danmu badges trigger on the counters.
+  applyData(root, {
+    ...PAYLOAD,
+    input_traces: 1500,
+    attr_traces: 785,
+    cluster: { ...PAYLOAD.cluster, traces: 622, pending: 163 },
+  });
+  assert.equal(byId.get("spAttrTraces").dataset.lastDanmu, "+35");
+  assert.equal(byId.get("spClusterTraces").dataset.lastDanmu, "+22");
+  assert.equal(byId.get("spClusterPct").dataset.lastDanmu, "+13");
+  assert.ok(speedCss.includes(".sp-danmu") && systemCss.includes(".fx-pool-danmu") && systemCss.includes(".fx-live-danmu"));
 });

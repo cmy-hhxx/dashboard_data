@@ -247,7 +247,90 @@ button.sp-ring-card:hover .sp-rc-arrow { color: var(--accent); transform: transl
   .sp-date-head .pager { margin-left: 0; width: 100%; justify-content: space-between; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .sp-conn.is-live i { animation: none; }
+  .sp-conn.is-live i, .sp-point-halo, .sp-danmu { animation: none; }
+}
+
+/* 增长弹幕（+ xxx）与评测进行中实时脉动 */
+.sp-danmu-host { position: relative; }
+.sp-ov-val, .sp-ov-sub, .sp-rate, .sp-gw-kpi-val, .sp-rc-stats span { position: relative; }
+.num.is-bumped {
+  animation: sp-num-bump 520ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes sp-num-bump {
+  0% { transform: scale(1); }
+  28% { transform: scale(1.08); }
+  100% { transform: scale(1); }
+}
+.sp-danmu {
+  display: inline-flex; align-items: center; justify-content: center;
+  margin-left: 6px; padding: 2px 8px; border-radius: 999px;
+  font: var(--w-title) 11.5px/1.25 var(--mono); font-variant-numeric: tabular-nums;
+  white-space: nowrap; pointer-events: none; vertical-align: super;
+  background: color-mix(in oklab, var(--accent) 16%, var(--card));
+  color: var(--accent);
+  box-shadow: 0 3px 10px -2px color-mix(in oklab, var(--accent) 28%, transparent),
+              inset 0 0 0 1px color-mix(in oklab, var(--accent) 32%, transparent);
+  animation: sp-danmu-rise 1800ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.sp-danmu.is-burst {
+  font-size: 12px; padding: 2px 9px;
+  background: var(--accent); color: var(--card);
+  box-shadow: 0 4px 14px -2px color-mix(in oklab, var(--accent) 45%, transparent);
+}
+.sp-danmu.is-burst.is-cl {
+  background: var(--loc-ulq); color: var(--card);
+  box-shadow: 0 4px 14px -2px color-mix(in oklab, var(--loc-ulq) 45%, transparent);
+}
+.sp-danmu.is-burst.is-comp {
+  background: var(--loc-vir); color: var(--card);
+  box-shadow: 0 4px 14px -2px color-mix(in oklab, var(--loc-vir) 45%, transparent);
+}
+.sp-danmu.is-burst.is-ink {
+  background: var(--ink); color: var(--card);
+  box-shadow: 0 4px 14px -2px color-mix(in oklab, var(--ink) 35%, transparent);
+}
+.sp-danmu.is-micro {
+  font-size: 10.5px; padding: 1px 6px;
+  animation: sp-danmu-micro 1100ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.sp-danmu.is-micro.is-cl {
+  background: color-mix(in oklab, var(--loc-ulq) 16%, var(--card));
+  color: var(--loc-ulq);
+  box-shadow: 0 2px 8px -2px color-mix(in oklab, var(--loc-ulq) 28%, transparent),
+              inset 0 0 0 1px color-mix(in oklab, var(--loc-ulq) 32%, transparent);
+}
+@keyframes sp-danmu-rise {
+  0% { opacity: 0; transform: translateY(8px) scale(0.78); }
+  16% { opacity: 1; transform: translateY(-2px) scale(1.06); }
+  74% { opacity: 0.96; transform: translateY(-13px) scale(1); }
+  100% { opacity: 0; transform: translateY(-20px) scale(0.94); }
+}
+@keyframes sp-danmu-micro {
+  0% { opacity: 0; transform: translateY(5px) scale(0.84); }
+  20% { opacity: 0.95; transform: translateY(-1px) scale(1.03); }
+  75% { opacity: 0.88; transform: translateY(-9px) scale(1); }
+  100% { opacity: 0; transform: translateY(-15px) scale(0.95); }
+}
+
+.sp-conn.is-synced {
+  background: color-mix(in oklab, var(--loc-ulq) 14%, var(--well));
+  color: var(--loc-ulq);
+}
+.sp-chart .sp-point-halo {
+  fill: none; stroke-width: 1.8; opacity: 0;
+  transform-box: fill-box; transform-origin: center;
+  animation: sp-halo-pulse 1.9s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+.sp-chart .sp-point-halo.sp-point-attr,
+.sp-chart .sp-point-halo.sp-point-rpm { stroke: var(--accent); }
+.sp-chart .sp-point-halo.sp-point-comp { stroke: var(--loc-vir); }
+@keyframes sp-halo-pulse {
+  0% { opacity: 0.72; transform: scale(0.55); }
+  80% { opacity: 0; transform: scale(1.75); }
+  100% { opacity: 0; transform: scale(1.85); }
+}
+.sp-bento.is-eval-running .sp-ring-card.is-active-model {
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 20%, transparent);
 }
 
 .sp-empty {

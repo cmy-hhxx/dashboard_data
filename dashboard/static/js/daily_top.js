@@ -18,7 +18,7 @@ const TOP_LIMIT = 10;
 const LINE_LIMIT = 5;
 const HEAT_COLS = 10;
 const HEAT_ROWS = 3;
-const HEAT_PAGE_SIZE = HEAT_COLS * HEAT_ROWS; // 10 × 3 = 30 days
+const HEAT_PAGE_SIZE = HEAT_COLS * HEAT_ROWS;
 const LINE_COLORS_UP = ["var(--accent)", "#c86d3b", "#6e59bd", "#248277", "#9e6378"];
 const LINE_COLORS_DOWN = ["#248277", "var(--accent)", "#6e59bd", "#4e8752", "#b57c3c"];
 
@@ -26,18 +26,67 @@ const signed = (n) => (n > 0 ? `+${fmt(n)}` : n < 0 ? `-${fmt(Math.abs(n))}` : "
 const pairNum = (n) => (Math.abs(n) >= 10000 ? compact(n) : fmt(n));
 const ratioText = (ratio) => (ratio > 0 ? fmt(ratio, 2) : "0.00");
 
-/* Divide days into pages of at most 30 days (10 × 3) so the newest page (default) always shows
-   a full 30-day window when total days >= 30, and earlier pages hold the older dates in order. */
-export function buildHeatPages(days, pageSize = HEAT_PAGE_SIZE) {
-  if (!Array.isArray(days) || !days.length) return [];
-  if (days.length <= pageSize) return [days];
-  const pages = [];
-  const headCount = days.length - pageSize;
-  for (let i = 0; i < headCount; i += pageSize) {
-    pages.push(days.slice(i, Math.min(i + pageSize, headCount)));
+const CHEVRON_LEFT_SVG = `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M9.75 3.75L5.5 8l4.25 4.25" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const CHEVRON_RIGHT_SVG = `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6.25 3.75L10.5 8l-4.25 4.25" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const CLOSE_X_SVG = `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" stroke="currentColor" stroke-width="1.65" stroke-linecap="round"/></svg>`;
+
+function daysInCalendarMonth(ym) {
+  const [y, m] = String(ym || "").split("-").map(Number);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || m < 1 || m > 12) return 30;
+  return new Date(Date.UTC(y, m, 0)).getUTCDate();
+}
+
+export function shiftCalendarMonth(ym, delta) {
+  const [y, m] = String(ym || "").split("-").map(Number);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || m < 1 || m > 12) return String(ym || "");
+  const d = new Date(Date.UTC(y, m - 1 + delta, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+export function buildCalendarMonthSlice(ym, byDate) {
+  const total = daysInCalendarMonth(ym);
+  const fullMonth = [];
+  for (let dayNum = 1; dayNum <= total; dayNum += 1) {
+    const date = `${ym}-${String(dayNum).padStart(2, "0")}`;
+    const existing = byDate instanceof Map ? byDate.get(date) : null;
+    if (existing) {
+      fullMonth.push({ ...existing, hasData: true, month: ym });
+    } else {
+      fullMonth.push({
+        date,
+        month: ym,
+        hasData: false,
+        traces: 0,
+        problems: 0,
+        perTrace: 0,
+        p01: 0,
+        sevs: [0, 0, 0, 0, 0],
+        traceSevs: [0, 0, 0, 0, 0, 0],
+        topAppear: [],
+        topRise: [],
+        topDrop: [],
+      });
+    }
   }
-  pages.push(days.slice(days.length - pageSize));
-  return pages;
+  return fullMonth;
+}
+
+/* Group evaluated days strictly by full calendar month (YYYY-MM-01 .. YYYY-MM-lastDay).
+   Every calendar day of the month is present in order; evaluated days carry `hasData: true`,
+   and unevaluated calendar days in the same month carry `hasData: false`. */
+export function buildHeatPages(days) {
+  if (!Array.isArray(days) || !days.length) return [];
+  const byDate = new Map();
+  const months = [];
+  days.forEach((d) => {
+    const date = String(d?.date || "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+    byDate.set(date, d);
+    const ym = date.slice(0, 7);
+    if (!months.includes(ym)) months.push(ym);
+  });
+  months.sort();
+  return months.map((ym) => buildCalendarMonthSlice(ym, byDate));
 }
 
 export function buildDailyTopModel(trend, tax = {}) {
@@ -194,10 +243,11 @@ export function buildDailyTopModel(trend, tax = {}) {
       return node.counts[di];
     };
 
-    // 1. Top 10 most frequent specific problems on day `di`
+    // 1. Top 10 most frequent specific problems on day `di` (strictly descending by count, then delta)
     const appearSorted = [...nodes]
       .sort((a, b) => (
         b.counts[di] - a.counts[di]
+        || (b.counts[di] - baselineOf(b)) - (a.counts[di] - baselineOf(a))
         || b.p01[di] - a.p01[di]
         || b.hits[di] - a.hits[di]
         || b.totalCount - a.totalCount
@@ -244,7 +294,7 @@ export function buildDailyTopModel(trend, tax = {}) {
       delta,
     }));
 
-    // 2. Top 10 most dropped specific problems on day `di`
+    // 2. Top 10 most dropped specific problems on day `di` (strictly descending by drop magnitude |delta|)
     const topDrop = [];
     const picked = new Set();
     const pushDrop = (node, prev) => {
@@ -326,6 +376,9 @@ export function buildDailyTopModel(trend, tax = {}) {
         .forEach((node) => pushDrop(node, baselineOf(node)));
     }
 
+    // Guarantee strict descending order of drop magnitude across all tiers
+    topDrop.sort((a, b) => a.delta - b.delta || b.prev - a.prev || a.count - b.count || a.code.localeCompare(b.code));
+
     return {
       date,
       di,
@@ -381,91 +434,131 @@ function parseCounts(str, len) {
   return Array.from({ length: len }, (_, i) => raw[i] || 0);
 }
 
-function tipRingSVG(counts, centerVal, centerUnit, cls = "mxd-tip-ring") {
+function tipRingSVG(counts, centerVal, centerUnit, cls = "mxd-tip-ring", activeSev = "") {
   const total = counts.reduce((a, b) => a + b, 0);
+  const shares = traceShares(total > 0 ? counts : [0, 0, 0, 0, 0, 0]);
   let offset = 0;
   const arcs = total > 0
-    ? counts.map((n, i) => ({ n, c: TIP_SEV_META[i]?.color || "var(--accent)" }))
+    ? counts.map((n, i) => ({
+        n,
+        key: TIP_SEV_META[i]?.key || String(i),
+        c: TIP_SEV_META[i]?.color || "var(--accent)",
+      }))
         .filter((seg) => seg.n > 0)
         .map((seg) => {
           const share = (100 * seg.n) / total;
           const dash = Math.max(0.8, share - 0.8);
           const at = offset;
           offset += share;
-          return `<circle class="mxd-tip-arc" cx="28" cy="28" r="21" pathLength="100" style="stroke:${seg.c};stroke-dasharray:${dash.toFixed(2)} ${(100 - dash).toFixed(2)};stroke-dashoffset:${(-at).toFixed(2)}"/>`;
+          const isSel = Boolean(activeSev && activeSev === seg.key);
+          const isDim = Boolean(activeSev && activeSev !== seg.key);
+          return `<circle class="mxd-tip-arc${isSel ? " is-active" : ""}${isDim ? " is-dim" : ""}" data-daily-sev="${esc(seg.key)}" cx="28" cy="28" r="21" pathLength="100" style="--c:${seg.c};stroke:${seg.c};stroke-dasharray:${dash.toFixed(2)} ${(100 - dash).toFixed(2)};stroke-dashoffset:${(-at).toFixed(2)}"/>`;
         }).join("")
     : "";
-  return `<div class="${cls}">
+  const selIdx = activeSev ? TIP_SEV_META.findIndex((m) => m.key === activeSev) : -1;
+  const selMeta = selIdx >= 0 ? TIP_SEV_META[selIdx] : null;
+  const cVal = selMeta ? `${fmt(shares[selIdx] || 0, 1)}%` : centerVal;
+  const cUnit = selMeta ? `${selMeta.label} · ${fmt(counts[selIdx] || 0)}` : centerUnit;
+  return `<div class="${cls}${selMeta ? " has-focus" : ""}">
     <svg viewBox="0 0 56 56" aria-hidden="true">
       <circle class="mxd-tip-track" cx="28" cy="28" r="21"/>
       ${arcs}
     </svg>
-    <div class="mxd-tip-center"><b class="num">${esc(centerVal)}</b><span>${esc(centerUnit)}</span></div>
+    <div class="mxd-tip-center${selMeta ? " is-sev-focus" : ""}"${selMeta ? ` style="--c:${selMeta.color}"` : ""}><b class="num">${esc(cVal)}</b><span>${esc(cUnit)}</span></div>
   </div>`;
 }
 
-function tipDaySevGridHTML(tCounts, pCounts) {
+function tipDaySevGridHTML(tCounts, pCounts, { interactive = false, activeSev = "" } = {}) {
   const shares = traceShares(sum(tCounts) > 0 ? tCounts : [...pCounts, 0]);
-  return `<div class="mxd-tip-grid">
+  return `<div class="mxd-tip-grid${interactive ? " is-interactive" : ""}${activeSev ? " has-focus" : ""}">
     ${TIP_SEV_META.map((meta, i) => {
       const tVal = tCounts[i] || 0;
       const pVal = i < 5 ? (pCounts[i] || 0) : 0;
       const shareNum = shares[i] != null ? shares[i] : 0;
       const shareStr = `${fmt(shareNum, 1)}%`;
-      return `<div class="mxd-tip-line">
-        <span class="mxd-tip-sev"><i style="--c:${meta.color}"></i>${esc(meta.label)}</span>
+      const isSel = Boolean(activeSev && activeSev === meta.key);
+      const inner = `<span class="mxd-tip-sev"><i style="--c:${meta.color}"></i><span>${esc(meta.label)}</span></span>
         <span class="mxd-modal-bar" aria-hidden="true"><i style="width:${Math.min(100, shareNum).toFixed(1)}%;background:${meta.color}"></i></span>
         <b class="mxd-tip-pct num">${esc(shareStr)}</b>
         <span class="mxd-tip-tr num">${fmt(tVal)} Trace</span>
-        <span class="mxd-tip-pr num">${fmt(pVal)} 问题</span>
-      </div>`;
+        <span class="mxd-tip-pr num">${fmt(pVal)} 问题</span>`;
+      if (interactive) {
+        return `<button type="button" class="mxd-tip-line is-interactive${isSel ? " is-active" : ""}" data-daily-sev="${esc(meta.key)}" aria-pressed="${isSel}" style="--c:${meta.color}">${inner}</button>`;
+      }
+      return `<div class="mxd-tip-line">${inner}</div>`;
     }).join("")}
   </div>`;
 }
 
-function tipProblemDeltaGridHTML(prevCounts, curCounts) {
-  return `<div class="mxd-tip-grid">
-    ${TIP_SEV_META.slice(0, 5).map((meta, i) => {
+function tipBoardSevStripHTML(prevCounts, curCounts) {
+  const chips = TIP_SEV_META.slice(0, 5)
+    .map((meta, i) => {
       const prevVal = prevCounts[i] || 0;
       const curVal = curCounts[i] || 0;
       const diff = curVal - prevVal;
+      if (curVal === 0 && prevVal === 0) return "";
       const diffCls = diff > 0 ? "is-up" : diff < 0 ? "is-down" : "is-flat";
-      return `<div class="mxd-tip-line is-prob">
-        <span class="mxd-tip-sev"><i style="--c:${meta.color}"></i>${esc(meta.label)}</span>
-        <span class="mxd-tip-pair num">${fmt(prevVal)} → ${fmt(curVal)}</span>
-        <b class="mxd-tip-delta num ${diffCls}">${signed(diff)}</b>
-      </div>`;
-    }).join("")}
-  </div>`;
+      return `<span class="mxd-tip-chip"><i style="--c:${meta.color}"></i><span>${esc(meta.label)}</span><b class="num">${fmt(curVal)}</b><em class="num ${diffCls}">(${signed(diff)})</em></span>`;
+    })
+    .filter(Boolean);
+  if (!chips.length) return "";
+  return `<div class="mxd-tip-sevs">${chips.join("")}</div>`;
 }
 
-/* Centered floating modal card shown when clicking a date cell in the heatmap. */
-export function dayModalHTML(day) {
-  if (!day) return "";
+function dayModalBodyHTML(day, activeSev = "") {
   const pCounts = (day.sevs || [0, 0, 0, 0, 0]).slice(0, 5);
   const tCounts = (day.traceSevs || [...pCounts, 0]).slice(0, 6);
   const ringCounts = sum(tCounts) > 0 ? tCounts : [...pCounts, 0];
+  return `${tipRingSVG(ringCounts, fmt(day.traces || day.problems), day.traces ? "Trace" : "问题", "mxd-tip-ring is-modal", activeSev)}
+    ${tipDaySevGridHTML(tCounts, pCounts, { interactive: true, activeSev })}`;
+}
+
+/* Non-blocking centered floating detail card anchored in the heatmap stage and linked to the two Top-10 boards below. */
+export function dayModalHTML(day, activeSev = "") {
+  if (!day) return "";
   const ratio = ratioText(day.perTrace);
-  return `<div class="mxd-modal-backdrop" data-daily-modal-backdrop role="dialog" aria-modal="true" aria-label="${esc(`${day.date} 评测详情`)}">
-    <div class="mxd-modal">
+  const top1 = day.topAppear?.[0];
+  const drop1 = day.topDrop?.[0];
+  const linkedFoot = (top1 || drop1)
+    ? `<div class="mxd-pop-foot">
+        ${top1 ? `<button type="button" class="mxd-pop-link is-top" data-daily-code="${esc(top1.code)}" data-daily-name="${esc(top1.name)}">
+          <i aria-hidden="true"></i>
+          <span class="mxd-pop-tag">当日最多</span>
+          <b class="mxd-pop-name">${esc(top1.name)}</b>
+          <span class="mxd-pop-num num">${fmt(top1.count)} <em class="${top1.delta > 0 ? "is-up" : top1.delta < 0 ? "is-down" : ""}">(${signed(top1.delta)})</em></span>
+        </button>` : ""}
+        ${drop1 ? `<button type="button" class="mxd-pop-link is-drop" data-daily-code="${esc(drop1.code)}" data-daily-name="${esc(drop1.name)}">
+          <i aria-hidden="true"></i>
+          <span class="mxd-pop-tag">下降最多</span>
+          <b class="mxd-pop-name">${esc(drop1.name)}</b>
+          <span class="mxd-pop-num num">${fmt(drop1.prev)}→${fmt(drop1.count)} <em class="is-down">(${signed(drop1.delta)})</em></span>
+        </button>` : ""}
+      </div>`
+    : "";
+  return `<div class="mxd-modal-backdrop mxd-pop-anchor" data-daily-modal-backdrop role="dialog" aria-label="${esc(`${day.date} 评测详情`)}">
+    <div class="mxd-modal mxd-pop">
       <div class="mxd-modal-head">
-        <b class="mxd-modal-date num">${esc(day.date)}</b>
-        <button type="button" class="mxd-modal-close" data-daily-modal-close aria-label="关闭">×</button>
-      </div>
-      <div class="mxd-modal-kpis">
-        <div class="mxd-modal-kpi"><span>问题数</span><b class="num">${fmt(day.problems)}</b></div>
-        <div class="mxd-modal-kpi"><span>Trace 数</span><b class="num">${fmt(day.traces)}</b></div>
-        <div class="mxd-modal-kpi"><span>问题 / Trace</span><b class="num">${esc(ratio)}</b></div>
+        <div class="mxd-pop-nav">
+          <button type="button" class="mxd-page-btn" data-daily-step="-1" aria-label="前一天">${CHEVRON_LEFT_SVG}</button>
+          <b class="mxd-modal-date num">${esc(day.date)}</b>
+          <button type="button" class="mxd-page-btn" data-daily-step="1" aria-label="后一天">${CHEVRON_RIGHT_SVG}</button>
+        </div>
+        <div class="mxd-pop-kpis">
+          <span class="mxd-pop-kpi"><span>问题</span><b class="num">${fmt(day.problems)}</b></span>
+          <span class="mxd-pop-kpi"><span>Trace</span><b class="num">${fmt(day.traces)}</b></span>
+          <span class="mxd-pop-kpi is-accent"><span>问题/Trace</span><b class="num">${esc(ratio)}</b></span>
+        </div>
+        <button type="button" class="mxd-modal-close" data-daily-modal-close aria-label="关闭">${CLOSE_X_SVG}</button>
       </div>
       <div class="mxd-modal-body">
-        ${tipRingSVG(ringCounts, ratio, "问题/Trace", "mxd-tip-ring is-modal")}
-        ${tipDaySevGridHTML(tCounts, pCounts)}
+        ${dayModalBodyHTML(day, activeSev)}
       </div>
+      ${linkedFoot}
     </div>
   </div>`;
 }
 
-/* Plain-language, beginner-friendly structured hover tooltip with explicit + / - signs. */
+/* Clean, scannable hover tooltip for bottom Top-10 rows and date summary. */
 export function resolveDailyTip(target) {
   if (!target) return null;
   if (target.dataset.mxdTipKind === "day") {
@@ -489,48 +582,35 @@ export function resolveDailyTip(target) {
     </div>`;
   }
   if (target.dataset.mxdTipKind === "top") {
-    const { name, stage, prev = "0", count, delta, sevs = "", prevSevs = "", plain } = target.dataset;
+    const { name, stage, prev = "0", count, delta, share = "", sevs = "", prevSevs = "", plain } = target.dataset;
     const d = Number(delta) || 0;
     const move = signed(d);
     const moveCls = d > 0 ? "is-up" : d < 0 ? "is-down" : "";
     const curCounts = parseCounts(sevs, 5);
     const prvCounts = prevSevs ? parseCounts(prevSevs, 5) : curCounts;
-    return `<div class="mxd-tip-wrap">
-      <div class="mxd-tip-head">
-        <div class="t-head">${esc(name)}</div>
-        <div class="mxd-tip-kpis">
-          <span>环节 <b>${esc(stage)}</b></span>
-          <span>前一天 <b class="num">${esc(prev)}</b> → 今天 <b class="num">${esc(count)}</b></span>
-          <span>变化 <b class="num ${moveCls}">${esc(move)}</b></span>
-        </div>
-      </div>
-      <div class="mxd-tip-card">
-        ${tipRingSVG([...curCounts, 0], move, "较前日")}
-        ${tipProblemDeltaGridHTML(prvCounts, curCounts)}
-      </div>
-    </div>${plain ? `<div class="t-note">${esc(plain)}</div>` : ""}`;
+    return `<div class="mxd-board-tip">
+      <div class="t-head">${esc(stage)} · ${esc(name)}</div>
+      <div class="t-row"><span>今日出现</span><b class="num">${esc(count)} 次${share ? ` (${esc(share)})` : ""}</b></div>
+      <div class="t-row"><span>前一日</span><b class="num">${esc(prev)} 次</b></div>
+      <div class="t-row"><span>较前日变化</span><b class="num ${moveCls}">${esc(move)}</b></div>
+      ${tipBoardSevStripHTML(prvCounts, curCounts)}
+      ${plain ? `<div class="t-note">${esc(plain)}</div>` : ""}
+    </div>`;
   }
   if (target.dataset.mxdTipKind === "drop") {
     const { name, stage, prev, count, drop, dropPct = "", sevs = "", prevSevs = "", plain } = target.dataset;
     const curCounts = parseCounts(sevs, 5);
     const prvCounts = prevSevs ? parseCounts(prevSevs, 5) : curCounts.map((v, i) => (i === 4 ? v + (Number(String(drop).replace(/,/g, "")) || 0) : v));
-    const dropCounts = prvCounts.map((p, i) => Math.max(0, p - curCounts[i]));
-    const ringCounts = sum(dropCounts) > 0 ? [...dropCounts, 0] : [...curCounts, 0];
     const minusDrop = `-${String(drop || "0").replace(/^[-−+]/, "")}`;
-    return `<div class="mxd-tip-wrap">
-      <div class="mxd-tip-head">
-        <div class="t-head">${esc(name)}</div>
-        <div class="mxd-tip-kpis">
-          <span>环节 <b>${esc(stage)}</b></span>
-          <span>前一天 <b class="num">${esc(prev)}</b> → 今天 <b class="num">${esc(count)}</b></span>
-          <span>下降 <b class="num is-down">${esc(minusDrop)}${dropPct ? ` (-${esc(String(dropPct).replace(/^[-−+]/, ""))})` : ""}</b></span>
-        </div>
-      </div>
-      <div class="mxd-tip-card">
-        ${tipRingSVG(ringCounts, minusDrop, "较前日")}
-        ${tipProblemDeltaGridHTML(prvCounts, curCounts)}
-      </div>
-    </div>${plain ? `<div class="t-note">${esc(plain)}</div>` : ""}`;
+    const cleanPct = String(dropPct || "").replace(/^[-−+]/, "");
+    return `<div class="mxd-board-tip">
+      <div class="t-head">${esc(stage)} · ${esc(name)}</div>
+      <div class="t-row"><span>前一日</span><b class="num">${esc(prev)} 次</b></div>
+      <div class="t-row"><span>今日出现</span><b class="num">${esc(count)} 次</b></div>
+      <div class="t-row"><span>较前日下降</span><b class="num is-down">${esc(minusDrop)}${cleanPct ? ` (-${esc(cleanPct)})` : ""}</b></div>
+      ${tipBoardSevStripHTML(prvCounts, curCounts)}
+      ${plain ? `<div class="t-note">${esc(plain)}</div>` : ""}
+    </div>`;
   }
   return null;
 }
@@ -578,8 +658,9 @@ export function dailyTopBoardsHTML(day) {
 }
 
 function heatPageForDate(pages, date) {
+  const ym = String(date || "").slice(0, 7);
   for (let i = 0; i < pages.length; i += 1) {
-    if (pages[i].some((d) => d.date === date)) return i;
+    if (pages[i].some((d) => d.date === date || d.date?.slice(0, 7) === ym)) return i;
   }
   return Math.max(0, pages.length - 1);
 }
@@ -599,20 +680,31 @@ function cellHeatValue(model, day, metric) {
   return day.problems > 0 ? 0.05 + 0.90 * (r ** 0.78) : 0;
 }
 
-function heatGridHTML(model, activeDate, pageIndex, metric = "problems") {
+function heatGridHTML(model, activeDate, pageIndex, metric = "problems", activeMonth = "") {
   const pageCount = model.pages.length;
   const page = Math.max(0, Math.min(pageCount - 1, pageIndex));
-  const slice = model.pages[page] || model.days;
+  const baseSlice = model.pages[page] || model.days;
+  const baseYm = baseSlice[0]?.date.slice(0, 7) || String(activeDate || "").slice(0, 7);
+  const monthLabel = /^\d{4}-\d{2}$/.test(activeMonth) ? activeMonth : baseYm;
+  const matchedPageIdx = model.pages.findIndex((p) => p[0]?.date.slice(0, 7) === monthLabel);
+  const slice = matchedPageIdx >= 0
+    ? model.pages[matchedPageIdx]
+    : buildCalendarMonthSlice(monthLabel, model.byDate);
   const firstDate = slice[0]?.date.slice(5) || "";
   const lastDate = slice[slice.length - 1]?.date.slice(5) || "";
 
-  // Pad trailing slots to complete rows of 10 (at least 1 row for tiny fixtures, up to 3 rows = 30).
-  const totalSlots = Math.max(HEAT_COLS, Math.ceil(slice.length / HEAT_COLS) * HEAT_COLS);
+  // Full calendar month laid out across 3 uniform rows (10 cols for 28–30 days, 11 cols for 31 days).
+  const cols = slice.length > HEAT_COLS * HEAT_ROWS ? 11 : HEAT_COLS;
+  const totalSlots = Math.max(cols, Math.ceil(slice.length / cols) * cols);
   const cells = [];
   for (let i = 0; i < totalSlots; i += 1) {
     const day = slice[i];
     if (!day) {
       cells.push(`<span class="mxd-day is-void" aria-hidden="true"></span>`);
+      continue;
+    }
+    if (day.hasData === false) {
+      cells.push(`<span class="mxd-day is-empty" aria-label="${esc(`${day.date} 暂无评测数据`)}"><span class="mxd-day-date num">${esc(day.date.slice(5))}</span></span>`);
       continue;
     }
     const active = day.date === activeDate;
@@ -622,14 +714,23 @@ function heatGridHTML(model, activeDate, pageIndex, metric = "problems") {
     </button>`);
   }
 
-  const pager = pageCount > 1
-    ? `<div class="mxd-pager" role="group" aria-label="日期分页">
-        <button type="button" class="mxd-page-btn" data-daily-page="${page - 1}" aria-label="上一页"${page <= 0 ? " disabled" : ""}>‹</button>
-        <span class="mxd-page-span num">${esc(`${firstDate} ~ ${lastDate}`)}</span>
-        <span class="mxd-page-idx num">${page + 1} / ${pageCount}</span>
-        <button type="button" class="mxd-page-btn" data-daily-page="${page + 1}" aria-label="下一页"${page >= pageCount - 1 ? " disabled" : ""}>›</button>
-      </div>`
-    : `<div class="mxd-pager"><span class="mxd-page-span num">${esc(`${firstDate} ~ ${lastDate}`)}</span></div>`;
+  const latestYm = model.pages[pageCount - 1]?.[0]?.date.slice(0, 7) || baseYm;
+  const prevYm = shiftCalendarMonth(monthLabel, -1);
+  const nextYm = shiftCalendarMonth(monthLabel, 1);
+  const prevPage = matchedPageIdx > 0 ? matchedPageIdx - 1 : 0;
+  const nextPage = matchedPageIdx >= 0 && matchedPageIdx < pageCount - 1 ? matchedPageIdx + 1 : pageCount - 1;
+  const atEarliest = monthLabel <= "2020-01";
+  const atLatest = monthLabel >= latestYm;
+  const spanText = monthLabel ? `${monthLabel} (${firstDate} ~ ${lastDate})` : `${firstDate} ~ ${lastDate}`;
+  const idxBadge = pageCount > 1 && matchedPageIdx >= 0
+    ? `<span class="mxd-page-idx num">${matchedPageIdx + 1} / ${pageCount}</span>`
+    : "";
+  const pager = `<div class="mxd-pager" role="group" aria-label="月份切换">
+      <button type="button" class="mxd-page-btn" data-daily-month="${esc(prevYm)}" data-daily-page="${prevPage}" aria-label="上一个月"${atEarliest ? " disabled" : ""}>${CHEVRON_LEFT_SVG}</button>
+      <span class="mxd-page-span num">${esc(spanText)}</span>
+      ${idxBadge}
+      <button type="button" class="mxd-page-btn" data-daily-month="${esc(nextYm)}" data-daily-page="${nextPage}" aria-label="下一个月"${atLatest ? " disabled" : ""}>${CHEVRON_RIGHT_SVG}</button>
+    </div>`;
 
   const metricSeg = `<div class="seg mxd-dir-seg mxd-metric-seg" role="group" aria-label="热力图口径">
     <button type="button" data-daily-metric="problems" aria-pressed="${metric === "problems"}">问题数</button>
@@ -644,7 +745,7 @@ function heatGridHTML(model, activeDate, pageIndex, metric = "problems") {
         <span>问题走势</span>
       </button>
     </div>
-    <div class="mxd-heat" role="group" aria-label="日期热力图" style="--heat-cols:${HEAT_COLS}">${cells.join("")}</div>`;
+    <div class="mxd-heat" role="group" aria-label="日期热力图" style="--heat-cols:${cols}">${cells.join("")}</div>`;
 }
 
 function lineCandidatesFor(day, dir) {
@@ -695,20 +796,22 @@ export function dailyTopHTML(model, selectedDate = "", options = {}) {
   if (!model || !model.days.length) return `<div class="empty">暂无每日问题数据</div>`;
   const activeDay = model.byDate.get(selectedDate) || model.byDate.get(model.defaultDate) || model.days[model.days.length - 1];
   const page = options.page != null ? options.page : heatPageForDate(model.pages, activeDay.date);
+  const activeMonth = options.month || "";
   const flipped = options.face === "line";
   const dir = options.dir === "down" ? "down" : "up";
   const metric = ["problems", "traces", "ratio"].includes(options.metric) ? options.metric : "problems";
   const disabledSet = options.disabled instanceof Set ? options.disabled : new Set();
   const zoomUnlocked = Boolean(options.zoom);
   const modalDay = options.modalDate ? model.byDate.get(options.modalDate) : null;
+  const modalSev = options.modalSev || "";
 
   return `<div class="mxd">
     <div class="mxd-top${flipped ? " is-line" : ""}" id="mxdTop">
-      <div class="mxd-face mxd-face-heat" id="mxdHeatFace"${flipped ? " hidden" : ""}>${heatGridHTML(model, activeDay.date, page, metric)}</div>
+      <div class="mxd-face mxd-face-heat" id="mxdHeatFace"${flipped ? " hidden" : ""}>${heatGridHTML(model, activeDay.date, page, metric, activeMonth)}</div>
       <div class="mxd-face mxd-face-line" id="mxdLineFace"${flipped ? "" : " hidden"}>${lineFaceHTML(activeDay, dir, disabledSet, zoomUnlocked)}</div>
     </div>
+    <div class="mxd-modal-slot" id="mxdModalSlot">${modalDay ? dayModalHTML(modalDay, modalSev) : ""}</div>
     <div class="mxd-boards" id="mxdBoards">${dailyTopBoardsHTML(activeDay)}</div>
-    <div class="mxd-modal-slot" id="mxdModalSlot">${modalDay ? dayModalHTML(modalDay) : ""}</div>
   </div>`;
 }
 
@@ -734,27 +837,37 @@ export function mountDailyTop(host, trend, tax, state = {}, actions = {}) {
   if (state.dailyPage == null || state.dailyPage < 0 || state.dailyPage >= model.pages.length) {
     state.dailyPage = heatPageForDate(model.pages, state.dailyDay);
   }
+  if (!state.dailyMonth || !/^\d{4}-\d{2}$/.test(state.dailyMonth)) {
+    state.dailyMonth = model.pages[state.dailyPage]?.[0]?.date.slice(0, 7) || state.dailyDay.slice(0, 7);
+  }
   state.dailyFace = state.dailyFace === "line" ? "line" : "heat";
   state.dailyDir = state.dailyDir === "down" ? "down" : "up";
   state.dailyMetric = ["problems", "traces", "ratio"].includes(state.dailyMetric) ? state.dailyMetric : "problems";
   state.dailyHidden = state.dailyHidden instanceof Set ? state.dailyHidden : new Set();
   state.dailyZoom = Boolean(state.dailyZoom);
+  state.dailyModalSev = state.dailyModalSev || "";
 
   host.innerHTML = dailyTopHTML(model, state.dailyDay, {
     page: state.dailyPage,
+    month: state.dailyMonth,
     face: state.dailyFace,
     dir: state.dailyDir,
     metric: state.dailyMetric,
     disabled: state.dailyHidden,
     zoom: state.dailyZoom,
     modalDate: state.dailyModalDate,
+    modalSev: state.dailyModalSev,
   });
 
   const setModalDate = (date) => {
-    state.dailyModalDate = date && model.byDate.has(date) ? date : null;
+    const nextDate = date && model.byDate.has(date) ? date : null;
+    if (nextDate !== state.dailyModalDate) state.dailyModalSev = "";
+    state.dailyModalDate = nextDate;
     const slot = host.querySelector("#mxdModalSlot");
     if (slot) {
-      slot.innerHTML = state.dailyModalDate ? dayModalHTML(model.byDate.get(state.dailyModalDate)) : "";
+      slot.innerHTML = state.dailyModalDate
+        ? dayModalHTML(model.byDate.get(state.dailyModalDate), state.dailyModalSev)
+        : "";
     }
   };
 
@@ -827,8 +940,9 @@ export function mountDailyTop(host, trend, tax, state = {}, actions = {}) {
         if (!time || !model.byDate.has(time) || time === state.dailyDay) return;
         state.dailyDay = time;
         state.dailyPage = heatPageForDate(model.pages, time);
+        state.dailyMonth = time.slice(0, 7);
         const heatFace = host.querySelector("#mxdHeatFace");
-        if (heatFace) heatFace.innerHTML = heatGridHTML(model, state.dailyDay, state.dailyPage, state.dailyMetric);
+        if (heatFace) heatFace.innerHTML = heatGridHTML(model, state.dailyDay, state.dailyPage, state.dailyMetric, state.dailyMonth);
         const boards = host.querySelector("#mxdBoards");
         if (boards) boards.innerHTML = dailyTopBoardsHTML(model.byDate.get(time));
       },
@@ -859,7 +973,7 @@ export function mountDailyTop(host, trend, tax, state = {}, actions = {}) {
       } else {
         host._mxdChart?.destroy();
         host._mxdChart = null;
-        heatFace.innerHTML = heatGridHTML(model, state.dailyDay, state.dailyPage, state.dailyMetric);
+        heatFace.innerHTML = heatGridHTML(model, state.dailyDay, state.dailyPage, state.dailyMetric, state.dailyMonth);
       }
     };
     if (REDUCED || typeof topEl.animate !== "function") {
@@ -899,9 +1013,66 @@ export function mountDailyTop(host, trend, tax, state = {}, actions = {}) {
     }
   };
 
+  const selectDay = (nextDate, openModal = false) => {
+    if (!nextDate || !model.byDate.has(nextDate)) return;
+    const changed = nextDate !== state.dailyDay;
+    if (changed) {
+      state.dailyDay = nextDate;
+      const targetPage = heatPageForDate(model.pages, nextDate);
+      const targetMonth = nextDate.slice(0, 7);
+      if (targetPage !== state.dailyPage || targetMonth !== state.dailyMonth) {
+        state.dailyPage = targetPage;
+        state.dailyMonth = targetMonth;
+        const heatFace = host.querySelector("#mxdHeatFace");
+        if (heatFace) heatFace.innerHTML = heatGridHTML(model, state.dailyDay, state.dailyPage, state.dailyMetric, state.dailyMonth);
+      } else {
+        host.querySelectorAll("[data-daily-day]").forEach((btn) => {
+          const on = btn.dataset.dailyDay === nextDate;
+          btn.classList.toggle("is-active", on);
+          btn.setAttribute("aria-pressed", String(on));
+        });
+      }
+      const boards = host.querySelector("#mxdBoards");
+      if (boards) {
+        boards.innerHTML = dailyTopBoardsHTML(model.byDate.get(nextDate));
+        if (boards.classList) {
+          boards.classList.remove("is-pulse");
+          boards.classList.add("is-pulse");
+        }
+      }
+    }
+    if (openModal || state.dailyModalDate) {
+      setModalDate(nextDate);
+    }
+  };
+
   const onClick = (e) => {
     if (e.target.closest("[data-daily-modal-close]")) {
       setModalDate(null);
+      return;
+    }
+    const sevBtn = e.target.closest("[data-daily-sev]");
+    if (sevBtn && state.dailyModalDate) {
+      const nextSev = sevBtn.dataset.dailySev || "";
+      state.dailyModalSev = state.dailyModalSev === nextSev ? "" : nextSev;
+      const modalDay = model.byDate.get(state.dailyModalDate);
+      const slot = host.querySelector("#mxdModalSlot");
+      const body = slot?.querySelector ? slot.querySelector(".mxd-modal-body") : null;
+      if (body && modalDay) {
+        body.innerHTML = dayModalBodyHTML(modalDay, state.dailyModalSev);
+      } else if (slot && modalDay) {
+        slot.innerHTML = dayModalHTML(modalDay, state.dailyModalSev);
+      }
+      return;
+    }
+    const stepBtn = e.target.closest("[data-daily-step]");
+    if (stepBtn) {
+      const step = Number(stepBtn.dataset.dailyStep) || 0;
+      const curIdx = model.dates.indexOf(state.dailyDay);
+      const nextIdx = curIdx + step;
+      if (curIdx >= 0 && nextIdx >= 0 && nextIdx < model.dates.length) {
+        selectDay(model.dates[nextIdx], true);
+      }
       return;
     }
     const backdrop = e.target.closest("[data-daily-modal-backdrop]");
@@ -921,17 +1092,26 @@ export function mountDailyTop(host, trend, tax, state = {}, actions = {}) {
       if (!["problems", "traces", "ratio"].includes(nextMetric) || nextMetric === state.dailyMetric) return;
       state.dailyMetric = nextMetric;
       const heatFace = host.querySelector("#mxdHeatFace");
-      if (heatFace) heatFace.innerHTML = heatGridHTML(model, state.dailyDay, state.dailyPage, state.dailyMetric);
+      if (heatFace) heatFace.innerHTML = heatGridHTML(model, state.dailyDay, state.dailyPage, state.dailyMetric, state.dailyMonth);
       return;
     }
-    const pageBtn = e.target.closest("[data-daily-page]");
+    const pageBtn = e.target.closest("[data-daily-month], [data-daily-page]");
     if (pageBtn) {
       if (typeof document !== "undefined") hideTip();
-      const nextPage = Number(pageBtn.dataset.dailyPage);
-      if (!Number.isFinite(nextPage) || nextPage < 0 || nextPage >= model.pages.length || nextPage === state.dailyPage) return;
-      state.dailyPage = nextPage;
+      const targetMonth = pageBtn.dataset.dailyMonth || "";
+      if (targetMonth && /^\d{4}-\d{2}$/.test(targetMonth)) {
+        if (targetMonth === state.dailyMonth) return;
+        state.dailyMonth = targetMonth;
+        const idx = model.pages.findIndex((p) => p[0]?.date.slice(0, 7) === targetMonth);
+        if (idx >= 0) state.dailyPage = idx;
+      } else {
+        const nextPage = Number(pageBtn.dataset.dailyPage);
+        if (!Number.isFinite(nextPage) || nextPage < 0 || nextPage >= model.pages.length || nextPage === state.dailyPage) return;
+        state.dailyPage = nextPage;
+        state.dailyMonth = model.pages[nextPage]?.[0]?.date.slice(0, 7) || state.dailyMonth;
+      }
       const heatFace = host.querySelector("#mxdHeatFace");
-      if (heatFace) heatFace.innerHTML = heatGridHTML(model, state.dailyDay, state.dailyPage, state.dailyMetric);
+      if (heatFace) heatFace.innerHTML = heatGridHTML(model, state.dailyDay, state.dailyPage, state.dailyMetric, state.dailyMonth);
       return;
     }
     const zoomBtn = e.target.closest("[data-daily-zoom]");
@@ -975,22 +1155,13 @@ export function mountDailyTop(host, trend, tax, state = {}, actions = {}) {
       if (typeof document !== "undefined") hideTip();
       const nextDate = dayBtn.dataset.dailyDay;
       if (!nextDate || !model.byDate.has(nextDate)) return;
-      if (nextDate !== state.dailyDay) {
-        state.dailyDay = nextDate;
-        host.querySelectorAll("[data-daily-day]").forEach((btn) => {
-          const on = btn.dataset.dailyDay === nextDate;
-          btn.classList.toggle("is-active", on);
-          btn.setAttribute("aria-pressed", String(on));
-        });
-        const boards = host.querySelector("#mxdBoards");
-        if (boards) boards.innerHTML = dailyTopBoardsHTML(model.byDate.get(nextDate));
-      }
-      setModalDate(nextDate);
+      selectDay(nextDate, true);
       return;
     }
     const rowBtn = e.target.closest("[data-daily-code]");
     if (rowBtn && actions.onPickProblem) {
       if (typeof document !== "undefined") hideTip();
+      setModalDate(null);
       actions.onPickProblem({
         code: rowBtn.dataset.dailyCode,
         name: rowBtn.dataset.dailyName || rowBtn.dataset.dailyCode,
