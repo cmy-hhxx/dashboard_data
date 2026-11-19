@@ -28,7 +28,6 @@ if DATASET not in LAYOUTS:
 LAYOUT = LAYOUTS[DATASET]
 
 # 兼容旧引用：目录名 / 布局对象
-AIME_DIR = "1_aime"
 PRODUCT_DIR = LAYOUT.product_dir
 DAY_TZ = LAYOUT.day_tz
 
@@ -63,7 +62,6 @@ SCHEMA_VERSION = "2.0"
 
 # 接口文档：GET /api/v1/analysis/docs 按文件名直接下发 Markdown
 # 每份数据只下发自己的文档，AIME 的 docs/ 保持原样。
-DOCS_DIR = REPO / "docs"
 DATASET_DOCS_DIR = REPO / ("docs_wencai" if DATASET == "wencai_eval" else "docs")
 
 # 问题严重度：P0 最重 → P4 最轻；定义见 taxonomy.severity_tree
