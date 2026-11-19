@@ -3634,8 +3634,15 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
         # silently disable payload reuse forever.
         ab_expected = {product for product in ENABLED if ab_test.ab_round_dirs(datasets, product)}
         bench_expected = {product for product in ENABLED if bench_dynamic.dynamic_bench_root(datasets, product)}
+        # The bench payload's shape comes from bench_dynamic's own code, which the dataset
+        # signature knows nothing about: a pure code change would otherwise be served from
+        # the reuse marker forever.  Hash the module source so the payload follows the code.
+        try:
+            bench_code = hashlib.sha1(Path(bench_dynamic.__file__).read_bytes()).hexdigest()[:16]
+        except OSError:
+            bench_code = ""
         bench_sig = hashlib.sha1("\x1f".join(
-            f"{p}:{bench_dynamic.dynamic_bench_signature(datasets, p)}" for p in sorted(bench_expected)
+            [bench_code] + [f"{p}:{bench_dynamic.dynamic_bench_signature(datasets, p)}" for p in sorted(bench_expected)]
         ).encode()).hexdigest() if bench_expected else ""
         scanned = sum(v["scanned"] for v in scan_info.values())
         marker = store.get_meta("complete")
