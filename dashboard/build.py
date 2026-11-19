@@ -5,6 +5,7 @@ Layout read under the datasets root (repo ``datasets/`` locally, ``EVAL_DATASETS
 
     <n>_<product>/eval_input/[<split dir>/]<model>/<date>.jsonl
     <n>_<product>/eval_output/<split>/<model>/<model>_attribution-<date>.jsonl
+    <n>_<product>/eval_output/<split>/<model>/<cohort>/<model>_attribution-<date>.jsonl  (问财 2_rsi_eval)
     <n>_<product>/eval_output/<split>/<model>/compact/<model>_compact-<date>.jsonl
     <n>_<product>/eval_output/**/cluster/<model>/{cluster_tree.json,item_index.jsonl}
 
@@ -74,13 +75,15 @@ def cache_root(out_dir: Path) -> Path:
 RELEASES_CONFIG = DASHBOARD / "config" / "releases.json"
 PRODUCTION_DATASETS = Path("/mnt/fin_bench/code_and_clean_data/datasets")
 # Bump when input index semantics change; also invalidates cached input stats.
+# 问财 RSI 的旧缓存按 trace 里的运行时模型名分过组（a_*/b_*），但记录数/工具/Token/tasks
+# 仍然有效；input_payload() 聚合时按目录模型重映射，所以不必为改口径重扫 74 GB 输入。
 INPUT_INDEX_VERSION = "2026-11-12.1"
 # Bump when pairing semantics change (cache keys are not otherwise versioned).
-PAIRING_VERSION = "2026-11-13.1"
+PAIRING_VERSION = "2026-11-19.1"
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-18.2"
+PAYLOAD_VERSION = "2026-11-19.1"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
-CLUSTER_INDEX_VERSION = 3
+CLUSTER_INDEX_VERSION = 4
 
 
 def default_datasets():
@@ -121,7 +124,7 @@ MODEL_LABEL = {
     "a_fast": "A Fast", "a_expert": "A Expert", "b_fast": "B Fast", "b_expert": "B Expert",
     "aime_fast": "Fast", "aime_expert": "Expert",
 }
-SPLITS = {"0_daily_eval": "daily", "1_lost_user_eval": "lost"}
+SPLITS = {"0_daily_eval": "daily", "1_lost_user_eval": "lost", "2_rsi_eval": "daily"}
 SPLIT_LABEL = {"daily": "日常评测", "lost": "流失用户"}
 
 # Legacy eval_input/ folders that must not be counted as extra input:
@@ -151,10 +154,11 @@ EVIDENCE_ID = re.compile(r"^ev_[0-9a-f-]{36}_(\d+)_")
 DATA_URI = re.compile(r"data:(image/[\w.+-]+);base64,[A-Za-z0-9+/=\s]{64,}")
 OUTPUT_FILE = re.compile(
     r"^(?P<product>[^/]+)/eval_output/(?P<split>[^/]+)/(?P<model>[^/]+)/"
-    r"(?P=model)_attribution-(?P<date>\d{4}-\d{2}-\d{2})\.jsonl$"
+    r"(?:(?P<cohort>[^/]+)/)?(?P=model)_attribution-(?P<date>\d{4}-\d{2}-\d{2})\.jsonl$"
 )
 CJK = re.compile(r"[㐀-鿿]")
 DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
+COMPACT_DATE_RE = re.compile(r"(?<!\d)(\d{4})(\d{2})(\d{2})(?!\d)")
 
 # Characters kept per text block before trimming to the head plus evidence windows.
 BLOCK_LIMIT = {
@@ -170,6 +174,12 @@ def product_of(top: str) -> str | None:
     name = re.sub(r"^\d+_", "", top)
     return name if name in ENABLED else None
 
+
+def active_split(product: str, eval_output: Path) -> str | None:
+    """问财只读当前 RSI 输出；旧 0_daily_eval / 1_task_eval 仍在盘上，不能一起算。"""
+    if product == "wencai" and (eval_output / "2_rsi_eval").is_dir():
+        return "2_rsi_eval"
+    return None
 
 
 def decode_question(text) -> str:
@@ -344,7 +354,8 @@ class LineReader:
         self._fds.clear()
 
 
-def input_candidates(root: Path, top: str, split: str, model: str, date: str) -> list[str]:
+def input_candidates(root: Path, top: str, split: str, model: str, date: str,
+                     cohort: str | None = None) -> list[str]:
     """Same-day input files for one output (pairing itself indexes all dates)."""
     if split != "daily":
         return []
@@ -353,6 +364,13 @@ def input_candidates(root: Path, top: str, split: str, model: str, date: str) ->
         top_dir / "eval_input" / "0_daily_eval_input" / model / f"{date}.jsonl",
         top_dir / "eval_input" / model / f"{date}.jsonl",
     ]
+    # 问财 RSI: eval_input/2_rsi_input/<model>/<cohort>/data_YYYYMMDD.jsonl
+    compact_date = date.replace("-", "")
+    rsi = top_dir / "eval_input" / "2_rsi_input" / model
+    if cohort:
+        paths.append(rsi / cohort / f"data_{compact_date}.jsonl")
+    else:
+        paths.extend(sorted(rsi.glob(f"*/data_{compact_date}.jsonl")))
     return [p.relative_to(root).as_posix() for p in paths if p.is_file()]
 
 
@@ -368,7 +386,11 @@ def input_roots(top: Path, product: str):
     base = top / "eval_input"
     if product == "aime":
         return [base / "0_daily_eval_input", base / "aime_expert", base / "aime_fast"]
-    return [base]  # wencai keeps the flat per-model layout directly under eval_input
+    # 问财 RSI 的发布输入按 <model>/<cohort>/data_YYYYMMDD.jsonl；旧日常输入只作快照兜底。
+    rsi = base / "2_rsi_input"
+    if rsi.is_dir():
+        return [rsi]
+    return [base]  # legacy flat per-model layout
 
 
 def snapshot_input_dirs(top: Path, product: str):
@@ -574,16 +596,42 @@ def input_session_counts(metas, store, product: str = "") -> dict[str, int] | No
     return counts
 
 
+def _merge_model_stats(dst, src):
+    """Merge one model's stats into another (cached files may split by trace model)."""
+    for key in ("traces", "tool_calls", "tokens_in", "tokens_out", "cache_read"):
+        dst[key] += int(src.get(key) or 0)
+    for task, node in (src.get("tasks") or {}).items():
+        out = dst["tasks"].setdefault(task, {"n": 0, "lost": 0, "sub": {}})
+        out["n"] += int(node.get("n") or 0)
+        out["lost"] += int(node.get("lost") or 0)
+        for sub, value in (node.get("sub") or {}).items():
+            sub_out = out["sub"].setdefault(sub, {"n": 0, "lost": 0})
+            sub_out["n"] += int(value.get("n") or 0)
+            sub_out["lost"] += int(value.get("lost") or 0)
+
+
 def input_payload(metas, store=None, product: str = ""):
     """Volume + task/subtask + lost counts for one product, from cached file stats."""
     agg = bs.empty_stats()
     records = 0
+    # 缓存里的 by_model 可能还按输入里的运行时模型名分组（问财 RSI 会分成 a_*/b_*）；
+    # 目录名才是真相，聚合时统一并到 input_model()。
+    by_model = {}
     for meta in metas:
         records += int(meta.get("lines") or 0)
-        bs.merge_stats(agg, meta.get("stats"))
+        stats = meta.get("stats") or {}
+        bs.merge_stats(agg, stats)
+        model = input_model(meta) or "未标注"
+        dst = by_model.setdefault(model, bs.empty_model())
+        sources = (stats.get("by_model") or {}).values()
+        if sources:
+            for ms in sources:
+                _merge_model_stats(dst, ms)
+        else:
+            _merge_model_stats(dst, stats)
 
     models = {}
-    for model, ms in agg["by_model"].items():
+    for model, ms in by_model.items():
         models[model] = {
             "label": MODEL_LABEL.get(model, model),
             "traces": ms["traces"], "tool_calls": ms["tool_calls"],
@@ -593,7 +641,7 @@ def input_payload(metas, store=None, product: str = ""):
         }
 
     top = {}
-    for ms in agg["by_model"].values():
+    for ms in by_model.values():
         for task, node in ms["tasks"].items():
             dst = top.setdefault(task, {"n": 0, "lost": 0, "sub": {}})
             dst["n"] += node["n"]
@@ -648,8 +696,8 @@ def input_model(meta):
             or Path(meta["path"]).parent.name)
 
 
-def daily_input_stats(metas, store):
-    """输入量/Session/Trace 按每条输入记录的 request_time 落到美东日期。
+def daily_input_stats(metas, store, product=""):
+    """输入量/Session/Trace 按每条输入记录的 request_time 落到产品时区日期。
 
     文件按批次命名，但一个批次可能包含很多天的记录（重跑/滚动追加），
     所以不能再用文件名里的日期分组。
@@ -665,7 +713,11 @@ def daily_input_stats(metas, store):
         model = input_model(meta)
         split = meta.get("split") or "daily"
         match = DATE_RE.search(Path(rel).name)
-        fallback = match.group(1) if match else None
+        if match:
+            fallback = match.group(1)
+        else:
+            compact = COMPACT_DATE_RE.search(Path(rel).name)
+            fallback = f"{compact.group(1)}-{compact.group(2)}-{compact.group(3)}" if compact else None
         index = store.get_file(rel) if store is not None else None
         keys = (index or {}).get("keys") or []
         tids = (index or {}).get("tids") or []
@@ -677,7 +729,7 @@ def daily_input_stats(metas, store):
             continue
         for i, key in enumerate(keys):
             sid, sep, raw_time = key.partition("\x1f") if key else ("", "", "")
-            day = local_day(raw_time) or fallback
+            day = local_day(raw_time, product) or fallback
             if not day:
                 continue
             records[(day, model, split)] += 1
@@ -799,8 +851,32 @@ def choose_input(cands, turn_tids):
 def discover_outputs(root: Path):
     """Attribution files plus a cheap signature of every file pairing depends on."""
     found = []
-    for out in sorted(root.glob("*/eval_output/*/*/*_attribution-*.jsonl")):
+    # 只扫发布目录：问财 2_rsi_eval、AIME 的两个 split。全库 ** glob 在 ceph 上会走进
+    # test_eval / 历史快照，实测 4 分钟以上。
+    globbed = []
+    for top in sorted(root.iterdir()):
+        product = product_of(top.name)
+        out = top / "eval_output"
+        if not product or not out.is_dir():
+            continue
+        active = active_split(product, out)
+        if active:
+            splits = [out / active]
+        else:
+            splits = [p for p in sorted(out.iterdir())
+                      if p.is_dir() and p.name in SPLITS and not p.name.startswith(".")]
+        for split_dir in splits:
+            if not split_dir.is_dir():
+                continue
+            # Legacy/AIME: <model>/<file>；问财 RSI: <model>/<cohort>/<file>
+            globbed.extend(split_dir.glob("*/*_attribution-*.jsonl"))
+            globbed.extend(split_dir.glob("*/*/*_attribution-*.jsonl"))
+    seen = set()
+    for out in sorted(globbed):
         rel = out.relative_to(root).as_posix()
+        if rel in seen:
+            continue
+        seen.add(rel)
         m = OUTPUT_FILE.match(rel)
         if not m:
             continue
@@ -811,7 +887,7 @@ def discover_outputs(root: Path):
             stat = out.stat()
         except OSError:
             continue
-        inputs = input_candidates(root, m["product"], split, m["model"], m["date"])
+        inputs = input_candidates(root, m["product"], split, m["model"], m["date"], m["cohort"])
         compact = out.parent / "compact" / f"{m['model']}_compact-{m['date']}.jsonl"
         compact_rel = compact.relative_to(root).as_posix() if compact.exists() else None
         parts = [[rel, stat.st_size, stat.st_mtime_ns]]
@@ -827,7 +903,8 @@ def discover_outputs(root: Path):
         sig = hashlib.sha1(json.dumps(parts, separators=(",", ":")).encode()).hexdigest()
         found.append({
             "rel": rel, "product": product, "split": split, "model": m["model"],
-            "date": m["date"], "inputs": inputs, "compact": compact_rel, "sig": sig,
+            "cohort": m["cohort"], "date": m["date"], "inputs": inputs,
+            "compact": compact_rel, "sig": sig,
         })
     return found
 
@@ -1120,9 +1197,13 @@ def pairs_from_keys(root: Path, store: bs.BuildStore, product_metas=None):
 def cluster_tree_files(root: Path):
     """Every cluster_tree.json, without the old recursive ** glob.
 
-    Two layouts are in use:
-      <product>/eval_output/cluster/<model>/cluster_tree.json       (AIME)
-      <product>/eval_output/<split>/cluster/<model>/cluster_tree.json (wencai)
+    Three layouts are in use:
+      <product>/eval_output/cluster/<model>/cluster_tree.json                (AIME)
+      <product>/eval_output/<split>/cluster/<model>/cluster_tree.json        (legacy wencai)
+      <product>/eval_output/<split>/cluster/<model>/<scope>/cluster_tree.json (问财 RSI)
+    The RSI pipeline writes one tree per cohort plus a cumulative ``total``. Only
+    ``total`` is used: the cohort trees are subsets, and loading them all would
+    multiply the item_index work for no extra reach.
     The recursive glob also walked .runs/.delivery subtrees on ceph, which was
     the expensive part of the "did anything change?" check.
     """
@@ -1136,13 +1217,36 @@ def cluster_tree_files(root: Path):
         direct = out / "cluster"
         if direct.is_dir():
             found.extend(direct.glob("*/cluster_tree.json"))
+        active = active_split(product_of(top.name), out)
         for split in out.iterdir():
             if not split.is_dir() or split.name == "cluster":
                 continue
+            if active and split.name != active:
+                continue
             nested = split / "cluster"
-            if nested.is_dir():
-                found.extend(nested.glob("*/cluster_tree.json"))
+            if not nested.is_dir():
+                continue
+            for model_dir in sorted(p for p in nested.iterdir() if p.is_dir()):
+                tree = model_dir / "cluster_tree.json"
+                if tree.is_file():
+                    found.append(tree)
+                    continue
+                total = model_dir / "total" / "cluster_tree.json"
+                if total.is_file():
+                    found.append(total)
+                    continue
+                found.extend(model_dir.glob("*/cluster_tree.json"))
     return sorted(found)
+
+
+def cluster_model(tree_path: Path) -> str:
+    """Model directory behind a cluster tree, whatever the scope layout is."""
+    parts = tree_path.parts
+    try:
+        at = parts.index("cluster")
+    except ValueError:
+        return tree_path.parent.name
+    return parts[at + 1] if at + 1 < len(parts) else tree_path.parent.name
 
 
 def load_clusters(root: Path):
@@ -1152,7 +1256,7 @@ def load_clusters(root: Path):
         product = product_of(tree_path.relative_to(root).parts[0])
         if not product:
             continue
-        model = tree_path.parent.name
+        model = cluster_model(tree_path)
         try:
             tree = json.loads(tree_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -1711,11 +1815,11 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
     if uid in (None, ""):
         uid = smeta.get("user_id")
     uid = str(uid) if uid not in (None, "") else None
-    # 统一按美东时间给样本定日；request_time 缺失时才退回批次文件日期。
+    # 按产品时区给样本定日；request_time 缺失时才退回批次文件日期。
     sample_day = (
-        local_day(imeta.get("request_time"))
-        or local_day(smeta.get("request_time"))
-        or local_day(first_meta.get("timestamp"))
+        local_day(imeta.get("request_time"), product)
+        or local_day(smeta.get("request_time"), product)
+        or local_day(first_meta.get("timestamp"), product)
         or pair["date"]
     )
     detail = {
@@ -1727,11 +1831,12 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
         "session_meta": imeta,
         "meta": {
             "version": (inp or {}).get("version"), "mode": smeta.get("agent_mode") or imeta.get("agent_mode"),
-            "source": smeta.get("source") or imeta.get("source"), "skill": imeta.get("skill_name") or None,
+            "source": smeta.get("source") or imeta.get("source"), "skill": imeta.get("skill_name") or smeta.get("skill_name") or smeta.get("skill_names_text"),
             "app": imeta.get("app") or first_meta.get("app") or smeta.get("app"),
             "comefrom": imeta.get("comefrom") or first_meta.get("comefrom") or smeta.get("comefrom"),
             "device": first_meta.get("device_type") or imeta.get("device_type"),
-            "task": first_meta.get("task"), "subtask": first_meta.get("subtask"),
+            "task": first_meta.get("task") or imeta.get("task_category") or smeta.get("task_category"),
+            "subtask": first_meta.get("subtask") or imeta.get("subtask_category") or smeta.get("subtask_category"),
             "difficulty": first_meta.get("difficulty"),
             "request_time": smeta.get("request_time"),
             "tokens_in": usage.get("input_tokens"), "tokens_out": usage.get("output_tokens"),
@@ -1762,9 +1867,11 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
         "tr": len(out_traces), "mc": sum(len(t["messages"]) for t in out_traces), "tc": tool_calls,
         "lang": detail["lang"],
     }
-    for key, value in (("task", first_meta.get("task")), ("sub", first_meta.get("subtask")),
-                       ("diff", first_meta.get("difficulty")),
-                       ("skill", imeta.get("skill_name") or None), ("case", case if product == "wencai" else None)):
+    task = first_meta.get("task") or imeta.get("task_category") or smeta.get("task_category")
+    subtask = first_meta.get("subtask") or imeta.get("subtask_category") or smeta.get("subtask_category")
+    skill = imeta.get("skill_name") or smeta.get("skill_name") or smeta.get("skill_names_text")
+    for key, value in (("task", task), ("sub", subtask), ("diff", first_meta.get("difficulty")),
+                       ("skill", skill), ("case", case if product == "wencai" else None)):
         if value:
             row[key] = value
     if uid:
@@ -2285,7 +2392,7 @@ def trend_payload(product, samples, releases=(), generated=None):
             trace_days[day_idx[row["d"]]][level] += count
         unresolved += trace["unresolved"]
         trace_refs.extend([day_idx[row["d"]], slug, *ref] for ref in trace.get("refs", []))
-        day_of_request, minute = local_day_minute((detail.get("meta") or {}).get("request_time"))
+        day_of_request, minute = local_day_minute((detail.get("meta") or {}).get("request_time"), product)
         if day_of_request and minute is not None:
             bucket = (minute // 5) * 5
             counts = intraday_buckets[day_of_request][bucket]
@@ -3000,13 +3107,21 @@ SAMPLE_STREAM = "chunks"
 
 
 def cgroup_headroom() -> int | None:
-    """Bytes the container's memory limit still allows, or None when unbounded."""
+    """Bytes the container's memory limit still allows, or None when unbounded.
+
+    ``memory.current`` / ``usage_in_bytes`` includes page cache, which the kernel
+    reclaims before OOM.  Counting it made every cold build look like it had no
+    headroom and forced the serial sample path; subtract the file cache so the
+    worker cap reflects anonymous memory.
+    """
     pairs = (
-        ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory.current"),
+        ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory.current",
+         "/sys/fs/cgroup/memory.stat", "file"),
         ("/sys/fs/cgroup/memory/memory.limit_in_bytes",
-         "/sys/fs/cgroup/memory/memory.usage_in_bytes"),
+         "/sys/fs/cgroup/memory/memory.usage_in_bytes",
+         "/sys/fs/cgroup/memory/memory.stat", "total_cache"),
     )
-    for limit_path, used_path in pairs:
+    for limit_path, used_path, stat_path, cache_key in pairs:
         try:
             limit = int(Path(limit_path).read_text().split()[0])
             used = int(Path(used_path).read_text().split()[0])
@@ -3014,7 +3129,16 @@ def cgroup_headroom() -> int | None:
             continue
         if limit > (1 << 40):  # cgroup v1 reports a huge number for "no limit"
             return None
-        return max(0, limit - used)
+        cache = 0
+        try:
+            for line in Path(stat_path).read_text().splitlines():
+                key, _, value = line.partition(" ")
+                if key == cache_key:
+                    cache = int(value)
+                    break
+        except (OSError, ValueError):
+            cache = 0
+        return max(0, limit - max(0, used - cache))
     return None
 
 
@@ -3631,7 +3755,7 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
             ]).encode()).hexdigest()
         feed_sig = feed_signature(datasets)
         release_sig = release_signature(datasets)
-        ab_sig = ab_test.rounds_signature(datasets)
+        ab_sig = ab_test.rounds_signature(datasets, ENABLED)
         # Only this deployment's products have payloads written; a shared datasets root
         # can contain another product's ab_test (e.g. 问财 reads a root that also has
         # 1_aime/ab_test), and requiring that product's abtests-*.json here would
@@ -3721,7 +3845,7 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
             products[product]["input"] = payload
             products[product]["kpi"]["inputs"] = payload["records"]
             products[product]["kpi"]["lost"] = payload["lost"]
-            input_records, input_sessions, input_traces = daily_input_stats(metas, store)
+            input_records, input_sessions, input_traces = daily_input_stats(metas, store, product)
             products[product]["daily"] = daily_payload(
                 samples[product], input_records, input_sessions, input_traces)
             feed = prediction_feed_path(datasets, product)
@@ -4056,22 +4180,41 @@ def write_data_absence(datasets: Path, product: str, out_dir: Path):
         return None
 
     inputs, outputs = {}, {}
-    input_root = top / "eval_input" / "0_daily_eval_input"
+    rsi_input = top / "eval_input" / "2_rsi_input"
+    input_root = rsi_input if rsi_input.is_dir() else top / "eval_input" / "0_daily_eval_input"
     for model_dir in sorted(p for p in input_root.glob("*") if p.is_dir() and not p.name.startswith(".")):
-        model_days = _days_named(model_dir, "*.jsonl")
+        if input_root == rsi_input:
+            model_days = set()
+            for cohort in sorted(p for p in model_dir.glob("*") if p.is_dir()):
+                model_days.update(_days_named(cohort, "data_*.jsonl"))
+            model_days = sorted(model_days)
+        else:
+            model_days = _days_named(model_dir, "*.jsonl")
         if model_days:
             inputs[model_dir.name] = model_days
-    for split_dir in sorted(p for p in (top / "eval_output").glob("*") if p.is_dir() and not p.name.startswith(".")):
+    split_dirs = sorted(p for p in (top / "eval_output").glob("*") if p.is_dir() and not p.name.startswith("."))
+    if product == "wencai" and (top / "eval_output" / "2_rsi_eval").is_dir():
+        split_dirs = [top / "eval_output" / "2_rsi_eval"]
+    for split_dir in split_dirs:
+        # 问财 RSI 把 attribution 放在 <model>/<cohort>/ 下，并且不再发布 compact。
+        rsi_output = split_dir.name == "2_rsi_eval"
         for model_dir in sorted(p for p in split_dir.glob("*") if p.is_dir() and not p.name.startswith(".")):
             if model_dir.name in ABSENCE_SKIP:
                 continue
-            attribution = _days_named(model_dir, f"{model_dir.name}_attribution-*.jsonl")
-            compact = _days_named(model_dir / "compact", f"{model_dir.name}_compact-*.jsonl")
+            attribution = set(_days_named(model_dir, f"{model_dir.name}_attribution-*.jsonl"))
+            if rsi_output:
+                for cohort in sorted(p for p in model_dir.glob("*") if p.is_dir()):
+                    attribution.update(_days_named(cohort, f"{model_dir.name}_attribution-*.jsonl"))
+            attribution = sorted(attribution)
+            compact = [] if rsi_output else _days_named(
+                model_dir / "compact", f"{model_dir.name}_compact-*.jsonl")
             if not attribution and not compact:
                 continue
-            bucket = outputs.setdefault(model_dir.name, {"attribution": set(), "compact": set()})
+            bucket = outputs.setdefault(model_dir.name, {"attribution": set(), "compact": set(),
+                                                         "no_compact": False})
             bucket["attribution"].update(attribution)
             bucket["compact"].update(compact)
+            bucket["no_compact"] = bucket["no_compact"] or rsi_output
 
     known = PRODUCTS[product]["models"]
     models = [m for m in known if m in inputs or m in outputs]
@@ -4081,8 +4224,9 @@ def write_data_absence(datasets: Path, product: str, out_dir: Path):
         in_days = inputs.get(model, [])
         attribution_days = sorted(outputs.get(model, {}).get("attribution") or [])
         compact_days = sorted(outputs.get(model, {}).get("compact") or [])
+        no_compact = bool(outputs.get(model, {}).get("no_compact"))
         missing_attribution = [day for day in in_days if day not in set(attribution_days)]
-        missing_compact = [day for day in in_days if day not in set(compact_days)]
+        missing_compact = [] if no_compact else [day for day in in_days if day not in set(compact_days)]
         missing_days = sorted(set(missing_attribution) | set(missing_compact))
         eval_models.append({
             "id": model, "input_days": in_days,
@@ -4119,8 +4263,13 @@ def write_data_absence(datasets: Path, product: str, out_dir: Path):
 
     cluster_models = set()
     for split_dir in (top / "eval_output").glob("*"):
-        for model_dir in (split_dir / "cluster").glob("*"):
+        cluster_root = split_dir / "cluster"
+        if not cluster_root.is_dir():
+            continue
+        for model_dir in cluster_root.glob("*"):
             if (model_dir / "item_index.jsonl").is_file():
+                cluster_models.add(model_dir.name)
+            elif (model_dir / "total" / "item_index.jsonl").is_file():
                 cluster_models.add(model_dir.name)
 
     rounds = ab_test.ab_round_dirs(datasets, product)

@@ -53,7 +53,7 @@ class TraceSeverityTests(unittest.TestCase):
         second = self.detail(["c"], [(0, "P4", [])])
         samples = [("s1", build.slim_detail(first), {"d": "2026-11-01", "m": "a_fast"}, {}),
                    ("s2", build.slim_detail(second), {"d": "2026-11-02", "m": "a_fast"}, {})]
-        trace = build.trend_payload("wencai", samples)["trace_severity"]
+        trace = build.trend_payload("aime", samples)["trace_severity"]
         self.assertEqual(trace["levels"], ["P0", "P1", "P2", "P3", "P4", "none"])
         self.assertEqual(trace["daily"], [[1, 0, 0, 0, 0, 1], [0, 0, 0, 0, 1, 0]])
         self.assertEqual(trace["unresolved"], 0)
@@ -71,7 +71,7 @@ class TraceSeverityTests(unittest.TestCase):
         samples = [("s1", build.slim_detail(first), {"d": "2026-11-01", "m": "a_fast"}, {}),
                    ("s2", build.slim_detail(second), {"d": "2026-11-02", "m": "a_fast"}, {}),
                    ("s3", build.slim_detail(late), {"d": "2026-11-02", "m": "a_fast"}, {})]
-        intraday = build.trend_payload("wencai", samples)["trace_severity"]["intraday"]
+        intraday = build.trend_payload("aime", samples)["trace_severity"]["intraday"]
         self.assertEqual(intraday["date"], "2026-11-03")
         self.assertEqual(sorted(intraday["days"]), ["2026-11-01", "2026-11-02", "2026-11-03"])
         self.assertEqual(intraday["bucket_minutes"], 5)
@@ -81,6 +81,16 @@ class TraceSeverityTests(unittest.TestCase):
         self.assertEqual([row for row in intraday["days"]["2026-11-03"]["buckets"] if row[0] == 30],
                          [[30, 0, 0, 1, 0, 0, 0]])
         self.assertEqual(intraday["days"]["2026-11-03"]["prev"], [0, 1, 0, 0, 0, 0])
+
+    def test_wencai_intraday_uses_shanghai_day(self):
+        # 2026-11-04T23:30Z 是北京时间 11-05 07:30，不应落进美东 11-04。
+        sample = self.detail(["a"], [(0, "P0", [])])
+        sample["meta"]["request_time"] = "2026-11-04T23:30:00Z"
+        samples = [("s1", build.slim_detail(sample), {"d": "2026-11-05", "m": "b_expert"}, {})]
+        intraday = build.trend_payload("wencai", samples)["trace_severity"]["intraday"]
+        self.assertEqual(intraday["date"], "2026-11-05")
+        self.assertEqual(intraday["buckets"], [[450, 1, 0, 0, 0, 0, 0]])
+        self.assertNotIn("2026-11-04", intraday["days"])
 
 
 if __name__ == "__main__":

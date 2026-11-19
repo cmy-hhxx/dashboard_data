@@ -170,10 +170,17 @@ def _round_signature_files(round_dir: Path):
     return sorted(seen)
 
 
-def rounds_signature(datasets: Path) -> str:
-    """Cheap fingerprint of every round's relevant files, so a new export rebuilds once."""
+def rounds_signature(datasets: Path, products=None) -> str:
+    """Cheap fingerprint of every round's relevant files, so a new export rebuilds once.
+
+    ``products`` limits the walk to the products this deployment builds: a shared
+    datasets root also holds the other product's A/B export, and walking it on ceph
+    can block for minutes.
+    """
     h = hashlib.sha1(f"ab-payload-v{AB_PAYLOAD_VERSION}\x1e".encode())
     for top in sorted(datasets.glob("*")):
+        if products is not None and top.name.split("_", 1)[-1] not in products:
+            continue
         root = top / AB_DIR
         if not root.is_dir():
             continue

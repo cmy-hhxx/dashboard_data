@@ -37,9 +37,8 @@ def command_status(args):
     try:
         intent = load_intent(config.INTENT_TAXONOMY_FILE)
         trees = {}
-        for model_dir, (tree_path, _) in store.cluster_files(config.datasets_root() / config.AIME_DIR).items():
-            suffix = config.MODEL_SUFFIX.get(model_dir, model_dir)
-            trees[f"__{suffix}"] = load_cluster(tree_path, model_dir)
+        for model_dir, (tree_path, _) in store.cluster_files(config.datasets_root() / config.PRODUCT_DIR).items():
+            trees[config.LAYOUT.tree_key(model_dir)] = load_cluster(tree_path, model_dir)
         snap = snapshot.load(conn, intent, trees)
         server.APP._fix_app_versions(snap)
         payload = {

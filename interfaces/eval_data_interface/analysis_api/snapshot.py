@@ -191,9 +191,10 @@ def parse_filters(params: dict, snap: Snapshot) -> Filters:
         raise errors.unknown_value("dataset", dataset, sorted(config.DATASET_ALIASES))
 
     sources = tuple(params.get("source") or ())
-    allowed_sources = set(config.SOURCE_TO_SPLIT)
+    # source 是数据里的值：AIME 是 prelaunch/feedback，问财是 cohort 目录名。
+    allowed_sources = {trace.source for trace in snap.traces if trace.source}
     for value in sources:
-        if value not in allowed_sources:
+        if allowed_sources and value not in allowed_sources:
             raise errors.unknown_value("source", value, sorted(allowed_sources))
 
     start_day = (params.get("start_day") or "").strip() or None

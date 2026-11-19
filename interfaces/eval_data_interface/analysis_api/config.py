@@ -3,6 +3,8 @@
 import os
 from pathlib import Path
 
+from .layout import LAYOUTS, MODEL_SUFFIX, AIME_SPLIT_TO_SOURCE
+
 REPO = Path(__file__).resolve().parent.parent
 
 # 数据集根：默认远端挂载，其次是仓库内 datasets/（本地调试）
@@ -18,8 +20,17 @@ def datasets_root() -> Path:
     return REPO / "datasets"
 
 
-# 本服务只服务 AIME 一份数据
+# 本服务每次部署只服务一份数据：ANALYSIS_DATASET 选 1_aime（AIME）或 0_wencai（问财）。
+# 两套数据在弗吉尼亚 / 乌兰分开部署，同一个实例不会混装。
+DATASET = os.environ.get("ANALYSIS_DATASET", "aime_eval").strip()
+if DATASET not in LAYOUTS:
+    raise SystemExit(f"ANALYSIS_DATASET: unknown {DATASET!r}, known {sorted(LAYOUTS)}")
+LAYOUT = LAYOUTS[DATASET]
+
+# 兼容旧引用：目录名 / 布局对象
 AIME_DIR = "1_aime"
+PRODUCT_DIR = LAYOUT.product_dir
+DAY_TZ = LAYOUT.day_tz
 
 # 状态目录：SQLite 索引、缓存、cursor 密钥
 STATE_DIR = Path(os.environ.get("ANALYSIS_STATE", str(REPO / "state"))).expanduser()
@@ -50,27 +61,25 @@ QUERY_PREVIEW_CHARS = 160
 API_PREFIX = "/api/v1/analysis"
 SCHEMA_VERSION = "2.0"
 
-# 接口文档：GET /api/v1/analysis/docs 按文件名直接下发这里的 Markdown
+# 接口文档：GET /api/v1/analysis/docs 按文件名直接下发 Markdown
+# 每份数据只下发自己的文档，AIME 的 docs/ 保持原样。
 DOCS_DIR = REPO / "docs"
+DATASET_DOCS_DIR = REPO / ("docs_wencai" if DATASET == "wencai_eval" else "docs")
 
 # 问题严重度：P0 最重 → P4 最轻；定义见 taxonomy.severity_tree
 SEVERITIES = ("P0", "P1", "P2", "P3", "P4")
 SEVERITY_VERSION = "2026-11"
 
-DATASET_ALIASES = {"aime_eval"}
+DATASET_ALIASES = {DATASET}
 
 # problem 编码为 null 时的展示名：这是"聚类未覆盖"，不是"其他"或异常。
 UNCLUSTERED_LABEL = "未聚类"
 
-# 目录 → 协议 source
-SPLIT_TO_SOURCE = {
-    "0_daily_eval": "prelaunch",
-    "1_lost_user_eval": "feedback",
-}
+# 目录 → 协议 source（AIME 专用；问财的 source 是 cohort 目录）
+SPLIT_TO_SOURCE = AIME_SPLIT_TO_SOURCE
 SOURCE_TO_SPLIT = {v: k for k, v in SPLIT_TO_SOURCE.items()}
 
-# 模型目录 → app_version 后缀
-MODEL_SUFFIX = {"aime_expert": "expert", "aime_fast": "fast"}
+# 模型目录 → app_version 后缀（由 layout 提供）
 
 INTENT_TAXONOMY_FILE = REPO / "taxonomy" / "intent_2026-10.json"
 

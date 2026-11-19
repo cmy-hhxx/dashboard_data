@@ -335,3 +335,77 @@ def build(root: Path) -> Path:
         "heuristics": {"real_user_id_max_digits": 10},
     })
     return aime
+
+
+WENCAI_DAY = "2026-11-04"
+WENCAI_COHORT = "新用户W1-3"
+
+
+def build_wencai(root: Path) -> Path:
+    """问财 RSI 布局：2_rsi_eval/<model>/<cohort>/ + 2_rsi_input + cluster total。"""
+    root = Path(root)
+    top = root / "0_wencai"
+    out = top / "eval_output" / "2_rsi_eval"
+    _write_json(out / "cluster" / "b_expert" / "total" / "cluster_tree.json", EXPERT_TREE)
+
+    sessions = [
+        _session(
+            "thread_wc_a", "trace_wc_alpha", f"{WENCAI_DAY}T04:00:00.000Z", None, None, "500000001",
+            "AIME-Atlas-thinking1", [_problem("空查询参数重试", "P2"), _problem("旧数据当当前值", "P4")],
+            question="云南锗业为什么涨停",
+        ),
+        _session(
+            "thread_wc_b", "trace_wc_beta", f"{WENCAI_DAY}T05:00:00.000Z", None, None, "500000002",
+            "AIME-Atlas-thinking1", [], question="今天适合买什么", is_correct=True,
+        ),
+    ]
+    for session in sessions:
+        smeta = session["session_meta"]
+        smeta.pop("question", None)
+        smeta.update({
+            "user_type": WENCAI_COHORT,
+            "skill_names_text": "finquery-market-data",
+            "task_category": "投资标的研究与分析",
+            "subtask_category": "行情事件解读",
+        })
+        for turn in session["turns"]:
+            turn["meta"].pop("task", None)
+            turn["meta"].pop("subtask", None)
+            turn["meta"].pop("model", None)
+
+    basename = f"b_expert_attribution-{WENCAI_DAY}.jsonl"
+    _write_jsonl(out / "b_expert" / WENCAI_COHORT / basename, sessions)
+    _write_jsonl(
+        out / "cluster" / "b_expert" / "total" / "item_index.jsonl",
+        [
+            {"file": f"{WENCAI_COHORT}/{basename}", "src_rel": f"{WENCAI_COHORT}/{basename}",
+             "line": 1, "turn_index": 0, "problem_index": 0, "date": WENCAI_DAY,
+             "json_path": "turns[0].problem[0]", "path": "S1.M1.1", "label": "空查询参数重试",
+             "trace_id": "trace_wc_alpha", "session_id": "thread_wc_a", "case_id": "trace_wc_alpha"},
+            {"file": f"{WENCAI_COHORT}/{basename}", "src_rel": f"{WENCAI_COHORT}/{basename}",
+             "line": 1, "turn_index": 0, "problem_index": 1, "date": WENCAI_DAY,
+             "json_path": "turns[0].problem[1]", "path": "S9.M5.1", "label": "旧数据当当前值",
+             "trace_id": "trace_wc_alpha", "session_id": "thread_wc_a", "case_id": "trace_wc_alpha"},
+        ],
+    )
+
+    inputs = [
+        _input_record("thread_wc_a", "trace_wc_alpha", f"{WENCAI_DAY}T04:00:00.000Z", "500000001",
+                      "AIME-Atlas-thinking1", "云南锗业为什么涨停"),
+        _input_record("thread_wc_b", "trace_wc_beta", f"{WENCAI_DAY}T05:00:00.000Z", "500000002",
+                      "aime-fast-new", "今天适合买什么"),
+    ]
+    for row in inputs:
+        row["meta"]["task_category"] = "投资标的研究与分析"
+        row["meta"]["subtask_category"] = "行情事件解读"
+        row["meta"]["user_type"] = WENCAI_COHORT
+        row["meta"]["question_text"] = row["meta"]["question"]
+    _write_jsonl(
+        top / "eval_input" / "2_rsi_input" / "b_expert" / WENCAI_COHORT / f"data_{WENCAI_DAY.replace('-', '')}.jsonl",
+        inputs,
+    )
+    _write_json(root / "user_rules.json", {
+        "test": {"ids": []},
+        "heuristics": {"real_user_id_max_digits": 10},
+    })
+    return top

@@ -6,22 +6,24 @@ RSI 看板「对话分析」查询接口的服务端实现。只读、零第三�
 v2 不再输出 `is_error` / `has_error` 这类对错判定（数据里没有标准答案），改为直接返回
 trace 的 `problems` 问题数组与 P0–P4 严重度，并新增 `GET /severity` 统计接口。
 
-- 接入说明：[docs/接入说明.md](docs/接入说明.md)
+- 接入说明（AIME）：[docs/接入说明.md](docs/接入说明.md)
+- 接入说明（问财）：[docs_wencai/接入说明.md](docs_wencai/接入说明.md)
 - 与 5002 页面接口一起使用的完整指南：[../../docs/接口使用指南.md](../../docs/接口使用指南.md)
-- 增量同步：[docs/incremental.md](docs/incremental.md)
+- 增量同步：[docs/incremental.md](docs/incremental.md)、[docs_wencai/incremental.md](docs_wencai/incremental.md)
 
 ## 地址
 
-| 部署 | 对外 | 集群内 | 数据 |
+| 部署 | 对外 | 集群内 | 数据 / `dataset` |
 |---|---|---|---|
-| 弗吉尼亚 | `http://10.217.219.2:2477` | `http://interactive-s3ynzadcvm9c:5003` | AIME |
-| 乌兰察布 | 暂未提供（问财供数接口尚未实现，5003 已停用） | — | — |
+| 弗吉尼亚 | `http://10.217.219.2:2477` | `http://interactive-s3ynzadcvm9c:5003` | AIME / `aime_eval` |
+| 乌兰察布 | 平台映射的 5003 端口 | `http://interactive-i6piqwvlnsr5:5003` | 问财 / `wencai_eval` |
 
 接口前缀 `/api/v1/analysis`，健康检查 `GET /healthz`。对外端口由平台侧映射到 pod 的 5003
-（`5003` 即固定的**供数端口**）。不做认证。5003 目前只部署在弗吉尼亚；地址、端口映射与容器名见
+（`5003` 即固定的**供数端口**）。不做认证。一次部署只服务一份数据，`ANALYSIS_DATASET`
+选 `aime_eval` 或 `wencai_eval`；地址、端口映射与容器名见
 [docs/接口使用指南.md](../../docs/接口使用指南.md) 第零节；端口角色见 `docs/dashboard-deployment.md`。
 
-## 数据来源
+## 数据来源（AIME）
 
 弗吉尼亚远端只读挂载：`/mnt/aime_eval_ssd/1_aime`（`EVAL_DATASETS=/mnt/aime_eval_ssd`）
 
@@ -33,9 +35,25 @@ trace 的 `problems` 问题数组与 P0–P4 严重度，并新增 `GET /severit
 | 对话原始结构体 | `eval_input/0_daily_eval_input/{model}/<date>.jsonl`、`.archive/1_lost_user_input/{model}/*_input.jsonl` |
 | 测试用户规则（可选） | `<EVAL_DATASETS>/user_rules.json`（`EVAL_USER_RULES` 可覆盖） |
 
-本服务只服务 AIME 一份数据（`dataset=aime_eval`）。
+每个部署只服务一份数据：AIME 是 `dataset=aime_eval`，问财是 `dataset=wencai_eval`
+（由 `ANALYSIS_DATASET` 选择）。
 
-## 维度映射
+## 数据来源（问财）
+
+乌兰远端只读挂载：`/mnt/fin_bench/code_and_clean_data/datasets/0_wencai`
+
+| 内容 | 路径 |
+|---|---|
+| 逐 trace 分析结果 | `eval_output/2_rsi_eval/{b_expert,b_fast}/<cohort>/*_attribution-YYYY-MM-DD.jsonl` |
+| 问题聚类树 / 条目编码 | `eval_output/2_rsi_eval/cluster/{b_expert,b_fast}/total/{cluster_tree.json,item_index.jsonl}` |
+| 对话原始结构体 | `eval_input/2_rsi_input/{b_expert,b_fast}/<cohort>/data_YYYYMMDD.jsonl` |
+| 测试用户规则（可选） | `<EVAL_DATASETS>/user_rules.json` |
+
+问财没有 compact；`source` 是 cohort（`新用户W1-3` 等），`app_version` 是模型目录
+（`b_expert` / `b_fast`），`day` 按 Asia/Shanghai。详见
+[docs_wencai/接入说明.md](docs_wencai/接入说明.md)。
+
+## 维度映射（AIME）
 
 | 协议字段 | 实际取值 | 来源 |
 |---|---|---|
@@ -124,27 +142,36 @@ trace 的 `problems` 问题数组与 P0–P4 严重度，并新增 `GET /severit
 # 用 fixture 自建一个小数据集并跑完整验收
 python3 tests/test_acceptance.py
 
-# 直接指向真实挂载（远端机器上；弗吉尼亚的 AIME 数据根）
-EVAL_DATASETS=/mnt/aime_eval_ssd python3 run.py serve
+# 直接指向真实挂载（远端机器上）
+EVAL_DATASETS=/mnt/aime_eval_ssd ANALYSIS_DATASET=aime_eval python3 run.py serve       # AIME
+EVAL_DATASETS=/mnt/fin_bench/code_and_clean_data/datasets ANALYSIS_DATASET=wencai_eval python3 run.py serve  # 问财
 
 # 只建索引 / 看索引摘要
 python3 run.py build
 python3 run.py status
 ```
 
-环境变量：`EVAL_DATASETS`（数据集根）、`ANALYSIS_STATE`（索引与密钥目录，默认 `./state`）、
-`PORT`（默认 5003）、`HOST`、`REFRESH_SECONDS`（默认 600；弗吉尼亚 deploy.env 设为 3600）、`CURSOR_TTL`（默认 1800）、
+环境变量：`EVAL_DATASETS`（数据集根）、`ANALYSIS_DATASET`（`aime_eval` / `wencai_eval`，默认 `aime_eval`）、
+`ANALYSIS_STATE`（索引与密钥目录，默认 `./state`）、
+`PORT`（默认 5003）、`HOST`、`REFRESH_SECONDS`（默认 600；线上 deploy.env 设为 3600）、`CURSOR_TTL`（默认 1800）、
 `ANALYSIS_CURSOR_KEY`（多机共享的 cursor 签名密钥）、`ANALYSIS_MAX_INFLIGHT`（默认 32）、
 `ANALYSIS_RESULT_CACHE` / `ANALYSIS_RESULT_CACHE_TTL`（聚合缓存条数 / 秒，默认 256 / 600）。
 
 ## 部署与运维
 
 ```bash
-./deploy.sh                     # rsync 到 /opt/eval_analysis + 重启 + 冒烟（EVAL_DEPLOY_HOST/PORT/KEY 可覆盖 ssh 别名）
-ssh aime_rsi_data 'cd /opt/eval_analysis && ./start.sh'
-ssh aime_rsi_data 'cd /opt/eval_analysis && ./stop.sh'
-curl -s http://10.217.219.2:2477/healthz           # 5003 目前只部署在弗吉尼亚
+# AIME（弗吉尼亚）
+EVAL_DEPLOY_HOST=aime_rsi_data EVAL_DATASETS=/mnt/aime_eval_ssd ANALYSIS_DATASET=aime_eval ./deploy.sh
+# 问财（乌兰）
+EVAL_DATASETS=/mnt/fin_bench/code_and_clean_data/datasets ANALYSIS_DATASET=wencai_eval ./deploy.sh
+ssh eval_data 'cd /opt/eval_analysis && ./start.sh'
+ssh eval_data 'cd /opt/eval_analysis && ./stop.sh'
+curl -s http://127.0.0.1:5003/healthz              # 容器内自检
 ```
+
+`deploy.sh` 默认 `EVAL_DEPLOY_HOST=eval_data`（乌兰）、`REMOTE=/opt/eval_analysis`、`PORT=5003`；
+弗吉尼亚用 `EVAL_DEPLOY_HOST=aime_rsi_data`。`ANALYSIS_DATASET` / `EVAL_DATASETS` /
+`REFRESH_SECONDS` 会写进远端 `deploy.env`，之后手动重启沿用。
 
 `start.sh` 会等到 `/healthz` 返回 `ok:true`（首次构建实测 341 秒（扫 11.4 GB 输入）；
 之后按 `(size, mtime)` 增量，未变文件直接跳过）。重启时先用 `state/index.sqlite` 里已有的索引对外服务，
@@ -163,7 +190,7 @@ python3 tests/test_taxonomy.py                         # 分类树加载与编�
 python3 tests/test_acceptance.py --real --base-url http://127.0.0.1:5003   # 真实数据
 ```
 
-## 验证结果（历史基线：2026-11-03，v2.0 部署在乌兰 `interactive-i6piqwvlnsr5`，该实例 5003 现已停用）
+## 验证结果（历史基线：2026-11-03，v2.0 部署在乌兰 `interactive-i6piqwvlnsr5`；2026-11-19 已按 `0_wencai/2_rsi_eval` 重新恢复）
 
 - v1 → v2 首次迁移：清归因派生行后全量重扫 44 个 attribution 文件，151 秒；之后重启/增量重建 3–4 秒。
 - 索引快照（部署后 14:48，数据仍在增长）：18,574 条 trace / 724 条历史版本 / 51,190 个问题条目；

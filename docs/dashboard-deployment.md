@@ -13,8 +13,9 @@
 | 看板数据根 | `/mnt/fin_bench/code_and_clean_data/datasets` | `/mnt/aime_eval_ssd`（产品目录 `1_aime`；旧 HDD `/mnt/fin_bench/aime_rsi_data` 仅作冷数据） |
 
 访问约定：集群内部跨容器用「容器名:容器端口」，同容器内用 `127.0.0.1`，本地 / 外部用「IP:对外端口」。
-当前状态（2026-11-04 切分完成）：乌兰 5001 已按 `EVAL_PRODUCTS=wencai` 重建，不再构建 AIME；
-弗吉尼亚 5001/5002/5003 已起（AIME 数据只在弗吉尼亚更新）；乌兰 5003 已停用（问财供数接口尚未实现）。
+当前状态（2026-11-19）：乌兰 5001/5002/5003 都按问财部署（`EVAL_PRODUCTS=wencai`）；
+问财看板的数据源是 `0_wencai/eval_output/2_rsi_eval` + `eval_input/2_rsi_input`，5003 服务
+`dataset=wencai_eval`。弗吉尼亚 5001/5002/5003 服务 AIME（数据只在弗吉尼亚更新）。
 端口映射与密钥在本地 `servers.conf`（已 gitignore，不入库）。
 
 ## 端口分配（固定）
@@ -23,7 +24,7 @@
 |---|---|---|---|
 | `5001` | 展示（看板生产） | `2768` | `2475` |
 | `5002` | 页面接口（样本详情页 / JSON API） | `2833` | `2476` |
-| `5003` | 供数（数据接口，对话分析查询接口 v2） | 已停用（问财暂未实现） | `2477` |
+| `5003` | 供数（数据接口，对话分析查询接口 v2） | 已恢复（`wencai_eval`） | `2477` |
 | `5004` | 开发调试 | `3336` | `2478` |
 | `5005` | 备用 | `3337` | `2479` |
 | `22` | SSH | `2834` | `2473` |
@@ -50,6 +51,9 @@ EVAL_DEPLOY_HOST=aime_rsi_data EVAL_DATASETS=/mnt/aime_eval_ssd EVAL_PRODUCTS=ai
 # 预发调试副本（乌兰 5004 对外 3336）
 EVAL_DEPLOY_REMOTE=/opt/eval_dashboard_2 PORT=5004 STATS_WORKER=0 \
   EVAL_DATASETS=/mnt/fin_bench/code_and_clean_data/datasets EVAL_PRODUCTS=wencai ./dashboard/deploy.sh
+# 问财 5003 供数（容器内 5003；对外端口由平台映射）
+EVAL_DATASETS=/mnt/fin_bench/code_and_clean_data/datasets ANALYSIS_DATASET=wencai_eval \
+  REFRESH_SECONDS=3600 ./interfaces/eval_data_interface/deploy.sh
 curl -s http://117.50.195.94:2768/healthz | jq
 curl -s http://10.217.219.2:2475/healthz | jq
 ```
@@ -214,7 +218,7 @@ EOF'
 nohup /opt/eval_supervisor.sh >> /opt/eval_supervisor.log 2>&1 &   # 幂等，flock 单实例
 ```
 
-- 配置格式：`name|health_url|workdir|start_cmd`；乌兰不列已停用的 5003。
+- 配置格式：`name|health_url|workdir|start_cmd`；乌兰可列 5001/5002/5003（5003 用 `/opt/eval_analysis`）。
 - 聚类矩阵 `/matrix/`、版本对比 `/compare/` 由 5002 同一进程提供（`page_service/problem_matrix`、
   `page_service/compare_details` 被 `sample_details/server.py` 导入），**不需要新增守护条目**。
 - 维护 / 发布窗口先 `touch /opt/eval_supervisor.pause`，结束后 `rm`，避免守护进程在 stop 后把旧服务拉起来。

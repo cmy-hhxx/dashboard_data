@@ -1,7 +1,8 @@
 # 看板交接
 
-> **部署分工（2026-11-04 起）：** 乌兰 5001=问财看板、5002=问财页面接口、5003 已停用；
-> 弗吉尼亚 5001=看板、5002=页面接口、5003=供数，AIME 新数据只在弗吉尼亚更新。
+> **部署分工：** 乌兰 5001=问财看板、5002=问财页面接口、5003=问财供数（`dataset=wencai_eval`，2026-11-19 恢复）；
+> 弗吉尼亚 5001=看板、5002=页面接口、5003=供数（AIME）。问财看板读
+> `0_wencai/eval_output/2_rsi_eval` 与 `eval_input/2_rsi_input`。
 >
 > **2026-11-09：** 弗吉尼亚看板数据源切到 SSD `/mnt/aime_eval_ssd`（产品目录 `1_aime`）；
 > 对弗吉尼亚的远程操作要走 SSH 长连接（ControlMaster / ControlPersist），见
@@ -64,6 +65,10 @@ server.py（标准库 HTTP，:5001，定时 build）──> app.js
                                                    core.js / sunburst.js / css/*.css
 ```
 
+- **问财（乌兰）** 只构建 `0_wencai`：输入读 `eval_input/2_rsi_input/<model>/<cohort>/data_YYYYMMDD.jsonl`，
+  输出读 `eval_output/2_rsi_eval/<model>/<cohort>/*_attribution-*.jsonl`，聚类只用
+  `eval_output/2_rsi_eval/cluster/<model>/total/`。旧 `0_daily_eval` / `1_task_eval` 不再进看板。
+  场景取输入的 `task_category` / `subtask_category`，日期按 Asia/Shanghai。
 - `build.py` 增量扫描输入、归因、compact，按 session key 配对；只生成变化的
   样本摘要，**不再全量写逐样本详情**。`cache/build.sqlite3` 保存文件索引、配对、样本摘要和
   详情生成所需的行号/引用。输出版本、KPI、会话场、聚类矩阵、预测、体系说明和样本索引；

@@ -146,7 +146,9 @@ def refresh_once():
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                 cwd=HERE, start_new_session=True)
         try:
-            stdout, stderr = proc.communicate(timeout=1800)
+            # 冷构建要按样本顺序读输入行（问财 RSI 约 25 GB），ceph-fuse 上限 ~15 MB/s；
+            # 30 分钟会被误杀。可用 EVAL_BUILD_TIMEOUT 覆盖。
+            stdout, stderr = proc.communicate(timeout=int(os.environ.get("EVAL_BUILD_TIMEOUT", "5400")))
         except subprocess.TimeoutExpired:
             os.killpg(proc.pid, signal.SIGKILL)
             proc.communicate()

@@ -8,6 +8,7 @@
 """
 
 import json
+import os
 import sys
 import urllib.error
 import urllib.parse
@@ -16,7 +17,7 @@ import gzip
 
 BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:5003").rstrip("/")
 API = BASE + "/api/v1/analysis"
-DATASET = "aime_eval"
+DATASET = (sys.argv[2] if len(sys.argv) > 2 else os.environ.get("ANALYSIS_DATASET", "aime_eval"))
 RESULTS = []
 
 

@@ -10,7 +10,7 @@ PORT="${PORT:-5003}"
 
 # 这份部署的设置（数据根、刷新间隔等）写进远端 deploy.env，start.sh 与手动重启都读它。
 RUN_ENV=""
-for var in PORT REFRESH_SECONDS EVAL_DATASETS ANALYSIS_STATE; do
+for var in PORT REFRESH_SECONDS EVAL_DATASETS ANALYSIS_STATE ANALYSIS_DATASET; do
   if [ -n "${!var:-}" ]; then RUN_ENV+="export $var=$(printf '%q' "${!var}")"$'\n'; fi
 done
 
@@ -36,7 +36,7 @@ rsync -az --delete -e "ssh ${SSH_OPTS[*]}" \
 if [ -n "$RUN_ENV" ]; then
   # 没显式传入的变量沿用远端已有取值：漏传不能把数据根 / 刷新间隔改回默认
   EXISTING="$(ssh "$HOST_ALIAS" "cat '${REMOTE}/deploy.env' 2>/dev/null" || true)"
-  for var in PORT REFRESH_SECONDS EVAL_DATASETS ANALYSIS_STATE; do
+  for var in PORT REFRESH_SECONDS EVAL_DATASETS ANALYSIS_STATE ANALYSIS_DATASET; do
     case "$RUN_ENV" in *"export $var="*) continue ;; esac
     line="$(printf '%s\n' "$EXISTING" | grep -E "^export ${var}=" | tail -n 1 || true)"
     if [ -n "$line" ]; then RUN_ENV+="$line"$'\n'; fi
@@ -45,17 +45,19 @@ if [ -n "$RUN_ENV" ]; then
 fi
 
 echo "==> 重启服务"
-ssh "$HOST_ALIAS" "cd '${REMOTE}' && { [ ! -f deploy.env ] || . ./deploy.env; } && chmod +x start.sh stop.sh && ./stop.sh && PORT=${PORT} ./start.sh"
+ssh "$HOST_ALIAS" "cd '${REMOTE}' && { [ ! -f deploy.env ] || . ./deploy.env; } && chmod +x start.sh stop.sh && ./stop.sh && PORT=${PORT} WAIT_SECONDS=${WAIT_SECONDS:-1800} ./start.sh"
 
 echo "==> 冒烟：健康检查 + 三个接口"
 ssh "$HOST_ALIAS" "set -e
+  cd '${REMOTE}' && { [ ! -f deploy.env ] || . ./deploy.env; }
+  DS=\${ANALYSIS_DATASET:-aime_eval}
   curl -fsS 'http://127.0.0.1:${PORT}/healthz'
   echo
   curl -fsS 'http://127.0.0.1:${PORT}/api/v1/analysis/taxonomy?kind=intent' | python3 -c 'import json,sys; d=json.load(sys.stdin); print(\"intent nodes\", len(d[\"data\"][\"nodes\"]))'
-  curl -fsS 'http://127.0.0.1:${PORT}/api/v1/analysis/summary?dataset=aime_eval&group_by=intent' | python3 -c 'import json,sys; d=json.load(sys.stdin); print(\"summary total\", d[\"data\"][\"total\"])'
-  curl -fsS 'http://127.0.0.1:${PORT}/api/v1/analysis/traces?dataset=aime_eval&page_size=1' | python3 -c 'import json,sys; d=json.load(sys.stdin); print(\"traces total\", d[\"data\"][\"total\"])'
-  curl -fsS 'http://127.0.0.1:${PORT}/api/v1/analysis/severity?dataset=aime_eval' | python3 -c 'import json,sys; d=json.load(sys.stdin); print(\"severity total\", d[\"data\"][\"total\"])'
-  curl -fsS 'http://127.0.0.1:${PORT}/api/v1/analysis/changes?dataset=aime_eval&page_size=1' | python3 -c 'import json,sys; d=json.load(sys.stdin); print(\"changes latest_seq\", d[\"data\"][\"latest_seq\"], \"items\", len(d[\"data\"][\"items\"]))'
+  curl -fsS \"http://127.0.0.1:${PORT}/api/v1/analysis/summary?dataset=\$DS&group_by=intent\" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(\"summary total\", d[\"data\"][\"total\"])'
+  curl -fsS \"http://127.0.0.1:${PORT}/api/v1/analysis/traces?dataset=\$DS&page_size=1\" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(\"traces total\", d[\"data\"][\"total\"])'
+  curl -fsS \"http://127.0.0.1:${PORT}/api/v1/analysis/severity?dataset=\$DS\" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(\"severity total\", d[\"data\"][\"total\"])'
+  curl -fsS \"http://127.0.0.1:${PORT}/api/v1/analysis/changes?dataset=\$DS&page_size=1\" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(\"changes latest_seq\", d[\"data\"][\"latest_seq\"], \"items\", len(d[\"data\"][\"items\"]))'
   curl -fsS 'http://127.0.0.1:${PORT}/api/v1/analysis/docs' | python3 -c 'import json,sys; d=json.load(sys.stdin); print(\"docs\", [x[\"name\"] for x in d[\"data\"][\"docs\"]])'
   curl -fsS 'http://127.0.0.1:${PORT}/api/v1/analysis/taxonomy?kind=severity' | python3 -c 'import json,sys; d=json.load(sys.stdin); print(\"severity nodes\", [n[\"code\"] for n in d[\"data\"][\"nodes\"]])'
 "

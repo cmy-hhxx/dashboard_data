@@ -123,10 +123,10 @@ class App:
     def _trees(log):
         intent_tree = load_intent(config.INTENT_TAXONOMY_FILE)
         problem_trees = {}
-        for model_dir, (tree_path, _) in store.cluster_files(config.datasets_root() / config.AIME_DIR).items():
-            suffix = config.MODEL_SUFFIX.get(model_dir, model_dir)
+        root = config.datasets_root() / config.PRODUCT_DIR
+        for model_dir, (tree_path, _) in store.cluster_files(root).items():
             try:
-                problem_trees[f"__{suffix}"] = load_cluster(tree_path, model_dir)
+                problem_trees[config.LAYOUT.tree_key(model_dir)] = load_cluster(tree_path, model_dir)
             except Exception as exc:  # noqa: BLE001
                 log(f"[warn] 问题树 {tree_path} 加载失败：{exc}")
         return intent_tree, problem_trees
@@ -406,6 +406,7 @@ class Handler(BaseHTTPRequestHandler):
             200,
             {
                 "ok": snap is not None,
+                "dataset": config.DATASET,
                 "started_at": APP.started_at,
                 "built_at": snap.built_at if snap else None,
                 "data_updated_at": snap.data_updated_at if snap else None,
@@ -535,10 +536,11 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     def _docs(self, name):
+        docs_dir = config.DATASET_DOCS_DIR.resolve()
         if name:
             slug = name
-            path = (config.DOCS_DIR / f"{slug}.md").resolve()
-            if path.parent != config.DOCS_DIR.resolve() or not path.is_file():
+            path = (docs_dir / f"{slug}.md").resolve()
+            if path.parent != docs_dir or not path.is_file():
                 raise errors.not_found("文档不存在", name=slug)
             content = path.read_text(encoding="utf-8", errors="replace")
             data = {
@@ -552,7 +554,7 @@ class Handler(BaseHTTPRequestHandler):
             }
         else:
             docs = []
-            for path in sorted(config.DOCS_DIR.glob("*.md")):
+            for path in sorted(docs_dir.glob("*.md")):
                 slug = path.stem
                 content = path.read_text(encoding="utf-8", errors="replace")
                 docs.append(
@@ -653,9 +655,9 @@ COMPUTE = {
 }
 # 最常用的几组聚合（接入说明里的示例调用）；新快照上线即预算。
 WARM_QUERIES = [
-    ("/severity", {"dataset": "aime_eval"}),
-    ("/summary", {"dataset": "aime_eval", "group_by": "intent"}),
-    ("/summary", {"dataset": "aime_eval", "group_by": "problem"}),
+    ("/severity", {"dataset": config.DATASET}),
+    ("/summary", {"dataset": config.DATASET, "group_by": "intent"}),
+    ("/summary", {"dataset": config.DATASET, "group_by": "problem"}),
 ]
 
 

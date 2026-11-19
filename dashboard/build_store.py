@@ -157,9 +157,12 @@ def _aggregate_line(stats: dict, payload: dict, product: str, split: str, defaul
         if not isinstance(trace, dict):
             continue
         tm = trace.get("meta") or meta
-        model = normalize_model(tm.get("model") or meta.get("model"), product, default_model)
-        task = tm.get("task") or meta.get("task") or "未接入分类体系"
-        sub = tm.get("subtask") or meta.get("subtask") or ""
+        # 目录名（b_expert / b_fast）才是模型真相：问财输入里的 model 是运行时引擎名
+        # （AIME-Atlas-thinking1、aime-fast-new），按名字猜会把所有 b_* 归到 a_*。
+        model = default_model or normalize_model(tm.get("model") or meta.get("model"), product)
+        # 问财的 RSI 输入把场景写在 task_category / subtask_category，没有 task 字段。
+        task = tm.get("task") or meta.get("task") or meta.get("task_category") or "未接入分类体系"
+        sub = tm.get("subtask") or meta.get("subtask") or meta.get("subtask_category") or ""
         uid = str(tm.get("user_id") or meta.get("user_id") or "")
         lost = int(base_lost or bool(tm.get("lost_user") or meta.get("lost_user"))
                    or bool(uid and uid in lost_ids))

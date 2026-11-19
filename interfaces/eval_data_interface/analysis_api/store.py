@@ -12,9 +12,11 @@ eval_input 是 GB 级、持续追加的文件：头部未变且只是变长时�
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import time
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import unquote
@@ -77,6 +79,12 @@ CREATE TABLE IF NOT EXISTS input_index(
     PRIMARY KEY (trace_id, day, path, offset)
 );
 CREATE INDEX IF NOT EXISTS input_index_path ON input_index(path);
+CREATE TABLE IF NOT EXISTS input_questions(
+    trace_id TEXT PRIMARY KEY,
+    question TEXT NOT NULL,
+    file TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS input_questions_file ON input_questions(file);
 CREATE TABLE IF NOT EXISTS problem_codes(
     trace_id TEXT NOT NULL,
     day TEXT NOT NULL,
@@ -123,6 +131,8 @@ PREFIX_BYTES = 65536
 TRACE_ID_RE = re.compile(rb'"trace_id"\s*:\s*"([^"\s]{4,80})"')
 ATTR_RE = re.compile(r"^(?P<model>.+)_attribution-(?P<day>\d{4}-\d{2}-\d{2})\.jsonl$")
 INPUT_DAY_RE = re.compile(r"(?P<day>\d{4}-\d{2}-\d{2})")
+COMPACT_DAY_RE = re.compile(r"(?<!\d)(\d{4})(\d{2})(\d{2})(?!\d)")
+QUESTION_RE = re.compile(rb'"question_text"\s*:\s*"((?:[^"\\]|\\.)*)"')
 
 
 def _log_factory(log):
@@ -236,6 +246,18 @@ def _decoded(value):
         except Exception:  # noqa: BLE001 - 解不开就保留原文
             return value
     return value
+
+
+def _question_from(raw: bytes):
+    """从输入行头部取 question_text，避免为补问句再解析整行 JSON。"""
+    match = QUESTION_RE.search(raw[:65536])
+    if not match:
+        return None
+    try:
+        text = json.loads(b'"' + match.group(1) + b'"')
+    except ValueError:
+        return None
+    return _decoded(text)
 
 
 def _text(value):
@@ -466,6 +488,11 @@ def load_item_codes(path: Path, log=None) -> tuple[ItemCodes, str]:
                 if label:
                     codes.by_trace_label.setdefault((trace_id, label), code)
             continue
+        if config.DATASET == "wencai_eval" and trace_id and json_path.startswith("turns"):
+            # 问财 RSI 同时给了行号和 turns[...] 定位；按 trace 定位不受 cohort 文件行号漂移影响。
+            codes.by_trace.setdefault((trace_id, int(turn_index or 0), int(problem_index)), code)
+            if label:
+                codes.by_trace_label.setdefault((trace_id, label), code)
         if json_path.startswith("session_problem"):
             codes.by_session[(basename, int(line), int(problem_index))] = code
         elif turn_index is not None:
@@ -475,38 +502,14 @@ def load_item_codes(path: Path, log=None) -> tuple[ItemCodes, str]:
     return codes, sig
 
 
-def _attribution_files(aime: Path):
-    """返回 [(path, split, model_dir)]。"""
-    out = []
-    for split_dir in (aime / "eval_output").iterdir() if (aime / "eval_output").is_dir() else []:
-        if not split_dir.is_dir() or split_dir.name.startswith("."):
-            continue
-        if split_dir.name not in config.SPLIT_TO_SOURCE:
-            continue
-        for model_dir in sorted(split_dir.iterdir()):
-            if not model_dir.is_dir():
-                continue
-            for path in sorted(model_dir.glob("*_attribution-*.jsonl")):
-                out.append((path, split_dir.name, model_dir.name))
-    return out
+def _attribution_files(product: Path):
+    """返回 [(path, source, model_dir)]。"""
+    return config.LAYOUT.attribution_files(product)
 
 
-def _input_files(aime: Path):
-    """返回 [(path, model_dir, source)]，覆盖日常输入与流失用户归档输入。"""
-    out = []
-    daily = aime / "eval_input" / "0_daily_eval_input"
-    if daily.is_dir():
-        for model_dir in sorted(daily.iterdir()):
-            if model_dir.is_dir():
-                for path in sorted(model_dir.glob("*.jsonl")):
-                    out.append((path, model_dir.name, "0_daily_eval"))
-    archive = aime / ".archive" / "1_lost_user_input"
-    if archive.is_dir():
-        for model_dir in sorted(archive.iterdir()):
-            if model_dir.is_dir():
-                for path in sorted(model_dir.glob("*_input.jsonl")):
-                    out.append((path, model_dir.name, "1_lost_user_eval"))
-    return out
+def _input_files(product: Path):
+    """返回 [(path, model_dir)]。"""
+    return config.LAYOUT.input_files(product)
 
 
 def _cached_sig(conn, path: Path):
@@ -538,15 +541,13 @@ def _intent_lookup(intent_tree):
     return by_label
 
 
-def ingest_attribution(conn, aime: Path, item_codes_by_model, intent_tree, log):
+def ingest_attribution(conn, product: Path, item_codes_by_model, intent_tree, log):
     """把一个 attribution 文件读进 traces / history；同一 trace 保留行号最大的一行。"""
     lookup = _intent_lookup(intent_tree)
     stats = {"files": 0, "skipped": 0, "traces": 0, "history": 0, "problems": 0, "unclustered": 0, "changes": 0}
     codes_by_model = {k: c for k, (c, _) in item_codes_by_model.items()}
 
-    for path, split, model_dir in _attribution_files(aime):
-        source = config.SPLIT_TO_SOURCE[split]
-        suffix = config.MODEL_SUFFIX.get(model_dir, model_dir)
+    for path, source, model_dir in _attribution_files(product):
         codes = codes_by_model.get(model_dir) or ItemCodes()
         # 依赖签名只取 item_index 里属于本文件的行，别的文件新增聚类不会让它重扫
         sig = f"{_file_sig(path)}|{codes.sig_for(path.name)}"
@@ -587,7 +588,7 @@ def ingest_attribution(conn, aime: Path, item_codes_by_model, intent_tree, log):
                 # session 是外层 meta；session_meta 缺失时用每轮 trace meta 的 session_id 兜底。
                 turn_session_id = session_id or _text(meta.get("session_id"))
                 stamp = timeutil.parse_iso(meta.get("timestamp")) or timeutil.parse_iso(smeta.get("request_time"))
-                day = timeutil.local_day(stamp) or default_day
+                day = timeutil.local_day(stamp, config.DAY_TZ) or default_day
                 task = _clean(meta.get("task"))
                 subtask = _clean(meta.get("subtask"))
                 intent_code = lookup.get((2, subtask)) if subtask else None
@@ -640,7 +641,7 @@ def ingest_attribution(conn, aime: Path, item_codes_by_model, intent_tree, log):
                 entry = {
                     "trace_id": trace_id,
                     "day": day,
-                    "app_version": f"{meta.get('model') or model_dir}_{suffix}",
+                    "app_version": config.LAYOUT.app_version(model_dir, meta),
                     "asked_at": timeutil.utc_rfc3339(stamp),
                     "source": source,
                     "user_id": _text(meta.get("user_id")),
@@ -743,15 +744,43 @@ def ingest_attribution(conn, aime: Path, item_codes_by_model, intent_tree, log):
     return stats
 
 
-def ingest_inputs(conn, aime: Path, log):
+def _scan_input_file(task):
+    """Scan one input file from a committed offset; returns rows for the parent to write."""
+    path_str, file_day, suffix, start, line_no = task
+    path = Path(path_str)
+    rows, qrows = [], []
+    offset = committed = start
+    lines = line_no
+    want_question = config.DATASET == "wencai_eval"
+    with path.open("rb", buffering=READ_BUFFER) as handle:
+        handle.seek(start)
+        for raw in handle:
+            line_no += 1
+            ids = TRACE_ID_RE.findall(raw)
+            question = _question_from(raw) if want_question and ids else None
+            for trace_id in ids:
+                tid = trace_id.decode("utf-8", "replace")
+                rows.append((tid, file_day, suffix, path_str, offset, line_no))
+                if question:
+                    qrows.append((tid, question, path_str))
+            offset += len(raw)
+            if raw.endswith(b"\n"):
+                committed, lines = offset, line_no
+    return {"path": path_str, "rows": rows, "qrows": qrows,
+            "committed": committed, "lines": lines, "start": start}
+
+
+def ingest_inputs(conn, product: Path, log):
     """扫描 eval_input 的行号，建立 trace_id → (文件, 偏移) 索引。
 
     文件头 64 KB 没变、只是变长时，从上次最后一个完整换行处续扫，已有的行不动；
     其余情况（新文件、被截短或重写）整份重扫。未写完的末行照常建索引，
     但不计入续扫起点，下次连同写完的部分重新读一遍。
+    每个文件独立扫描，最多 4 个进程并行；问财 74 GB 输入串行要两个多小时。
     """
     stats = {"files": 0, "skipped": 0, "traces": 0, "resumed": 0}
-    for path, model_dir, split in _input_files(aime):
+    tasks, pending = [], []
+    for path, model_dir in _input_files(product):
         sig = _file_sig(path)
         prev = conn.execute(
             "SELECT sig, committed, lines, prefix FROM files WHERE path = ?", (str(path),)
@@ -759,9 +788,13 @@ def ingest_inputs(conn, aime: Path, log):
         if prev and prev[0] == sig:
             stats["skipped"] += 1
             continue
-        suffix = config.MODEL_SUFFIX.get(model_dir, model_dir)
+        suffix = model_dir
         match = INPUT_DAY_RE.search(path.name)
-        file_day = match.group("day") if match else None
+        if match:
+            file_day = match.group("day")
+        else:
+            compact = COMPACT_DAY_RE.search(path.name)
+            file_day = f"{compact.group(1)}-{compact.group(2)}-{compact.group(3)}" if compact else None
         start, line_no = 0, 0
         if (prev and prev[1] is not None and path.stat().st_size >= prev[1]
                 and prev[3] == _prefix(path, prev[1])):
@@ -769,34 +802,97 @@ def ingest_inputs(conn, aime: Path, log):
             stats["resumed"] += 1
         else:
             conn.execute("DELETE FROM input_index WHERE path = ?", (str(path),))
-        rows = []
-        offset = committed = start
-        lines = line_no
-        with path.open("rb", buffering=READ_BUFFER) as handle:
-            handle.seek(start)
-            for raw in handle:
-                line_no += 1
-                for trace_id in TRACE_ID_RE.findall(raw):
-                    tid = trace_id.decode("utf-8", "replace")
-                    rows.append((tid, file_day, suffix, str(path), offset, line_no))
-                offset += len(raw)
-                if raw.endswith(b"\n"):
-                    committed, lines = offset, line_no
+            conn.execute("DELETE FROM input_questions WHERE file = ?", (str(path),))
+        tasks.append((str(path), file_day, suffix, start, line_no))
+        pending.append((path, sig, start))
+
+    if not tasks:
+        return stats
+    workers = min(4, os.cpu_count() or 1)
+    if workers > 1 and len(tasks) >= 2:
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(_scan_input_file, tasks))
+    else:
+        results = [_scan_input_file(task) for task in tasks]
+
+    for (path, sig, start), result in zip(pending, results):
         conn.executemany(
             "INSERT OR IGNORE INTO input_index(trace_id, day, app_version, path, offset, line) VALUES (?, ?, ?, ?, ?, ?)",
-            rows,
+            result["rows"],
         )
-        _store_sig(conn, path, sig, "input", committed, lines, _prefix(path, committed))
+        if result["qrows"]:
+            conn.executemany(
+                "INSERT OR REPLACE INTO input_questions(trace_id, question, file) VALUES (?, ?, ?)",
+                result["qrows"],
+            )
+        _store_sig(conn, path, sig, "input", result["committed"], result["lines"],
+                   _prefix(path, result["committed"]))
         conn.commit()
         stats["files"] += 1
-        stats["traces"] += len(rows)
-        log(f"[index] input {path.name}: {'+' if start else ''}{len(rows)} traces")
+        stats["traces"] += len(result["rows"])
+        log(f"[index] input {path.name}: {'+' if start else ''}{len(result['rows'])} traces")
     return stats
 
 
-def _prune(conn, aime: Path):
+def backfill_questions(conn, log) -> int:
+    """旧索引升级：用 input_index 的行偏移补 input_questions，只读每行头部。
+
+    74 GB 的输入不必重扫：每个 offset 读 64 KB 就能拿到 question_text。
+    只跑一次（meta 位点），之后 ingest_inputs 边扫边写。
+    """
+    if conn.execute("SELECT value FROM meta WHERE key = 'input_questions_v1'").fetchone():
+        return 0
+    grouped = {}
+    for path, offset, trace_id in conn.execute("SELECT path, offset, trace_id FROM input_index"):
+        grouped.setdefault(path, {}).setdefault(offset, set()).add(trace_id)
+    rows = []
+    for path, offsets in grouped.items():
+        try:
+            handle = open(path, "rb", buffering=0)
+        except OSError:
+            continue
+        with handle:
+            for offset, tids in offsets.items():
+                try:
+                    handle.seek(offset)
+                    raw = handle.read(65536)
+                except OSError:
+                    continue
+                question = _question_from(raw)
+                if question:
+                    rows.extend((tid, question, path) for tid in tids)
+    if rows:
+        conn.executemany(
+            "INSERT OR REPLACE INTO input_questions(trace_id, question, file) VALUES (?, ?, ?)",
+            rows,
+        )
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES ('input_questions_v1', '1') "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+    )
+    conn.commit()
+    log(f"[index] 输入问句回填：{len(rows)} 条 trace")
+    return len(rows)
+
+
+def fill_questions(conn) -> int:
+    """归因 session_meta 缺 question 时，用同一 trace 的输入行问句补齐并记一条变更。"""
+    rows = conn.execute(
+        "UPDATE traces SET question = ("
+        "  SELECT q.question FROM input_questions q WHERE q.trace_id = traces.trace_id"
+        ") WHERE (question IS NULL OR question = '') AND EXISTS ("
+        "  SELECT 1 FROM input_questions q WHERE q.trace_id = traces.trace_id AND q.question <> ''"
+        ") RETURNING trace_id, day, app_version"
+    ).fetchall()
+    if rows:
+        _emit_changes(conn, rows, [], timeutil.utc_rfc3339(datetime.now(timezone.utc)))
+        conn.commit()
+    return len(rows)
+
+
+def _prune(conn, product: Path):
     """清理已经消失的文件对应的行；删掉的 trace 写一条 delete 变更。"""
-    alive = {str(p) for p, _, _ in _attribution_files(aime)} | {str(p) for p, _, _ in _input_files(aime)}
+    alive = {str(p) for p, _, _ in _attribution_files(product)} | {str(p) for p, _ in _input_files(product)}
     rows = conn.execute("SELECT path, kind FROM files").fetchall()
     removed = 0
     changed = 0
@@ -813,6 +909,7 @@ def _prune(conn, aime: Path):
             )
         elif kind == "input":
             conn.execute("DELETE FROM input_index WHERE path = ?", (path,))
+            conn.execute("DELETE FROM input_questions WHERE file = ?", (path,))
         conn.execute("DELETE FROM files WHERE path = ?", (path,))
         removed += 1
     if removed or changed:
@@ -820,19 +917,8 @@ def _prune(conn, aime: Path):
     return removed, changed
 
 
-def cluster_files(aime: Path):
-    out = {}
-    root = aime / "eval_output" / "cluster"
-    if not root.is_dir():
-        return out
-    for model_dir in sorted(root.iterdir()):
-        if not model_dir.is_dir():
-            continue
-        tree = model_dir / "cluster_tree.json"
-        index = model_dir / "item_index.jsonl"
-        if tree.exists():
-            out[model_dir.name] = (tree, index if index.exists() else None)
-    return out
+def cluster_files(product: Path):
+    return config.LAYOUT.cluster_files(product)
 
 
 def build(root: Path | None = None, log=None) -> dict:
@@ -840,9 +926,9 @@ def build(root: Path | None = None, log=None) -> dict:
     log = _log_factory(log)
     started = time.time()
     root = root or config.datasets_root()
-    aime = root / config.AIME_DIR
-    if not (aime / "eval_output").is_dir():
-        raise FileNotFoundError(f"找不到数据目录：{aime}")
+    product_dir = root / config.PRODUCT_DIR
+    if not (product_dir / "eval_output").is_dir():
+        raise FileNotFoundError(f"找不到数据目录：{product_dir}")
 
     config.STATE_DIR.mkdir(parents=True, exist_ok=True)
     conn = connect(config.db_path())
@@ -858,17 +944,25 @@ def build(root: Path | None = None, log=None) -> dict:
             log(f"[warn] 意图树加载失败：{exc}")
 
         item_codes = {}
-        for model_dir, (_, index_path) in cluster_files(aime).items():
+        for model_dir, (_, index_path) in cluster_files(product_dir).items():
             if index_path is None:
                 item_codes[model_dir] = (ItemCodes(), "")
                 continue
             codes, sig = load_item_codes(index_path, log)
             item_codes[model_dir] = (codes, sig)
 
-        attribution = ingest_attribution(conn, aime, item_codes, intent_tree, log)
-        inputs = ingest_inputs(conn, aime, log)
+        attribution = ingest_attribution(conn, product_dir, item_codes, intent_tree, log)
+        # 问财归因常缺 question，用输入行补齐；AIME 的问句本来就在归因里，不做额外处理。
+        questions = filled = 0
+        if config.DATASET == "wencai_eval":
+            # 先用已有 input_index 的偏移补问句（不必等 74 GB 重扫），再扫剩余输入。
+            questions = backfill_questions(conn, log)
+            filled = fill_questions(conn)
+        inputs = ingest_inputs(conn, product_dir, log)
+        if config.DATASET == "wencai_eval":
+            filled += fill_questions(conn)
         seeded = _seed_changes(conn, log)
-        removed, pruned_changes = _prune(conn, aime)
+        removed, pruned_changes = _prune(conn, product_dir)
         counts = conn.execute("SELECT COUNT(*) FROM traces").fetchone()[0]
         history = conn.execute("SELECT COUNT(*) FROM history").fetchone()[0]
         inputs_total = conn.execute("SELECT COUNT(*) FROM input_index").fetchone()[0]
@@ -891,6 +985,8 @@ def build(root: Path | None = None, log=None) -> dict:
         cluster_dates = [codes.max_date for codes, _ in item_codes.values() if codes.max_date]
         return {
             "ok": True,
+            "dataset": config.DATASET,
+            "product_dir": config.PRODUCT_DIR,
             "seconds": round(time.time() - started, 1),
             "root": str(root),
             "traces": counts,
@@ -901,13 +997,15 @@ def build(root: Path | None = None, log=None) -> dict:
             "attribution_files": attribution["files"],
             "skipped_attribution": attribution["skipped"],
             "skipped_input": inputs["skipped"],
+            "questions_backfilled": questions,
+            "questions_filled": filled,
             "problems": problems_total,
             "unclustered": max(0, problems_total - clustered),
             "cluster_through": max(cluster_dates) if cluster_dates else None,
             "severity": severity,
             "pruned": removed,
             "changes": changes_total,
-            "changes_emitted": attribution["changes"] + pruned_changes,
+            "changes_emitted": attribution["changes"] + pruned_changes + filled,
             "changes_seeded": seeded,
             "latest_seq": latest_seq,
             "data_updated_at": newest,

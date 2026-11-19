@@ -1,10 +1,28 @@
-"""时间处理：输入是数据里各种 ISO8601 变体，输出统一为 UTC RFC3339；day 按美东时间。"""
+"""时间处理：输入是数据里各种 ISO8601 变体，输出统一为 UTC RFC3339；day 按产品时区（AIME 美东、问财北京）。"""
 
-from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 EASTERN = ZoneInfo("America/New_York")  # 美东，自动处理 EST/EDT
 UTC = timezone.utc
+_ZONES = {"America/New_York": EASTERN}
+
+
+def zone(name: str | None):
+    if not name:
+        return EASTERN
+    try:
+        return _ZONES[name]
+    except KeyError:
+        pass
+    try:
+        _ZONES[name] = ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        if name != "Asia/Shanghai":
+            raise
+        # 容器可能缺 tzdata；中国无夏令时，固定 +08:00 与 Asia/Shanghai 等价。
+        _ZONES[name] = timezone(timedelta(hours=8), name)
+    return _ZONES[name]
 
 
 def parse_iso(value):
@@ -35,8 +53,8 @@ def utc_rfc3339(dt):
     return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def local_day(dt):
-    """UTC 时间 → America/New_York 的 YYYY-MM-DD（含夏令时）。"""
+def local_day(dt, tz: str | None = None):
+    """UTC 时间 → 指定时区的 YYYY-MM-DD（默认美东，含夏令时）。"""
     if dt is None:
         return None
-    return dt.astimezone(EASTERN).strftime("%Y-%m-%d")
+    return dt.astimezone(zone(tz)).strftime("%Y-%m-%d")
