@@ -62,6 +62,7 @@ test("timeline uses crisp noun titles and plain Chinese: no AI titles, meta span
     "一条对话怎样被评完", "一批对话怎样排队", "怎样排队", "怎样被评完",
     "点图里任意一条实心条", "点图里任意一行",
     'class="meta"', "tl-case-meta", "tl-global-meta", "引文核对", "tl-ev",
+    "tl-facts", "tl-rules", "tl-outcome", "关口",
     "attribution-", "--model-requests", "--concurrency", "verifiedCompact", ".jsonl",
   ]) {
     assert.ok(!html.includes(bad), `timeline html must not contain ${bad}`);
@@ -69,6 +70,8 @@ test("timeline uses crisp noun titles and plain Chinese: no AI titles, meta span
   }
   assert.ok(html.includes('id="tl-pipe"'));
   assert.ok(html.includes('id="tl-focus"'));
+  assert.ok(html.includes("阶段汇聚点"));
+  assert.ok(timelineSrc.includes('class="tl-hl"') && systemCss.includes(".tl-hl"));
 });
 
 test("system CSS styles the compact 5-tier SVG tree and tree-structured modal, removes old clutter selectors", () => {

@@ -1,13 +1,13 @@
 /* 评测速度: live AIME throughput, overview concentric rings, native horizontal pipeline & gateway telemetry. */
-import { $, esc, fmt, compact, pct, segmented, showTip, hideTip, getJSON } from "./core.js";
+import { $, esc, fmt, compact, pct, segmented, showTip, hideTip, bindTips, getJSON } from "./core.js";
 import { fxDiagramHTML, mountFxDiagram } from "./system.js";
 
 const POLL_MS = 15000;
 const DATE_PAGE_SIZE = 12;
 const SVG_NS = "http://www.w3.org/2000/svg";
 const CHART_PAD = { L: 48, R: 24, T: 18, B: 32 };
-const RING_OUT_C = 2 * Math.PI * 56;
-const RING_IN_C = 2 * Math.PI * 42;
+const RING_OUT_C = 2 * Math.PI * 64;
+const RING_IN_C = 2 * Math.PI * 49;
 const HORIZ_TREE_W = 940;
 const HORIZ_TREE_H = 540;
 
@@ -134,22 +134,23 @@ export function shellHTML(tax = null, pd = null) {
         <h2>评测总览</h2>
         <div class="sp-head-pills">
           <span class="sp-conn" id="spEvalState"><i></i><span id="spEvalStateText">读取中</span></span>
-          <span class="sp-conn is-quiet" id="spConn"><i></i><span id="spConnText">实时</span></span>
+          <button type="button" class="sp-conn is-quiet is-refresh" id="spConn" title="点击立即刷新实时数据"><i></i><span id="spConnText">15s 实时</span></button>
         </div>
       </header>
       <div class="sp-ov-wrap">
-        <div class="sp-ov-ring" role="img" aria-label="评测与聚类占比圆环">
-          <svg viewBox="0 0 140 140" aria-hidden="true">
-            <g transform="rotate(-90 70 70)">
-              <circle class="sp-ring-track" cx="70" cy="70" r="56"/>
-              <circle class="sp-ring-arc is-attr" id="spRingAttr" cx="70" cy="70" r="56" stroke-dasharray="${cOut}" stroke-dashoffset="${cOut}"/>
-              <circle class="sp-ring-track" cx="70" cy="70" r="42"/>
-              <circle class="sp-ring-arc is-cl" id="spRingCl" cx="70" cy="70" r="42" stroke-dasharray="${cIn}" stroke-dashoffset="${cIn}"/>
+        <div class="sp-ov-ring" role="img" aria-label="外环已评测、内环已聚类占评测输入比例">
+          <svg viewBox="0 0 156 156" aria-hidden="true">
+            <g transform="rotate(-90 78 78)">
+              <circle class="sp-ring-track" cx="78" cy="78" r="64"/>
+              <circle class="sp-ring-arc is-attr" id="spRingAttr" cx="78" cy="78" r="64" stroke-dasharray="${cOut}" stroke-dashoffset="${cOut}"/>
+              <circle class="sp-ring-track" cx="78" cy="78" r="49"/>
+              <circle class="sp-ring-arc is-cl" id="spRingCl" cx="78" cy="78" r="49" stroke-dasharray="${cIn}" stroke-dashoffset="${cIn}"/>
             </g>
           </svg>
           <div class="sp-ring-center">
             <b class="num" id="spRingPct">—</b>
             <span>已评测</span>
+            <em class="sp-ring-cl num" id="spRingClPct">聚类 —</em>
           </div>
         </div>
         <div class="sp-ov">
@@ -159,12 +160,12 @@ export function shellHTML(tax = null, pd = null) {
             <span class="sp-ov-sub"><b class="num" id="spInputSessions">—</b> session</span>
           </div>
           <div class="sp-ov-stat" style="--c:var(--accent)">
-            <span class="sp-ov-lbl">已完成评测</span>
+            <span class="sp-ov-lbl">已完成评测<i class="sp-ring-tag is-attr">外环</i></span>
             <div class="sp-ov-val"><span class="big num" id="spAttrTraces">—</span><span class="unit">trace</span></div>
             <span class="sp-ov-sub" id="spAttrPct">—</span>
           </div>
           <div class="sp-ov-stat" style="--c:var(--loc-ulq)">
-            <span class="sp-ov-lbl">已聚类</span>
+            <span class="sp-ov-lbl">已聚类<i class="sp-ring-tag is-cl">内环</i></span>
             <div class="sp-ov-val"><span class="big num" id="spClusterTraces">—</span><span class="unit">trace</span></div>
             <span class="sp-ov-sub" id="spClusterPct">—</span>
           </div>
@@ -174,7 +175,7 @@ export function shellHTML(tax = null, pd = null) {
 
     <article class="card fx-card" style="--span:12">
       <header class="card-head"><h2>评测流水线</h2></header>
-      <div id="spFxHost">${fxDiagramHTML(tax, pd, { horizontal: true, showMatrix: false, showControls: false, showLabels: false, idPrefix: "spfx", treeW: HORIZ_TREE_W, treeH: HORIZ_TREE_H })}</div>
+      <div id="spFxHost">${fxDiagramHTML(tax, pd, { horizontal: true, showMatrix: false, showControls: false, showLabels: false, showPool: true, idPrefix: "spfx", treeW: HORIZ_TREE_W, treeH: HORIZ_TREE_H })}</div>
     </article>
 
     <article class="card sp-rate-card is-rate-attr" style="--span:4">
@@ -274,14 +275,15 @@ export function shellHTML(tax = null, pd = null) {
     </article>
 
     <article class="card" style="--span:12">
-      <header class="card-head"><h2>日期分布</h2></header>
-      <div id="spModelList" class="md-table sp-table">
-        <table>
-          <thead>
-            <tr><th>目录</th><th class="num">输入 Session</th><th class="num">输入 Trace</th><th class="num">已评测 Trace</th><th class="num">已聚类 Trace</th><th class="num">待评测 Trace</th><th>进度</th></tr>
-          </thead>
-          <tbody id="spModels"><tr><td colspan="7" class="empty">读取中…</td></tr></tbody>
-        </table>
+      <header class="card-head">
+        <h2>日期分布</h2>
+        <div class="sp-ring-legend" id="spDateLegend">
+          <span><i class="is-attr"></i>外环 已评测</span>
+          <span><i class="is-cl"></i>内环 已聚类</span>
+        </div>
+      </header>
+      <div id="spModelList">
+        <div class="sp-ring-grid" id="spModels"><div class="empty">读取中…</div></div>
       </div>
       <div id="spDateView" hidden>
         <div class="sp-date-head">
@@ -297,43 +299,64 @@ export function shellHTML(tax = null, pd = null) {
             <button type="button" id="spDateNext">下一页</button>
           </div>
         </div>
-        <div class="md-table sp-table">
-          <table>
-            <thead>
-              <tr><th>日期</th><th class="num">输入 Session</th><th class="num">输入 Trace</th><th class="num">已评测 Trace</th><th class="num">待评测 Trace</th><th>进度</th></tr>
-            </thead>
-            <tbody id="spDates"></tbody>
-          </table>
-        </div>
+        <div class="sp-ring-grid is-dates" id="spDates"></div>
       </div>
     </article>
   </div>`;
 }
 
-/* 进度条：外层为已评测占比，内层叠加已聚类占比（聚类 ⊆ 评测）。 */
-function stackCell(attrRatio, clRatio = null) {
-  const a = Math.max(0, Math.min(1, Number(attrRatio) || 0));
-  const c = clRatio == null ? null : Math.max(0, Math.min(a, Number(clRatio) || 0));
-  return `<td class="sp-prog-cell"><span class="sp-mini-bar"><i style="width:${(a * 100).toFixed(1)}%"></i>${c == null ? "" : `<i class="is-cl" style="width:${(c * 100).toFixed(1)}%"></i>`}</span><span class="num">${(a * 100).toFixed(1)}%</span></td>`;
+const MINI_OUT_C = 2 * Math.PI * 34;
+const MINI_IN_C = 2 * Math.PI * 26.5;
+
+/* 双层同心小圆环：用于目录与日期分布卡片，与顶部评测总览保持一致视觉语言。 */
+function miniRingHTML(outerRatio, innerRatio, { outerCls = "is-attr", innerCls = "is-cl", centerRatio = outerRatio } = {}) {
+  const o = Math.max(0, Math.min(1, Number(outerRatio) || 0));
+  const hasIn = innerRatio != null;
+  const i = hasIn ? Math.max(0, Math.min(1, Number(innerRatio) || 0)) : 0;
+  const c = Math.max(0, Math.min(1, Number(centerRatio) || 0));
+  const oOff = (MINI_OUT_C * (1 - o)).toFixed(2);
+  const iOff = (MINI_IN_C * (1 - i)).toFixed(2);
+  const pctStr = c >= 0.9995 ? "100%" : `${(c * 100).toFixed(c >= 0.1 ? 0 : 1)}%`;
+  return `<div class="sp-mring" aria-hidden="true">
+    <svg viewBox="0 0 80 80">
+      <g transform="rotate(-90 40 40)">
+        <circle class="sp-mring-track" cx="40" cy="40" r="34"/>
+        <circle class="sp-mring-arc ${outerCls}" cx="40" cy="40" r="34" stroke-dasharray="${MINI_OUT_C.toFixed(2)}" stroke-dashoffset="${oOff}"/>
+        ${hasIn ? `<circle class="sp-mring-track" cx="40" cy="40" r="26.5"/><circle class="sp-mring-arc ${innerCls}" cx="40" cy="40" r="26.5" stroke-dasharray="${MINI_IN_C.toFixed(2)}" stroke-dashoffset="${iOff}"/>` : ""}
+      </g>
+    </svg>
+    <b class="num">${pctStr}</b>
+  </div>`;
 }
 
 export function modelRowsHTML(data) {
   const models = data?.models || [];
-  if (!models.length) return `<tr><td colspan="7" class="empty">等待数据…</td></tr>`;
+  if (!models.length) return `<div class="empty">等待数据…</div>`;
   const cl = new Map((data?.cluster?.models || []).map((c) => [c.name, Number(c.traces) || 0]));
   return models.map((m) => {
     const inTr = Number(m.input_traces) || 0;
     const attrTr = Number(m.attr_traces) || 0;
+    const remTr = Math.max(0, inTr - attrTr);
+    const hasCl = cl.has(m.name);
     const clTr = cl.get(m.name) || 0;
-    return `<tr>
-      <td><button type="button" class="sp-model-btn" data-sp-model="${esc(m.name)}">${esc(m.name)}</button></td>
-      <td class="num">${num(m.input_sessions)}</td>
-      <td class="num">${num(inTr)}</td>
-      <td class="num">${num(attrTr)}</td>
-      <td class="num">${cl.has(m.name) ? num(clTr) : "—"}</td>
-      <td class="num">${num(Math.max(0, inTr - attrTr))}</td>
-      ${stackCell(inTr ? attrTr / inTr : 0, inTr && cl.has(m.name) ? clTr / inTr : null)}
-    </tr>`;
+    const aRatio = inTr ? attrTr / inTr : 0;
+    const cRatio = inTr && hasCl ? Math.min(aRatio, clTr / inTr) : null;
+    const badge = remTr === 0 && inTr > 0
+      ? `<span class="sp-rc-tag is-done">已完成</span>`
+      : `<span class="sp-rc-tag">待测 ${num(remTr)}</span>`;
+    return `<button type="button" class="sp-ring-card is-model" data-sp-model="${esc(m.name)}">
+      ${miniRingHTML(aRatio, cRatio, { outerCls: "is-attr", innerCls: "is-cl", centerRatio: aRatio })}
+      <div class="sp-rc-body">
+        <div class="sp-rc-head">
+          <b class="sp-rc-name">${esc(m.name)}<span class="sp-rc-arrow" aria-hidden="true">›</span></b>
+          ${badge}
+        </div>
+        <div class="sp-rc-stats">
+          <span>输入 <b class="num">${num(inTr)}</b> trace · <b class="num">${num(m.input_sessions)}</b> sess</span>
+          <span>已测 <b class="num is-attr">${num(attrTr)}</b>${hasCl ? ` · 已聚类 <b class="num is-cl">${num(clTr)}</b>` : ""}</span>
+        </div>
+      </div>
+    </button>`;
   }).join("");
 }
 
@@ -435,7 +458,7 @@ function renderDates(root, model) {
     setText(root, "spDatePageInfo", "共 0 天");
     $("#spDatePrev", root).disabled = true;
     $("#spDateNext", root).disabled = true;
-    setHTML(root, "spDates", `<tr><td colspan="6" class="empty">暂无日期数据</td></tr>`);
+    setHTML(root, "spDates", `<div class="empty">暂无日期数据</div>`);
     return;
   }
   const years = [...new Set(dates.map((d) => d.date.slice(0, 4)))].sort().reverse();
@@ -457,20 +480,36 @@ function renderDates(root, model) {
   $("#spDateNext", root).disabled = S.dateFilter.page >= pages;
 
   if (!pageRows.length) {
-    setHTML(root, "spDates", `<tr><td colspan="6" class="empty">当前筛选暂无日期</td></tr>`);
+    setHTML(root, "spDates", `<div class="empty">当前筛选暂无日期</div>`);
     return;
   }
   const html = pageRows.map((d) => {
     const inTr = Number(d.input_traces) || 0;
     const attrTr = Number(d.attr_traces) || 0;
-    return `<tr>
-      <td class="num">${esc(d.date)}</td>
-      <td class="num">${num(d.input_sessions)}</td>
-      <td class="num">${num(inTr)}</td>
-      <td class="num">${num(attrTr)}</td>
-      <td class="num">${num(Math.max(0, inTr - attrTr))}</td>
-      ${stackCell(inTr ? attrTr / inTr : 0)}
-    </tr>`;
+    const compTr = d.compact != null ? Number(d.compact) || 0 : null;
+    const remTr = Math.max(0, inTr - attrTr);
+    const aRatio = inTr ? attrTr / inTr : 0;
+    const cRatio = inTr && compTr != null ? Math.min(1, Math.max(aRatio, compTr / inTr)) : null;
+    const badge = remTr === 0 && inTr > 0
+      ? `<span class="sp-rc-tag is-done">已完成</span>`
+      : `<span class="sp-rc-tag">待测 ${num(remTr)}</span>`;
+    return `<div class="sp-ring-card is-date">
+      ${miniRingHTML(cRatio != null ? cRatio : aRatio, cRatio != null ? aRatio : null, {
+        outerCls: cRatio != null ? "is-comp" : "is-attr",
+        innerCls: "is-attr",
+        centerRatio: aRatio,
+      })}
+      <div class="sp-rc-body">
+        <div class="sp-rc-head">
+          <b class="sp-rc-name num">${esc(d.date)}</b>
+          ${badge}
+        </div>
+        <div class="sp-rc-stats">
+          <span>输入 <b class="num">${num(inTr)}</b> trace · <b class="num">${num(d.input_sessions)}</b> sess</span>
+          <span>已测 <b class="num is-attr">${num(attrTr)}</b>${compTr != null ? ` · 压缩 <b class="num is-comp">${num(compTr)}</b>` : ""}</span>
+        </div>
+      </div>
+    </div>`;
   }).join("");
   setHTML(root, "spDates", html);
 }
@@ -888,7 +927,9 @@ export function applyData(root, data) {
   const remTr = Number(data.remaining_traces) || 0;
   const remSess = Number(data.remaining_sessions) || 0;
   const cl = data.cluster || {};
+  const hasCluster = cl.traces != null;
   const clTr = Number(cl.traces) || 0;
+  const pendingTr = cl.pending != null ? Math.max(0, Number(cl.pending) || 0) : Math.max(0, attrTr - clTr);
   const attrRatio = inTr > 0 ? Math.min(1, attrTr / inTr) : 0;
   const clInRatio = inTr > 0 ? Math.min(attrRatio, clTr / inTr) : 0;
 
@@ -897,10 +938,13 @@ export function applyData(root, data) {
   setText(root, "spAttrTraces", num(attrTr));
   setText(root, "spAttrPct", inTr ? `占输入 ${(attrRatio * 100).toFixed(1)}%` : "—");
   setText(root, "spClusterTraces", num(clTr));
-  setText(root, "spClusterPct", attrTr ? `占已评测 ${pct(clTr, attrTr, 1)}` : "—");
+  setText(root, "spClusterPct", inTr
+    ? `占输入 ${(clInRatio * 100).toFixed(1)}% · ${pendingTr > 0 ? `待聚类 ${num(pendingTr)}` : "已全部聚类"}`
+    : "—");
   setRing($("#spRingAttr", root), RING_OUT_C, attrRatio);
   setRing($("#spRingCl", root), RING_IN_C, clInRatio);
   setText(root, "spRingPct", inTr ? `${(attrRatio * 100).toFixed(1)}%` : "—");
+  setText(root, "spRingClPct", inTr ? `聚类 ${(clInRatio * 100).toFixed(1)}%` : "聚类 —");
 
   const r = data.rates || {};
   const attrRate = r.attr == null || (Number(r.attr) === 0 && Number(r.parts_attr) > 0) ? r.parts_attr : r.attr;
@@ -918,21 +962,24 @@ export function applyData(root, data) {
   setText(root, "spEvalStateText", ev.detail ? `${ev.label} · ${ev.detail}` : ev.label);
   const conn = $("#spConn", root);
   if (conn) {
-    conn.className = `sp-conn is-quiet ${data.ok ? "is-ok" : "is-bad"}`;
-    setText(root, "spConnText", data.ok ? `更新 ${clock(data.updated_at)}` : "连接异常");
+    conn.className = `sp-conn is-quiet is-refresh ${data.ok ? "is-ok" : "is-bad"}`;
+    setText(root, "spConnText", data.ok ? `15s 刷新 · ${clock(data.updated_at)}` : "连接异常 · 点击重试");
   }
 
   const deltaAttr = S.prevAttrTraces != null ? Math.max(0, attrTr - S.prevAttrTraces) : 0;
-  const deltaCl = S.prevClusterTraces != null ? Math.max(0, clTr - S.prevClusterTraces) : 0;
+  const deltaCluster = S.prevClusterTraces != null ? Math.max(0, clTr - S.prevClusterTraces) : 0;
   S.prevAttrTraces = attrTr;
   S.prevClusterTraces = clTr;
-  const delta = deltaAttr + deltaCl;
   const liveRate = (Number(r.parts_attr) || 0) + (Number(r.parts_compact) || 0) || Number(attrRate) || 0;
   S.fx?.setLiveProgress({
-    ratio: attrRatio,
+    ratio: hasCluster ? clInRatio : attrRatio,
+    pending: pendingTr,
+    attrTraces: attrTr,
+    clusterTraces: clTr,
     running: ev.running,
     rate: liveRate,
-    delta,
+    deltaAttr,
+    deltaCluster,
     windowMs: POLL_MS * 0.92,
     done: ev.key === "done",
   });
@@ -954,6 +1001,7 @@ function openDates(root, modelName) {
   S.dateFilter = { year: "all", month: "all", page: 1 };
   $("#spModelList", root).hidden = true;
   $("#spDateView", root).hidden = false;
+  setHTML(root, "spDateLegend", `<span><i class="is-comp"></i>外环 已压缩</span><span><i class="is-attr"></i>内环 已评测</span>`);
   renderDates(root, model);
   S.fx?.redraw();
 }
@@ -964,6 +1012,7 @@ function closeDates(root) {
   const ml = $("#spModelList", root);
   if (dv) dv.hidden = true;
   if (ml) ml.hidden = false;
+  setHTML(root, "spDateLegend", `<span><i class="is-attr"></i>外环 已评测</span><span><i class="is-cl"></i>内环 已聚类</span>`);
   S.fx?.redraw();
 }
 
@@ -1003,7 +1052,23 @@ function wireControls(root) {
   }
   if (!root._spClickWired) {
     root._spClickWired = true;
+    if (typeof bindTips === "function") {
+      bindTips(root, (el) => {
+        if (el.dataset.tip !== "p") return null;
+        const p = Number(el.dataset.pending) || 0;
+        const a = Number(el.dataset.attr) || 0;
+        const c = Number(el.dataset.clustered) || 0;
+        return `<div class="t-head">待聚类池 · 每 2 小时批量聚类</div>
+          <div class="t-row">待聚类<b class="num">${fmt(p)} trace</b></div>
+          <div class="t-row">已聚类<b class="num">${fmt(c)} trace</b></div>
+          <div class="t-row">已归因<b class="num">${fmt(a)} trace</b></div>`;
+      });
+    }
     root.addEventListener("click", (e) => {
+      if (e.target.closest("#spConn")) {
+        fetchSpeed({ force: true });
+        return;
+      }
       const modelBtn = e.target.closest("[data-sp-model]");
       if (modelBtn) {
         openDates(root, modelBtn.dataset.spModel);
@@ -1041,12 +1106,13 @@ function wireControls(root) {
   });
 }
 
-async function fetchSpeed() {
-  if (S.inflight || document.hidden || document.documentElement.dataset.view !== "speed") return;
+async function fetchSpeed({ force = false } = {}) {
+  if (S.inflight || (!force && (document.hidden || document.documentElement.dataset.view !== "speed"))) return;
   S.inflight = true;
   try {
     // 评测速度只有 AIME（弗吉尼亚）接入：其它节点不转发、不借用别人的数据，直接显示暂无。
-    const data = await getJSON(S.sourceUrl, { retries: 1 });
+    const sep = S.sourceUrl.includes("?") ? "&" : "?";
+    const data = await getJSON(`${S.sourceUrl}${sep}_=${Date.now()}`, { retries: 1 });
     if (data && data.available === false) {
       S.unavailable = true;
       if (S.root) showEmpty(S.root);
@@ -1058,8 +1124,8 @@ async function fetchSpeed() {
     if (S.root) {
       const conn = $("#spConn", S.root);
       if (conn) {
-        conn.className = "sp-conn is-quiet is-bad";
-        setText(S.root, "spConnText", S.data ? "暂未连上" : "读取失败，自动重试中");
+        conn.className = "sp-conn is-quiet is-refresh is-bad";
+        setText(S.root, "spConnText", S.data ? "暂未连上 · 点击重试" : "读取失败，自动重试中");
       }
     }
   } finally {
@@ -1089,7 +1155,7 @@ export async function render(root, c) {
     mountPipeline(root, c);
   } else if (S.taxKey !== nextTaxKey && $("#spFxHost", root)) {
     const host = $("#spFxHost", root);
-    host.innerHTML = fxDiagramHTML(tax, pd, { horizontal: true, showMatrix: false, showControls: false, showLabels: false, idPrefix: "spfx", treeW: HORIZ_TREE_W, treeH: HORIZ_TREE_H });
+    host.innerHTML = fxDiagramHTML(tax, pd, { horizontal: true, showMatrix: false, showControls: false, showLabels: false, showPool: true, idPrefix: "spfx", treeW: HORIZ_TREE_W, treeH: HORIZ_TREE_H });
     mountPipeline(root, c);
   }
   await fetchSpeed();

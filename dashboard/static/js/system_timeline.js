@@ -83,22 +83,16 @@ export function timelineCardHTML() {
         <div class="tl-canvas-wrap" id="tl-c-wrap"><svg class="tl-canvas" id="tl-c-canvas" role="img" aria-label="一条对话的时间线：逐项摘要、拼装验收、组件调查、写小结、组装成行"></svg></div>
 
         <div class="tl-legend">
-          <span class="tl-lg"><i class="tl-sw model"></i>模型在写</span>
-          <span class="tl-lg"><i class="tl-sw later"></i>还没轮到</span>
-          <span class="tl-lg"><i class="tl-sw code"></i>程序步骤</span>
-          <span class="tl-lg"><i class="tl-sw file"></i>写出结果</span>
-          <span class="tl-lg"><i class="tl-sw gate"></i>关口</span>
-          <span class="tl-lg"><i class="tl-sw fail"></i>失败</span>
-          <span class="tl-lg"><i class="tl-sw blocked"></i>受牵连不再运行</span>
+          <span class="tl-lg"><i class="tl-sw model"></i>模型已执行</span>
+          <span class="tl-lg"><i class="tl-sw later"></i>待执行</span>
+          <span class="tl-lg"><i class="tl-sw code"></i>本地程序处理</span>
+          <span class="tl-lg"><i class="tl-sw file"></i>落盘产出文件</span>
+          <span class="tl-lg"><i class="tl-sw gate"></i>阶段汇聚点</span>
+          <span class="tl-lg"><i class="tl-sw fail"></i>执行失败</span>
+          <span class="tl-lg"><i class="tl-sw blocked"></i>前置失败已跳过</span>
         </div>
 
         <div class="tl-focus" id="tl-focus" aria-live="polite"></div>
-
-        <div class="tl-facts">
-          <div class="tl-fact"><span>逐项摘要</span><b class="num">约 4 s</b><p>最慢的「组件」一项要 18 秒，它决定这一段有多长。</p></div>
-          <div class="tl-fact"><span>组件调查</span><b class="num">约 36 s</b><p>每组平均翻查原文 3.8 次，最慢的一组要 66 秒。</p></div>
-          <div class="tl-fact"><span>一批 34 条</span><b class="num">147–208 s</b><p>长尾来自一次很长的生成，或一次被退回后的重写。</p></div>
-        </div>
       </section>
 
       <section class="tl-sec" aria-label="整批调度">
@@ -120,17 +114,10 @@ export function timelineCardHTML() {
         <div class="tl-canvas-wrap" id="tl-g-wrap"><svg class="tl-canvas" id="tl-g-canvas" role="img" aria-label="一批对话的排队情况：每条对话的等待、逐项摘要、组件调查与写完时刻"></svg></div>
 
         <div class="tl-legend">
-          <span class="tl-lg"><i class="tl-sw wait"></i>排队等进场</span>
+          <span class="tl-lg"><i class="tl-sw wait"></i>排队等待</span>
           <span class="tl-lg"><i class="tl-sw compact"></i>逐项摘要</span>
           <span class="tl-lg"><i class="tl-sw model"></i>组件调查与小结</span>
-          <span class="tl-lg"><i class="tl-sw end"></i>写完</span>
-        </div>
-
-        <div class="tl-rules">
-          <div class="tl-rule"><b>进场名额</b><span>同时最多处理固定数量的对话，一条写完才放下一条进场。</span></div>
-          <div class="tl-rule"><b>单条并行</b><span>每条对话最多同时跑 12 个任务，9 项摘要一次发齐。</span></div>
-          <div class="tl-rule"><b>请求总闸</b><span>全场同时在跑的模型请求有上限；排队少时先写摘要，多时先把调查做完。</span></div>
-          <div class="tl-rule"><b>缓冲区</b><span>已压缩、还没写完归因的对话有数量上限，写完或失败立刻腾位。</span></div>
+          <span class="tl-lg"><i class="tl-sw end"></i>完成落盘</span>
         </div>
       </section>
     </div>
@@ -279,6 +266,8 @@ export function wireTimeline(root) {
     });
   }
 
+  const hl = (s) => `<mark class="tl-hl">${s}</mark>`;
+
   function metaOf(id) {
     if (id.startsWith("f:")) {
       const field = FIELDS.find((f) => f.key === id.slice(2));
@@ -286,62 +275,80 @@ export function wireTimeline(root) {
       return {
         title: `摘要 · ${field.label}`,
         who: skipped ? "程序" : "模型",
-        what: skipped ? "这一轮没调工具，这一项直接留空，不调模型。" : `读${field.session ? "整场对话" : "这一轮"}的原文，写出「${field.label}」这一项摘要，不用工具。`,
-        when: "对话一进场，9 项同时开始。",
-        fail: "整条对话停下，压缩稿和归因结果都不写。",
+        what: skipped
+          ? `本轮未调用工具，程序直接留空，${hl("不消耗模型请求")}。`
+          : `仅阅读${field.session ? "整场对话" : "当前轮次"}原文，提炼「${field.label}」摘要，${hl("纯文本生成、不调工具")}。`,
+        when: `对话进入后，${hl("9 项摘要同时并行启动")}。`,
+        fail: `${hl("整条对话立即中止")}，压缩稿与归因结果均不落盘，等待下次重跑。`,
       };
     }
     if (id === "compact") {
-      return { title: "拼装验收", who: "程序", what: "每交回一项就检查一次，9 项全部通过后拼成一份压缩稿。", when: "9 项摘要全部交回（关口 1）。", fail: "缺任何一项都拼不成，整条对话停下。" };
+      return {
+        title: "拼装验收",
+        who: "程序",
+        what: `本地程序逐项校验格式与完整性，全部通过后${hl("拼装为统一压缩稿")}（不调模型）。`,
+        when: `等待 ${hl("9 项摘要全部交回")}（汇聚点 1）。`,
+        fail: `缺任意一项都无法通过校验，${hl("整条对话立即中止")}。`,
+      };
     }
     if (id.startsWith("g:")) {
       const delivery = id === "g:delivery";
       return {
         title: delivery ? "交付组 · 核查最终回答" : `调查组 ${Number(id.slice(2)) + 1} · 沿一条调用链深查`,
         who: "模型",
-        what: "可以翻原文、搜关键词、看图、算数、跑代码；每组最多提交 4 次，被退回会多给 3 次查询额度。",
-        when: "压缩稿通过后（关口 1），各组同时开始。",
-        fail: "只缺这一组的结论，小结里注明「覆盖不完整」，两份结果照常写出。",
+        what: `可主动翻原文、搜关键词、看图与跑代码核验；每组${hl("最多提交 4 次")}，被退回时${hl("追加 3 次查询额度")}重查。`,
+        when: `压缩稿验收通过后（汇聚点 1），${hl("各调查组并行启动")}。`,
+        fail: `${hl("仅缺失该组结论")}，其余组继续执行；小结注明「覆盖不完整」，结果${hl("照常落盘")}。`,
       };
     }
     if (id === "trace") {
-      return { title: "写小结", who: "模型", what: "用一段话总结这条对话的问题；问题清单由程序合并，模型不改动。", when: "所有调查组都结束（关口 2），失败的也算结束。", fail: "归因结果写不出，但压缩稿已写好；下次重跑整条。" };
-    }
-    if (id === "session") {
-      return { title: "组装成行", who: "程序", what: "把小结和问题清单组装成最终的归因结果，并放出进场名额。", when: "小结写完。", fail: "—" };
-    }
-    if (id === "file:compact") return { title: "压缩稿", who: "程序", what: "把 9 项摘要写成一份压缩稿，供组件调查使用。", when: "关口 1 通过。", fail: "—" };
-    return { title: "归因结果", who: "程序", what: "写出这条对话最终的归因结果。", when: "组装完成。", fail: "—" };
-  }
-
-  function outcomeOf() {
-    const P = cBoard.P;
-    const f = S.fail;
-    if (!f) {
       return {
-        cls: "",
-        text: `时间主要花在两段：先等最慢的一项摘要「组件」（约 ${fmtSec(P.compactAt)}），再等最慢的一组调查（约 ${fmtSec(P.settleAt - P.compactAt)}）。${S.rework ? "交付组第一次提交被退回，整条对话被明显拖长。" : ""}`,
+        title: "写小结",
+        who: "模型",
+        what: `用一段话概括本条对话的核心问题；${hl("问题清单由程序直接合并")}，模型不做篡改。`,
+        when: `等待${hl("全部调查组结束")}（汇聚点 2，含失败组）。`,
+        fail: `${hl("归因结果无法写出")}，但压缩稿已保存，下次重跑整条对话。`,
       };
     }
-    if (f.startsWith("f:")) return { cls: "is-bad", text: "一项摘要失败：压缩稿拼不成，后面的调查、小结、组装全部停下，两份结果都不写，下次整条重跑。" };
-    if (f.startsWith("g:")) return { cls: "is-warn", text: "一组调查失败：其余各组和小结照常进行，小结里注明「覆盖不完整」，两份结果照常写出。" };
-    return { cls: "is-bad", text: "小结失败：归因结果写不出，但压缩稿已经写好；下次重跑整条。" };
+    if (id === "session") {
+      return {
+        title: "组装成行",
+        who: "程序",
+        what: `本地程序将小结与问题清单${hl("组装为最终归因记录")}并落盘，同时${hl("释放并发名额")}给下一条对话。`,
+        when: `${hl("写小结完成后")}立即执行。`,
+        fail: "—",
+      };
+    }
+    if (id === "file:compact") {
+      return {
+        title: "压缩稿",
+        who: "程序",
+        what: `将 9 项摘要合并落盘为压缩稿，${hl("供后续各调查组共享读取")}。`,
+        when: `${hl("汇聚点 1 验收通过")}后写入。`,
+        fail: "—",
+      };
+    }
+    return {
+      title: "归因结果",
+      who: "程序",
+      what: `落盘本条对话的${hl("最终归因结果")}，供后续批量聚类消费。`,
+      when: `${hl("组装成行完成")}后写入。`,
+      fail: "—",
+    };
   }
 
   function syncFocus() {
     const node = $("#tl-focus", host);
     if (!node) return;
     const m = S.sel ? metaOf(S.sel) : null;
-    const o = outcomeOf();
     node.innerHTML = `<div class="tl-focus-main">${m
       ? `<div class="tl-focus-head"><b>${m.title}</b><span class="tl-chip${m.who === "程序" ? " is-code" : ""}">${m.who}</span></div>
          <dl class="tl-focus-dl">
            <div><dt>做什么</dt><dd>${m.what}</dd></div>
-           <div><dt>等谁</dt><dd>${m.when}</dd></div>
-           <div><dt>出错时</dt><dd class="${S.sel === S.fail ? "is-bad" : ""}">${m.fail}</dd></div>
+           <div><dt>何时开始</dt><dd>${m.when}</dd></div>
+           <div><dt>失败影响</dt><dd class="${S.sel === S.fail ? "is-bad" : ""}">${m.fail}</dd></div>
          </dl>`
-      : `<div class="tl-focus-head"><b>步骤详情</b></div>`}</div>
-      <p class="tl-outcome${o.cls ? ` ${o.cls}` : ""}">${o.text}</p>`;
+      : `<div class="tl-focus-head"><b>步骤详情</b></div>`}</div>`;
   }
 
   /* Per frame: bar fills, running rows, playhead, gates and the stepper. */
@@ -437,8 +444,8 @@ export function wireTimeline(root) {
       }
       drawRow(layer, item.row, item.y, rowH, geo);
     });
-    gate(P.compactAt, "关口 1 · 9 项摘要全部通过", secY.compact);
-    gate(P.settleAt, "关口 2 · 所有调查组都结束", secY.trace);
+    gate(P.compactAt, "汇聚点 1 · 9 项摘要全部通过", secY.compact);
+    gate(P.settleAt, "汇聚点 2 · 全部调查组结束", secY.trace);
 
     cBoard.playhead = add(svgRoot, "g", { class: "playhead" });
     cBoard.height = height;

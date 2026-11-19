@@ -60,28 +60,35 @@ test("speed UI has no chunk, no funnel progress bar, and no verbose meta clutter
   assert.ok(!speedJs.includes("sp-gw-url"));
 });
 
-test("overview card uses concentric ring chart and shows input sessions+traces, evaluated traces and clustered traces", () => {
+test("overview card uses concentric ring chart with outer/inner labels and shows input, evaluated and clustered traces", () => {
   const html = shellHTML(SAMPLE_TAX, SAMPLE_PD);
   const ov = html.slice(0, html.indexOf("评测流水线"));
-  for (const id of ["spRingAttr", "spRingCl", "spRingPct", "spInputTraces", "spInputSessions", "spAttrTraces", "spClusterTraces", "spEvalState"]) {
+  for (const id of ["spRingAttr", "spRingCl", "spRingPct", "spRingClPct", "spInputTraces", "spInputSessions", "spAttrTraces", "spClusterTraces", "spEvalState"]) {
     assert.ok(ov.includes(`id="${id}"`), `overview missing ${id}`);
   }
+  assert.ok(ov.includes("外环") && ov.includes("内环"), "overview must clearly label outer & inner rings");
   assert.ok(!ov.includes("spAttrSessions"), "evaluated count must be trace-only");
 });
 
-test("pipeline card reuses native horizontal fx-diagram with spacious horizontal tree, no stage headers/playback controls, and charging flow", () => {
+test("pipeline card reuses native horizontal fx-diagram with pending cluster pool, Ant Design active surge, and no fake controls", () => {
   const html = shellHTML(SAMPLE_TAX, SAMPLE_PD);
   for (const token of [
-    'class="fx-diagram is-horiz is-headless"',
+    'class="fx-diagram is-horiz is-headless has-pool"',
     'class="fx-tree is-horiz"',
     'id="spfxDiagram"',
+    'id="spfxPool"',
+    'id="spfxPoolFill"',
+    'id="spfxPoolNum"',
+    "待聚类",
+    "2h 批量",
     'id="spfxTree"',
     'id="spfxRootClip"',
-    'id="spfxChargeClip"',
-    'data-rw="204"',
+    'data-rw="86"',
+    'data-rh="156"',
+    "is-vroot",
+    "fx-leaf-bar",
     'viewBox="0 0 940 540"',
-    "fx-charge-track",
-    "fx-charge-band",
+    "fx-ant-active",
     "fx-box fx-in",
     "fx-hub",
     "fx-ring",
@@ -99,7 +106,7 @@ test("pipeline card reuses native horizontal fx-diagram with spacious horizontal
   for (const removed of ["spfxPause", "spfxSpeed", "fx-label", "原始对话", "轨迹压缩", "问题归因", "层级聚类"]) {
     assert.ok(!html.includes(removed), `speed pipeline must not contain ${removed}`);
   }
-  assert.ok(systemCss.includes(".fx-diagram.is-idle") && systemCss.includes("fx-charge-roll") && systemCss.includes("fx-charge-glow"), "idle charging flow styles missing");
+  assert.ok(systemCss.includes(".fx-diagram.is-idle") && systemCss.includes("fx-ant-active") && systemCss.includes(".fx-pool"), "pool & Ant Design active surge styles missing");
   assert.ok(html.indexOf("评测流水线") > html.indexOf("评测总览"));
   assert.ok(html.lastIndexOf("<article") < html.indexOf("日期分布"), "日期分布 must be the last card");
   assert.ok(html.includes('id="spDateView"'));
@@ -124,13 +131,15 @@ test("deriveEvalStatus distinguishes 进行中 / 中断中 / 已完成 / 采集�
   assert.equal(done.label, "已完成");
 });
 
-test("modelRowsHTML lists trace-based progress with nested cluster bar", () => {
+test("modelRowsHTML renders dual concentric ring cards with trace/session/cluster stats", () => {
   const html = modelRowsHTML(PAYLOAD);
   assert.ok(html.includes('data-sp-model="aime_fast"'));
+  assert.ok(html.includes("sp-ring-card"));
+  assert.ok(html.includes("sp-mring-arc is-attr"));
+  assert.ok(html.includes("sp-mring-arc is-cl"));
   assert.ok(html.includes("1,000"));
   assert.ok(html.includes("600"));
   assert.ok(html.includes("250"));
-  assert.ok(html.includes('class="is-cl"'));
 });
 
 test("applyData updates concentric rings and KPI counters from real numbers", () => {
@@ -169,10 +178,12 @@ test("applyData updates concentric rings and KPI counters from real numbers", ()
   assert.equal(byId.get("spAttrTraces").textContent, "750");
   assert.equal(byId.get("spClusterTraces").textContent, "600");
   assert.equal(byId.get("spRingPct").textContent, "75.0%");
+  assert.equal(byId.get("spRingClPct").textContent, "聚类 60.0%");
+  assert.ok(byId.get("spClusterPct").textContent.includes("待聚类 150"));
   const outOff = Number(byId.get("spRingAttr").getAttribute("stroke-dashoffset"));
   const inOff = Number(byId.get("spRingCl").getAttribute("stroke-dashoffset"));
-  assert.ok(Math.abs(outOff - 2 * Math.PI * 56 * 0.25) < 0.05);
-  assert.ok(Math.abs(inOff - 2 * Math.PI * 42 * 0.40) < 0.05);
+  assert.ok(Math.abs(outOff - 2 * Math.PI * 64 * 0.25) < 0.05);
+  assert.ok(Math.abs(inOff - 2 * Math.PI * 49 * 0.40) < 0.05);
   assert.equal(byId.get("spEvalStateText").textContent, "进行中 · 2 实例");
   assert.ok(byId.get("spModels").innerHTML.includes("aime_fast"));
   applyData(root, { ...PAYLOAD, gateways: { ...PAYLOAD.gateways, control: { paused: true } } });
@@ -180,8 +191,9 @@ test("applyData updates concentric rings and KPI counters from real numbers", ()
   // When input_traces grows, both evaluated and clustered ratios must adjust downward proportionally.
   applyData(root, { ...PAYLOAD, input_traces: 1500, remaining_traces: 750 });
   assert.equal(byId.get("spRingPct").textContent, "50.0%");
+  assert.equal(byId.get("spRingClPct").textContent, "聚类 40.0%");
   const grownOutOff = Number(byId.get("spRingAttr").getAttribute("stroke-dashoffset"));
   const grownInOff = Number(byId.get("spRingCl").getAttribute("stroke-dashoffset"));
-  assert.ok(Math.abs(grownOutOff - 2 * Math.PI * 56 * 0.5) < 0.05);
-  assert.ok(Math.abs(grownInOff - 2 * Math.PI * 42 * 0.6) < 0.05);
+  assert.ok(Math.abs(grownOutOff - 2 * Math.PI * 64 * 0.5) < 0.05);
+  assert.ok(Math.abs(grownInOff - 2 * Math.PI * 49 * 0.6) < 0.05);
 });

@@ -14,7 +14,9 @@
 .sp-conn.is-bad i { background: var(--sev-0); box-shadow: 0 0 0 3px color-mix(in oklab, var(--sev-0) 16%, transparent); }
 .sp-conn.is-warn { color: var(--sev-2); background: color-mix(in oklab, var(--sev-2) 10%, var(--well)); }
 .sp-conn.is-warn i { background: var(--sev-2); box-shadow: 0 0 0 3px color-mix(in oklab, var(--sev-2) 16%, transparent); }
-.sp-conn.is-quiet { background: transparent; padding: 0 6px; color: var(--muted); font-weight: var(--w-body); }
+.sp-conn.is-quiet { background: transparent; padding: 0 8px; color: var(--muted); font-weight: var(--w-body); }
+.sp-conn.is-refresh { cursor: pointer; transition: background var(--snap), color var(--snap); }
+.sp-conn.is-refresh:hover { background: var(--well); color: var(--ink-2); }
 @keyframes sp-pulse {
   0%, 100% { box-shadow: 0 0 0 2px color-mix(in oklab, var(--loc-ulq) 18%, transparent); }
   50% { box-shadow: 0 0 0 5px color-mix(in oklab, var(--loc-ulq) 32%, transparent); }
@@ -22,11 +24,11 @@
 
 /* 评测总览：双层同心圆环比例（外环已评测、内环已聚类） + 3 个核心指标 */
 .sp-ov-wrap { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--sp-6); padding: var(--sp-1) 0; }
-.sp-ov-ring { position: relative; width: 132px; height: 132px; flex: none; }
+.sp-ov-ring { position: relative; width: 148px; height: 148px; flex: none; }
 .sp-ov-ring svg { display: block; width: 100%; height: 100%; }
-.sp-ring-track { fill: none; stroke: var(--well-2); stroke-width: 9.5; }
+.sp-ring-track { fill: none; stroke: var(--well-2); stroke-width: 10; }
 .sp-ring-arc {
-  fill: none; stroke-width: 9.5; stroke-linecap: round;
+  fill: none; stroke-width: 10; stroke-linecap: round;
   transition: stroke-dashoffset 900ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 .sp-ring-arc.is-attr { stroke: var(--accent); }
@@ -35,11 +37,21 @@
   position: absolute; inset: 0; display: grid; place-content: center; text-align: center; gap: 2px;
 }
 .sp-ring-center b { font-size: var(--fs-num-s); line-height: 1.05; font-weight: var(--w-title); color: var(--ink); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-.sp-ring-center span { font-size: var(--fs-micro); color: var(--muted); }
+.sp-ring-center span { font-size: var(--fs-micro); color: var(--muted); line-height: 1.2; }
+.sp-ring-cl {
+  font-style: normal; font-size: 10.5px; line-height: 1.2; margin-top: 2px;
+  color: var(--loc-ulq); font-weight: var(--w-medium); font-variant-numeric: tabular-nums;
+}
 
 .sp-ov { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--gap); }
 .sp-ov-stat { display: grid; gap: var(--sp-2); min-width: 0; padding-left: var(--sp-4); border-left: 3px solid var(--c); }
-.sp-ov-lbl { color: var(--muted); font-size: var(--fs-small); font-weight: var(--w-medium); }
+.sp-ov-lbl { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--fs-small); font-weight: var(--w-medium); }
+.sp-ring-tag {
+  font-style: normal; font-size: 10px; line-height: 1; padding: 3px 6px; border-radius: 999px;
+  font-weight: var(--w-medium);
+}
+.sp-ring-tag.is-attr { background: color-mix(in oklab, var(--accent) 12%, transparent); color: var(--accent); }
+.sp-ring-tag.is-cl { background: color-mix(in oklab, var(--loc-ulq) 14%, transparent); color: var(--loc-ulq); }
 .sp-ov-val { display: flex; align-items: baseline; gap: var(--sp-2); }
 .sp-ov-val .big { color: var(--ink); }
 .sp-ov-stat:nth-child(2) .sp-ov-val .big { color: var(--accent); }
@@ -116,18 +128,83 @@
   border-radius: var(--r-chip); background: var(--well); color: var(--ink-2); font-size: var(--fs-meta);
 }
 
-.sp-mini-bar { display: inline-block; width: 100%; max-width: 140px; height: 6px; border-radius: 999px; background: var(--well); overflow: hidden; vertical-align: middle; margin-right: 8px; }
-.sp-mini-bar { position: relative; }
-.sp-mini-bar i { position: absolute; left: 0; top: 0; bottom: 0; display: block; border-radius: inherit; background: var(--accent); }
-.sp-mini-bar i.is-cl { background: var(--loc-ulq); }
-.sp-date-title { font-size: var(--fs-body); font-weight: var(--w-title); color: var(--ink); }
-.sp-prog-cell { min-width: 150px; }
+/* 日期分布：多重同心圆环卡片（目录：外环已评测/内环已聚类；按天：外环已压缩/内环已评测） */
+.sp-ring-legend {
+  display: inline-flex; align-items: center; gap: 14px; margin-left: auto;
+  font-size: var(--fs-meta); color: var(--muted);
+}
+.sp-ring-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sp-ring-legend i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.sp-ring-legend i.is-attr { background: var(--accent); }
+.sp-ring-legend i.is-cl { background: var(--loc-ulq); }
+.sp-ring-legend i.is-comp { background: var(--loc-vir); }
 
-/* Model drill & date filters */
-.sp-model-btn { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); font-weight: var(--w-title); font-size: var(--fs-body); }
-.sp-model-btn::after { content: "›"; color: var(--faint); font-size: 16px; line-height: 1; transition: color var(--snap), transform var(--snap); }
-.sp-model-btn:hover { color: var(--accent); }
-.sp-model-btn:hover::after { color: var(--accent); transform: translateX(2px); }
+.sp-ring-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: var(--sp-4);
+}
+.sp-ring-grid.is-dates {
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--sp-3);
+}
+.sp-ring-grid > .empty { grid-column: 1 / -1; padding: var(--sp-6) 0; text-align: center; color: var(--muted); font-size: var(--fs-small); }
+
+.sp-ring-card {
+  display: flex; align-items: center; gap: var(--sp-4); width: 100%; text-align: left;
+  padding: var(--sp-4) var(--sp-5); border-radius: var(--r-well); background: var(--well);
+  transition: background var(--snap), transform var(--snap), box-shadow var(--snap);
+  min-width: 0;
+}
+button.sp-ring-card:hover {
+  background: var(--lift);
+  box-shadow: var(--shadow), inset 0 0 0 1px color-mix(in oklab, var(--accent) 26%, transparent);
+  transform: translateY(-1px);
+}
+button.sp-ring-card:active { transform: none; }
+
+.sp-mring { position: relative; width: 76px; height: 76px; flex: none; }
+.sp-ring-grid.is-dates .sp-mring { width: 70px; height: 70px; }
+.sp-mring svg { display: block; width: 100%; height: 100%; }
+.sp-mring-track { fill: none; stroke: var(--well-2); stroke-width: 5; }
+.sp-mring-arc {
+  fill: none; stroke-width: 5; stroke-linecap: round;
+  transition: stroke-dashoffset 640ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.sp-mring-arc.is-attr { stroke: var(--accent); }
+.sp-mring-arc.is-cl { stroke: var(--loc-ulq); }
+.sp-mring-arc.is-comp { stroke: var(--loc-vir); }
+.sp-mring b {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  font-size: var(--fs-meta); font-weight: var(--w-title); color: var(--ink);
+  font-variant-numeric: tabular-nums; letter-spacing: -0.03em; line-height: 1;
+}
+.sp-ring-grid.is-dates .sp-mring b { font-size: var(--fs-micro); }
+
+.sp-rc-body { display: grid; gap: 6px; flex: 1; min-width: 0; }
+.sp-rc-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); min-width: 0; }
+.sp-rc-name {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: var(--fs-body); font-weight: var(--w-title); color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sp-rc-arrow { color: var(--faint); font-weight: var(--w-body); transition: transform var(--snap), color var(--snap); }
+button.sp-ring-card:hover .sp-rc-name { color: var(--accent); }
+button.sp-ring-card:hover .sp-rc-arrow { color: var(--accent); transform: translateX(2px); }
+
+.sp-rc-tag {
+  flex: none; padding: 2px 8px; border-radius: 999px;
+  background: var(--well-2); color: var(--muted);
+  font-size: var(--fs-micro); font-weight: var(--w-medium); font-variant-numeric: tabular-nums;
+}
+.sp-rc-tag.is-done {
+  background: color-mix(in oklab, var(--loc-ulq) 14%, transparent); color: var(--loc-ulq);
+}
+.sp-rc-stats { display: grid; gap: 3px; font-size: var(--fs-meta); color: var(--muted); }
+.sp-rc-stats span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sp-rc-stats b { color: var(--ink-2); font-weight: var(--w-medium); }
+.sp-rc-stats b.is-attr { color: var(--accent); }
+.sp-rc-stats b.is-cl { color: var(--loc-ulq); }
+.sp-rc-stats b.is-comp { color: var(--loc-vir); }
+
+.sp-date-title { font-size: var(--fs-body); font-weight: var(--w-title); color: var(--ink); }
 
 .sp-date-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: var(--sp-4); }
 .sp-back {

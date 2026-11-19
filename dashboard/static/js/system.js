@@ -1,7 +1,7 @@
 /* 评测体系: one vertical slide (01 → 02 → 03 → 04 5-tier cluster tree → matrix) + centered cell dialog.
    Below: evidence closure (golden traces) and the attribution timeline. */
 import {
-  $, $$, esc, fmt, SEV, sevColor, KIND, getJSON,
+  $, $$, esc, fmt, compact, SEV, sevColor, KIND, getJSON,
   bindTips, hideTip, copyText, flashCopy, REDUCED,
 } from "./core.js";
 import { threadFlow } from "./particles.js";
@@ -507,23 +507,78 @@ function relaxY(nodes, minGap, minY, maxY) {
   }
 }
 
-/* Left-to-right 5-tier cluster tree (全部问题 → 阶段 → 环节 → 错法 → 标准模式叶子). */
+/* Bell-curve ordering helper: places larger values toward the vertical center (Gaussian silhouette)
+   while keeping every branch strictly planar with zero wire crossings. */
+function bellOrder(items, valueOf, mode = "bell") {
+  const arr = items.slice();
+  if (arr.length <= 1) return arr;
+  if (mode === "asc") return arr.sort((a, b) => valueOf(a) - valueOf(b));
+  if (mode === "desc") return arr.sort((a, b) => valueOf(b) - valueOf(a));
+  arr.sort((a, b) => valueOf(b) - valueOf(a));
+  const out = [];
+  arr.forEach((item, idx) => {
+    if (idx % 2 === 0) out.push(item);
+    else out.unshift(item);
+  });
+  return out;
+}
+
+const barCountText = (n) => (Number(n) >= 10000 ? compact(n) : fmt(n));
+
+/* Left-to-right 5-tier cluster tree (竖式全部问题液态池 → 阶段 → 环节 → 错法 → 正态分布单列标准模式柱条). */
 const HTREE_W = 940;
 const HTREE_H = 540;
+const HBAR_MIN_PITCH = 12.5;
+const horizLeafCap = (H = HTREE_H) => Math.max(12, Math.floor((H - 40) / HBAR_MIN_PITCH));
+
 function layoutTreeHorizontal(model, W = HTREE_W, H = HTREE_H) {
   const padY = 20;
   const usableH = H - padY * 2;
-  const stages = model.stages;
-  const rootW = 204;
+  const rootW = 86;
+  const rootH = 156;
   const rootHw = rootW / 2;
+  const rootHh = rootH / 2;
   model.root.x = 8 + rootHw;
   model.root.y = H / 2;
   model.root.w = rootW;
+  model.root.h = rootH;
   model.root.hw = rootHw;
-  model.root.hh = 22;
-  if (!stages.length) {
-    return { ...model, horizontal: true, treeW: W, treeH: H, rootW, cellMode: "pill", cellW: 52, maxR: 5, minR: 2.2, leafRadius: () => 3.5, showLeafNums: false };
+  model.root.hh = rootHh;
+  if (!model.stages.length) {
+    return { ...model, horizontal: true, treeW: W, treeH: H, rootW, rootH, cellMode: "pill", cellW: 52, maxR: 4.4, minR: 2.4, leafRadius: () => 3.2, showLeafNums: true };
   }
+
+  // Reorder phases, stages, cells and leaves into a smooth Gaussian/normal-distribution silhouette
+  // (shorter bars at top/bottom, swelling symmetrically toward the vertical center) while keeping
+  // every tree branch strictly planar with zero crossings.
+  const maxLeafOf = (node) => {
+    if (!node.children || !node.children.length) return node.n || 0;
+    return Math.max(...node.children.map(maxLeafOf));
+  };
+  model.phases = bellOrder(model.phases, (p) => p.n || 0, "bell");
+  const peakPhaseIdx = model.phases.reduce((best, ph, i) => ((ph.n || 0) > (model.phases[best].n || 0) ? i : best), 0);
+  const orderedStages = [];
+  model.phases.forEach((ph, pi) => {
+    const pMode = pi < peakPhaseIdx ? "asc" : pi > peakPhaseIdx ? "desc" : "bell";
+    ph.children = bellOrder(ph.children, (s) => maxLeafOf(s) * 1000 + (s.n || 0), pMode);
+    ph.children.forEach((sn) => orderedStages.push(sn));
+  });
+  const peakStageIdx = orderedStages.reduce((best, sn, i) => ((maxLeafOf(sn) * 1000 + (sn.n || 0)) > (maxLeafOf(orderedStages[best]) * 1000 + (orderedStages[best].n || 0)) ? i : best), 0);
+  const orderedCells = [];
+  const orderedLeaves = [];
+  orderedStages.forEach((sn, si) => {
+    const sMode = si === peakStageIdx ? "bell" : si < peakStageIdx ? "asc" : "desc";
+    sn.children = bellOrder(sn.children, (c) => maxLeafOf(c) * 1000 + (c.n || 0), sMode);
+    sn.children.forEach((cn) => {
+      cn.children = bellOrder(cn.children, (lf) => lf.n || 0, sMode);
+      orderedCells.push(cn);
+      cn.children.forEach((lf) => orderedLeaves.push(lf));
+    });
+  });
+  model.stages = orderedStages;
+  model.cells = orderedCells;
+  model.leaves = orderedLeaves;
+  const stages = model.stages;
 
   const contentH = stages.length <= 6 ? Math.min(usableH, Math.max(260, stages.length * 64)) : usableH;
   const minSpan = Math.min(38, contentH / stages.length);
@@ -536,9 +591,9 @@ function layoutTreeHorizontal(model, W = HTREE_W, H = HTREE_H) {
   stages.forEach((sn, i) => {
     const span = wSum > 0 ? minSpan + extra * (weights[i] / wSum) : contentH / stages.length;
     sn.y = y + span / 2;
-    sn.x = 500;
-    sn.w = 170;
-    sn.hw = 85;
+    sn.x = 398;
+    sn.w = 166;
+    sn.hw = 83;
     sn.hh = 15;
     const padIn = Math.min(8, span * 0.12);
     const leaves = sn.children.flatMap((c) => c.children);
@@ -556,10 +611,10 @@ function layoutTreeHorizontal(model, W = HTREE_W, H = HTREE_H) {
   model.phases.forEach((ph) => {
     const first = ph.children[0];
     const last = ph.children[ph.children.length - 1];
-    ph.x = 308;
+    ph.x = 208;
     ph.y = (first.y + last.y) / 2;
-    ph.w = 118;
-    ph.hw = 59;
+    ph.w = 114;
+    ph.hw = 57;
     ph.hh = 17;
   });
   relaxY(model.phases, 46, padY + 18, H - padY - 18);
@@ -567,47 +622,52 @@ function layoutTreeHorizontal(model, W = HTREE_W, H = HTREE_H) {
   const cells = model.cells;
   const cellMode = cells.length <= 16 ? "pill" : "circle";
   const cellW = 52;
+  const maxCell = Math.max(1, ...cells.map((c) => c.n || 0));
   if (cellMode === "pill") {
-    cells.forEach((cn) => { cn.x = 672; cn.hw = cellW / 2; cn.hh = 12; });
+    cells.forEach((cn) => { cn.x = 576; cn.hw = cellW / 2; cn.hh = 12; cn.heat = Math.sqrt((cn.n || 0) / maxCell); });
     relaxY(cells, 28, padY + 13, H - padY - 13);
   } else {
-    const cols = cells.length > 36 ? 3 : cells.length > 18 ? 2 : 1;
+    const cols = cells.length > 18 ? 2 : 1;
     const perCol = Math.ceil(cells.length / cols);
-    const colPitch = perCol > 1 ? usableH / (perCol - 1) : 26;
-    const cellR = Math.max(7.6, Math.min(9.6, (colPitch - 4) / 2));
-    const cellBase = cols === 3 ? 646 : cols === 2 ? 658 : 672;
-    const cellStep = 26;
+    const colPitch = perCol > 1 ? usableH / (perCol - 1) : 28;
+    const cellR = Math.max(8.2, Math.min(9.6, (colPitch - 6) / 2));
+    const cellBase = cols === 2 ? 562 : 576;
+    const cellStep = 38;
     cells.forEach((cn, idx) => {
       cn.r = cellR;
       cn.hw = cellR;
       cn.hh = cellR;
       cn.x = cellBase + (idx % cols) * cellStep;
+      cn.heat = Math.sqrt((cn.n || 0) / maxCell);
     });
     relaxY(cells, usableH / Math.max(1, cells.length), padY + cellR, H - padY - cellR);
   }
 
-  const leaves = model.leaves;
-  const leafCols = leaves.length > 90 ? 4 : leaves.length > 50 ? 3 : leaves.length > 20 ? 2 : 1;
-  const perCol = Math.ceil(leaves.length / leafCols);
-  const colPitch = perCol > 1 ? usableH / (perCol - 1) : 22;
-  const maxR = Math.max(2.4, Math.min(5.8, colPitch * 0.36));
-  const minR = Math.max(1.8, maxR * 0.56);
-  relaxY(leaves, usableH / Math.max(1, leaves.length), padY + maxR, H - padY - maxR);
+  const leaves = bellOrder(model.leaves, (lf) => lf.n || 0, "bell");
+  model.leaves = leaves;
+  const pitch = leaves.length > 1 ? usableH / (leaves.length - 1) : 20;
+  const maxR = Math.max(2.6, Math.min(4.4, pitch * 0.34));
+  const minR = Math.max(1.9, maxR * 0.60);
+  const topY = padY + maxR + 2;
+  const botY = H - padY - maxR - 2;
   const leafRadius = (count) => {
     if (count <= 0) return minR;
     return minR + Math.sqrt(Math.min(1, count / model.maxLeaf)) * (maxR - minR);
   };
-  const xBase = leafCols === 4 ? 786 : leafCols === 3 ? 802 : leafCols === 2 ? 818 : 824;
-  const xStep = leafCols === 4 ? 32 : 34;
+  const leafX = 706;
+  const barStartX = leafX + 8;
+  const maxBarW = Math.max(64, W - barStartX - 54);
   leaves.forEach((lf, idx) => {
+    lf.y = leaves.length > 1 ? topY + (idx * (botY - topY)) / (leaves.length - 1) : H / 2;
     lf.r = leafRadius(lf.n);
-    lf.x = xBase + (idx % leafCols) * xStep;
+    lf.x = leafX;
     lf.hw = lf.r;
     lf.hh = lf.r;
+    lf.barW = 10 + Math.sqrt(Math.min(1, (lf.n || 0) / model.maxLeaf)) * (maxBarW - 10);
   });
 
-  const showLeafNums = leaves.length <= 20;
-  return { ...model, horizontal: true, treeW: W, treeH: H, rootW, cellMode, cellW, maxR, minR, leafRadius, showLeafNums };
+  const showLeafNums = true;
+  return { ...model, horizontal: true, treeW: W, treeH: H, rootW, rootH, cellMode, cellW, maxR, minR, leafRadius, showLeafNums };
 }
 
 function linkCurve(n, horizontal = false) {
@@ -629,12 +689,10 @@ function treeSVG(model, W = TREE_W, { idPrefix = "fx", horizontal = false } = {}
   const rootW = model.rootW || 236;
   const rootHw = rootW / 2;
   const clipId = `${idPrefix}RootClip`;
-  const chargeClipId = `${idPrefix}ChargeClip`;
   const sheenId = `${idPrefix}LiquidSheen`;
   const glossId = `${idPrefix}RootGloss`;
   const sweepId = `${idPrefix}RootSweep`;
-  const chargeGradId = `${idPrefix}ChargeGrad`;
-  const edgeGradId = `${idPrefix}EdgeGrad`;
+  const activeGradId = `${idPrefix}AntActiveGrad`;
   const links = model.all.filter((n) => n.parent).map((n) => {
     const c = linkCurve(n, horizontal);
     const d = c.horiz
@@ -647,6 +705,62 @@ function treeSVG(model, W = TREE_W, { idPrefix = "fx", horizontal = false } = {}
   const nodes = model.all.map((n) => {
     const at = `data-node="${esc(n.id)}" data-tip="t"`;
     if (n.row === 0) {
+      if (horizontal) {
+        const rh = model.rootH || 156;
+        const rhh = rh / 2;
+        const rx = Number((n.x - rootHw).toFixed(1));
+        const ry = Number((n.y - rhh).toFixed(1));
+        const by = Number((ry + rh).toFixed(1));
+        const bot = Number((by + rh + 24).toFixed(1));
+        const wq = rootW / 4;
+        const wh = rootW / 2;
+        const waveBack = `M${rx} ${by}Q${rx + wq} ${by - 5.2} ${rx + wh} ${by}T${rx + rootW} ${by}T${rx + rootW + wh} ${by}T${rx + rootW * 2} ${by}V${bot}H${rx}Z`;
+        const waveMid = `M${rx} ${by}Q${rx + wq} ${by + 4.4} ${rx + wh} ${by}T${rx + rootW} ${by}T${rx + rootW + wh} ${by}T${rx + rootW * 2} ${by}V${bot}H${rx}Z`;
+        const waveFront = `M${rx} ${by}Q${rx + wq} ${by - 4.6} ${rx + wh} ${by}T${rx + rootW} ${by}T${rx + rootW + wh} ${by}T${rx + rootW * 2} ${by}V${bot}H${rx}Z`;
+        const waveCrest = `M${rx} ${by}Q${rx + wq} ${by - 4.6} ${rx + wh} ${by}T${rx + rootW} ${by}T${rx + rootW + wh} ${by}T${rx + rootW * 2} ${by}`;
+        rootClip = `<defs>
+          <clipPath id="${clipId}"><rect x="${rx}" y="${ry}" width="${rootW}" height="${rh}" rx="20"/></clipPath>
+          <linearGradient id="${sheenId}" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#ffffff" stop-opacity="0.34"/>
+            <stop offset="55%" stop-color="#ffffff" stop-opacity="0.06"/>
+            <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+          </linearGradient>
+          <linearGradient id="${glossId}" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#ffffff" stop-opacity="0.42"/>
+            <stop offset="55%" stop-color="#ffffff" stop-opacity="0.05"/>
+            <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+          </linearGradient>
+          <linearGradient id="${activeGradId}" x1="0%" y1="100%" x2="0%" y2="0%">
+            <stop offset="0%" stop-color="#ffffff" stop-opacity="0"/>
+            <stop offset="52%" stop-color="#ffffff" stop-opacity="0.26"/>
+            <stop offset="88%" stop-color="#ffffff" stop-opacity="0.64"/>
+            <stop offset="100%" stop-color="#ffffff" stop-opacity="0.88"/>
+          </linearGradient>
+        </defs>`;
+        return `<g class="fx-tn is-root is-vroot" ${at} data-rx="${rx}" data-ry="${ry}" data-rw="${rootW}" data-rh="${rh}">
+          <rect class="fx-root-bg" x="${rx}" y="${ry}" width="${rootW}" height="${rh}" rx="20"/>
+          <g clip-path="url(#${clipId})">
+            <g class="fx-root-shift">
+              <path class="fx-wave-back is-vwave" d="${waveBack}"/>
+              <path class="fx-wave-mid is-vwave" d="${waveMid}"/>
+              <g class="fx-wave-front-wrap is-vwave">
+                <path class="fx-wave-front" d="${waveFront}"/>
+                <path class="fx-wave-sheen" d="${waveFront}" fill="url(#${sheenId})"/>
+                <path class="fx-wave-glow" d="${waveCrest}" fill="none"/>
+                <path class="fx-wave-crest" d="${waveCrest}" fill="none"/>
+              </g>
+            </g>
+            <g class="fx-active-bar" aria-hidden="true">
+              <rect class="fx-ant-active is-v is-a" x="${rx}" y="${by}" width="${rootW}" height="0" fill="url(#${activeGradId})"/>
+              <rect class="fx-ant-active is-v is-b" x="${rx}" y="${by}" width="${rootW}" height="0" fill="url(#${activeGradId})"/>
+            </g>
+            <rect class="fx-root-gloss" x="${rx}" y="${ry}" width="${rootW}" height="48" fill="url(#${glossId})"/>
+          </g>
+          <rect class="fx-root-ring" x="${rx}" y="${ry}" width="${rootW}" height="${rh}" rx="20" fill="none"/>
+          <text class="fx-tn-k" x="${n.x.toFixed(1)}" y="${(n.y - 24).toFixed(1)}" text-anchor="middle">全部问题</text>
+          <text class="fx-tn-big num" x="${n.x.toFixed(1)}" y="${(n.y + 5).toFixed(1)}" text-anchor="middle" data-num="root">${fmt(n.n)}</text>
+          <text class="fx-tn-sub num" x="${n.x.toFixed(1)}" y="${(n.y + 30).toFixed(1)}" text-anchor="middle" data-pct="root">已聚类 —</text></g>`;
+      }
       const rx = Number((n.x - rootHw).toFixed(1));
       const ry = Number((n.y - 22).toFixed(1));
       const lx = (rx - rootW - 24).toFixed(1);
@@ -654,11 +768,6 @@ function treeSVG(model, W = TREE_W, { idPrefix = "fx", horizontal = false } = {}
       const waveMid = `M${lx} ${ry}H${rx}Q${rx - 5} ${ry + 11} ${rx} ${ry + 22}T${rx} ${ry + 44}T${rx} ${ry + 66}T${rx} ${ry + 88}H${lx}Z`;
       const waveFront = `M${lx} ${ry}H${rx}Q${rx + 5.5} ${ry + 11} ${rx} ${ry + 22}T${rx} ${ry + 44}T${rx} ${ry + 66}T${rx} ${ry + 88}H${lx}Z`;
       const waveCrest = `M${rx} ${ry}Q${rx + 5.5} ${ry + 11} ${rx} ${ry + 22}T${rx} ${ry + 44}T${rx} ${ry + 66}T${rx} ${ry + 88}`;
-      const chargePitch = 84;
-      const chargeBands = Array.from({ length: 5 }, (_, k) => {
-        const bx = rx - rootW - chargePitch + k * chargePitch;
-        return `<polygon class="fx-charge-band" points="${(bx + 14).toFixed(1)},${ry} ${(bx + 68).toFixed(1)},${ry} ${(bx + 54).toFixed(1)},${ry + 44} ${bx.toFixed(1)},${ry + 44}" fill="url(#${chargeGradId})"/>`;
-      }).join("");
       const bubbles = [
         [28, 12, 1.8, "0s", "2.6s"],
         [58, 30, 1.3, "-0.9s", "2.2s"],
@@ -671,7 +780,6 @@ function treeSVG(model, W = TREE_W, { idPrefix = "fx", horizontal = false } = {}
       ).join("");
       rootClip = `<defs>
         <clipPath id="${clipId}"><rect x="${rx}" y="${ry}" width="${rootW}" height="44" rx="22"/></clipPath>
-        <clipPath id="${chargeClipId}"><rect x="${(rx - rootW - 24).toFixed(1)}" y="${ry}" width="${rootW + 24}" height="44"/></clipPath>
         <linearGradient id="${sheenId}" x1="0%" y1="0%" x2="0%" y2="100%">
           <stop offset="0%" stop-color="#ffffff" stop-opacity="0.34"/>
           <stop offset="55%" stop-color="#ffffff" stop-opacity="0.06"/>
@@ -687,16 +795,11 @@ function treeSVG(model, W = TREE_W, { idPrefix = "fx", horizontal = false } = {}
           <stop offset="50%" stop-color="#ffffff" stop-opacity="0.38"/>
           <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
         </linearGradient>
-        <linearGradient id="${chargeGradId}" x1="0%" y1="0%" x2="100%" y2="0%">
+        <linearGradient id="${activeGradId}" x1="0%" y1="0%" x2="100%" y2="0%">
           <stop offset="0%" stop-color="#ffffff" stop-opacity="0"/>
-          <stop offset="48%" stop-color="#ffffff" stop-opacity="0.46"/>
-          <stop offset="64%" stop-color="#ffffff" stop-opacity="0.62"/>
-          <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
-        </linearGradient>
-        <linearGradient id="${edgeGradId}" x1="0%" y1="0%" x2="100%" y2="0%">
-          <stop offset="0%" stop-color="#ffffff" stop-opacity="0"/>
-          <stop offset="68%" stop-color="#ffffff" stop-opacity="0.28"/>
-          <stop offset="100%" stop-color="#ffffff" stop-opacity="0.72"/>
+          <stop offset="55%" stop-color="#ffffff" stop-opacity="0.28"/>
+          <stop offset="90%" stop-color="#ffffff" stop-opacity="0.68"/>
+          <stop offset="100%" stop-color="#ffffff" stop-opacity="0.92"/>
         </linearGradient>
       </defs>`;
       const padText = Math.max(18, rootHw - 18);
@@ -712,11 +815,11 @@ function treeSVG(model, W = TREE_W, { idPrefix = "fx", horizontal = false } = {}
               <path class="fx-wave-glow" d="${waveCrest}" fill="none"/>
               <path class="fx-wave-crest" d="${waveCrest}" fill="none"/>
             </g>
-            <g class="fx-charge-wrap" clip-path="url(#${chargeClipId})" aria-hidden="true">
-              <g class="fx-charge-track">${chargeBands}</g>
-              <rect class="fx-charge-edge" x="${(rx - 22).toFixed(1)}" y="${ry}" width="22" height="44" fill="url(#${edgeGradId})"/>
-            </g>
             <g class="fx-bubbles" aria-hidden="true">${bubbles}</g>
+          </g>
+          <g class="fx-active-bar" aria-hidden="true">
+            <rect class="fx-ant-active is-a" x="${rx}" y="${ry}" width="0" height="44" fill="url(#${activeGradId})"/>
+            <rect class="fx-ant-active is-b" x="${rx}" y="${ry}" width="0" height="44" fill="url(#${activeGradId})"/>
           </g>
           <rect class="fx-root-gloss" x="${rx}" y="${ry}" width="${rootW}" height="22" fill="url(#${glossId})"/>
           <rect class="fx-root-sweep" x="${rx - 90}" y="${ry}" width="90" height="44" fill="url(#${sweepId})"/>
@@ -754,13 +857,18 @@ function treeSVG(model, W = TREE_W, { idPrefix = "fx", horizontal = false } = {}
           <text class="fx-tn-cnum num" x="${(n.x + w / 2 - 7).toFixed(1)}" y="${(n.y + 3.5).toFixed(1)}" text-anchor="end" data-num="${esc(n.id)}">${fmt(n.n)}</text></g>`;
       }
       const r = n.r || 10;
-      return `<g class="fx-tn is-cell is-circle" ${at} role="button" tabindex="0" aria-label="${esc(`${n.parent?.name || ""} · ${n.name}：${fmt(n.n)}，查看口径`)}"><circle cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}" r="${r.toFixed(1)}"/>
+      const heat = n.heat != null ? ` style="--h:${n.heat.toFixed(3)}"` : "";
+      return `<g class="fx-tn is-cell is-circle" ${at}${heat} role="button" tabindex="0" aria-label="${esc(`${n.parent?.name || ""} · ${n.name}：${fmt(n.n)}，查看口径`)}"><circle cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}" r="${r.toFixed(1)}"/>
         <text class="fx-tn-code" x="${n.x.toFixed(1)}" y="${(n.y + 3.2).toFixed(1)}" text-anchor="middle">${esc(n.m)}</text></g>`;
     }
+    if (horizontal) {
+      const bw = Number(n.barW || 24).toFixed(1);
+      const bx = (n.x + 8).toFixed(1);
+      const lx = (n.x + 8 + Number(bw) + 6).toFixed(1);
+      return `<g class="fx-tn is-leaf is-hbar" ${at} role="button" tabindex="0" aria-label="${esc(`${n.name}：${fmt(n.n)}，查看口径`)}"><circle cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}" r="${n.r.toFixed(1)}"/><rect class="fx-leaf-bar" x="${bx}" y="${(n.y - 2.4).toFixed(1)}" width="${bw}" height="4.8" rx="2.4"/><text class="fx-tn-lnum num" x="${lx}" y="${(n.y + 3.2).toFixed(1)}" data-num="${esc(n.id)}" data-compact="1">${barCountText(n.n)}</text><rect class="fx-tn-hit" x="${(n.x - 8).toFixed(1)}" y="${(n.y - 6).toFixed(1)}" width="${(Number(bw) + 56).toFixed(1)}" height="12"/></g>`;
+    }
     const lbl = model.showLeafNums
-      ? (horizontal
-        ? `<text class="fx-tn-lnum num" x="${(n.x + model.maxR + 6).toFixed(1)}" y="${(n.y + 3.2).toFixed(1)}" data-num="${esc(n.id)}">${fmt(n.n)}</text>`
-        : `<text class="fx-tn-lnum num" x="${n.x.toFixed(1)}" y="${(n.y + model.maxR + 13).toFixed(1)}" text-anchor="middle" data-num="${esc(n.id)}">${fmt(n.n)}</text>`)
+      ? `<text class="fx-tn-lnum num" x="${n.x.toFixed(1)}" y="${(n.y + model.maxR + 13).toFixed(1)}" text-anchor="middle" data-num="${esc(n.id)}">${fmt(n.n)}</text>`
       : "";
     return `<g class="fx-tn is-leaf" ${at} role="button" tabindex="0" aria-label="${esc(`${n.name}：${fmt(n.n)}，查看口径`)}"><circle cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}" r="${n.r.toFixed(1)}"/><circle class="fx-tn-hit" cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}" r="10"/>${lbl}</g>`;
   }).join("");
@@ -774,7 +882,7 @@ function treeSVG(model, W = TREE_W, { idPrefix = "fx", horizontal = false } = {}
   </svg>`;
 }
 
-export function fxDiagramHTML(tax, pd, { horizontal = false, showMatrix = true, showControls = true, showLabels = true, idPrefix = "fx", treeW = horizontal ? HTREE_W : TREE_W, treeH = HTREE_H } = {}) {
+export function fxDiagramHTML(tax, pd, { horizontal = false, showMatrix = true, showControls = true, showLabels = true, showPool = false, idPrefix = "fx", treeW = horizontal ? HTREE_W : TREE_W, treeH = HTREE_H } = {}) {
   const ticks = Array.from({ length: 60 }, (_, k) => {
     const c = k % 9 === 0 ? FX_STEPS[(k / 9) % FX_STEPS.length][1] : "";
     const a = (k * Math.PI) / 30;
@@ -791,7 +899,8 @@ export function fxDiagramHTML(tax, pd, { horizontal = false, showMatrix = true, 
     return `<div class="fx-box fx-out" data-o="${i}" style="--c:${c}">${ico}<b>${t}</b></div>`;
   }).join("");
 
-  const rawTree = tax ? selectOptimalTree(treeModel(tax, pd), { maxCells: Infinity, maxLeaves: Infinity }) : null;
+  const budget = horizontal ? { maxCells: 32, maxLeaves: horizLeafCap(treeH) } : { maxCells: Infinity, maxLeaves: Infinity };
+  const rawTree = tax ? selectOptimalTree(treeModel(tax, pd), budget) : null;
   const model = rawTree ? (horizontal ? layoutTreeHorizontal(rawTree, treeW, treeH) : layoutTree(rawTree, treeW)) : null;
   const hasTree = !!(model && model.leaves.length);
   const treeBlock = hasTree
@@ -806,7 +915,18 @@ export function fxDiagramHTML(tax, pd, { horizontal = false, showMatrix = true, 
       </div>`
     : "";
 
-  return `<div class="fx-diagram${horizontal ? " is-horiz" : ""}${showLabels ? "" : " is-headless"}" id="${idPrefix}Diagram">
+  const poolSection = showPool
+    ? `<section class="fx-stage fx-pool-stage">
+        <div class="fx-pool" id="${idPrefix}Pool" data-tip="p" role="status" aria-label="待聚类池">
+          <div class="fx-pool-fill" id="${idPrefix}PoolFill" style="height:0%"></div>
+          <span class="fx-pool-lbl">待聚类</span>
+          <b class="fx-pool-num num" id="${idPrefix}PoolNum">—</b>
+          <span class="fx-pool-tag">2h 批量</span>
+        </div>
+      </section>`
+    : "";
+
+  return `<div class="fx-diagram${horizontal ? " is-horiz" : ""}${showLabels ? "" : " is-headless"}${showPool ? " has-pool" : ""}" id="${idPrefix}Diagram">
     <svg class="fx-wires" aria-hidden="true"></svg>
     <canvas class="fx-sparks" aria-hidden="true"></canvas>
     <section class="fx-stage">${showLabels ? `<div class="fx-label"><span class="num">01</span>原始对话</div>` : ""}<div class="fx-row">${ins}</div></section>
@@ -814,6 +934,7 @@ export function fxDiagramHTML(tax, pd, { horizontal = false, showMatrix = true, 
       <div class="fx-hub"><span class="fx-orbit"><i></i></span><svg class="fx-ring" viewBox="-80 -80 160 160" aria-hidden="true">${ticks}</svg><span class="fx-core"><span>${tiles}</span></span></div>
     </section>
     <section class="fx-stage">${showLabels ? `<div class="fx-label"><span class="num">03</span>问题归因</div>` : ""}<div class="fx-row">${outs}</div></section>
+    ${poolSection}
     <section class="fx-stage fx-tax" id="${idPrefix}Tax">
       ${taxHead}
       ${treeBlock}
@@ -1922,6 +2043,9 @@ export function mountFxDiagram(root, tax, pd, {
   const tiles = $$(".fx-core i", diagram);
   const ins = $$(".fx-in", diagram);
   const outs = $$(".fx-out", diagram);
+  const poolEl = $(`#${idPrefix}Pool`, diagram);
+  const poolFillEl = $(`#${idPrefix}PoolFill`, diagram);
+  const poolNumEl = $(`#${idPrefix}PoolNum`, diagram);
   const tx = $(`#${idPrefix}Tax`, diagram);
   const treeSvg = $(`#${idPrefix}Tree`, diagram);
   const fxLayer = treeSvg ? $(".fx-fx", treeSvg) : null;
@@ -1930,7 +2054,8 @@ export function mountFxDiagram(root, tax, pd, {
   const speedBtn = $(`#${idPrefix}Speed`, diagram);
 
   const matModel = tax ? matrixModel(tax, pd) : null;
-  const rawTree = tax && treeSvg ? selectOptimalTree(treeModel(tax, pd), { maxCells: Infinity, maxLeaves: Infinity }) : null;
+  const budget = horizontal ? { maxCells: 32, maxLeaves: horizLeafCap(treeH) } : { maxCells: Infinity, maxLeaves: Infinity };
+  const rawTree = tax && treeSvg ? selectOptimalTree(treeModel(tax, pd), budget) : null;
   const tree = rawTree ? (horizontal ? layoutTreeHorizontal(rawTree, treeW, treeH) : layoutTree(rawTree, treeW)) : null;
   const liveLeaf = new Map();
   const live = new Map();
@@ -2008,17 +2133,33 @@ export function mountFxDiagram(root, tax, pd, {
         const sy = tr.height / tree.treeH;
         const mapPt = (nx, ny) => ({ x: tr.left - h.left + nx * sx, y: tr.top - h.top + ny * sy });
         const lastOut = outs[0] ? rel(outs[0]) : null;
-        const treeToRight = horizFlow && lastOut && (tr.left - h.left) > lastOut.r - 8;
+        const pr = poolEl ? rel(poolEl) : null;
+        const poolToRight = !!(pr && horizFlow && lastOut && pr.l > lastOut.r - 8);
+        const anchorRight = pr ? pr.r : (lastOut ? lastOut.r : 0);
+        const treeToRight = horizFlow && (tr.left - h.left) > anchorRight - 8;
         const rootHw = (tree.rootW || 236) / 2;
+        const rootHh = (tree.rootH || 44) / 2;
         const rootTarget = treeToRight
           ? mapPt(tree.root.x - rootHw, tree.root.y)
-          : mapPt(tree.root.x, tree.root.y - 22);
-        outs.forEach((b, i) => {
-          const r = rel(b);
+          : mapPt(tree.root.x, tree.root.y - rootHh);
+        if (pr) {
+          outs.forEach((b, i) => {
+            const r = rel(b);
+            d += poolToRight
+              ? hcurve(r.r, r.cy, pr.l, pr.cy, `${idPrefix}w-p${i}`, "pool-in")
+              : vcurve(r.cx, r.b, pr.cx, pr.t, `${idPrefix}w-p${i}`, "pool-in");
+          });
           d += treeToRight
-            ? hcurve(r.r, r.cy, rootTarget.x, rootTarget.y, `${idPrefix}w-c${i}`, "funnel")
-            : vcurve(r.cx, r.b, rootTarget.x, rootTarget.y, `${idPrefix}w-c${i}`, "funnel");
-        });
+            ? hcurve(pr.r, pr.cy, rootTarget.x, rootTarget.y, `${idPrefix}w-flush`, "funnel pool-out")
+            : vcurve(pr.cx, pr.b, rootTarget.x, rootTarget.y, `${idPrefix}w-flush`, "funnel pool-out");
+        } else {
+          outs.forEach((b, i) => {
+            const r = rel(b);
+            d += treeToRight
+              ? hcurve(r.r, r.cy, rootTarget.x, rootTarget.y, `${idPrefix}w-c${i}`, "funnel")
+              : vcurve(r.cx, r.b, rootTarget.x, rootTarget.y, `${idPrefix}w-c${i}`, "funnel");
+          });
+        }
         tree.all.filter((n) => n.parent).forEach((n) => {
           const c = linkCurve(n, horizontal);
           const p0 = mapPt(c.x0, c.y0);
@@ -2065,6 +2206,8 @@ export function mountFxDiagram(root, tax, pd, {
   const later = (fn, ms) => { const id = setTimeout(() => { timers.delete(id); fn(); }, ms); timers.add(id); };
   const rootNodeEl = treeSvg ? $(".fx-tn.is-root", treeSvg) : null;
   const rootShiftEl = rootNodeEl ? $(".fx-root-shift", rootNodeEl) : null;
+  const rootPctEl = rootNodeEl ? $('[data-pct="root"]', rootNodeEl) : null;
+  const activeRects = rootNodeEl ? $$(".fx-ant-active", rootNodeEl) : [];
 
   const rowSumEls = new Map();
   const colSumEls = new Map();
@@ -2076,12 +2219,42 @@ export function mountFxDiagram(root, tax, pd, {
 
   const updateProgress = (cur, total) => {
     if (!rootNodeEl) return;
-    const rw = Number(rootNodeEl.dataset.rw) || 236;
     const ratio = total > 0 ? Math.min(1, Math.max(0, cur / total)) : 1;
-    const shiftX = ratio >= 0.999 ? rw + 10 : ratio <= 0.001 ? -8 : rw * ratio;
-    if (rootShiftEl) rootShiftEl.setAttribute("transform", `translate(${shiftX.toFixed(1)} 0)`);
+    if (rootNodeEl.classList.contains("is-vroot")) {
+      const rh = Number(rootNodeEl.dataset.rh) || 156;
+      const by = (Number(rootNodeEl.dataset.ry) || 0) + rh;
+      const shiftY = ratio >= 0.999 ? -(rh + 10) : ratio <= 0.001 ? 8 : -(rh * ratio);
+      const fillH = ratio >= 0.999 ? rh : ratio <= 0.001 ? 0 : rh * ratio;
+      if (rootShiftEl) rootShiftEl.setAttribute("transform", `translate(0 ${shiftY.toFixed(1)})`);
+      activeRects.forEach((r) => {
+        r.setAttribute("y", (by - fillH).toFixed(1));
+        r.setAttribute("height", fillH.toFixed(1));
+      });
+      if (rootPctEl) rootPctEl.textContent = `已聚类 ${(ratio * 100).toFixed(0)}%`;
+    } else {
+      const rw = Number(rootNodeEl.dataset.rw) || 236;
+      const shiftX = ratio >= 0.999 ? rw + 10 : ratio <= 0.001 ? -8 : rw * ratio;
+      const fillW = ratio >= 0.999 ? rw : ratio <= 0.001 ? 0 : rw * ratio;
+      if (rootShiftEl) rootShiftEl.setAttribute("transform", `translate(${shiftX.toFixed(1)} 0)`);
+      activeRects.forEach((r) => r.setAttribute("width", fillW.toFixed(1)));
+    }
     rootNodeEl.classList.toggle("is-full", ratio >= 0.999);
     rootNodeEl.classList.toggle("is-flowing", ratio > 0.01 && ratio < 0.999);
+  };
+
+  const updatePool = ({ pending = 0, attrTraces = 0, clusterTraces = 0, flushing = false } = {}) => {
+    if (!poolEl) return;
+    const p = Math.max(0, Math.round(Number(pending) || 0));
+    const a = Math.max(0, Math.round(Number(attrTraces) || 0));
+    const c = Math.max(0, Math.round(Number(clusterTraces) || 0));
+    if (poolNumEl) poolNumEl.textContent = fmt(p);
+    const fillPct = p <= 0 ? 0 : Math.max(16, Math.min(90, (p / Math.max(1, a || p)) * 100));
+    if (poolFillEl) poolFillEl.style.height = `${fillPct.toFixed(1)}%`;
+    poolEl.classList.toggle("has-pending", p > 0);
+    poolEl.classList.toggle("is-flushing", !!flushing);
+    poolEl.dataset.pending = String(p);
+    poolEl.dataset.attr = String(a);
+    poolEl.dataset.clustered = String(c);
   };
 
   const restart = (el, cls) => { if (!el) return; el.classList.remove(cls); void el.offsetWidth; el.classList.add(cls); };
@@ -2176,7 +2349,7 @@ export function mountFxDiagram(root, tax, pd, {
     tree.all.forEach((n) => {
       const val = live.get(n.id) || 0;
       const numEl = numElMap.get(n.id);
-      if (numEl) numEl.textContent = fmt(val);
+      if (numEl) numEl.textContent = numEl.dataset.compact === "1" ? barCountText(val) : fmt(val);
     });
     tree.leaves.forEach((lf) => {
       const val = live.get(lf.id) || 0;
@@ -2212,12 +2385,14 @@ export function mountFxDiagram(root, tax, pd, {
     snapToFinal();
     if (liveControl) {
       updateProgress(0, 1000);
+      updatePool({ pending: 0, attrTraces: 0, clusterTraces: 0, flushing: false });
       diagram.classList.add("is-idle");
     }
     return {
       redraw: draw,
-      setLiveProgress({ ratio, running = false } = {}) {
+      setLiveProgress({ ratio, pending = 0, attrTraces = 0, clusterTraces = 0, running = false } = {}) {
         if (ratio != null) updateProgress(Math.max(0, Math.min(1, Number(ratio))) * 1000, 1000);
+        updatePool({ pending, attrTraces, clusterTraces, flushing: false });
         diagram.classList.toggle("is-idle", !running);
       },
       destroy() { ro?.disconnect(); timers.forEach(clearTimeout); },
@@ -2475,7 +2650,7 @@ export function mountFxDiagram(root, tax, pd, {
   const liveCtl = { ratio: 0, running: false, rateInterval: 0, nextRateAt: 0, done: false };
   const getCap = () => schedule.events.length;
 
-  const spawn = (forcedInput, forcedEv, forcedOut = null, delayMs = 0) => {
+  const spawn = (forcedInput, forcedEv, forcedOut = null, delayMs = 0, kind = "full") => {
     if (!forcedEv && sparks.length >= 16) return;
     const cap = getCap();
     const ev = forcedEv || (phaseState === "replay" && evIdx < cap ? schedule.events[evIdx++] : null);
@@ -2486,8 +2661,9 @@ export function mountFxDiagram(root, tax, pd, {
     sparks.push({
       i, j,
       ev,
-      chain: makeChain(ev.leaf),
-      phase: 0,
+      kind,
+      chain: kind === "attr" ? [] : makeChain(ev.leaf),
+      phase: kind === "cluster" ? 2 : 0,
       hop: 0,
       t0: simNow + delayMs,
       launched: false,
@@ -2568,13 +2744,17 @@ export function mountFxDiagram(root, tax, pd, {
       if (liveCtl.running && liveCtl.rateInterval > 0 && now >= liveCtl.nextRateAt && sparks.length < 14 && tree.leaves.length) {
         liveCtl.nextRateAt = now + liveCtl.rateInterval;
         const lf = tree.leaves[Math.floor(Math.random() * tree.leaves.length)];
-        spawn(null, { leaf: lf, delta: 0, isNew: false });
+        spawn(null, { leaf: lf, delta: 0, isNew: false }, null, 0, poolEl ? "attr" : "full");
       }
       if (!liveCtl.running && !sparks.length) {
+        poolEl?.classList.remove("is-flushing");
         diagram.classList.add("is-idle");
         ctx.setTransform(geo.dpr, 0, 0, geo.dpr, 0, 0);
         ctx.clearRect(0, 0, geo.w, geo.h);
         return;
+      }
+      if (poolEl && !sparks.some((s) => s.kind === "cluster")) {
+        poolEl.classList.remove("is-flushing");
       }
     } else {
       const cap = getCap();
@@ -2620,18 +2800,35 @@ export function mountFxDiagram(root, tax, pd, {
       if (now < s.t0) continue;
       if (!s.launched) {
         s.launched = true;
-        land(ins[s.i], 420);
+        if (s.kind === "cluster") {
+          if (poolEl) { poolEl.classList.add("is-flushing"); land(poolEl, 380); }
+        } else {
+          land(ins[s.i], 420);
+        }
       }
       const el = now - s.t0;
       let pt = null;
       if (s.phase < 3) {
         const u = Math.min(1, el / DUR[s.phase]);
-        const id = s.phase === 0 ? `${idPrefix}w-i${s.i}` : s.phase === 1 ? `${idPrefix}w-o${s.j}` : `${idPrefix}w-c${s.j}`;
+        const id = s.phase === 0
+          ? `${idPrefix}w-i${s.i}`
+          : s.phase === 1
+            ? `${idPrefix}w-o${s.j}`
+            : s.kind === "attr"
+              ? `${idPrefix}w-p${s.j}`
+              : s.kind === "cluster"
+                ? `${idPrefix}w-flush`
+                : `${idPrefix}w-c${s.j}`;
         pt = along(id, easeInOut(u));
         if (u >= 1) {
           if (s.phase === 0) receive();
           if (s.phase === 1) land(outs[s.j], 420);
           if (s.phase === 2) {
+            if (s.kind === "attr") {
+              land(poolEl, 420);
+              sparks.splice(n, 1);
+              continue;
+            }
             if (!geo.hasTree) { sparks.splice(n, 1); continue; }
             land(nodeElMap.get("root"), 380);
             if (s.chain.length) lightLink(s.chain[0], 420);
@@ -2677,7 +2874,7 @@ export function mountFxDiagram(root, tax, pd, {
         }
       }
       if (!pt) { sparks.splice(n, 1); continue; }
-      const isSprout = s.phase === 3 && s.ev.isNew;
+      const isSprout = s.kind === "cluster" || (s.phase === 3 && s.ev.isNew);
       const col = isSprout ? sproutCol : accent;
       s.trail.unshift({ x: pt.x, y: pt.y });
       if (s.trail.length > 14) s.trail.pop();
@@ -2736,32 +2933,61 @@ export function mountFxDiagram(root, tax, pd, {
 
   return {
     redraw: draw,
-    setLiveProgress({ ratio = 0, running = false, rate = 0, delta = 0, windowMs = 14000, done = false } = {}) {
+    setLiveProgress({
+      ratio = 0,
+      pending = 0,
+      attrTraces = 0,
+      clusterTraces = 0,
+      running = false,
+      rate = 0,
+      deltaAttr = 0,
+      deltaCluster = 0,
+      windowMs = 14000,
+      done = false,
+    } = {}) {
       const clamped = Math.max(0, Math.min(1, Number(ratio) || 0));
       liveCtl.ratio = clamped;
       liveCtl.running = !!running;
       liveCtl.done = !!done;
       updateProgress(clamped * 1000, 1000);
 
-      const d = Math.max(0, Math.round(Number(delta) || 0));
+      const dAttr = Math.max(0, Math.round(Number(deltaAttr) || 0));
+      const dCl = Math.max(0, Math.round(Number(deltaCluster) || 0));
+      updatePool({
+        pending,
+        attrTraces,
+        clusterTraces,
+        flushing: dCl > 0 || sparks.some((s) => s.kind === "cluster"),
+      });
+
       const r = Math.max(0, Number(rate) || 0);
       liveCtl.rateInterval = running && r > 0 ? Math.max(320, Math.min(3600, 60000 / r)) : 0;
 
-      if (!running && d === 0) {
+      if (!running && dAttr === 0) {
         for (let i = sparks.length - 1; i >= 0; i--) {
-          if (!sparks[i].launched) sparks.splice(i, 1);
+          if (!sparks[i].launched && sparks[i].kind !== "cluster") sparks.splice(i, 1);
         }
       }
 
-      if (d > 0 && tree.leaves.length) {
-        const count = Math.min(40, Math.max(1, d));
-        const span = Math.max(2000, Number(windowMs) || 14000);
+      const span = Math.max(2000, Number(windowMs) || 14000);
+      if (dAttr > 0 && tree.leaves.length) {
+        const count = Math.min(36, Math.max(1, dAttr));
         for (let k = 0; k < count; k++) {
           const lf = tree.leaves[Math.floor(Math.random() * tree.leaves.length)];
           const delay = (span * k) / count;
-          spawn(k % ins.length, { leaf: lf, delta: 0, isNew: false }, k % outs.length, delay);
+          spawn(k % ins.length, { leaf: lf, delta: 0, isNew: false }, k % outs.length, delay, poolEl ? "attr" : "full");
         }
         liveCtl.nextRateAt = simNow + span;
+      }
+
+      if (dCl > 0 && tree.leaves.length) {
+        const count = Math.min(48, Math.max(1, dCl));
+        const flushSpan = Math.min(12000, span);
+        for (let k = 0; k < count; k++) {
+          const lf = tree.leaves[Math.floor(Math.random() * tree.leaves.length)];
+          const delay = (flushSpan * k) / count;
+          spawn(0, { leaf: lf, delta: 0, isNew: false }, 0, delay, poolEl ? "cluster" : "full");
+        }
       }
 
       const active = liveCtl.running || sparks.length > 0;
@@ -2772,7 +2998,7 @@ export function mountFxDiagram(root, tax, pd, {
         ctx.clearRect(0, 0, geo.w, geo.h);
         return;
       }
-      if (liveCtl.running && d === 0 && liveCtl.nextRateAt < simNow) liveCtl.nextRateAt = simNow + 240;
+      if (liveCtl.running && dAttr === 0 && liveCtl.nextRateAt < simNow) liveCtl.nextRateAt = simNow + 240;
       kick();
     },
     destroy() {

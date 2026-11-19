@@ -5,6 +5,7 @@ import test from "node:test";
 globalThis.location = { search: "" };
 globalThis.window = {};
 const { buildProblemTrendModel, problemRateValues, problemKlineRows, problemKlineSpec, mountProblemTrends } = await import("../static/js/problem_trends.js");
+const { buildDailyTopModel, buildHeatPages, dailyTopHTML, dayModalHTML, mountDailyTop, resolveDailyTip } = await import("../static/js/daily_top.js");
 const { traceSeverityModel, traceShares } = await import("../static/js/trace_analysis.js");
 const { abComparisonHTML, abRoundsHTML, mountAB, metricValue, metricTip } = await import("../static/js/abtest.js");
 const { trendSampleCandidates, trendSampleProblems, traceSampleRefs, abTrendSampleRefs, abLeafRefs, resolveABSamples } = await import("../static/js/trend_samples.js");
@@ -454,4 +455,131 @@ test("Trace sample references preserve date and exclusive severity including cle
   assert.deepEqual(traceSampleRefs(source, trend.dates[0], "none"), [refs[1]]);
   assert.deepEqual(traceSampleRefs(source, "2026-01-01", "P0"), []);
   assert.deepEqual(traceSampleRefs(trend, trend.dates[0], "P0"), []);
+});
+
+test("daily top model computes top 10 most frequent and top 10 most dropped problems for every day without secondary headings or small print", () => {
+  const leafCodes = Array.from({ length: 12 }, (_, i) => `S1.M1.${i + 1}`);
+  const nodes = ["S1", "S1.M1", ...leafCodes];
+  const tax = {
+    stages: [{ id: "S1", name: "取数规划" }],
+    mechanisms: [{ id: "M1", name: "漏掉" }],
+    patterns: Object.fromEntries(leafCodes.map((code, i) => [code, { name: `问题模式${i + 1}`, plain: `现象${i + 1}` }])),
+  };
+  const cells = [];
+  // Day 0 vs Day 1: 12 problems where 10 have higher volume-adjusted baseline on Day 0 and drop on Day 1
+  leafCodes.forEach((_, i) => {
+    const ni = i + 2;
+    const c0 = 40 + i * 5;
+    const c1 = Math.max(2, c0 - (i + 1) * 2);
+    cells.push([0, 0, ni, 0, 0, 2, 3, c0 - 5, 0, 0, 1, 1, 5, 0, 0, 7]);
+    cells.push([1, 0, ni, 0, 0, 1, 1, Math.max(0, c1 - 2), 0, 0, 1, 1, 2, 0, 0, 4]);
+  });
+  const fixture = {
+    dates: ["2026-11-16", "2026-11-17"],
+    nodes,
+    base: [[0, 0, 0, 0, 300], [1, 0, 0, 0, 100]],
+    cells,
+  };
+  const model = buildDailyTopModel(fixture, tax);
+  assert.ok(model);
+  assert.equal(model.days.length, 2);
+  model.days.forEach((day) => {
+    assert.equal(day.topAppear.length, 10);
+    assert.equal(day.topDrop.length, 10);
+    assert.ok(day.topAppear[0].count >= day.topAppear[9].count);
+    assert.ok(day.topDrop[0].delta <= day.topDrop[9].delta);
+    assert.ok(day.topDrop.every((item) => item.delta < 0));
+  });
+
+  const html = dailyTopHTML(model, "2026-11-17");
+  assert.match(html, /class="mxd-heat"/);
+  assert.equal((html.match(/data-daily-day="/g) || []).length, 2);
+  assert.equal((html.match(/class="mxd-day is-void"/g) || []).length, 8, "pads the 10-column row to a full rectangle");
+  assert.doesNotMatch(html, /mxd-day-val/, "date heatmap cells only show the date without numbers");
+  assert.equal((html.match(/class="mxd-row is-top"/g) || []).length, 10);
+  assert.equal((html.match(/class="mxd-row is-drop"/g) || []).length, 10);
+  assert.match(html, /问题模式12/);
+  assert.match(html, /data-daily-flip="line"/);
+  assert.match(html, /data-daily-metric="problems"/);
+  assert.match(html, /data-daily-metric="traces"/);
+  assert.match(html, /data-daily-metric="ratio"/);
+  assert.match(html, /data-daily-dir="up"/);
+  assert.match(html, /data-daily-dir="down"/);
+  assert.match(html, /data-daily-zoom aria-pressed="false"/);
+  assert.doesNotMatch(html, /<h3|<h4|<small|<p\b/, "no secondary headings or small-print notes allowed");
+
+  // 30-day pagination (10 × 3): 48 days split into [18 older days, 30 latest days]
+  const pages48 = buildHeatPages(Array.from({ length: 48 }, (_, i) => ({ date: `2026-10-${String(i + 1).padStart(2, "0")}` })));
+  assert.equal(pages48.length, 2);
+  assert.equal(pages48[0].length, 18);
+  assert.equal(pages48[1].length, 30);
+
+  // Centered floating modal when clicking a date cell
+  const modalHtml = dayModalHTML(model.byDate.get("2026-11-17"));
+  assert.match(modalHtml, /class="mxd-modal-backdrop"/);
+  assert.match(modalHtml, /2026-11-17/);
+  for (const label of ["P0", "P1", "P2", "P3", "P4", "无问题"]) {
+    assert.ok(modalHtml.includes(label), `day modal includes ${label}`);
+  }
+
+  // Beginner-friendly structured tooltips with 6-bucket (P0–P4 + 无问题) SVG donut ring and explicit + / - signs
+  const dayTip = resolveDailyTip({
+    dataset: {
+      mxdTipKind: "day",
+      date: "2026-11-17",
+      problems: "18,099",
+      traces: "5,702",
+      ratio: "3.17",
+      sevs: "95,1646,5662,1967,8729",
+      traceSevs: "93,1272,2538,456,712,631",
+    },
+  });
+  assert.match(dayTip, /class="mxd-tip-ring"/);
+  assert.match(dayTip, /<div class="t-head">2026-11-17<\/div>/);
+  assert.match(dayTip, /问题数 <b class="num">18,099<\/b>/);
+  assert.match(dayTip, /Trace 数 <b class="num">5,702<\/b>/);
+  assert.match(dayTip, /问题\/Trace <b class="num">3\.17<\/b>/);
+  for (const label of ["P0", "P1", "P2", "P3", "P4", "无问题"]) {
+    assert.ok(dayTip.includes(label), `day tooltip includes ${label}`);
+  }
+  assert.match(dayTip, /631 Trace/);
+  const topTip = resolveDailyTip({ dataset: { mxdTipKind: "top", name: "问题模式12", stage: "取数规划", prev: "80", count: "95", delta: "15", sevs: "1,4,30,20,40", prevSevs: "1,4,20,20,35", plain: "现象12" } });
+  assert.match(topTip, /变化 <b class="num is-up">\+15<\/b>/);
+  assert.match(topTip, /\+10/);
+  assert.match(topTip, /<div class="t-note">现象12<\/div>/);
+  const dropTip = resolveDailyTip({ dataset: { mxdTipKind: "drop", name: "问题模式12", stage: "取数规划", prev: "95", count: "71", drop: "24", dropPct: "25%", sevs: "1,4,20,16,30", prevSevs: "1,4,30,20,40", plain: "现象12" } });
+  assert.match(dropTip, /下降 <b class="num is-down">-24 \(-25%\)<\/b>/);
+  assert.match(dropTip, /-10/);
+
+  let clickedHandler = null;
+  const dayBtns = [{ dataset: { dailyDay: "2026-11-16" }, classList: { toggle() {} }, setAttribute() {} },
+    { dataset: { dailyDay: "2026-11-17" }, classList: { toggle() {} }, setAttribute() {} }];
+  const boardsEl = { innerHTML: "" };
+  const modalSlotEl = { innerHTML: "" };
+  const host = {
+    innerHTML: "",
+    addEventListener: (_ev, fn) => { clickedHandler = fn; },
+    removeEventListener() {},
+    querySelectorAll: () => dayBtns,
+    querySelector: (sel) => (sel === "#mxdBoards" ? boardsEl : sel === "#mxdModalSlot" ? modalSlotEl : null),
+  };
+  const state = {};
+  let pickedProblem = null;
+  mountDailyTop(host, fixture, tax, state, { onPickProblem: (p) => { pickedProblem = p; } });
+  assert.equal(state.dailyDay, "2026-11-17");
+  clickedHandler({ target: { closest: (sel) => (sel === "[data-daily-day]" ? dayBtns[0] : null) } });
+  assert.equal(state.dailyDay, "2026-11-16");
+  assert.equal(state.dailyModalDate, "2026-11-16");
+  assert.match(modalSlotEl.innerHTML, /class="mxd-modal-backdrop"/);
+  assert.match(boardsEl.innerHTML, /2026-11-16 出现最多 TOP 10/);
+  const rowTarget = { dataset: { dailyCode: "S1.M1.12", dailyName: "问题模式12" } };
+  clickedHandler({ target: { closest: (sel) => (sel === "[data-daily-code]" ? rowTarget : null) } });
+  assert.equal(pickedProblem.code, "S1.M1.12");
+
+  // Zoom lock defaults to false and toggles on [data-daily-zoom] click
+  assert.equal(state.dailyZoom, false);
+  const zoomTarget = { attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, title: "" };
+  clickedHandler({ target: { closest: (sel) => (sel === "[data-daily-zoom]" ? zoomTarget : null) } });
+  assert.equal(state.dailyZoom, true);
+  assert.equal(zoomTarget.attrs["aria-pressed"], "true");
 });

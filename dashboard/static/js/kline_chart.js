@@ -51,10 +51,18 @@ function cssColor(value, fallback) {
   return name ? colorOf(name, fallback) : (value || fallback);
 }
 
-/* 面积叠层需要同一颜色的低透明度版本；解析后的颜色都是 rgba(r, g, b, a)。 */
+/* 面积叠层需要同一颜色的低透明度版本；支持 rgba(r, g, b, a) 与 #rrggbb / #rgb。 */
 function alphaColor(color, alpha) {
-  const m = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/.exec(String(color || ""));
-  return m ? `rgba(${m[1]}, ${m[2]}, ${m[3]}, ${alpha})` : color;
+  const s = String(color || "").trim();
+  const m = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/.exec(s);
+  if (m) return `rgba(${m[1]}, ${m[2]}, ${m[3]}, ${alpha})`;
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(s)?.[1];
+  if (hex) {
+    const full = hex.length === 3 ? hex.split("").map((c) => c + c).join("") : hex;
+    const num = parseInt(full, 16);
+    return `rgba(${(num >> 16) & 255}, ${(num >> 8) & 255}, ${num & 255}, ${alpha})`;
+  }
+  return color;
 }
 
 /* 发版日：轻量图表没有内置垂线，用 series primitive 在绘图区画一根贯穿上下的红线。
@@ -480,10 +488,12 @@ export function createTrendChart(host, spec = {}) {
 
   const colors = palette();
   const measure = spec.measure === "ratio" ? "ratio" : "count";
-  const valueText = (v) => (measure === "ratio" ? `${fmt(v, Math.abs(v) >= 10 ? 1 : 2)}%` : fmt(Math.round(v)));
+  const valueText = typeof spec.valueFormat === "function"
+    ? spec.valueFormat
+    : (v) => (measure === "ratio" ? `${fmt(v, Math.abs(v) >= 10 ? 1 : 2)}%` : fmt(Math.round(v)));
   const timeTextOf = (time) => timeText(time);
-  const priceFormat = measure === "ratio"
-    ? { type: "custom", formatter: valueText, minMove: 0.01 }
+  const priceFormat = (measure === "ratio" || typeof spec.valueFormat === "function")
+    ? { type: "custom", formatter: valueText, minMove: measure === "ratio" ? 0.01 : 1 }
     : { type: "price", precision: 0, minMove: 1 };
   // 折线身份由上方折线卡承担，图内不再重复一排 legend；只留锁定键。
   const lock = zoomLock(spec, false);
@@ -521,13 +531,19 @@ export function createTrendChart(host, spec = {}) {
   lock.wire(host);
   const offWheel = wireWheelZoom(host, chart, lock.allowed);
 
+  const topAlpha = typeof spec.topAlpha === "number" ? spec.topAlpha : (input.length > 2 ? 0.04 : 0.14);
+  const bottomAlpha = typeof spec.bottomAlpha === "number" ? spec.bottomAlpha : (input.length > 2 ? 0 : 0.01);
+  const invertArea = Boolean(spec.invertArea);
+  const fillTopAlpha = invertArea ? bottomAlpha : topAlpha;
+  const fillBottomAlpha = invertArea ? topAlpha : bottomAlpha;
   const byApi = new Map();
   const lineSeries = input.map((s) => {
     const color = cssColor(s.color, colors.line);
     const series = chart.addSeries(AreaSeries, {
       lineColor: color,
-      topColor: alphaColor(color, 0.14),
-      bottomColor: alphaColor(color, 0.01),
+      topColor: alphaColor(color, fillTopAlpha),
+      bottomColor: alphaColor(color, fillBottomAlpha),
+      invertFilledArea: invertArea,
       lineWidth: 2,
       priceLineVisible: false,
       lastValueVisible: false,
@@ -586,7 +602,8 @@ export function createTrendChart(host, spec = {}) {
       tip.hidden = true;
       return;
     }
-    tip.innerHTML = `<div class="kl-tip-head"><b class="num">${esc(when)}</b><span>${esc(measure === "ratio" ? "出现比例" : "出现数")}</span></div>${rows
+    const tipTitle = spec.tipLabel || (measure === "ratio" ? "出现比例" : "出现数");
+    tip.innerHTML = `<div class="kl-tip-head"><b class="num">${esc(when)}</b><span>${esc(tipTitle)}</span></div>${rows
       .map(({ s, v }) => `<div class="kl-tip-row"><span class="kl-tip-name"><i style="--c:${cssColor(s.color, colors.line)}"></i>${esc(s.name || "")}</span><b class="num">${esc(valueText(v))}</b></div>`)
       .join("")}`;
     tip.hidden = false;
@@ -634,7 +651,7 @@ export function createTrendChart(host, spec = {}) {
     });
     lineSeries.forEach((series, i) => {
       const color = cssColor(input[i].color, next.line);
-      series.applyOptions({ lineColor: color, topColor: alphaColor(color, 0.14), bottomColor: alphaColor(color, 0.01) });
+      series.applyOptions({ lineColor: color, topColor: alphaColor(color, fillTopAlpha), bottomColor: alphaColor(color, fillBottomAlpha) });
     });
     if (volumeSeries) volumeSeries.applyOptions({ color: next.volume });
     releaseLines?.setColors(next.release, next.card);

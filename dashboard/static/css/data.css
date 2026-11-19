@@ -363,14 +363,254 @@ body.is-mx-full { overflow: hidden; }
 .matrix .rowtot-foot { display: flex; align-items: center; justify-content: flex-end; padding: 0 8px; color: var(--ink); font-size: var(--fs-small); font-weight: var(--w-medium); background: var(--well-2); }
 
 /* Matrix disclosures share the sunburst motion. Only surfaces and transforms move. */
-.mx-perspective[hidden], .mx-issue-trends-shell[hidden] { display: none; }
-.mx-perspective, .mx-issue-trends-shell { overflow-anchor: none; min-width: 0; }
+.mx-perspective[hidden], .mx-issue-trends-shell[hidden], .mx-daily[hidden] { display: none; }
+.mx-perspective, .mx-issue-trends-shell, .mx-daily { overflow-anchor: none; min-width: 0; }
 .mx-issue-trends-shell { scroll-margin-top: 116px; }
+.mx-daily {
+  margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--well-2);
+}
 .mx-panels {
   display: grid; gap: 16px; align-items: start;
   margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--well-2);
 }
+.mx-kline-face > .mx-panels { margin-top: 0; padding-top: 0; border-top: 0; }
+.mx-card.is-full .mx-panels.is-both { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .mx-panels[hidden] { display: none; }
+
+/* ------------------------------------------------------------------ 每日 TOP 问题: 日期热力图 (可翻转为多问题走势折线) + 双栏 TOP 10 */
+.mxd { display: grid; gap: 16px; min-width: 0; font-variant-numeric: tabular-nums; }
+.mxd-top {
+  padding: 12px 14px 14px; border-radius: 12px; background: var(--well);
+  transform-origin: 50% 50%; min-width: 0;
+}
+.mxd-face[hidden] { display: none; }
+.mxd-face { display: grid; gap: 10px; min-width: 0; }
+.mxd-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 28px; flex-wrap: wrap;
+}
+.mxd-heat-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; min-width: 0; }
+.mxd-pager { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--fs-meta); }
+.mxd-page-btn {
+  width: 24px; height: 24px; display: grid; place-items: center; border-radius: 6px;
+  background: var(--well-2); color: var(--ink-2); font-size: 14px; line-height: 1; cursor: pointer;
+  transition: background var(--snap), color var(--snap), opacity var(--snap);
+}
+.mxd-page-btn:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
+.mxd-page-btn:disabled { opacity: 0.32; cursor: default; }
+.mxd-page-span { color: var(--ink-2); font-weight: var(--w-medium); padding: 0 2px; }
+.mxd-page-idx { color: var(--faint); font-size: var(--fs-micro); padding: 0 2px; }
+.mxd-flip-btn {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px;
+  border-radius: var(--r-ctl); background: var(--card); color: var(--accent);
+  font-size: var(--fs-meta); font-weight: var(--w-medium); white-space: nowrap; cursor: pointer;
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ink) 6%, transparent);
+  transition: background var(--snap), color var(--snap), transform var(--spring), box-shadow var(--snap);
+}
+.mxd-flip-btn svg { width: 14px; height: 14px; }
+.mxd-flip-btn:hover { background: var(--hover); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 32%, transparent); }
+.mxd-flip-btn:active { transform: scale(0.97); }
+.mxd-heat {
+  display: grid; gap: 6px; min-width: 0;
+  grid-template-columns: repeat(var(--heat-cols, 10), minmax(0, 1fr));
+}
+.mxd-day {
+  position: relative; display: flex; align-items: center; justify-content: center;
+  min-width: 0; height: 42px; padding: 0 8px; border-radius: 8px; overflow: hidden;
+  background: color-mix(in oklab, var(--accent) calc(var(--v, 0) * 46%), var(--card));
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ink) 4.5%, transparent);
+  color: var(--ink-2); cursor: pointer; text-align: center;
+  transition: background var(--snap), box-shadow var(--snap), transform var(--spring);
+}
+.mxd-day.is-void {
+  background: color-mix(in oklab, var(--card) 42%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ink) 2.5%, transparent);
+  cursor: default; pointer-events: none;
+}
+.mxd-day:not(.is-void):hover {
+  transform: translateY(-1px);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ink) 22%, transparent);
+}
+.mxd-day:not(.is-void):active { transform: scale(0.985); transition-duration: 110ms; }
+.mxd-day.is-active {
+  background: color-mix(in oklab, var(--accent) calc(var(--v, 0) * 50% + 10%), var(--card));
+  box-shadow: inset 0 0 0 1.75px var(--ink);
+}
+.mxd-day-date { font-size: var(--fs-meta); line-height: 1.1; color: var(--ink-2); font-weight: var(--w-medium); white-space: nowrap; }
+.mxd-day.hot .mxd-day-date, .mxd-day.is-active .mxd-day-date { color: var(--ink); font-weight: var(--w-title); }
+/* 点击日期格子从页面中心弹出的详情浮窗 */
+.mxd-modal-backdrop {
+  position: fixed; inset: 0; z-index: calc(var(--z-tip, 90) + 10);
+  display: grid; place-items: center; padding: 16px;
+  background: color-mix(in oklab, var(--ink) 24%, transparent);
+  backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+  animation: mxd-fade-in 160ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.mxd-modal {
+  width: min(460px, calc(100vw - 32px)); display: grid; gap: 14px;
+  padding: 18px 20px; border-radius: 16px; background: var(--lift); color: var(--ink);
+  box-shadow: var(--shadow-pop), inset 0 0 0 1px color-mix(in oklab, var(--ink) 8%, transparent);
+  transform-origin: 50% 50%;
+  animation: mxd-pop-center 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes mxd-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes mxd-pop-center { from { opacity: 0; transform: scale(0.88); } to { opacity: 1; transform: scale(1); } }
+.mxd-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.mxd-modal-date { font-size: 16px; font-weight: var(--w-title); color: var(--ink); }
+.mxd-modal-close {
+  width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px;
+  background: var(--well); color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer;
+  transition: background var(--snap), color var(--snap);
+}
+.mxd-modal-close:hover { background: var(--hover); color: var(--ink); }
+.mxd-modal-kpis {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;
+}
+.mxd-modal-kpi {
+  display: grid; gap: 3px; padding: 9px 11px; border-radius: 10px; background: var(--well);
+}
+.mxd-modal-kpi span { font-size: var(--fs-micro); color: var(--muted); }
+.mxd-modal-kpi b { font-size: 16px; font-weight: var(--w-title); color: var(--ink); }
+.mxd-modal-body { display: flex; align-items: center; gap: 18px; padding-top: 2px; }
+.mxd-tip-ring.is-modal { width: 104px; height: 104px; }
+.mxd-tip-ring.is-modal svg { width: 104px; height: 104px; }
+.mxd-tip-ring.is-modal .mxd-tip-center b { font-size: 15px; }
+.mxd-tip-ring.is-modal .mxd-tip-center span { font-size: 10px; }
+.mxd-modal-bar { height: 5px; border-radius: 3px; background: var(--well-2); overflow: hidden; align-self: center; }
+.mxd-modal-bar i { display: block; height: 100%; border-radius: inherit; }
+/* 榜单 Hover Tip 圆环与 P0–P4 变化口径展示 */
+.mxd-tip-wrap { display: grid; gap: 10px; min-width: 260px; }
+.mxd-tip-head { display: grid; gap: 4px; padding-bottom: 8px; border-bottom: 1px solid var(--well-2); }
+.mxd-tip-head .t-head { margin-bottom: 0; }
+.mxd-tip-kpis { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; font-size: var(--fs-meta); color: var(--muted); }
+.mxd-tip-kpis b { color: var(--ink); font-weight: var(--w-medium); margin-left: 3px; }
+.mxd-tip-kpis b.is-up { color: var(--sev-1); }
+.mxd-tip-kpis b.is-down { color: var(--accent); }
+.mxd-tip-card { display: flex; align-items: center; gap: 16px; }
+.mxd-tip-ring { position: relative; flex: none; width: 76px; height: 76px; }
+.mxd-tip-ring svg { display: block; width: 76px; height: 76px; }
+.mxd-tip-ring circle { fill: none; stroke-width: 6.5; }
+.mxd-tip-track { stroke: var(--well-2); }
+.mxd-tip-arc { transform: rotate(-90deg); transform-origin: 28px 28px; stroke-linecap: butt; }
+.mxd-tip-center {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 1px; text-align: center; pointer-events: none;
+}
+.mxd-tip-center b { color: var(--ink); font-size: 12.5px; font-weight: var(--w-medium); line-height: 1.05; }
+.mxd-tip-center span { color: var(--muted); font-size: 8.5px; line-height: 1.05; }
+.mxd-tip-grid { display: grid; gap: 3px; flex: 1 1 auto; min-width: 0; }
+.mxd-tip-line {
+  display: grid; grid-template-columns: 54px minmax(40px, 1fr) 44px 72px 68px; align-items: baseline; column-gap: 8px;
+  font-size: var(--fs-meta); line-height: 1.45; white-space: nowrap;
+}
+.mxd-tip-line.is-prob { grid-template-columns: 44px 86px 56px; }
+.mxd-tip-sev { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-2); }
+.mxd-tip-sev i { width: 7px; height: 7px; border-radius: 50%; background: var(--c, var(--sev-1)); flex: none; }
+.mxd-tip-pct { text-align: right; color: var(--ink); font-weight: var(--w-medium); }
+.mxd-tip-tr { text-align: right; color: var(--muted); }
+.mxd-tip-pr { text-align: right; color: var(--ink-2); }
+.mxd-tip-pair { text-align: right; color: var(--muted); }
+.mxd-tip-delta { text-align: right; font-weight: var(--w-medium); color: var(--muted); }
+.mxd-tip-delta.is-up { color: var(--sev-1); }
+.mxd-tip-delta.is-down { color: var(--accent); }
+.mxd-tip-delta.is-flat { color: var(--faint); }
+/* 翻转背面：多问题日期折线走势图 */
+.mxd-head.is-line { display: flex; align-items: center; justify-content: space-between; flex-wrap: nowrap; gap: 10px; }
+.mxd-line-controls { display: flex; align-items: center; flex-wrap: nowrap; gap: 8px; min-width: 0; flex: 1 1 auto; overflow: hidden; }
+.mxd-line-actions { display: flex; flex-direction: row; align-items: center; flex-wrap: nowrap; gap: 6px; flex: 0 0 auto; margin-left: auto; white-space: nowrap; }
+.mxt-zoom.mxd-zoom-lock {
+  display: inline-grid; place-items: center; flex: 0 0 28px; width: 28px; height: 28px;
+  border-radius: var(--r-ctl); background: var(--card);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ink) 6%, transparent);
+}
+.mxd-flip-btn { flex: 0 0 auto; }
+.mxd-dir-seg {
+  display: inline-flex; align-items: center; gap: 2px; height: 28px; padding: 2px; flex: 0 0 auto;
+  border-radius: var(--r-ctl); background: var(--well-2);
+}
+.mxd-dir-seg button {
+  height: 24px; padding: 0 10px; border-radius: calc(var(--r-ctl) - 2px);
+  color: var(--muted); font-size: var(--fs-meta); font-weight: var(--w-medium); cursor: pointer; white-space: nowrap;
+  transition: background var(--snap), color var(--snap);
+}
+.mxd-dir-seg button:hover { color: var(--ink); }
+.mxd-dir-seg button[aria-pressed="true"] {
+  background: var(--card); color: var(--ink); box-shadow: 0 1px 2px color-mix(in oklab, var(--ink) 8%, transparent);
+}
+.mxd-line-chips { display: flex; align-items: center; flex-wrap: nowrap; gap: 6px; min-width: 0; flex: 1 1 auto; overflow-x: auto; scrollbar-width: none; }
+.mxd-line-chips::-webkit-scrollbar { display: none; }
+.mxd-line-chip {
+  display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 8px; flex: 0 0 auto;
+  border-radius: var(--r-chip); background: var(--card); color: var(--muted);
+  font-size: var(--fs-micro); cursor: pointer; opacity: 0.45;
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ink) 5%, transparent);
+  transition: opacity var(--snap), background var(--snap), color var(--snap), box-shadow var(--snap);
+}
+.mxd-line-chip.is-on {
+  opacity: 1; color: var(--ink);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--c, var(--accent)) 36%, transparent);
+}
+.mxd-line-chip:hover { opacity: 0.9; background: var(--hover); }
+.mxd-line-chip > i { width: 7px; height: 7px; border-radius: 50%; background: var(--c, var(--accent)); flex: none; }
+.mxd-chip-name { max-width: 112px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mxd-line-chip b.is-up { color: var(--sev-1); }
+.mxd-line-chip b.is-down { color: var(--accent); }
+.mxd-line-plot { min-width: 0; min-height: 186px; cursor: default; }
+.mxd-line-plot.is-unlocked { cursor: grab; }
+.mxd-line-plot.is-unlocked:active { cursor: grabbing; }
+.mxd-boards {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: stretch; min-width: 0;
+}
+.mxd-board {
+  display: grid; grid-auto-rows: 1fr; gap: 2px; min-width: 0;
+  padding: 10px 12px; border-radius: 12px; background: var(--well);
+}
+.mxd-row {
+  display: grid; align-items: center; column-gap: 10px; min-width: 0; min-height: 32px;
+  padding: 0 8px; border-radius: 7px; text-align: left; color: var(--ink-2); cursor: pointer;
+  transition: background var(--snap), color var(--snap), transform var(--spring);
+}
+.mxd-row.is-top { grid-template-columns: 20px 74px minmax(0, 1.35fr) minmax(56px, 0.85fr) 52px 52px; }
+.mxd-row.is-drop { grid-template-columns: 20px 74px minmax(0, 1.35fr) minmax(56px, 0.85fr) 88px 52px; }
+.mxd-row:hover { background: var(--hover); color: var(--ink); }
+.mxd-row:active { transform: scale(0.992); transition-duration: 110ms; }
+.mxd-rank { color: var(--faint); font-size: var(--fs-micro); text-align: right; }
+.mxd-stage {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 20px; padding: 0 6px; border-radius: 5px; background: var(--well-2);
+  color: var(--muted); font-size: var(--fs-micro); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mxd-name {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--ink); font-size: var(--fs-small); font-weight: var(--w-medium);
+}
+.mxd-bar { position: relative; height: 6px; border-radius: 3px; background: var(--well-2); overflow: hidden; }
+.mxd-bar-fill { position: absolute; inset: 0 auto 0 0; border-radius: 3px; }
+.mxd-bar.is-top .mxd-bar-fill { background: color-mix(in oklab, var(--sev-1) 54%, var(--card)); }
+.mxd-bar.is-top .mxd-bar-p01 { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--sev-1); }
+.mxd-bar.is-drop .mxd-bar-fill { background: var(--accent); }
+.mxd-count { justify-self: end; color: var(--ink); font-size: var(--fs-small); font-weight: var(--w-medium); white-space: nowrap; }
+.mxd-pair {
+  display: grid; grid-template-columns: minmax(0, 1fr) 12px minmax(0, 1fr);
+  align-items: baseline; font-size: var(--fs-meta); color: var(--muted); white-space: nowrap;
+}
+.mxd-pair .is-from { justify-self: end; color: var(--muted); }
+.mxd-pair i { justify-self: center; color: var(--faint); font-style: normal; font-size: var(--fs-micro); }
+.mxd-pair .is-to { justify-self: start; color: var(--ink-2); font-weight: var(--w-medium); }
+.mxd-delta { justify-self: end; font-size: var(--fs-meta); font-weight: var(--w-medium); white-space: nowrap; color: var(--muted); }
+.mxd-delta.is-up { color: var(--sev-1); }
+.mxd-delta.is-down { color: var(--accent); }
+.mxd-delta.is-flat { color: var(--faint); }
+@media (max-width: 1160px) {
+  .mxd-heat { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .mxd-boards { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 700px) {
+  .mxd-heat { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .mxd-row { column-gap: 8px; padding: 0 4px; }
+  .mxd-row.is-top { grid-template-columns: 18px 66px minmax(0, 1fr) 46px 46px; }
+  .mxd-row.is-drop { grid-template-columns: 18px 66px minmax(0, 1fr) 76px 46px; }
+  .mxd-bar { display: none; }
+}
 .mx-panels.is-both { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); align-items: stretch; }
 /* 左右两栏共用一个高度：左栏问题卡片的行等高铺满，最后一行的底边与右栏热力的底边对齐，
    两栏顶边同一条线，卡片之间、两栏之间都是同一个间距。 */
@@ -382,7 +622,7 @@ body.is-mx-full { overflow: hidden; }
 /* 两栏并排时左栏按宽度自动选 3/4 列：1440 下 4 列 × 3 行，右栏趋势图才有正常的横向比例；
    卡片底部的两个读数压到一行，长数字不再把脚注挤成两行。 */
 @media (min-width: 1161px) {
-  .mx-panels.is-both .mpt-grid { grid-template-columns: repeat(auto-fill, minmax(175px, 1fr)); }
+  .mx-panels.is-both .mpt-grid { grid-template-columns: repeat(auto-fill, minmax(156px, 1fr)); }
   .mx-panels.is-both .mpt-card > footer {
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 4px; min-height: 0; font-size: 11px;

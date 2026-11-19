@@ -6,6 +6,7 @@ import { sunburst } from "./sunburst.js";
 import { sunburstTween } from "./motion.js";
 import { galaxy } from "./galaxy.js";
 import { mountAB } from "./abtest.js";
+import { mountDailyTop, resolveDailyTip } from "./daily_top.js";
 import { mountProblemTrends } from "./problem_trends.js";
 import { traceSeverityModel, traceShares } from "./trace_analysis.js";
 import { createKlineChart, createTrendChart, KLINE_PERIODS } from "./kline_chart.js";
@@ -1913,7 +1914,7 @@ function wireMatrixAnalysis(panel, model, state, trend) {
     if (h !== lastChartH) { lastChartH = h; paint(); }
   };
   panel._mxFitObserver?.disconnect();
-  const ro = new ResizeObserver(fit);
+  const ro = new ResizeObserver(() => requestAnimationFrame(fit));
   ro.observe(panel);
   const issueShell = document.getElementById("mxIssueTrends");
   if (issueShell) ro.observe(issueShell);
@@ -2484,6 +2485,9 @@ function normalizeTrend(trend, data) {
 
 function matrixCard(p, tax) {
   const page = document.documentElement.dataset.matrix === "1";
+  const klineBtn = tax
+    ? `<button type="button" class="link mx-kline" id="mxKline" aria-expanded="false" aria-controls="mxKlineFace">问题K线图</button>`
+    : "";
   const abBtn = p.ab && tax
     ? `<button type="button" class="link mx-ab" id="mxAB" aria-expanded="false" aria-controls="mxABFace" title="固定题集改版前后对比 + 线上真实用户验证">A/B Test<small>${esc(p.ab.label || "")}</small></button>`
     : "";
@@ -2491,11 +2495,24 @@ function matrixCard(p, tax) {
     <div class="mx-face mx-matrix-face" id="mxMatrixFace">
       <header class="card-head mx-card-head"><h2>聚类矩阵</h2>${actions ? `<div class="mx-head-actions">${actions}</div>` : ""}</header>
       ${body}
-      ${chrome ? `<div class="mx-panels" id="mxPanels" hidden>
+      ${chrome ? `<section class="mx-daily" id="mxDaily" hidden aria-label="每日 TOP 问题"></section>` : ""}
+    </div>
+    ${chrome ? `<div class="mx-face mx-kline-face" id="mxKlineFace" hidden>
+      <header class="card-head ab-card-head mx-kline-head">
+        <h2>问题K线图</h2>
+        <div class="ab-head-actions">
+          <button type="button" class="icon-btn ab-full" id="klineFull" aria-pressed="false" aria-label="全屏查看问题K线图" title="全屏">
+            <svg class="i-abfull-open" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 2.5H2.5V6M10 2.5h3.5V6M6 13.5H2.5V10M10 13.5h3.5V10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <svg class="i-abfull-close" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 6H6V2.5M13.5 6H10V2.5M2.5 10H6v3.5M13.5 10H10v3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button type="button" class="link ab-close" id="klineClose" aria-label="返回聚类矩阵">← 返回矩阵</button>
+        </div>
+      </header>
+      <div class="mx-panels is-both" id="mxPanels" hidden>
         <section class="mx-issue-trends-shell" id="mxIssueTrends" hidden aria-label="全部问题类型趋势"></section>
         <section class="mx-perspective" id="mxPerspective" hidden aria-label="聚类矩阵问题分析"></section>
-      </div>` : ""}
-    </div>
+      </div>
+    </div>` : ""}
     <div class="mx-face mx-ab-face" id="mxABFace" hidden>
       <header class="card-head ab-card-head">
         <h2>A/B Test</h2>
@@ -2519,7 +2536,7 @@ function matrixCard(p, tax) {
   }
   return matrix(
     `<div id="mxShell">${matrixTable(matrixView(p, sceneRoot.children, clusterRoot.children))}</div>`,
-    `${abBtn}<button type="button" class="icon-btn mx-full" id="mxFull" aria-pressed="false" aria-label="全屏查看聚类矩阵" title="全屏">
+    `${klineBtn}${abBtn}<button type="button" class="icon-btn mx-full" id="mxFull" aria-pressed="false" aria-label="全屏查看聚类矩阵" title="全屏">
       <svg class="i-mxfull-open" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 2.5H2.5V6M10 2.5h3.5V6M6 13.5H2.5V10M10 13.5h3.5V10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
       <svg class="i-mxfull-close" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 6H6V2.5M13.5 6H10V2.5M2.5 10H6v3.5M13.5 10H10v3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </button><button type="button" class="mx-back" id="mxBack" hidden aria-label="返回上一级">← 返回</button>`,
@@ -3369,6 +3386,7 @@ function wire(bento, p, tax, u) {
   // Rows: task → subtask (long task lists fold into 其他场景). Columns: stage → mechanism → pattern.
   const shell = $("#mxShell", bento);
   let mxView = null;
+  let setKlinePanelsOpen = () => {};
   if (shell && tax) {
     /* 聚类矩阵全屏：卡片离开 bento 铺满视口，Esc 或同一枚键回到原位。 */
     const mxCardEl = shell.closest(".mx-card");
@@ -3465,7 +3483,7 @@ function wire(bento, p, tax, u) {
       mxView = view;
       mxKey = "";
       remember();
-      swapShell(shell, matrixTable(mxView), animate, source, () => { if (!trend.open) setPanelsOpen(true); });
+      swapShell(shell, matrixTable(mxView), animate, source, () => { if (!trend.open) setDailyOpen(true); });
       const back = $("#mxBack", bento);
       if (back) {
         back.textContent = "← 返回上一级";
@@ -3540,10 +3558,15 @@ function wire(bento, p, tax, u) {
       lines: trend.lines, active: trend.active,
     });
     let trendData = null;
+    const dailyEl = $("#mxDaily", bento);
     const perspectiveEl = $("#mxPerspective", bento);
     const issueEl = $("#mxIssueTrends", bento);
     const panelsEl = $("#mxPanels", bento);
-    /* 两张分析面板没有开关，默认就在矩阵下面；只有进入某个格子的就地趋势时才让位。 */
+    /* 每日 TOP 问题面板常驻在矩阵下方，只有进入某个格子的就地趋势时才让位；
+       原本的两张 K 线分析面板移到翻转背面「问题K线图」（#mxKlineFace）。 */
+    let dailyOpen = false;
+    let dailyLoading = false;
+    let dailyToken = 0;
     let panelsOpen = false;
     let perspectiveToken = 0;
     let perspectiveLoading = false;
@@ -3591,6 +3614,49 @@ function wire(bento, p, tax, u) {
       if (anims.length) Promise.all(anims.map((a) => a.finished.catch(() => {}))).then(clean);
       else clean();
       cancelPanelMotion = () => { anims.forEach((a) => a.cancel()); clean(); };
+    }
+
+    function renderDailyTop(reveal = true) {
+      if (!dailyEl || !dailyOpen || !trendData) return;
+      const update = () => mountDailyTop(dailyEl, trendData, tax, u.mx, {
+        onPickProblem: ({ code, name, source }) => {
+          openTrend({ name: "全部场景", all: true }, { name, prefix: code, pat: code }, source, true);
+        },
+      });
+      if (reveal) layoutPanels(update);
+      else update();
+    }
+
+    async function hydrateDailyTop() {
+      if (!dailyEl || !dailyOpen || trendData || dailyLoading) return;
+      dailyLoading = true;
+      const token = ++dailyToken;
+      const data = await loadTrend(ctx);
+      if (token !== dailyToken) return;
+      dailyLoading = false;
+      if (data?.dates?.length) {
+        trendData = data;
+        trendData.modelLabels = data.modelLabels || (p.models || []).map((m) => ({ id: m.id, label: m.label }));
+        issueData = issueData || data;
+      }
+      if (dailyOpen && dailyEl.isConnected) {
+        if (trendData) renderDailyTop();
+        else layoutPanels(() => { dailyEl.innerHTML = `<div class="mx-issue-loading"><div class="empty">暂无每日问题数据</div></div>`; });
+      }
+    }
+
+    function setDailyOpen(open, animate = true) {
+      if (dailyOpen === open) return;
+      dailyOpen = open;
+      layoutPanels(() => {
+        if (!dailyEl) return;
+        dailyEl.hidden = !open;
+        if (open) {
+          if (trendData) renderDailyTop(false);
+          else dailyEl.innerHTML = `<div class="mx-issue-loading"><div class="empty">正在读取每日问题…</div></div>`;
+        }
+      }, animate);
+      if (open) hydrateDailyTop();
     }
 
     function renderIssueTrends(reveal = true) {
@@ -3684,11 +3750,12 @@ function wire(bento, p, tax, u) {
       if (issueEl) hydrateIssueTrends();
       if (perspectiveEl) hydratePerspective();
     }
+    setKlinePanelsOpen = setPanelsOpen;
 
     function trendFrame(row, animate = true, source = null) {
       const spec = trendSpec(row);
       const title = trendTitle(row, spec.node);
-      swapShell(shell, trendBodyHTML(trendData, spec, title), animate, source, () => setPanelsOpen(false));
+      swapShell(shell, trendBodyHTML(trendData, spec, title), animate, source, () => setDailyOpen(false));
       const box = $(".mxt", shell);
       const zoomBtn = $("#mxtZoom", box);
       const setZoom = (on) => {
@@ -3903,7 +3970,7 @@ function wire(bento, p, tax, u) {
       if (token !== trendToken || !trend.open || !shell.isConnected) return;
       $$(".mx-trend-probe, .mx-swap-probe", shell).forEach((el) => el.remove());
       if (!data || !data.dates || !data.dates.length) {
-        swapShell(shell, `<div class="mxt mx-swap-panel"><div class="empty">暂无趋势数据</div></div>`, !!ready, source, () => setPanelsOpen(false));
+        swapShell(shell, `<div class="mxt mx-swap-panel"><div class="empty">暂无趋势数据</div></div>`, !!ready, source, () => setDailyOpen(false));
         return;
       }
       trendData = data;
@@ -3925,8 +3992,8 @@ function wire(bento, p, tax, u) {
     const preloadTrend = () => loadTrend(ctx);
     if ("requestIdleCallback" in window) requestIdleCallback(preloadTrend, { timeout: 3000 });
     else setTimeout(preloadTrend, 1200);
-    // 默认展开两张分析面板；回到某个格子的趋势时它们保持收着。
-    setPanelsOpen(!trend.open, false);
+    // 默认展开每日 TOP 问题面板；进入某个格子的就地趋势时它保持收着。
+    setDailyOpen(!trend.open, false);
     // 就地刷新或切产品回来：路径还在，趋势也重新打开在同一格上。
     if (trend.open && trend.node) {
       const row = (mxView.rows || []).find((x) => x.name === trend.rowName);
@@ -4021,6 +4088,7 @@ function wire(bento, p, tax, u) {
   });
 
   bindTips(bento, (t) => {
+    if (t.dataset.mxdTipKind) return resolveDailyTip(t);
     if (t.dataset.mx) {
       if (!mxView) return null;
       const [ri, ci] = t.dataset.mx.split(":").map(Number);
@@ -4046,28 +4114,40 @@ function wire(bento, p, tax, u) {
       <span>${esc(groupName(p, p.field[g]))}</span>${c[4] ? `<span class="dim">流失用户</span>` : ""}<b class="num">${c[2]} 个问题</b></div>`;
   });
 
-  /* A/B Test: 聚类矩阵卡原位翻转成背面的对比面板，返回时再翻回矩阵。
-     数据按需拉一次；展开状态活在 u.ab 上，就地刷新后还停在原来那一期、步骤和格子。 */
+  /* 问题K线图 & A/B Test: 聚类矩阵卡原位翻转成背面的分析或对比面板，返回时再翻回矩阵。
+     数据按需拉一次；展开状态活在 u.kline / u.ab 上，就地刷新后还停在原来那一面。 */
+  const klineBtn = $("#mxKline", bento);
+  const klineFace = $("#mxKlineFace", bento);
   const abBtn = $("#mxAB", bento);
   const mxCard = $("#mxCard", bento);
   const matrixFace = $("#mxMatrixFace", bento);
   const abFace = $("#mxABFace", bento);
   const abBody = $("#abBody", bento);
-  if (abBtn && mxCard && matrixFace && abFace && abBody && p.ab) {
-    u.ab = u.ab || { open: false, round: -1, metric: "", cell: null, mxRows: [], mxCols: [], mxTrail: [] };
-    let targetBack = !abFace.hidden;
+  if (mxCard && matrixFace && (klineFace || (abBtn && abFace && abBody && p.ab))) {
+    u.kline = u.kline || { open: false, full: false };
+    u.ab = u.ab || { open: false, full: false, round: -1, metric: "", cell: null, mxRows: [], mxCols: [], mxTrail: [] };
+    let currentFace = "matrix";
+    let targetFace = "matrix";
     let flipping = false;
-    let loading = false;
-    let loaded = false;
-    const setFace = (back) => {
-      matrixFace.hidden = back;
-      abFace.hidden = !back;
-      mxCard.classList.toggle("is-ab", back);
-      abBtn.setAttribute("aria-expanded", String(back));
+    let abLoading = false;
+    let abLoaded = false;
+
+    const setFace = (face) => {
+      currentFace = face;
+      matrixFace.hidden = face !== "matrix";
+      if (klineFace) klineFace.hidden = face !== "kline";
+      if (abFace) abFace.hidden = face !== "ab";
+      mxCard.classList.toggle("is-kline", face === "kline");
+      mxCard.classList.toggle("is-ab", face === "ab");
+      if (klineBtn) klineBtn.setAttribute("aria-expanded", String(face === "kline"));
+      if (abBtn) abBtn.setAttribute("aria-expanded", String(face === "ab"));
+      setKlinePanelsOpen(face === "kline", false);
+      if (face === "matrix" && shell) fitMatrix(shell.querySelector(".matrix:last-of-type"));
     };
+
     const wait = (anim) => (anim && anim.finished ? anim.finished.catch(() => {}) : Promise.resolve());
-    const flipOnce = async (back) => {
-      if (REDUCED || !mxCard.animate) return setFace(back);
+    const flipOnce = async (face) => {
+      if (REDUCED || !mxCard.animate) return setFace(face);
       const oldH = mxCard.getBoundingClientRect().height;
       const out = mxCard.animate([
         { transform: "perspective(1600px) translateZ(0) rotateX(0deg) scale(1)", opacity: 1 },
@@ -4075,7 +4155,7 @@ function wire(bento, p, tax, u) {
       ], { duration: 150, easing: "cubic-bezier(0.4, 0, 1, 1)", fill: "forwards" });
       await wait(out);
       out.cancel();
-      setFace(back);
+      setFace(face);
       const newH = mxCard.getBoundingClientRect().height;
       mxCard.style.height = `${oldH}px`;
       mxCard.style.overflow = "hidden";
@@ -4092,48 +4172,56 @@ function wire(bento, p, tax, u) {
       mxCard.style.height = "";
       mxCard.style.overflow = "";
     };
-    const requestFace = async (back) => {
-      targetBack = back;
+
+    const requestFace = async (face) => {
+      targetFace = face;
       if (flipping) return;
       flipping = true;
       mxCard.classList.add("is-flipping");
       try {
-        while (targetBack !== !abFace.hidden) await flipOnce(targetBack);
+        while (targetFace !== currentFace) await flipOnce(targetFace);
       } finally {
         flipping = false;
         mxCard.classList.remove("is-flipping");
       }
     };
+
     const hydrateAB = async () => {
-      if (loaded || loading) return;
-      loading = true;
+      if (!abBody || !p.ab || abLoaded || abLoading) return;
+      abLoading = true;
       const data = await loadAB(ctx, p.ab.url);
       if (!data || !data.rounds || !data.rounds.length) {
         abBody.innerHTML = `<div class="empty">暂无 AB 测试数据</div>`;
-        loaded = true;
-        loading = false;
+        abLoaded = true;
+        abLoading = false;
         return;
       }
       mountAB(abBody, data, u.ab, tax, p, { openCompare, mountCellTrend: mountABCellTrend });
-      loaded = true;
-      loading = false;
+      abLoaded = true;
+      abLoading = false;
     };
+
     /* Fullscreen keeps the reader inside the same card: it leaves the bento, covers the viewport and
        returns to its slot on Esc or the same icon, so no second panel is mounted. */
-    const fullBtn = $("#abFull", mxCard);
+    const klineFullBtn = $("#klineFull", mxCard);
+    const abFullBtn = $("#abFull", mxCard);
     const setFull = (on, animate = true) => {
       const had = mxCard.classList.contains("is-full");
-      u.ab.full = on;
+      if (currentFace === "kline") u.kline.full = on;
+      if (currentFace === "ab") u.ab.full = on;
       if (had === on) return;
       const first = animate && !REDUCED ? mxCard.getBoundingClientRect() : null;
       mxCard.classList.toggle("is-full", on);
       document.body.classList.toggle("is-ab-full", on);
-      if (fullBtn) {
-        fullBtn.setAttribute("aria-pressed", String(on));
-        const label = on ? "退出全屏" : "全屏查看 A/B Test";
-        fullBtn.setAttribute("aria-label", label);
-        fullBtn.title = on ? "退出全屏" : "全屏";
-      }
+      [
+        [klineFullBtn, "全屏查看问题K线图"],
+        [abFullBtn, "全屏查看 A/B Test"],
+      ].forEach(([btn, openLabel]) => {
+        if (!btn) return;
+        btn.setAttribute("aria-pressed", String(on));
+        btn.setAttribute("aria-label", on ? "退出全屏" : openLabel);
+        btn.title = on ? "退出全屏" : "全屏";
+      });
       if (!first) return;
       const last = mxCard.getBoundingClientRect();
       mxCard.animate([
@@ -4141,30 +4229,55 @@ function wire(bento, p, tax, u) {
         { transform: "none" },
       ], { duration: 360, easing: "cubic-bezier(0.16, 1, 0.3, 1)" });
     };
-    const closeAB = () => {
+
+    const closeBackFace = () => {
+      u.kline.open = false;
+      u.kline.full = false;
       u.ab.open = false;
+      u.ab.full = false;
       setFull(false, false);
-      requestFace(false);
+      requestFace("matrix");
+    };
+    const openKline = async () => {
+      u.kline.open = true;
+      u.ab.open = false;
+      await requestFace("kline");
     };
     const openAB = async () => {
+      if (!p.ab || !abFace) return;
       u.ab.open = true;
-      await requestFace(true);
+      u.kline.open = false;
+      await requestFace("ab");
       if (u.ab.open) hydrateAB();
     };
-    abBtn.addEventListener("click", () => (u.ab.open ? closeAB() : openAB()));
-    $("#abClose", mxCard).addEventListener("click", closeAB);
-    if (fullBtn) fullBtn.addEventListener("click", () => setFull(!u.ab.full));
+
+    klineBtn?.addEventListener("click", () => (u.kline.open ? closeBackFace() : openKline()));
+    $("#klineClose", mxCard)?.addEventListener("click", closeBackFace);
+    klineFullBtn?.addEventListener("click", () => setFull(!mxCard.classList.contains("is-full")));
+
+    if (abBtn && abFace && abBody && p.ab) {
+      abBtn.addEventListener("click", () => (u.ab.open ? closeBackFace() : openAB()));
+      $("#abClose", mxCard)?.addEventListener("click", closeBackFace);
+      abFullBtn?.addEventListener("click", () => setFull(!mxCard.classList.contains("is-full")));
+    }
+
     const onDocKey = (e) => {
-      if (e.key !== "Escape" || !u.ab.open || !mxCard.isConnected) return;
-      if (u.ab.full) setFull(false);
-      else closeAB();
+      if (e.key !== "Escape" || (!u.ab.open && !u.kline.open) || !mxCard.isConnected) return;
+      if (mxCard.querySelector(".mxt-sample-layout.is-open") || mxCard.querySelector(".mxp-lens.is-full")) return;
+      if (mxCard.classList.contains("is-full")) setFull(false);
+      else closeBackFace();
     };
     if (abDocKey) document.removeEventListener("keydown", abDocKey);
     abDocKey = onDocKey;
     document.addEventListener("keydown", abDocKey);
-    if (u.ab.open) {
-      setFace(true);
-      targetBack = true;
+
+    if (u.kline.open && klineFace) {
+      setFace("kline");
+      targetFace = "kline";
+      if (u.kline.full) setFull(true, false);
+    } else if (u.ab.open && abFace && p.ab) {
+      setFace("ab");
+      targetFace = "ab";
       if (u.ab.full) setFull(true, false);
       hydrateAB();
     }
