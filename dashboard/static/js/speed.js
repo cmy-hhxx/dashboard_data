@@ -8,7 +8,8 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 const CHART_PAD = { L: 48, R: 24, T: 18, B: 32 };
 const RING_OUT_C = 2 * Math.PI * 56;
 const RING_IN_C = 2 * Math.PI * 42;
-const HORIZ_TREE_W = 820;
+const HORIZ_TREE_W = 940;
+const HORIZ_TREE_H = 540;
 
 const S = {
   data: null,
@@ -173,7 +174,7 @@ export function shellHTML(tax = null, pd = null) {
 
     <article class="card fx-card" style="--span:12">
       <header class="card-head"><h2>评测流水线</h2></header>
-      <div id="spFxHost">${fxDiagramHTML(tax, pd, { horizontal: true, showMatrix: false, showControls: false, idPrefix: "spfx", treeW: HORIZ_TREE_W })}</div>
+      <div id="spFxHost">${fxDiagramHTML(tax, pd, { horizontal: true, showMatrix: false, showControls: false, showLabels: false, idPrefix: "spfx", treeW: HORIZ_TREE_W, treeH: HORIZ_TREE_H })}</div>
     </article>
 
     <article class="card sp-rate-card is-rate-attr" style="--span:4">
@@ -842,6 +843,7 @@ function mountPipeline(root, c) {
     horizontal: true,
     idPrefix: "spfx",
     treeW: HORIZ_TREE_W,
+    treeH: HORIZ_TREE_H,
     liveControl: true,
     nav: c?.navigate || null,
     product: c?.product || null,
@@ -1087,7 +1089,7 @@ export async function render(root, c) {
     mountPipeline(root, c);
   } else if (S.taxKey !== nextTaxKey && $("#spFxHost", root)) {
     const host = $("#spFxHost", root);
-    host.innerHTML = fxDiagramHTML(tax, pd, { horizontal: true, showMatrix: false, showControls: false, idPrefix: "spfx", treeW: HORIZ_TREE_W });
+    host.innerHTML = fxDiagramHTML(tax, pd, { horizontal: true, showMatrix: false, showControls: false, showLabels: false, idPrefix: "spfx", treeW: HORIZ_TREE_W, treeH: HORIZ_TREE_H });
     mountPipeline(root, c);
   }
   await fetchSpeed();

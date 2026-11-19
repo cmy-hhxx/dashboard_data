@@ -69,16 +69,19 @@ test("overview card uses concentric ring chart and shows input sessions+traces, 
   assert.ok(!ov.includes("spAttrSessions"), "evaluated count must be trace-only");
 });
 
-test("pipeline card reuses native horizontal fx-diagram with horizontal cluster tree and no fake playback controls", () => {
+test("pipeline card reuses native horizontal fx-diagram with spacious horizontal tree, no stage headers/playback controls, and charging flow", () => {
   const html = shellHTML(SAMPLE_TAX, SAMPLE_PD);
   for (const token of [
-    'class="fx-diagram is-horiz"',
+    'class="fx-diagram is-horiz is-headless"',
     'class="fx-tree is-horiz"',
     'id="spfxDiagram"',
     'id="spfxTree"',
     'id="spfxRootClip"',
-    'data-rw="188"',
-    'viewBox="0 0 820 420"',
+    'id="spfxChargeClip"',
+    'data-rw="204"',
+    'viewBox="0 0 940 540"',
+    "fx-charge-track",
+    "fx-charge-band",
     "fx-box fx-in",
     "fx-hub",
     "fx-ring",
@@ -90,16 +93,13 @@ test("pipeline card reuses native horizontal fx-diagram with horizontal cluster 
     "is-stage",
     "is-cell",
     "is-leaf",
-    "原始对话",
-    "轨迹压缩",
-    "问题归因",
-    "层级聚类",
   ]) {
     assert.ok(html.includes(token), `native horizontal pipeline missing ${token}`);
   }
-  assert.ok(!html.includes("spfxPause"), "speed pipeline must not have pause button");
-  assert.ok(!html.includes("spfxSpeed"), "speed pipeline must not have speed button");
-  assert.ok(systemCss.includes(".fx-diagram.is-idle") && systemCss.includes("fx-charge-glow"), "idle charging glow styles missing");
+  for (const removed of ["spfxPause", "spfxSpeed", "fx-label", "原始对话", "轨迹压缩", "问题归因", "层级聚类"]) {
+    assert.ok(!html.includes(removed), `speed pipeline must not contain ${removed}`);
+  }
+  assert.ok(systemCss.includes(".fx-diagram.is-idle") && systemCss.includes("fx-charge-roll") && systemCss.includes("fx-charge-glow"), "idle charging flow styles missing");
   assert.ok(html.indexOf("评测流水线") > html.indexOf("评测总览"));
   assert.ok(html.lastIndexOf("<article") < html.indexOf("日期分布"), "日期分布 must be the last card");
   assert.ok(html.includes('id="spDateView"'));

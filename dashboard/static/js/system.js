@@ -508,25 +508,25 @@ function relaxY(nodes, minGap, minY, maxY) {
 }
 
 /* Left-to-right 5-tier cluster tree (全部问题 → 阶段 → 环节 → 错法 → 标准模式叶子). */
-const HTREE_W = 820;
-const HTREE_H = 420;
+const HTREE_W = 940;
+const HTREE_H = 540;
 function layoutTreeHorizontal(model, W = HTREE_W, H = HTREE_H) {
-  const padY = 18;
+  const padY = 20;
   const usableH = H - padY * 2;
   const stages = model.stages;
-  const rootW = 188;
+  const rootW = 204;
   const rootHw = rootW / 2;
-  model.root.x = 6 + rootHw;
+  model.root.x = 8 + rootHw;
   model.root.y = H / 2;
   model.root.w = rootW;
   model.root.hw = rootHw;
   model.root.hh = 22;
   if (!stages.length) {
-    return { ...model, horizontal: true, treeW: W, treeH: H, rootW, cellMode: "pill", cellW: 48, maxR: 5, minR: 2.2, leafRadius: () => 3.5, showLeafNums: false };
+    return { ...model, horizontal: true, treeW: W, treeH: H, rootW, cellMode: "pill", cellW: 52, maxR: 5, minR: 2.2, leafRadius: () => 3.5, showLeafNums: false };
   }
 
-  const contentH = stages.length <= 6 ? Math.min(usableH, Math.max(220, stages.length * 56)) : usableH;
-  const minSpan = Math.min(34, contentH / stages.length);
+  const contentH = stages.length <= 6 ? Math.min(usableH, Math.max(260, stages.length * 64)) : usableH;
+  const minSpan = Math.min(38, contentH / stages.length);
   const extra = Math.max(0, contentH - stages.length * minSpan);
   const leafCounts = stages.map((sn) => Math.max(1, sn.children.reduce((t, c) => t + c.children.length, 0)));
   const weights = leafCounts.map((c) => Math.max(0, c - 1));
@@ -536,10 +536,10 @@ function layoutTreeHorizontal(model, W = HTREE_W, H = HTREE_H) {
   stages.forEach((sn, i) => {
     const span = wSum > 0 ? minSpan + extra * (weights[i] / wSum) : contentH / stages.length;
     sn.y = y + span / 2;
-    sn.x = 444;
-    sn.w = 152;
-    sn.hw = 76;
-    sn.hh = 13;
+    sn.x = 500;
+    sn.w = 170;
+    sn.hw = 85;
+    sn.hh = 15;
     const padIn = Math.min(8, span * 0.12);
     const leaves = sn.children.flatMap((c) => c.children);
     leaves.forEach((lf, k) => {
@@ -551,51 +551,54 @@ function layoutTreeHorizontal(model, W = HTREE_W, H = HTREE_H) {
     y += span;
   });
 
-  relaxY(stages, 32, padY + 14, H - padY - 14);
+  relaxY(stages, Math.min(40, usableH / Math.max(1, stages.length)), padY + 16, H - padY - 16);
 
   model.phases.forEach((ph) => {
     const first = ph.children[0];
     const last = ph.children[ph.children.length - 1];
-    ph.x = 276;
+    ph.x = 308;
     ph.y = (first.y + last.y) / 2;
-    ph.w = 96;
-    ph.hw = 48;
-    ph.hh = 15;
+    ph.w = 118;
+    ph.hw = 59;
+    ph.hh = 17;
   });
-  relaxY(model.phases, 38, padY + 16, H - padY - 16);
+  relaxY(model.phases, 46, padY + 18, H - padY - 18);
 
   const cells = model.cells;
   const cellMode = cells.length <= 16 ? "pill" : "circle";
-  const cellW = 48;
+  const cellW = 52;
   if (cellMode === "pill") {
-    cells.forEach((cn) => { cn.x = 612; cn.hw = cellW / 2; cn.hh = 11; });
-    relaxY(cells, 26, padY + 12, H - padY - 12);
+    cells.forEach((cn) => { cn.x = 672; cn.hw = cellW / 2; cn.hh = 12; });
+    relaxY(cells, 28, padY + 13, H - padY - 13);
   } else {
-    const cols = cells.length > 28 ? 2 : 1;
-    const cellPitch = cells.length > 1 ? (usableH * cols) / (cells.length - 1) : 24;
-    const cellR = Math.max(6.2, Math.min(9.5, (cellPitch - 3) / 2));
+    const cols = cells.length > 36 ? 3 : cells.length > 18 ? 2 : 1;
+    const perCol = Math.ceil(cells.length / cols);
+    const colPitch = perCol > 1 ? usableH / (perCol - 1) : 26;
+    const cellR = Math.max(7.6, Math.min(9.6, (colPitch - 4) / 2));
+    const cellBase = cols === 3 ? 646 : cols === 2 ? 658 : 672;
+    const cellStep = 26;
     cells.forEach((cn, idx) => {
       cn.r = cellR;
       cn.hw = cellR;
       cn.hh = cellR;
-      cn.x = cols === 2 ? 602 + (idx % 2) * 22 : 612;
+      cn.x = cellBase + (idx % cols) * cellStep;
     });
-    relaxY(cells, Math.max(cellR * 1.15, usableH / Math.max(1, cells.length)), padY + cellR, H - padY - cellR);
+    relaxY(cells, usableH / Math.max(1, cells.length), padY + cellR, H - padY - cellR);
   }
 
   const leaves = model.leaves;
-  const leafCols = leaves.length > 64 ? 3 : leaves.length > 24 ? 2 : 1;
+  const leafCols = leaves.length > 90 ? 4 : leaves.length > 50 ? 3 : leaves.length > 20 ? 2 : 1;
   const perCol = Math.ceil(leaves.length / leafCols);
-  const colPitch = perCol > 1 ? usableH / (perCol - 1) : 20;
-  const maxR = Math.max(2.0, Math.min(6.2, colPitch * 0.40));
-  const minR = Math.max(1.5, maxR * 0.56);
-  relaxY(leaves, Math.max(1.6, usableH / Math.max(1, leaves.length)), padY + maxR, H - padY - maxR);
+  const colPitch = perCol > 1 ? usableH / (perCol - 1) : 22;
+  const maxR = Math.max(2.4, Math.min(5.8, colPitch * 0.36));
+  const minR = Math.max(1.8, maxR * 0.56);
+  relaxY(leaves, usableH / Math.max(1, leaves.length), padY + maxR, H - padY - maxR);
   const leafRadius = (count) => {
     if (count <= 0) return minR;
     return minR + Math.sqrt(Math.min(1, count / model.maxLeaf)) * (maxR - minR);
   };
-  const xBase = leafCols === 3 ? 726 : leafCols === 2 ? 746 : 762;
-  const xStep = leafCols === 3 ? 28 : 26;
+  const xBase = leafCols === 4 ? 786 : leafCols === 3 ? 802 : leafCols === 2 ? 818 : 824;
+  const xStep = leafCols === 4 ? 32 : 34;
   leaves.forEach((lf, idx) => {
     lf.r = leafRadius(lf.n);
     lf.x = xBase + (idx % leafCols) * xStep;
@@ -626,9 +629,12 @@ function treeSVG(model, W = TREE_W, { idPrefix = "fx", horizontal = false } = {}
   const rootW = model.rootW || 236;
   const rootHw = rootW / 2;
   const clipId = `${idPrefix}RootClip`;
+  const chargeClipId = `${idPrefix}ChargeClip`;
   const sheenId = `${idPrefix}LiquidSheen`;
   const glossId = `${idPrefix}RootGloss`;
   const sweepId = `${idPrefix}RootSweep`;
+  const chargeGradId = `${idPrefix}ChargeGrad`;
+  const edgeGradId = `${idPrefix}EdgeGrad`;
   const links = model.all.filter((n) => n.parent).map((n) => {
     const c = linkCurve(n, horizontal);
     const d = c.horiz
@@ -648,6 +654,11 @@ function treeSVG(model, W = TREE_W, { idPrefix = "fx", horizontal = false } = {}
       const waveMid = `M${lx} ${ry}H${rx}Q${rx - 5} ${ry + 11} ${rx} ${ry + 22}T${rx} ${ry + 44}T${rx} ${ry + 66}T${rx} ${ry + 88}H${lx}Z`;
       const waveFront = `M${lx} ${ry}H${rx}Q${rx + 5.5} ${ry + 11} ${rx} ${ry + 22}T${rx} ${ry + 44}T${rx} ${ry + 66}T${rx} ${ry + 88}H${lx}Z`;
       const waveCrest = `M${rx} ${ry}Q${rx + 5.5} ${ry + 11} ${rx} ${ry + 22}T${rx} ${ry + 44}T${rx} ${ry + 66}T${rx} ${ry + 88}`;
+      const chargePitch = 84;
+      const chargeBands = Array.from({ length: 5 }, (_, k) => {
+        const bx = rx - rootW - chargePitch + k * chargePitch;
+        return `<polygon class="fx-charge-band" points="${(bx + 14).toFixed(1)},${ry} ${(bx + 68).toFixed(1)},${ry} ${(bx + 54).toFixed(1)},${ry + 44} ${bx.toFixed(1)},${ry + 44}" fill="url(#${chargeGradId})"/>`;
+      }).join("");
       const bubbles = [
         [28, 12, 1.8, "0s", "2.6s"],
         [58, 30, 1.3, "-0.9s", "2.2s"],
@@ -660,6 +671,7 @@ function treeSVG(model, W = TREE_W, { idPrefix = "fx", horizontal = false } = {}
       ).join("");
       rootClip = `<defs>
         <clipPath id="${clipId}"><rect x="${rx}" y="${ry}" width="${rootW}" height="44" rx="22"/></clipPath>
+        <clipPath id="${chargeClipId}"><rect x="${(rx - rootW - 24).toFixed(1)}" y="${ry}" width="${rootW + 24}" height="44"/></clipPath>
         <linearGradient id="${sheenId}" x1="0%" y1="0%" x2="0%" y2="100%">
           <stop offset="0%" stop-color="#ffffff" stop-opacity="0.34"/>
           <stop offset="55%" stop-color="#ffffff" stop-opacity="0.06"/>
@@ -675,8 +687,19 @@ function treeSVG(model, W = TREE_W, { idPrefix = "fx", horizontal = false } = {}
           <stop offset="50%" stop-color="#ffffff" stop-opacity="0.38"/>
           <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
         </linearGradient>
+        <linearGradient id="${chargeGradId}" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#ffffff" stop-opacity="0"/>
+          <stop offset="48%" stop-color="#ffffff" stop-opacity="0.46"/>
+          <stop offset="64%" stop-color="#ffffff" stop-opacity="0.62"/>
+          <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+        </linearGradient>
+        <linearGradient id="${edgeGradId}" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#ffffff" stop-opacity="0"/>
+          <stop offset="68%" stop-color="#ffffff" stop-opacity="0.28"/>
+          <stop offset="100%" stop-color="#ffffff" stop-opacity="0.72"/>
+        </linearGradient>
       </defs>`;
-      const padText = Math.max(18, rootHw - 22);
+      const padText = Math.max(18, rootHw - 18);
       return `<g class="fx-tn is-root" ${at} data-rx="${rx}" data-rw="${rootW}">
         <rect class="fx-root-bg" x="${rx}" y="${ry}" width="${rootW}" height="44" rx="22"/>
         <g clip-path="url(#${clipId})">
@@ -688,6 +711,10 @@ function treeSVG(model, W = TREE_W, { idPrefix = "fx", horizontal = false } = {}
               <path class="fx-wave-sheen" d="${waveFront}" fill="url(#${sheenId})"/>
               <path class="fx-wave-glow" d="${waveCrest}" fill="none"/>
               <path class="fx-wave-crest" d="${waveCrest}" fill="none"/>
+            </g>
+            <g class="fx-charge-wrap" clip-path="url(#${chargeClipId})" aria-hidden="true">
+              <g class="fx-charge-track">${chargeBands}</g>
+              <rect class="fx-charge-edge" x="${(rx - 22).toFixed(1)}" y="${ry}" width="22" height="44" fill="url(#${edgeGradId})"/>
             </g>
             <g class="fx-bubbles" aria-hidden="true">${bubbles}</g>
           </g>
@@ -703,16 +730,16 @@ function treeSVG(model, W = TREE_W, { idPrefix = "fx", horizontal = false } = {}
       const hw = w / 2;
       const hh = n.hh || 16;
       return `<g class="fx-tn is-phase" ${at}><rect x="${(n.x - hw).toFixed(1)}" y="${(n.y - hh).toFixed(1)}" width="${w}" height="${hh * 2}" rx="${hh}"/>
-        <text class="fx-tn-name" x="${(n.x - hw + 14).toFixed(1)}" y="${(n.y + 4.5).toFixed(1)}">${esc(n.name)}</text>
-        <text class="fx-tn-num num" x="${(n.x + hw - 14).toFixed(1)}" y="${(n.y + 4.5).toFixed(1)}" text-anchor="end" data-num="${esc(n.id)}">${fmt(n.n)}</text></g>`;
+        <text class="fx-tn-name" x="${(n.x - hw + 13).toFixed(1)}" y="${(n.y + 4.5).toFixed(1)}">${esc(n.name)}</text>
+        <text class="fx-tn-num num" x="${(n.x + hw - 13).toFixed(1)}" y="${(n.y + 4.5).toFixed(1)}" text-anchor="end" data-num="${esc(n.id)}">${fmt(n.n)}</text></g>`;
     }
     if (n.row === 2) {
       const w = n.w || 78;
       const hw = w / 2;
       if (horizontal) {
-        return `<g class="fx-tn is-stage" ${at} role="button" tabindex="0" aria-label="${esc(`${n.name}：${fmt(n.n)}，查看口径`)}"><rect x="${(n.x - hw).toFixed(1)}" y="${(n.y - 13).toFixed(1)}" width="${w.toFixed(1)}" height="26" rx="8"/>
-          <text class="fx-tn-name" x="${(n.x - hw + 10).toFixed(1)}" y="${(n.y + 4).toFixed(1)}">${esc(n.name)}</text>
-          <text class="fx-tn-num num" x="${(n.x + hw - 10).toFixed(1)}" y="${(n.y + 4).toFixed(1)}" text-anchor="end" data-num="${esc(n.id)}">${fmt(n.n)}</text></g>`;
+        return `<g class="fx-tn is-stage" ${at} role="button" tabindex="0" aria-label="${esc(`${n.name}：${fmt(n.n)}，查看口径`)}"><rect x="${(n.x - hw).toFixed(1)}" y="${(n.y - 15).toFixed(1)}" width="${w.toFixed(1)}" height="30" rx="9"/>
+          <text class="fx-tn-name" x="${(n.x - hw + 12).toFixed(1)}" y="${(n.y + 4.5).toFixed(1)}">${esc(n.name)}</text>
+          <text class="fx-tn-num num" x="${(n.x + hw - 12).toFixed(1)}" y="${(n.y + 4.5).toFixed(1)}" text-anchor="end" data-num="${esc(n.id)}">${fmt(n.n)}</text></g>`;
       }
       return `<g class="fx-tn is-stage" ${at} role="button" tabindex="0" aria-label="${esc(`${n.name}：${fmt(n.n)}，查看口径`)}"><rect x="${(n.x - hw).toFixed(1)}" y="${n.y - 22}" width="${w.toFixed(1)}" height="44" rx="11"/>
         <text class="fx-tn-name" x="${n.x.toFixed(1)}" y="${n.y - 3}" text-anchor="middle">${esc(n.name)}</text>
@@ -747,7 +774,7 @@ function treeSVG(model, W = TREE_W, { idPrefix = "fx", horizontal = false } = {}
   </svg>`;
 }
 
-export function fxDiagramHTML(tax, pd, { horizontal = false, showMatrix = true, showControls = true, idPrefix = "fx", treeW = horizontal ? HTREE_W : TREE_W, treeH = HTREE_H } = {}) {
+export function fxDiagramHTML(tax, pd, { horizontal = false, showMatrix = true, showControls = true, showLabels = true, idPrefix = "fx", treeW = horizontal ? HTREE_W : TREE_W, treeH = HTREE_H } = {}) {
   const ticks = Array.from({ length: 60 }, (_, k) => {
     const c = k % 9 === 0 ? FX_STEPS[(k / 9) % FX_STEPS.length][1] : "";
     const a = (k * Math.PI) / 30;
@@ -772,19 +799,23 @@ export function fxDiagramHTML(tax, pd, { horizontal = false, showMatrix = true, 
       ${showMatrix ? taxGrid(tax, pd) : ""}`
     : `<div class="empty">聚类树待接入</div>`;
 
-  return `<div class="fx-diagram${horizontal ? " is-horiz" : ""}" id="${idPrefix}Diagram">
+  const taxHead = showLabels || (hasTree && showControls)
+    ? `<div class="fx-tax-head">
+        ${showLabels ? `<div class="fx-label"><span class="num">04</span>层级聚类</div>` : ""}
+        ${hasTree && showControls ? `<div class="fx-ctls"><button type="button" class="fx-ctl" id="${idPrefix}Pause" aria-pressed="false">暂停</button><button type="button" class="fx-ctl" id="${idPrefix}Speed" aria-pressed="false">加速</button></div>` : ""}
+      </div>`
+    : "";
+
+  return `<div class="fx-diagram${horizontal ? " is-horiz" : ""}${showLabels ? "" : " is-headless"}" id="${idPrefix}Diagram">
     <svg class="fx-wires" aria-hidden="true"></svg>
     <canvas class="fx-sparks" aria-hidden="true"></canvas>
-    <section class="fx-stage"><div class="fx-label"><span class="num">01</span>原始对话</div><div class="fx-row">${ins}</div></section>
-    <section class="fx-stage fx-mid"><div class="fx-label"><span class="num">02</span>轨迹压缩</div>
+    <section class="fx-stage">${showLabels ? `<div class="fx-label"><span class="num">01</span>原始对话</div>` : ""}<div class="fx-row">${ins}</div></section>
+    <section class="fx-stage fx-mid">${showLabels ? `<div class="fx-label"><span class="num">02</span>轨迹压缩</div>` : ""}
       <div class="fx-hub"><span class="fx-orbit"><i></i></span><svg class="fx-ring" viewBox="-80 -80 160 160" aria-hidden="true">${ticks}</svg><span class="fx-core"><span>${tiles}</span></span></div>
     </section>
-    <section class="fx-stage"><div class="fx-label"><span class="num">03</span>问题归因</div><div class="fx-row">${outs}</div></section>
+    <section class="fx-stage">${showLabels ? `<div class="fx-label"><span class="num">03</span>问题归因</div>` : ""}<div class="fx-row">${outs}</div></section>
     <section class="fx-stage fx-tax" id="${idPrefix}Tax">
-      <div class="fx-tax-head">
-        <div class="fx-label"><span class="num">04</span>层级聚类</div>
-        ${hasTree && showControls ? `<div class="fx-ctls"><button type="button" class="fx-ctl" id="${idPrefix}Pause" aria-pressed="false">暂停</button><button type="button" class="fx-ctl" id="${idPrefix}Speed" aria-pressed="false">加速</button></div>` : ""}
-      </div>
+      ${taxHead}
       ${treeBlock}
     </section>
   </div>`;

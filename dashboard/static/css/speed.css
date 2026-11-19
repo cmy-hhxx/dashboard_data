@@ -21,7 +21,7 @@
 }
 
 /* 评测总览：双层同心圆环比例（外环已评测、内环已聚类） + 3 个核心指标 */
-.sp-ov-wrap { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--sp-6); }
+.sp-ov-wrap { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--sp-6); padding: var(--sp-1) 0; }
 .sp-ov-ring { position: relative; width: 132px; height: 132px; flex: none; }
 .sp-ov-ring svg { display: block; width: 100%; height: 100%; }
 .sp-ring-track { fill: none; stroke: var(--well-2); stroke-width: 9.5; }
@@ -32,15 +32,15 @@
 .sp-ring-arc.is-attr { stroke: var(--accent); }
 .sp-ring-arc.is-cl { stroke: var(--loc-ulq); }
 .sp-ring-center {
-  position: absolute; inset: 0; display: grid; place-content: center; text-align: center; gap: 1px;
+  position: absolute; inset: 0; display: grid; place-content: center; text-align: center; gap: 2px;
 }
-.sp-ring-center b { font-size: var(--fs-num-s); line-height: 1.05; font-weight: var(--w-title); color: var(--ink); letter-spacing: -0.02em; }
+.sp-ring-center b { font-size: var(--fs-num-s); line-height: 1.05; font-weight: var(--w-title); color: var(--ink); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 .sp-ring-center span { font-size: var(--fs-micro); color: var(--muted); }
 
 .sp-ov { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--gap); }
-.sp-ov-stat { display: grid; gap: 6px; min-width: 0; padding-left: var(--sp-4); border-left: 3px solid var(--c); }
-.sp-ov-lbl { color: var(--muted); font-size: var(--fs-small); }
-.sp-ov-val { display: flex; align-items: baseline; gap: 6px; }
+.sp-ov-stat { display: grid; gap: var(--sp-2); min-width: 0; padding-left: var(--sp-4); border-left: 3px solid var(--c); }
+.sp-ov-lbl { color: var(--muted); font-size: var(--fs-small); font-weight: var(--w-medium); }
+.sp-ov-val { display: flex; align-items: baseline; gap: var(--sp-2); }
 .sp-ov-val .big { color: var(--ink); }
 .sp-ov-stat:nth-child(2) .sp-ov-val .big { color: var(--accent); }
 .sp-ov-stat:nth-child(3) .sp-ov-val .big { color: var(--loc-ulq); }
@@ -48,10 +48,10 @@
 .sp-ov-sub b { color: var(--ink-2); font-weight: var(--w-medium); }
 
 /* 3-up speed cards */
-.sp-rate-card .sp-rate { display: flex; align-items: baseline; gap: 4px; }
+.sp-rate-card .sp-rate { display: flex; align-items: baseline; gap: var(--sp-1); }
 .sp-rate-card.is-rate-attr .big { color: var(--accent); }
 .sp-rate-card.is-rate-comp .big { color: var(--loc-vir); }
-.sp-rate-sub { color: var(--muted); font-size: var(--fs-meta); margin-top: 10px; }
+.sp-rate-sub { color: var(--muted); font-size: var(--fs-meta); margin-top: var(--sp-3); }
 .sp-rate-sub b { color: var(--ink-2); font-weight: var(--w-medium); }
 
 /* Speed trend chart */
