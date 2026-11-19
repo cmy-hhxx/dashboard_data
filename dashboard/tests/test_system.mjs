@@ -5,7 +5,7 @@ import test from "node:test";
 globalThis.location = { search: "" };
 globalThis.window = {};
 const { timelineCardHTML } = await import("../static/js/system_timeline.js");
-const { flowCard, cellModalHTML, treeModel, buildReplaySchedule } = await import("../static/js/system.js");
+const { flowCard, cellModalHTML, treeModel, computeOptimalBudget, selectOptimalTree, buildReplaySchedule } = await import("../static/js/system.js");
 const systemCss = fs.readFileSync(new URL("../static/css/system.css", import.meta.url), "utf8");
 const timelineSrc = fs.readFileSync(new URL("../static/js/system_timeline.js", import.meta.url), "utf8");
 
@@ -60,6 +60,7 @@ test("timeline uses crisp noun titles and plain Chinese: no AI titles, meta span
   assert.ok(html.includes("整批调度"));
   for (const bad of [
     "一条对话怎样被评完", "一批对话怎样排队", "怎样排队", "怎样被评完",
+    "点图里任意一条实心条", "点图里任意一行",
     'class="meta"', "tl-case-meta", "tl-global-meta", "引文核对", "tl-ev",
     "attribution-", "--model-requests", "--concurrency", "verifiedCompact", ".jsonl",
   ]) {
@@ -70,26 +71,35 @@ test("timeline uses crisp noun titles and plain Chinese: no AI titles, meta span
   assert.ok(html.includes('id="tl-focus"'));
 });
 
-test("system CSS styles the 5-tier cluster tree and modal, removes Galton board and tl clutter", () => {
+test("system CSS styles the clean 5-tier SVG tree and modal, removes old clutter selectors", () => {
   assert.ok(systemCss.includes('.view[data-view="system"] .card-head'));
   assert.ok(systemCss.includes(".fx-tree"));
-  assert.ok(systemCss.includes(".fx-tree-bar"));
+  assert.ok(systemCss.includes(".fx-tax-head"));
   assert.ok(systemCss.includes(".fx-link.is-sprout"));
   assert.ok(systemCss.includes(".fx-tn.is-leaf"));
-  assert.ok(systemCss.includes(".fx-toast"));
+  assert.ok(systemCss.includes(".fx-leaf-box"));
+  assert.ok(systemCss.includes(".fx-leaf-cap"));
+  assert.ok(systemCss.includes(".fx-tree.is-hovering"));
+  assert.ok(systemCss.includes(".fx-g-ph.is-hl"));
+  assert.ok(systemCss.includes(".fx-tn-mname"));
+  assert.ok(systemCss.includes(".fx-leaf-lbl"));
   assert.ok(systemCss.includes(".sm-panel"));
   assert.ok(systemCss.includes(".sm-pat.is-focus"));
-  for (const old of [".fx-board", ".fx-bin", ".fx-cl-how", ".tl-ev", ".tl-readout", ".sys-spec"]) {
+  for (const old of [
+    ".fx-board", ".fx-bin", ".fx-cl-how", ".tl-ev", ".tl-readout", ".sys-spec",
+    ".fx-tree-bar", ".fx-feed", ".fx-toast", ".fx-tier-lbl", ".sm-coord",
+  ]) {
     assert.ok(!systemCss.includes(old), `system.css must remove old selector ${old}`);
   }
 });
 
-test("flowCard builds a centered 5-tier cluster tree and drops prose cl-how and Galton board", () => {
+test("flowCard builds a centered 5-tier cluster tree with card leaves, full Chinese names and zero raw codes", () => {
   const html = flowCard(SAMPLE_TAX, SAMPLE_CLUSTERS_PD);
   assert.ok(html.includes('id="fxDiagram"'));
   assert.ok(html.includes('class="fx-sparks"'));
   assert.ok(html.includes('id="fxTree"'));
-  assert.ok(html.includes('id="fxTreeBar"'));
+  assert.ok(html.includes('class="fx-tax-head"'));
+  assert.ok(html.includes('id="fxRootLeaf"'));
   assert.ok(html.includes('id="fxPause"'));
   assert.ok(html.includes('id="fxReplay"'));
   assert.ok(html.includes("fx-tn is-root"));
@@ -97,7 +107,19 @@ test("flowCard builds a centered 5-tier cluster tree and drops prose cl-how and 
   assert.ok(html.includes("fx-tn is-stage"));
   assert.ok(html.includes("fx-tn is-cell"));
   assert.ok(html.includes("fx-tn is-leaf"));
-  for (const gone of ["fx-cl-how", "fx-board", "fx-bin", "Compact"]) {
+  assert.ok(html.includes("fx-leaf-box"));
+  assert.ok(html.includes("fx-leaf-cap"));
+  assert.ok(html.includes("fx-leaf-lbl"));
+  assert.ok(html.includes('data-phase="deliver"'));
+  assert.ok(!/class="fx-tn is-leaf"[^>]*><circle/.test(html), "leaf nodes must be rounded cards, not circles");
+  assert.ok(html.includes("空转未执行"));
+  assert.ok(html.includes("加工计算错误"));
+  assert.ok(html.includes("数</tspan>") && html.includes(">值<") && html.includes(">错<"));
+  for (const gone of [
+    "fx-cl-how", "fx-board", "fx-bin", "Compact",
+    "fx-tree-bar", "fxFeed", "fxStatProb", "fx-toast", "fx-tier-lbl",
+    "<code", "data-tip", ">M1<", ">M5<", ">S1<", ">S9<", ">S9.M5.3<", "NaN",
+  ]) {
     assert.ok(!html.includes(gone), `flowCard must not contain ${gone}`);
   }
   assert.ok(html.includes('<button type="button" class="fx-g-c'));
@@ -153,7 +175,7 @@ test("buildReplaySchedule sums exactly to each leaf count and always sprouts unb
   model.leaves.forEach((lf) => assert.equal(totals.get(lf.id), lf.n, `sum for ${lf.id} must equal exact count`));
 });
 
-test("cellModalHTML explains a cell, stage, mechanism, and highlights focused pattern", () => {
+test("cellModalHTML explains a cell, stage, mechanism, highlights focus pattern, and exposes zero codes", () => {
   const cell = cellModalHTML(SAMPLE_TAX, SAMPLE_CLUSTERS_PD, "S9", "M5", { pos: { i: 1, n: 2 }, pattern: "S9.M5.3" });
   assert.ok(cell.includes("答案合成 × 加工计算错误"));
   assert.ok(cell.includes("data-close"));
@@ -166,9 +188,108 @@ test("cellModalHTML explains a cell, stage, mechanism, and highlights focused pa
   assert.ok(cell.includes(">12<"));
   assert.ok(cell.includes("sm-pat is-focus"));
   assert.ok(cell.includes("sm-pat-n"));
+  for (const gone of ["sm-coord", "<code", ">S9.M5.3<", ">S9.M5.3.1<"]) {
+    assert.ok(!cell.includes(gone), `cellModalHTML must not contain ${gone}`);
+  }
 
   const stage = cellModalHTML(SAMPLE_TAX, SAMPLE_PD, "S9", null);
   assert.ok(stage.includes('data-cell="S9.M5"'));
+  assert.ok(!stage.includes("<code"));
   const mech = cellModalHTML(SAMPLE_TAX, SAMPLE_PD, null, "M5");
   assert.ok(mech.includes('data-cell="S9.M5"'));
+  assert.ok(!mech.includes("<code"));
+});
+
+test("computeOptimalBudget, selectOptimalTree and buildReplaySchedule keep exact real totals on 131,632-problem trees", () => {
+  const budget = computeOptimalBudget(1280);
+  assert.deepEqual(budget, { maxCells: 16, maxLeaves: 24 });
+
+  const phases = [
+    { id: "plan", name: "规划" },
+    { id: "request", name: "请求" },
+    { id: "execute", name: "执行" },
+    { id: "deliver", name: "交付" },
+  ];
+  const mechanisms = Array.from({ length: 7 }, (_, i) => ({
+    id: `M${i + 1}`,
+    name: ["空转未执行", "目标错配", "执行失败", "结果不可用", "加工计算错误", "无依据断言", "交付不符"][i],
+    def: `错法定义${i + 1}`,
+  }));
+  const stageSpecs = [
+    ["S12", "plan", [6, 1, 1, 3]],
+    ["S1", "plan", [11, 3, 2, 1]],
+    ["S2", "plan", [9, 3, 1, 1, 1]],
+    ["S10", "request", [9, 3, 1, 1, 2, 1]],
+    ["S3", "execute", [7, 7, 8, 4, 1, 1]],
+    ["S4", "execute", [9, 3, 7, 2, 1, 1, 1]],
+    ["S5", "execute", [6, 1]],
+    ["S6", "execute", [4, 2, 2, 2]],
+    ["S7", "execute", [1, 2, 1]],
+    ["S8", "execute", [1, 1, 1, 1]],
+    ["S11", "deliver", [2, 2, 2, 2, 1, 1, 1]],
+    ["S9", "deliver", [6, 7, 4, 2, 2, 1]],
+  ];
+  const stages = stageSpecs.map(([id, phase], idx) => ({ id, phase, name: `环节${idx + 1}`, def: `定义${idx + 1}` }));
+  const patterns = {};
+  const clusters = {};
+  let patIdx = 0;
+  let runningTotal = 0;
+  const targetTotal = 131632;
+  const patIds = [];
+  stageSpecs.forEach(([sid, , counts]) => {
+    counts.forEach((cnt, mIdx) => {
+      const mid = `M${(mIdx % 7) + 1}`;
+      for (let k = 1; k <= cnt; k++) {
+        patIdx++;
+        const pid = `${sid}.${mid}.${k}`;
+        patterns[pid] = { name: `标准模式${patIdx}`, plain: `说明${patIdx}` };
+        const n = Math.max(10, 1200 - patIdx * 6);
+        clusters[pid] = n;
+        runningTotal += n;
+        patIds.push(pid);
+      }
+    });
+  });
+  clusters[patIds[0]] += targetTotal - runningTotal;
+  assert.equal(patIds.length, 170);
+
+  const bigTax = { phases, stages, mechanisms, patterns };
+  const bigPd = { clusters };
+  const raw = treeModel(bigTax, bigPd);
+  const opt = selectOptimalTree(raw, budget);
+  assert.equal(opt.root.n, targetTotal);
+  assert.equal(opt.totalPatterns, 170);
+  assert.equal(opt.shownPatterns, opt.leaves.length);
+  assert.equal(opt.isSampled, true);
+  assert.ok(opt.cells.length <= budget.maxCells, `cells=${opt.cells.length}`);
+  assert.ok(opt.leaves.length <= budget.maxLeaves, `leaves=${opt.leaves.length}`);
+  assert.equal(opt.root.shownLeafTotal, opt.leaves.reduce((t, x) => t + x.n, 0));
+
+  const { seedMap, events } = buildReplaySchedule(opt);
+  const totals = new Map();
+  opt.leaves.forEach((lf) => totals.set(lf.id, seedMap.get(lf.id) || 0));
+  const unbornIds = new Set(opt.leaves.filter((lf) => (seedMap.get(lf.id) || 0) === 0).map((lf) => lf.id));
+  const seenUnborn = new Set();
+  events.forEach((ev) => {
+    totals.set(ev.leaf.id, (totals.get(ev.leaf.id) || 0) + ev.delta);
+    if (ev.isNew) {
+      assert.ok(unbornIds.has(ev.leaf.id));
+      seenUnborn.add(ev.leaf.id);
+    } else if (unbornIds.has(ev.leaf.id)) {
+      assert.ok(seenUnborn.has(ev.leaf.id));
+    }
+  });
+  assert.equal(seenUnborn.size, unbornIds.size);
+  opt.leaves.forEach((lf) => assert.equal(totals.get(lf.id), lf.n));
+
+  const html = flowCard(bigTax, bigPd);
+  assert.ok(html.includes("131,632"));
+  assert.ok(html.includes("展示"));
+  assert.ok(html.includes("170"));
+  assert.ok(html.includes("fx-leaf-box"));
+  assert.ok(html.includes('data-phase="execute"'));
+  assert.ok(!/class="fx-tn is-leaf"[^>]*><circle/.test(html), "leaf nodes must not render as circle dots");
+  for (const gone of ["NaN", "<code", "data-tip", "其余"]) {
+    assert.ok(!html.includes(gone), `large flowCard must not contain ${gone}`);
+  }
 });

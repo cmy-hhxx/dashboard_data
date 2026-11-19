@@ -317,7 +317,6 @@ export function wireTimeline(root) {
   function outcomeOf() {
     const P = cBoard.P;
     const f = S.fail;
-    if (S.lens === "fail" && !f) return { cls: "", text: "点图里任意一条实心条，看它失败后哪些步骤还会跑、哪份结果还能写出。" };
     if (!f) {
       return {
         cls: "",
@@ -341,7 +340,7 @@ export function wireTimeline(root) {
            <div><dt>等谁</dt><dd>${m.when}</dd></div>
            <div><dt>出错时</dt><dd class="${S.sel === S.fail ? "is-bad" : ""}">${m.fail}</dd></div>
          </dl>`
-      : `<div class="tl-focus-head"><b>点图里任意一行</b></div>`}</div>
+      : `<div class="tl-focus-head"><b>步骤详情</b></div>`}</div>
       <p class="tl-outcome${o.cls ? ` ${o.cls}` : ""}">${o.text}</p>`;
   }
 
@@ -488,6 +487,11 @@ export function wireTimeline(root) {
     const seg = segmented(lensEl, (v) => {
       S.lens = v;
       if (v !== "fail") S.fail = null;
+      else if (!S.fail) {
+        const selRow = S.sel && cBoard.rowNodes[S.sel]?.row;
+        S.fail = (selRow && selRow.kind === "model") ? S.sel : "f:components";
+        S.sel = S.fail;
+      }
       refreshCase();
       syncFocus();
     });
