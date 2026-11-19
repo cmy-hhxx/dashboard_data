@@ -82,14 +82,17 @@ test("system CSS styles the compact 5-tier SVG tree and tree-structured modal, r
   assert.ok(systemCss.includes(".fx-g-ph.is-hl"));
   assert.ok(systemCss.includes(".fx-g-col code"));
   assert.ok(systemCss.includes(".fx-toast"));
-  assert.ok(systemCss.includes(".fx-root-fill"));
+  assert.ok(systemCss.includes(".fx-root-shift"));
+  assert.ok(systemCss.includes(".fx-wave-back"));
+  assert.ok(systemCss.includes(".fx-wave-front"));
   assert.ok(!systemCss.includes(".fx-clu-gear"));
   assert.ok(!systemCss.includes(".fx-prog"));
+  assert.ok(!systemCss.includes(".sm-pat-bar"));
+  assert.ok(!systemCss.includes(".sm-tree"));
   assert.ok(systemCss.includes(".fx-g-sum"));
   assert.ok(systemCss.includes(".sm-panel"));
-  assert.ok(systemCss.includes(".sm-pat.is-focus"));
-  assert.ok(systemCss.includes(".sm-tree"));
-  assert.ok(systemCss.includes(".sm-children"));
+  assert.ok(systemCss.includes(".sm-sb"));
+  assert.ok(systemCss.includes(".sm-spec"));
   assert.ok(systemCss.includes(".sm-coord"));
   for (const old of [
     ".fx-board", ".fx-bin", ".fx-cl-how", ".tl-ev", ".tl-readout", ".sys-spec",
@@ -132,7 +135,8 @@ test("flowCard builds a compact 5-tier cluster tree with M{n} cells, dot leaves,
   }
   assert.ok(html.includes('<button type="button" class="fx-g-c'));
   assert.ok(html.includes('data-s="S9" data-m="M5"'));
-  assert.ok(html.includes('class="fx-root-fill"'));
+  assert.ok(html.includes('class="fx-root-shift"'));
+  assert.ok(html.includes('class="fx-wave-front"'));
   assert.ok(!html.includes('id="fxProg"'));
   assert.ok(!html.includes('fx-clu-gear'));
   assert.ok(html.includes('is-row-sum'));
@@ -189,29 +193,25 @@ test("buildReplaySchedule sums exactly to each leaf count and always sprouts unb
   model.leaves.forEach((lf) => assert.equal(totals.get(lf.id), lf.n, `sum for ${lf.id} must equal exact count`));
 });
 
-test("cellModalHTML renders a clean tree hierarchy without conversational AI copy", () => {
+test("cellModalHTML renders a clean sunburst container with P0/P1 keys and drilldown spec without AI copy or 排除", () => {
   const cell = cellModalHTML(SAMPLE_TAX, SAMPLE_CLUSTERS_PD, "S9", "M5", { pos: { i: 1, n: 2 }, pattern: "S9.M5.3" });
   assert.ok(cell.includes("答案合成 × 加工计算错误"));
   assert.ok(cell.includes("data-close"));
   assert.ok(cell.includes('data-samples="S9|M5|S9.M5.3"'));
   assert.ok(cell.includes('data-step="-1"'));
   assert.ok(cell.includes("sm-coord"));
-  assert.ok(cell.includes("sm-tree"));
-  assert.ok(cell.includes("sm-children"));
-  assert.ok(cell.includes("sm-node"));
+  assert.ok(cell.includes('id="smSunburst"'));
+  assert.ok(cell.includes('id="smSpec"'));
+  assert.ok(cell.includes("sb-keys"));
+  assert.ok(!cell.includes("sm-pat-bar"));
+  assert.ok(!cell.includes("sm-tree"));
   assert.ok(cell.includes("<code>S9</code>"));
   assert.ok(cell.includes("<code>M5</code>"));
   assert.ok(cell.includes("<code>S9.M5.3</code>"));
-  assert.ok(cell.includes("<code>S9.M5.3.1</code>"));
-  assert.ok(cell.includes("终稿整合或推算过程中的计算错误"));
   assert.ok(cell.includes("公式或数量级算错"));
   assert.ok(cell.includes("纳入"));
   assert.ok(!cell.includes("排除"));
   assert.ok(!cell.includes("上游数据源本身错误"));
-  assert.ok(cell.includes("同比环比混算"));
-  assert.ok(cell.includes(">12 · "));
-  assert.ok(cell.includes("sm-pat is-focus"));
-  assert.ok(cell.includes("sm-pat-n"));
   const aiPhrases = [
     "在哪一步出错", "错在哪种方式", "这一格收哪些问题", "这一步的几种错法",
     "出现在这些环节", "问题出在", "选一格看", "算进来", "不算进来",
@@ -222,20 +222,18 @@ test("cellModalHTML renders a clean tree hierarchy without conversational AI cop
   }
 
   const stage = cellModalHTML(SAMPLE_TAX, SAMPLE_PD, "S9", null);
-  assert.ok(stage.includes('data-cell="S9.M5"'));
+  assert.ok(stage.includes('id="smSunburst"'));
+  assert.ok(stage.includes('id="smSpec"'));
   assert.ok(stage.includes("<code>S9</code>"));
   assert.ok(stage.includes("<code>S9.M5</code>"));
-  assert.ok(stage.includes("sm-tree"));
-  assert.ok(stage.includes("sm-children"));
   for (const gone of aiPhrases) {
     assert.ok(!stage.includes(gone), `stage modal must not contain ${gone}`);
   }
   const mech = cellModalHTML(SAMPLE_TAX, SAMPLE_PD, null, "M5");
-  assert.ok(mech.includes('data-cell="S9.M5"'));
+  assert.ok(mech.includes('id="smSunburst"'));
+  assert.ok(mech.includes('id="smSpec"'));
   assert.ok(mech.includes("<code>M5</code>"));
   assert.ok(mech.includes("<code>S9.M5</code>"));
-  assert.ok(mech.includes("sm-tree"));
-  assert.ok(mech.includes("sm-children"));
   for (const gone of aiPhrases) {
     assert.ok(!mech.includes(gone), `mechanism modal must not contain ${gone}`);
   }

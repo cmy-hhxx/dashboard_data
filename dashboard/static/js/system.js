@@ -8,6 +8,7 @@ import { threadFlow } from "./particles.js";
 import { openTheater } from "./evidence_theater.js";
 import { buildPage } from "./builder.js";
 import { timelineCardHTML, wireTimeline } from "./system_timeline.js";
+import { sunburst } from "./sunburst.js";
 
 let shown = null;
 
@@ -503,14 +504,23 @@ function treeSVG(model, W = TREE_W) {
   const nodes = model.all.map((n) => {
     const at = `data-node="${esc(n.id)}" data-tip="t"`;
     if (n.row === 0) {
-      const rx = (n.x - 118).toFixed(1);
-      const ry = (n.y - 22).toFixed(1);
+      const rx = Number((n.x - 118).toFixed(1));
+      const ry = Number((n.y - 22).toFixed(1));
+      const lx = (rx - 256).toFixed(1);
+      const waveBack = `M${lx} ${ry}H${rx}Q${rx + 5} ${ry + 11} ${rx} ${ry + 22}T${rx} ${ry + 44}T${rx} ${ry + 66}T${rx} ${ry + 88}H${lx}Z`;
+      const waveFront = `M${lx} ${ry}H${rx}Q${rx - 4.5} ${ry + 11} ${rx} ${ry + 22}T${rx} ${ry + 44}T${rx} ${ry + 66}T${rx} ${ry + 88}H${lx}Z`;
+      const waveCrest = `M${rx} ${ry}Q${rx - 4.5} ${ry + 11} ${rx} ${ry + 22}T${rx} ${ry + 44}T${rx} ${ry + 66}T${rx} ${ry + 88}`;
       rootClip = `<defs><clipPath id="fxRootClip"><rect x="${rx}" y="${ry}" width="236" height="44" rx="22"/></clipPath></defs>`;
       return `<g class="fx-tn is-root" ${at} data-rx="${rx}">
         <rect class="fx-root-bg" x="${rx}" y="${ry}" width="236" height="44" rx="22"/>
         <g clip-path="url(#fxRootClip)">
-          <rect class="fx-root-fill" x="${rx}" y="${ry}" width="0" height="44"/>
-          <rect class="fx-root-wave" x="${rx}" y="${ry}" width="2.5" height="44" opacity="0"/>
+          <g class="fx-root-shift">
+            <path class="fx-wave-back" d="${waveBack}"/>
+            <g class="fx-wave-front-wrap">
+              <path class="fx-wave-front" d="${waveFront}"/>
+              <path class="fx-wave-crest" d="${waveCrest}" fill="none"/>
+            </g>
+          </g>
         </g>
         <rect class="fx-root-ring" x="${rx}" y="${ry}" width="236" height="44" rx="22" fill="none"/>
         <text class="fx-tn-k" x="${(n.x - 94).toFixed(1)}" y="${n.y + 5}">全部问题</text>
@@ -727,6 +737,189 @@ const ICON_X = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d=
 const ICON_L = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 4L6 8l4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const ICON_R = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
+function toSevObj(raw) {
+  if (!raw) return null;
+  if (Array.isArray(raw)) {
+    const p0 = Number(raw[0]) || 0;
+    const p1 = Number(raw[1]) || 0;
+    return p0 || p1 ? { P0: p0, P1: p1 } : null;
+  }
+  const p0 = Number(raw.P0) || 0;
+  const p1 = Number(raw.P1) || 0;
+  return p0 || p1 ? { P0: p0, P1: p1 } : null;
+}
+
+function addSevObj(a, b) {
+  const p0 = ((a && a.P0) || 0) + ((b && b.P0) || 0);
+  const p1 = ((a && a.P1) || 0) + ((b && b.P1) || 0);
+  return p0 || p1 ? { P0: p0, P1: p1 } : null;
+}
+
+function patMetaMap(pd) {
+  const map = new Map();
+  if (Array.isArray(pd && pd.patterns)) {
+    pd.patterns.forEach((p) => {
+      if (!p || !p.id) return;
+      map.set(p.id, { n: Number(p.n) || 0, sev: toSevObj(p.sev) });
+    });
+  }
+  const cl = clusterMap(pd);
+  if (cl) {
+    Object.entries(cl).forEach(([path, rawN]) => {
+      const n = Number(rawN) || 0;
+      if (n <= 0) return;
+      const cur = map.get(path) || { n: 0, sev: null };
+      map.set(path, { n: Math.max(cur.n, n), sev: cur.sev });
+      const parts = String(path).split(".");
+      if (parts.length >= 4) {
+        const p3 = parts.slice(0, 3).join(".");
+        const c3 = map.get(p3) || { n: 0, sev: null };
+        if (!Array.isArray(pd && pd.patterns)) map.set(p3, { n: c3.n + n, sev: c3.sev });
+      }
+    });
+  }
+  return map;
+}
+
+function modalSunburstTree(tax, pd, sid, mid) {
+  const st = sid ? (tax.stages || []).find((x) => x.id === sid) : null;
+  const m = mid ? (tax.mechanisms || []).find((x) => x.id === mid) : null;
+  if (!st && !m) return null;
+  const cc = cellCounts(tax, pd);
+  const pMeta = patMetaMap(pd);
+  const mx = pd && pd.matrix;
+
+  const buildPatterns = (sId, mId) => {
+    const { top, byParent } = matchingPatterns(tax, sId, mId);
+    const cellN = cc.n(sId, mId);
+    const hasPatCounts = top.some(([pid]) => (pMeta.get(pid)?.n || 0) > 0);
+    const fallbackPer = !hasPatCounts && top.length ? (cellN > 0 ? Math.max(1, Math.round(cellN / top.length)) : 1) : 0;
+
+    return top.map(([pid, pt]) => {
+      const subs = byParent.get(pid) || [];
+      const meta = pMeta.get(pid);
+      const subNodes = subs.map(([spid, sp]) => {
+        const sm = pMeta.get(spid);
+        return {
+          id: spid,
+          code: spid,
+          tier: "子模式",
+          name: sp.name || spid,
+          n: sm?.n || (meta?.n ? 0 : fallbackPer ? 1 : 0),
+          sev: sm?.sev || null,
+          desc: sp.plain || sp.def || "",
+          include: sp.include || "",
+          s: sId,
+          m: mId,
+          pattern: pid,
+        };
+      }).filter((x) => x.n > 0);
+      const sumSubN = subNodes.reduce((t, x) => t + x.n, 0);
+      const pn = (meta && meta.n) || sumSubN || fallbackPer;
+      const pSev = (meta && meta.sev) || subNodes.reduce((a, c) => addSevObj(a, c.sev), null);
+      return {
+        id: pid,
+        code: pid,
+        tier: "标准模式",
+        name: pt.name || "未命名模式",
+        n: pn,
+        sev: pSev,
+        desc: pt.plain || pt.def || "",
+        include: pt.include || "",
+        s: sId,
+        m: mId,
+        pattern: pid,
+        children: subNodes.length ? subNodes : undefined,
+      };
+    }).filter((x) => x.n > 0);
+  };
+
+  if (st && m) {
+    const l2 = (tax.l2 || {})[`${st.id}.${m.id}`] || null;
+    const kids = buildPatterns(st.id, m.id);
+    const cellInfo = mx && mx[st.id] && mx[st.id][m.id];
+    const cellSev = toSevObj(cellInfo && cellInfo.sev) || kids.reduce((a, c) => addSevObj(a, c.sev), null);
+    const totalN = batchCountOf(pd, st.id, m.id) || kids.reduce((t, x) => t + x.n, 0);
+    return {
+      id: `${st.id}.${m.id}`,
+      code: `${st.id}.${m.id}`,
+      tier: "错法",
+      name: `${st.name} × ${m.name}`,
+      n: totalN,
+      sev: cellSev,
+      desc: (l2 && l2.def) || m.def || st.def || "",
+      include: "",
+      s: st.id,
+      m: m.id,
+      pattern: "",
+      children: kids,
+    };
+  }
+
+  const others = st
+    ? (tax.mechanisms || []).slice().sort(taxoNum).map((x) => ({ s: st.id, m: x.id, name: x.name, def: x.def }))
+    : (tax.stages || []).slice().map((x) => ({ s: x.id, m: m.id, name: x.name, def: x.def }));
+
+  const cells = others.map((o) => {
+    const l2 = (tax.l2 || {})[`${o.s}.${o.m}`] || null;
+    const kids = buildPatterns(o.s, o.m);
+    const cellInfo = mx && mx[o.s] && mx[o.s][o.m];
+    const v = cc.n(o.s, o.m) || kids.reduce((t, x) => t + x.n, 0);
+    const sev = toSevObj(cellInfo && cellInfo.sev) || kids.reduce((a, c) => addSevObj(a, c.sev), null);
+    return {
+      id: `${o.s}.${o.m}`,
+      code: `${o.s}.${o.m}`,
+      tier: st ? "错法" : "环节",
+      name: o.name,
+      n: v,
+      sev,
+      desc: (l2 && l2.def) || o.def || "",
+      include: "",
+      s: o.s,
+      m: o.m,
+      pattern: "",
+      children: kids,
+    };
+  }).filter((x) => x.n > 0);
+
+  const rootSev = cells.reduce((a, c) => addSevObj(a, c.sev), null);
+  const totalN = batchCountOf(pd, st && st.id, m && m.id) || cells.reduce((t, x) => t + x.n, 0);
+  return {
+    id: st ? st.id : m.id,
+    code: st ? st.id : m.id,
+    tier: st ? "环节" : "错法",
+    name: (st || m).name,
+    n: totalN,
+    sev: rootSev,
+    desc: (st || m).def || "",
+    include: "",
+    s: st ? st.id : "",
+    m: m ? m.id : "",
+    pattern: "",
+    children: cells,
+  };
+}
+
+function modalSpecHTML(node, unit = "问题") {
+  if (!node) return `<div class="sm-empty">点击左侧旭日图或列表任意分支查看口径说明。</div>`;
+  const sevChips = [];
+  if (node.sev && node.sev.P0) sevChips.push(`<span class="sm-sev-chip is-p0"><i style="background:var(--sev-0)"></i>P0 <b class="num">${fmt(node.sev.P0)}</b></span>`);
+  if (node.sev && node.sev.P1) sevChips.push(`<span class="sm-sev-chip is-p1"><i style="background:var(--sev-1)"></i>P1 <b class="num">${fmt(node.sev.P1)}</b></span>`);
+  const share = node.parent && node.parent.n > 0 ? `${((node.n / node.parent.n) * 100).toFixed(1)}%` : "";
+  return `<div class="sm-spec-head">
+      ${node.tier ? `<span class="sm-tag">${esc(node.tier)}</span>` : ""}
+      ${node.code ? `<code>${esc(node.code)}</code>` : ""}
+      <b>${esc(node.name)}</b>
+    </div>
+    <div class="sm-spec-nums">
+      <span class="sm-stat"><b class="num">${fmt(node.n || 0)}</b> ${esc(unit)}${share ? ` · ${share}` : ""}</span>
+      ${sevChips.join("")}
+    </div>
+    ${node.desc ? `<p class="sm-spec-def">${esc(node.desc)}</p>` : ""}
+    ${node.include ? `<div class="sm-bounds"><div><span>纳入</span><p>${esc(node.include)}</p></div></div>` : ""}
+    ${node.children && node.children.length ? `<div class="sm-spec-hint">含 <b class="num">${node.children.length}</b> 个下级分支，点击弧段或列表项可继续下钻</div>` : ""}`;
+}
+
 /* Pure markup for one cell (S × M), one stage (S) or one mechanism (M); exported for tests. */
 export function cellModalHTML(tax, pd, sid, mid, { pos = null, pattern = null } = {}) {
   const st = sid ? (tax.stages || []).find((x) => x.id === sid) : null;
@@ -734,11 +927,14 @@ export function cellModalHTML(tax, pd, sid, mid, { pos = null, pattern = null } 
   if (!st && !m) return `<div class="sm-body"><div class="sm-empty">未找到对应条目。</div></div>`;
   const cc = cellCounts(tax, pd);
   const n = batchCountOf(pd, st && st.id, m && m.id);
-  const pCounts = patternCounts(pd);
-  const { top, byParent } = matchingPatterns(tax, st && st.id, m && m.id);
+  const { top } = matchingPatterns(tax, st && st.id, m && m.id);
   const title = st && m ? `${st.name} × ${m.name}` : (st || m).name;
   const coord = [st && st.id, m && m.id].filter(Boolean).map((c) => `<code>${esc(c)}</code>`).join('<i aria-hidden="true">×</i>');
   const phase = st ? phaseName(tax, st.phase) : "";
+
+  const tree = modalSunburstTree(tax, pd, sid, mid);
+  const initialFocus = (pattern && tree?.children?.find((c) => c.id === pattern))
+    || (tree?.children && tree.children.length ? tree.children.reduce((a, b) => (b.n > a.n ? b : a), tree.children[0]) : tree);
 
   const stats = [];
   if (st && m) {
@@ -747,61 +943,14 @@ export function cellModalHTML(tax, pd, sid, mid, { pos = null, pattern = null } 
   } else if (st) {
     if (phase) stats.push(`<span class="sm-stat">${esc(phase)}</span>`);
     if (n != null) stats.push(`<span class="sm-stat"><b class="num">${fmt(n)}</b> 问题</span>`);
+    stats.push(`<span class="sm-stat"><b class="num">${tree?.children?.length || 0}</b> 错法</span>`);
   } else {
     if (n != null) stats.push(`<span class="sm-stat"><b class="num">${fmt(n)}</b> 问题</span>`);
+    stats.push(`<span class="sm-stat"><b class="num">${tree?.children?.length || 0}</b> 环节</span>`);
   }
-
-  const nodeHTML = (tier, tag, code, name, def, children = "") => `<div class="sm-node is-${tier}">
-    <div class="sm-node-box">
-      <div class="sm-node-head"><i class="sm-dot" aria-hidden="true"></i><span class="sm-tag">${tag}</span>${code ? `<code>${esc(code)}</code>` : ""}<b>${esc(name)}</b></div>
-      ${def ? `<p>${esc(def)}</p>` : ""}
-    </div>
-    ${children}
-  </div>`;
-
-  let treeHTML;
-  if (st && m) {
-    const l2 = (tax.l2 || {})[`${st.id}.${m.id}`] || null;
-    const patTotal = top.reduce((t, [pid]) => t + (pCounts ? pCounts.get(pid) || 0 : 0), 0);
-    const maxPat = Math.max(1, ...top.map(([pid]) => (pCounts ? pCounts.get(pid) || 0 : 0)));
-    const patsHTML = top.length ? `<ol class="sm-children sm-pats">${top.map(([pid, pt]) => {
-      const subs = byParent.get(pid) || [];
-      const pn = pCounts ? pCounts.get(pid) || 0 : 0;
-      const pct = patTotal > 0 && pn > 0 ? Math.round((pn / patTotal) * 100) : 0;
-      const share = pn > 0 ? (pn / maxPat).toFixed(3) : "0";
-      const focus = pattern === pid ? " is-focus" : "";
-      return `<li class="sm-pat${focus}" data-pid="${esc(pid)}" style="--share:${share}">
-        <div class="sm-pat-head"><i class="sm-pat-dot" aria-hidden="true"></i><span class="sm-tag">模式</span><code>${esc(pid)}</code><b>${esc(pt.name || "未命名模式")}</b>${pn ? `<span class="sm-pat-n num">${fmt(pn)}${pct ? ` · ${pct}%` : ""}</span>` : ""}</div>
-        ${pn ? `<span class="sm-pat-bar" aria-hidden="true"><i></i></span>` : ""}
-        ${pt.plain || pt.def ? `<p>${esc(pt.plain || pt.def)}</p>` : ""}
-        ${pt.include ? `<div class="sm-bounds"><div><span>纳入</span><p>${esc(pt.include)}</p></div></div>` : ""}
-        ${subs.length ? `<ul class="sm-children sm-subs">${subs.map(([spid, sp]) => `<li><code>${esc(spid)}</code><span>${esc(sp.name || "")}${sp.plain ? `：${esc(sp.plain)}` : ""}</span></li>`).join("")}</ul>` : ""}
-      </li>`;
-    }).join("")}</ol>` : `<div class="sm-children"><div class="sm-empty">暂无标准模式</div></div>`;
-    const mechHTML = nodeHTML("t3", "错法", m.id, m.name, (l2 && l2.def) || m.def, patsHTML);
-    const stageHTML = nodeHTML("t2", "环节", st.id, st.name, st.def, `<div class="sm-children">${mechHTML}</div>`);
-    treeHTML = phase ? nodeHTML("t1", "阶段", st.phase || "", phase, "", `<div class="sm-children">${stageHTML}</div>`) : stageHTML;
-  } else {
-    const others = st
-      ? (tax.mechanisms || []).slice().sort(taxoNum).map((x) => ({ s: st.id, m: x.id, code: x.id, name: x.name }))
-      : (tax.stages || []).slice().map((x) => ({ s: x.id, m: m.id, code: x.id, name: x.name }));
-    const cells = others
-      .map((o) => ({ ...o, v: cc.n(o.s, o.m), has: cc.has(o.s, o.m) }))
-      .filter((o) => o.v || o.has);
-    const maxCell = Math.max(1, ...cells.map((o) => o.v || 0));
-    stats.push(`<span class="sm-stat"><b class="num">${cells.length}</b> ${st ? "错法" : "环节"}</span>`);
-    const cellsHTML = cells.length
-      ? `<div class="sm-children sm-cells">${cells.map((o) => {
-        const share = o.v > 0 ? (o.v / maxCell).toFixed(3) : "0";
-        return `<button type="button" class="sm-cell" data-cell="${o.s}.${o.m}" style="--share:${share}"><code>${o.s}.${o.m}</code><span>${esc(o.name)}</span><span class="sm-cell-meter" aria-hidden="true"><i></i></span><b class="num">${fmt(o.v)}</b></button>`;
-      }).join("")}</div>`
-      : `<div class="sm-children"><div class="sm-empty">暂无标准模式</div></div>`;
-    if (st) {
-      const stageHTML = nodeHTML("t2", "环节", st.id, st.name, st.def, cellsHTML);
-      treeHTML = phase ? nodeHTML("t1", "阶段", st.phase || "", phase, "", `<div class="sm-children">${stageHTML}</div>`) : stageHTML;
-    } else {
-      treeHTML = nodeHTML("t3", "错法", m.id, m.name, m.def, cellsHTML);
-    }
+  if (tree && tree.sev) {
+    if (tree.sev.P0) stats.push(`<span class="sm-stat"><i class="sm-sev-dot" style="background:var(--sev-0)"></i>P0 <b class="num">${fmt(tree.sev.P0)}</b></span>`);
+    if (tree.sev.P1) stats.push(`<span class="sm-stat"><i class="sm-sev-dot" style="background:var(--sev-1)"></i>P1 <b class="num">${fmt(tree.sev.P1)}</b></span>`);
   }
 
   const nav = pos ? `<div class="sm-nav">
@@ -810,13 +959,23 @@ export function cellModalHTML(tax, pd, sid, mid, { pos = null, pattern = null } 
       <button type="button" class="sm-icon" data-step="1" aria-label="下一格"${pos.i >= pos.n - 1 ? " disabled" : ""}>${ICON_R}</button>
     </div>` : "";
 
+  const bodyHTML = tree && tree.children && tree.children.length
+    ? `<div class="sm-sb-layout">
+        <div class="sm-sb-col">
+          <div class="sm-sb" id="smSunburst"></div>
+          <div class="sb-keys"><span class="sb-key"><i style="background:var(--sev-0)"></i>P0 严重</span><span class="sb-key"><i style="background:var(--sev-1)"></i>P1 较重</span></div>
+        </div>
+        <aside class="sm-spec" id="smSpec">${modalSpecHTML(initialFocus, cc.unit)}</aside>
+      </div>`
+    : `<div class="sm-spec" id="smSpec">${modalSpecHTML(tree, cc.unit)}</div>`;
+
   return `<header class="sm-head">
       <div class="sm-coord">${coord}</div>
       <button type="button" class="sm-icon sm-close" data-close aria-label="关闭">${ICON_X}</button>
       <h2 id="smTitle">${esc(title)}</h2>
       <div class="sm-meta">${stats.join("")}</div>
     </header>
-    <div class="sm-body"><div class="sm-tree">${treeHTML}</div></div>
+    <div class="sm-body">${bodyHTML}</div>
     <footer class="sm-foot">
       ${nav}
       <span class="sm-spacer"></span>
@@ -850,6 +1009,28 @@ function paintModal(key, swap, pattern = null) {
     void panel.offsetWidth;
     panel.classList.add("is-swap");
   }
+  const sbHost = $("#smSunburst", panel);
+  const specEl = $("#smSpec", panel);
+  const samplesBtn = $("[data-samples]", panel);
+  const tree = E.tax ? modalSunburstTree(E.tax, E.pd, sid || null, mid || null) : null;
+  if (sbHost && tree && tree.children && tree.children.length) {
+    const unit = cellCounts(E.tax, E.pd).unit;
+    const initState = pattern ? { focus: tree.id, open: pattern } : null;
+    sunburst(sbHost, tree, {
+      unit,
+      sort: true,
+      fold: false,
+      state: initState,
+      animate: !REDUCED,
+      onChange: (focus, open) => {
+        const active = open || focus;
+        if (specEl) specEl.innerHTML = modalSpecHTML(active, unit);
+        if (samplesBtn && active) {
+          samplesBtn.dataset.samples = `${active.s || sid || ""}|${active.m || mid || ""}|${active.pattern || ""}`;
+        }
+      },
+    });
+  }
   $$("#fxTax .is-sel, #fxTree .is-sel", document).forEach((x) => x.classList.remove("is-sel"));
   if (sid && mid) $(`#fxTax .fx-g-c[data-s="${sid}"][data-m="${mid}"]`)?.classList.add("is-sel");
   const treeTarget = pattern ? `${pattern}` : sid && mid ? `${sid}.${mid}` : sid;
@@ -858,12 +1039,6 @@ function paintModal(key, swap, pattern = null) {
     || (sid && $(`#fxTree .fx-tn[data-node="${sid}"]`))
     || (phaseId && $(`#fxTree .fx-tn[data-node="ph:${phaseId}"]`));
   selNode?.classList.add("is-sel");
-  if (pattern) {
-    requestAnimationFrame(() => {
-      const hit = $(".sm-pat.is-focus", panel);
-      hit?.scrollIntoView?.({ block: "nearest", behavior: REDUCED ? "auto" : "smooth" });
-    });
-  }
 }
 
 function onModalKey(e) {
@@ -899,6 +1074,7 @@ function openCellModal(sid, mid, from, pattern = null) {
     }
     document.body.appendChild(el);
     MOD.el = el;
+    bindTips(el);
     document.documentElement.classList.add("is-modal");
     document.addEventListener("keydown", onModalKey, true);
     el.addEventListener("click", (e) => {
@@ -1582,9 +1758,7 @@ function wireFx(root, tax, pd) {
   const timers = new Set();
   const later = (fn, ms) => { const id = setTimeout(() => { timers.delete(id); fn(); }, ms); timers.add(id); };
   const rootNodeEl = treeSvg ? $(".fx-tn.is-root", treeSvg) : null;
-  const rootFillEl = rootNodeEl ? $(".fx-root-fill", rootNodeEl) : null;
-  const rootWaveEl = rootNodeEl ? $(".fx-root-wave", rootNodeEl) : null;
-  const rootRx = rootNodeEl ? Number(rootNodeEl.dataset.rx) || 0 : 0;
+  const rootShiftEl = rootNodeEl ? $(".fx-root-shift", rootNodeEl) : null;
 
   const rowSumEls = new Map();
   const colSumEls = new Map();
@@ -1597,13 +1771,10 @@ function wireFx(root, tax, pd) {
   const updateProgress = (cur, total) => {
     if (!rootNodeEl) return;
     const ratio = total > 0 ? Math.min(1, Math.max(0, cur / total)) : 1;
-    const fillW = 236 * ratio;
-    if (rootFillEl) rootFillEl.setAttribute("width", fillW.toFixed(1));
-    if (rootWaveEl) {
-      rootWaveEl.setAttribute("x", (rootRx + Math.max(0, fillW - 2)).toFixed(1));
-      rootWaveEl.setAttribute("opacity", ratio > 0.01 && ratio < 0.995 ? "0.75" : "0");
-    }
+    const shiftX = ratio >= 0.999 ? 246 : ratio <= 0.001 ? -8 : 236 * ratio;
+    if (rootShiftEl) rootShiftEl.setAttribute("transform", `translate(${shiftX.toFixed(1)} 0)`);
     rootNodeEl.classList.toggle("is-full", ratio >= 0.999);
+    rootNodeEl.classList.toggle("is-flowing", ratio > 0.01 && ratio < 0.999);
   };
 
   const restart = (el, cls) => { if (!el) return; el.classList.remove(cls); void el.offsetWidth; el.classList.add(cls); };
@@ -1765,7 +1936,12 @@ function wireFx(root, tax, pd) {
   let holdSince = 0;
   let drainSince = 0;
   let paused = false;
-  let fastMode = false;
+  let speedTier = 0;
+  const SPEED_TIERS = [
+    { mult: 1.0, label: "加速", pressed: false },
+    { mult: 2.0, label: "加速 2×", pressed: true },
+    { mult: 4.0, label: "极速 4×", pressed: true },
+  ];
   let visible = true;
   let raf = 0;
   let simNow = 0;
@@ -1948,11 +2124,11 @@ function wireFx(root, tax, pd) {
 
   initSeed();
 
-  const DUR = [540, 460, 420];
-  const HOP_DUR = [250, 220, 210, 240];
-  const MATCH_GAP = 290;
-  const SPROUT_GAP = 380;
-  const DRAIN_DUR = 420;
+  const DUR = [860, 720, 660];
+  const HOP_DUR = [360, 320, 300, 360];
+  const MATCH_GAP = 540;
+  const SPROUT_GAP = 680;
+  const DRAIN_DUR = 480;
 
   const along = (id, u) => {
     const p = paths.get(id);
@@ -1973,7 +2149,7 @@ function wireFx(root, tax, pd) {
   };
 
   const spawn = (forcedInput, forcedEv, forcedOut = null, delayMs = 0) => {
-    if (!forcedEv && sparks.length >= 26) return;
+    if (!forcedEv && sparks.length >= 16) return;
     const ev = forcedEv || (phaseState === "replay" && evIdx < schedule.events.length ? schedule.events[evIdx++] : null);
     if (!ev) return;
     refreshColors();
@@ -1992,10 +2168,10 @@ function wireFx(root, tax, pd) {
   };
 
   const spawnWave = (now) => {
-    if (evIdx >= schedule.events.length || sparks.length >= 22) return null;
+    if (evIdx >= schedule.events.length || sparks.length >= 13) return null;
     const batch = [];
     let hasSprout = false;
-    while (evIdx < schedule.events.length && batch.length < 4 && sparks.length + batch.length < 26) {
+    while (evIdx < schedule.events.length && batch.length < 3 && sparks.length + batch.length < 16) {
       const nextEv = schedule.events[evIdx];
       if (nextEv.isNew && hasSprout) break;
       if (nextEv.isNew) hasSprout = true;
@@ -2004,7 +2180,7 @@ function wireFx(root, tax, pd) {
     if (!batch.length) return null;
     const in0 = Math.floor(Math.random() * ins.length);
     const out0 = Math.floor(Math.random() * outs.length);
-    batch.forEach((ev, k) => spawn((in0 + k) % ins.length, ev, (out0 + k) % outs.length, k * 75));
+    batch.forEach((ev, k) => spawn((in0 + k) % ins.length, ev, (out0 + k) % outs.length, k * 125));
     return now + (hasSprout ? SPROUT_GAP : MATCH_GAP);
   };
 
@@ -2018,14 +2194,14 @@ function wireFx(root, tax, pd) {
         const b = trail[k + 1];
         const t = 1 - k / trail.length;
         ctx.strokeStyle = col;
-        ctx.globalAlpha = t * 0.22;
-        ctx.lineWidth = (isSprout ? 6.2 : 5.2) * t;
+        ctx.globalAlpha = t * 0.20;
+        ctx.lineWidth = (isSprout ? 6.4 : 5.4) * t;
         ctx.beginPath();
         ctx.moveTo(a.x, a.y);
         ctx.lineTo(b.x, b.y);
         ctx.stroke();
 
-        ctx.globalAlpha = t * 0.65;
+        ctx.globalAlpha = t * 0.72;
         ctx.lineWidth = (isSprout ? 2.8 : 2.3) * t;
         ctx.beginPath();
         ctx.moveTo(a.x, a.y);
@@ -2037,7 +2213,7 @@ function wireFx(root, tax, pd) {
     ctx.fillStyle = col;
     ctx.globalAlpha = 0.22;
     ctx.beginPath();
-    ctx.arc(head.x, head.y, isSprout ? 6.8 : 5.8, 0, Math.PI * 2);
+    ctx.arc(head.x, head.y, isSprout ? 7.2 : 6.0, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.globalAlpha = 0.96;
@@ -2054,7 +2230,7 @@ function wireFx(root, tax, pd) {
     if (!diagram.isConnected || paused || !visible || document.hidden) return;
     const rawDt = lastFrame ? Math.min(50, Math.max(0, rawNow - lastFrame)) : 16;
     lastFrame = rawNow;
-    simNow += rawDt * (fastMode ? 2.4 : 1.0);
+    simNow += rawDt * SPEED_TIERS[speedTier].mult;
     const now = simNow;
 
     if (!accent) refreshColors();
@@ -2162,7 +2338,7 @@ function wireFx(root, tax, pd) {
       const isSprout = s.phase === 3 && s.ev.isNew;
       const col = isSprout ? sproutCol : accent;
       s.trail.unshift({ x: pt.x, y: pt.y });
-      if (s.trail.length > 10) s.trail.pop();
+      if (s.trail.length > 14) s.trail.pop();
       drawRibbon(s.trail, col, isSprout);
     }
 
@@ -2188,9 +2364,11 @@ function wireFx(root, tax, pd) {
   });
 
   speedBtn?.addEventListener("click", () => {
-    fastMode = !fastMode;
-    speedBtn.setAttribute("aria-pressed", String(fastMode));
-    speedBtn.textContent = fastMode ? "加速中" : "加速";
+    speedTier = (speedTier + 1) % SPEED_TIERS.length;
+    const tier = SPEED_TIERS[speedTier];
+    speedBtn.setAttribute("aria-pressed", String(tier.pressed));
+    speedBtn.dataset.tier = String(speedTier);
+    speedBtn.textContent = tier.label;
   });
 
   const io = new IntersectionObserver(([en]) => { visible = en.isIntersecting; kick(); }, { threshold: 0.05 });
