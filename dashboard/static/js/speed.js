@@ -73,11 +73,6 @@ function setHTML(root, id, html) {
   }
 }
 
-function progressBarCell(ratio) {
-  const clamped = Math.max(0, Math.min(1, Number(ratio) || 0));
-  return `<td class="sp-prog-cell"><span class="sp-mini-bar"><i style="width:${(clamped * 100).toFixed(1)}%"></i></span><span class="num">${(clamped * 100).toFixed(1)}%</span></td>`;
-}
-
 /* Derive overall pipeline run state (`进行中` / `中断中` / `已完成` / `采集中断`) from live telemetry. */
 export function deriveEvalStatus(data) {
   if (!data || data.ok === false) {
@@ -117,117 +112,131 @@ export function deriveEvalStatus(data) {
   return { key: "stalled", label: "中断中", cls: "is-warn", running: false, detail: "" };
 }
 
-function miniWaveSVG(stage) {
-  const sheenId = `spLiquidSheen-${stage}`;
-  const waveBack = "M-256 0H0Q7 25 0 50T0 100T0 150T0 200H-256Z";
-  const waveFront = "M-256 0H0Q-6 25 0 50T0 100T0 150T0 200H-256Z";
-  const crest = "M0 0Q-6 25 0 50T0 100T0 150T0 200";
-  const def = stage !== "in"
-    ? `<defs><linearGradient id="${sheenId}" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#ffffff" stop-opacity="0.32"/><stop offset="65%" stop-color="#ffffff" stop-opacity="0.04"/><stop offset="100%" stop-color="#ffffff" stop-opacity="0"/></linearGradient></defs>`
-    : "";
-  return `<svg class="sp-node-wave" viewBox="0 0 240 100" preserveAspectRatio="none" aria-hidden="true">${def}
-    <g class="sp-node-wave-shift" data-wave-shift="${stage}" transform="translate(-8 0)">
-      <path class="sp-nw-back" d="${waveBack}"/>
-      <path class="sp-nw-front" d="${waveFront}"/>
-      ${stage !== "in" ? `<path class="sp-nw-sheen" d="${waveFront}" fill="url(#${sheenId})"/><path class="sp-nw-crest" d="${crest}" fill="none"/>` : ""}
-    </g>
-  </svg>`;
-}
+const FX_IN = [["user", "用户提问"], ["think", "模型思考"], ["call", "工具调用"], ["answer", "最终回答"]];
+const FX_OUT = [["问题", "var(--sev-1)"], ["定级", "var(--sev-0)"], ["证据", "var(--accent)"], ["归属", "var(--t1)"]];
 
-function miniHubHTML() {
-  const ticks = Array.from({ length: 30 }, (_, k) => {
-    const c = k % 5 === 0 ? MINI_STEPS[(k / 5) % MINI_STEPS.length] : "";
-    const a = (k * Math.PI) / 15;
-    const r0 = c ? 16.5 : 17.8;
-    const [x0, y0, x1, y1] = [Math.cos(a) * r0, Math.sin(a) * r0, Math.cos(a) * 20, Math.sin(a) * 20].map((v) => v.toFixed(1));
+function hubHTML() {
+  const ticks = Array.from({ length: 60 }, (_, k) => {
+    const c = k % 9 === 0 ? MINI_STEPS[(k / 9) % MINI_STEPS.length] : "";
+    const a = (k * Math.PI) / 30;
+    const r0 = c ? 63 : 67;
+    const [x0, y0, x1, y1] = [Math.cos(a) * r0, Math.sin(a) * r0, Math.cos(a) * 74, Math.sin(a) * 74].map((v) => v.toFixed(1));
     return `<line x1="${x0}" y1="${y0}" x2="${x1}" y2="${y1}"${c ? ` class="c" style="--c:${c}"` : ""}/>`;
   }).join("");
   const tiles = [2, 9, 0, 9, 2, 9, 9, 4, 9].map((v) => `<i style="--c:${v < 5 ? `var(--sev-${v})` : "var(--sev-none)"}"></i>`).join("");
-  return `<div class="sp-mini-hub"><span class="sp-mini-orbit"><i></i></span><svg class="sp-mini-ring" viewBox="-21 -21 42 42" aria-hidden="true">${ticks}</svg><span class="sp-mini-core"><span>${tiles}</span></span></div>`;
+  return `<div class="fx-hub sp-hub"><span class="fx-orbit"><i></i></span><svg class="fx-ring" viewBox="-80 -80 160 160" aria-hidden="true">${ticks}</svg><span class="fx-core"><span>${tiles}</span></span></div>`;
 }
 
-function sevIconHTML() {
-  const bars = [0, 1, 2, 3, 4].map((k) => `<i style="--c:var(--sev-${k});--k:${k}"></i>`).join("");
-  return `<span class="sp-ico is-sev" style="--c:var(--accent)">${bars}</span>`;
+/* 聚类池：液面高度 = 已聚类 / 已评测，水平双层波浪持续流动。 */
+function poolHTML() {
+  const wave = (y) => `M0 ${y}Q15 ${y - 5} 30 ${y}T60 ${y}T90 ${y}T120 ${y}T150 ${y}T180 ${y}T210 ${y}T240 ${y}V140H0Z`;
+  return `<div class="sp-pool" id="spPool">
+    <svg viewBox="0 0 120 120" preserveAspectRatio="none" aria-hidden="true">
+      <defs>
+        <clipPath id="spPoolClip"><rect x="0" y="0" width="120" height="120" rx="20"/></clipPath>
+        <linearGradient id="spPoolSheen" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="#ffffff" stop-opacity="0.36"/>
+          <stop offset="60%" stop-color="#ffffff" stop-opacity="0.04"/>
+          <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+        </linearGradient>
+      </defs>
+      <g clip-path="url(#spPoolClip)">
+        <rect class="sp-pool-bg" x="0" y="0" width="120" height="120"/>
+        <g class="sp-pool-level" id="spPoolLevel" transform="translate(0 120)">
+          <path class="sp-pool-back" d="${wave(6)}"/>
+          <path class="sp-pool-front" d="${wave(9)}"/>
+          <path class="sp-pool-sheen" d="${wave(9)}" fill="url(#spPoolSheen)"/>
+        </g>
+      </g>
+      <rect class="sp-pool-ring" x="0.5" y="0.5" width="119" height="119" rx="19.5" fill="none"/>
+    </svg>
+    <b class="sp-pool-pct num" id="spPoolPct">—</b>
+  </div>`;
 }
 
 export function shellHTML() {
+  const ins = FX_IN.map(([k, t], i) => `<div class="fx-box fx-in k-${k}" data-i="${i}"><i class="fx-dot"></i><b>${t}</b></div>`).join("");
+  const outs = FX_OUT.map(([t, c], i) => {
+    const ico = i === 1
+      ? `<span class="fx-ico is-sev">${[0, 1, 2, 3, 4].map((k) => `<i style="--c:var(--sev-${k});--k:${k}"></i>`).join("")}</span>`
+      : `<span class="fx-ico"><i></i></span>`;
+    return `<div class="fx-box fx-out" data-o="${i}" style="--c:${c}">${ico}<b>${t}</b></div>`;
+  }).join("");
   return `<div class="bento sp-bento">
-    <article class="card" style="--span:12">
+    <article class="card sp-ov-card" style="--span:12">
       <header class="card-head">
-        <h2>评测与聚类进程</h2>
+        <h2>评测总览</h2>
         <div class="sp-head-pills">
           <span class="sp-conn" id="spEvalState"><i></i><span id="spEvalStateText">读取中</span></span>
           <span class="sp-conn is-quiet" id="spConn"><i></i><span id="spConnText">实时</span></span>
         </div>
       </header>
-      <div class="sp-flow-mini" id="spFlowMini">
+      <div class="sp-ov">
+        <div class="sp-ov-stat" style="--c:var(--t2)">
+          <span class="sp-ov-lbl"><i></i>评测输入</span>
+          <div class="sp-ov-val"><span class="big num" id="spInputTraces">—</span><span class="unit">trace</span></div>
+          <span class="sp-ov-sub"><b class="num" id="spInputSessions">—</b> session</span>
+        </div>
+        <div class="sp-ov-stat" style="--c:var(--accent)">
+          <span class="sp-ov-lbl"><i></i>已完成评测</span>
+          <div class="sp-ov-val"><span class="big num" id="spAttrTraces">—</span><span class="unit">trace</span></div>
+          <span class="sp-ov-sub" id="spAttrPct">—</span>
+        </div>
+        <div class="sp-ov-stat" style="--c:var(--loc-ulq)">
+          <span class="sp-ov-lbl"><i></i>已聚类</span>
+          <div class="sp-ov-val"><span class="big num" id="spClusterTraces">—</span><span class="unit">trace</span></div>
+          <span class="sp-ov-sub" id="spClusterPct">—</span>
+        </div>
+      </div>
+      <div class="sp-funnel" id="spFunnel" role="img" aria-label="评测与聚类覆盖">
+        <i class="sp-funnel-attr" id="spFunnelAttr"></i>
+        <i class="sp-funnel-cl" id="spFunnelCl"></i>
+      </div>
+      <div class="sp-funnel-keys">
+        <span style="--c:var(--loc-ulq)"><i></i>已聚类</span>
+        <span style="--c:var(--accent)"><i></i>已评测待聚类 <b class="num" id="spKeyClPending">—</b></span>
+        <span style="--c:var(--well-2)"><i></i>待评测 <b class="num" id="spKeyRemain">—</b></span>
+      </div>
+    </article>
+
+    <article class="card" style="--span:12">
+      <header class="card-head"><h2>评测流水线</h2></header>
+      <div class="sp-fx" id="spFx">
         <svg class="sp-fx-wires" id="spFxWires" aria-hidden="true"></svg>
         <canvas class="sp-fx-sparks" id="spFxSparks" aria-hidden="true"></canvas>
-        <div class="sp-flow-grid">
-          <section class="sp-node" data-stage="in" style="--c:var(--accent)">
-            ${miniWaveSVG("in")}
-            <div class="sp-node-top"><span class="sp-node-step">01</span><span class="sp-node-name">输入对话</span><span class="sp-node-pct num" id="spNodeInSess">—</span></div>
-            <div class="sp-node-body"><i class="sp-dot"></i><div class="sp-node-nums"><span class="sp-node-main num" id="spInputTraces">—</span></div></div>
-            <div class="sp-node-sub" id="spInputSub">Trace 总量</div>
-          </section>
-          <section class="sp-node" data-stage="compact" style="--c:var(--loc-vir)">
-            ${miniWaveSVG("compact")}
-            <div class="sp-node-top"><span class="sp-node-step">02</span><span class="sp-node-name">轨迹压缩</span><span class="sp-node-pct num" id="spCompactPct">—</span></div>
-            <div class="sp-node-body">${miniHubHTML()}<div class="sp-node-nums"><span class="sp-node-main num" id="spCompactTotal">—</span></div></div>
-            <div class="sp-node-sub" id="spCompactSub">已压缩 Trace</div>
-          </section>
-          <section class="sp-node" data-stage="attr" style="--c:var(--accent)">
-            ${miniWaveSVG("attr")}
-            <div class="sp-node-top"><span class="sp-node-step">03</span><span class="sp-node-name">问题归因</span><span class="sp-node-pct num" id="spPercent">—</span></div>
-            <div class="sp-node-body">${sevIconHTML()}<div class="sp-node-nums"><span class="sp-node-main num" id="spAttrTraces">—</span></div></div>
-            <div class="sp-node-sub">待归因 <b class="num" id="spRemainingTraces">—</b></div>
-          </section>
-          <section class="sp-node" data-stage="cluster" style="--c:var(--loc-ulq)">
-            ${miniWaveSVG("cluster")}
-            <div class="sp-node-top"><span class="sp-node-step">04</span><span class="sp-node-name">层级聚类</span><span class="sp-node-pct num" id="spClusterPct">—</span></div>
-            <div class="sp-node-body"><span class="sp-ico" style="--c:var(--loc-ulq)"><i></i></span><div class="sp-node-nums"><span class="sp-node-main num" id="spClusterTraces">—</span></div></div>
-            <div class="sp-node-sub">待聚类 <b class="num" id="spClusterPending">—</b></div>
-          </section>
-        </div>
-        <div id="spModelList">
-          <div class="sp-branches" id="spTracks"><div class="empty">读取中…</div></div>
-        </div>
-        <div id="spDateView" hidden>
-          <div class="sp-date-head">
-            <button type="button" class="sp-back" id="spBack">← 返回进程总览</button>
-            <div class="sp-filters">
-              <label>年 <select class="sp-select" id="spDateYear"></select></label>
-              <label>月 <select class="sp-select" id="spDateMonth"></select></label>
-            </div>
-            <div class="pager">
-              <span class="pager-info" id="spDatePageInfo"></span>
-              <button type="button" id="spDatePrev">上一页</button>
-              <button type="button" id="spDateNext">下一页</button>
-            </div>
-          </div>
-          <div class="md-table sp-table">
-            <table>
-              <thead>
-                <tr><th>日期</th><th class="num">输入 Session</th><th class="num">输入 Trace</th><th class="num">已评测 Session</th><th class="num">已评测 Trace</th><th class="num">待评 Session</th><th class="num">待评 Trace</th><th>进度</th></tr>
-              </thead>
-              <tbody id="spDates"></tbody>
-            </table>
-          </div>
-        </div>
+        <section class="sp-fx-col">
+          <div class="fx-label"><span class="num">01</span>原始对话</div>
+          <div class="sp-fx-stack">${ins}</div>
+          <div class="sp-fx-foot"><b class="num" id="spFxIn">—</b>输入</div>
+        </section>
+        <section class="sp-fx-col">
+          <div class="fx-label"><span class="num">02</span>轨迹压缩</div>
+          ${hubHTML()}
+          <div class="sp-fx-foot"><b class="num" id="spFxCompact">—</b>已压缩</div>
+        </section>
+        <section class="sp-fx-col">
+          <div class="fx-label"><span class="num">03</span>问题归因</div>
+          <div class="sp-fx-stack">${outs}</div>
+          <div class="sp-fx-foot"><b class="num" id="spFxAttr">—</b>已归因</div>
+        </section>
+        <section class="sp-fx-col">
+          <div class="fx-label"><span class="num">04</span>层级聚类</div>
+          ${poolHTML()}
+          <div class="sp-fx-foot"><b class="num" id="spFxCluster">—</b>已聚类</div>
+        </section>
       </div>
     </article>
 
     <article class="card sp-rate-card is-rate-attr" style="--span:4">
-      <header class="card-head"><h2>Attribution 速率</h2></header>
-      <div class="sp-rate"><span class="big num" id="spAttrRate">—</span><span class="unit">条/分钟</span></div>
-      <p class="sp-rate-sub" id="spPartsAttrSub">在途实时 —</p>
+      <header class="card-head"><h2>归因速率</h2></header>
+      <div class="sp-rate"><span class="big num" id="spAttrRate">—</span><span class="unit">trace/分钟</span></div>
+      <p class="sp-rate-sub" id="spPartsAttrSub">在途 —</p>
     </article>
 
     <article class="card sp-rate-card is-rate-comp" style="--span:4">
-      <header class="card-head"><h2>Compact 速率</h2></header>
-      <div class="sp-rate"><span class="big num" id="spCompactRate">—</span><span class="unit">条/分钟</span></div>
-      <p class="sp-rate-sub" id="spPartsCompactSub">在途实时 —</p>
+      <header class="card-head"><h2>压缩速率</h2></header>
+      <div class="sp-rate"><span class="big num" id="spCompactRate">—</span><span class="unit">trace/分钟</span></div>
+      <p class="sp-rate-sub" id="spPartsCompactSub">在途 —</p>
     </article>
 
     <article class="card sp-rate-card" style="--span:4">
@@ -304,99 +313,80 @@ export function shellHTML() {
         <table>
           <thead>
             <tr>
-              <th>网关 / 渠道</th>
-              <th>状态</th>
-              <th>模型</th>
-              <th class="num">实时 RPM / 配额</th>
-              <th class="num">并发许可</th>
-              <th class="num">实例 / 写入流</th>
-              <th class="num">探活延迟</th>
-              <th class="num">最近活跃</th>
+              <th>网关 / 渠道</th><th>状态</th><th>模型</th>
+              <th class="num">实时 RPM / 配额</th><th class="num">并发许可</th>
+              <th class="num">实例 / 写入流</th><th class="num">探活延迟</th><th class="num">最近活跃</th>
             </tr>
           </thead>
           <tbody id="spGateways"><tr><td colspan="8" class="empty">读取中…</td></tr></tbody>
         </table>
       </div>
     </article>
+
+    <article class="card" style="--span:12">
+      <header class="card-head"><h2>日期分布</h2></header>
+      <div id="spModelList" class="md-table sp-table">
+        <table>
+          <thead>
+            <tr><th>目录</th><th class="num">输入 Session</th><th class="num">输入 Trace</th><th class="num">已评测 Trace</th><th class="num">已聚类 Trace</th><th class="num">待评测 Trace</th><th>进度</th></tr>
+          </thead>
+          <tbody id="spModels"><tr><td colspan="7" class="empty">读取中…</td></tr></tbody>
+        </table>
+      </div>
+      <div id="spDateView" hidden>
+        <div class="sp-date-head">
+          <button type="button" class="sp-back" id="spBack">← 全部目录</button>
+          <b class="sp-date-title" id="spDateTitle"></b>
+          <div class="sp-filters">
+            <select class="sp-select" id="spDateYear" aria-label="年份"></select>
+            <select class="sp-select" id="spDateMonth" aria-label="月份"></select>
+          </div>
+          <div class="pager">
+            <span class="pager-info" id="spDatePageInfo"></span>
+            <button type="button" id="spDatePrev">上一页</button>
+            <button type="button" id="spDateNext">下一页</button>
+          </div>
+        </div>
+        <div class="md-table sp-table">
+          <table>
+            <thead>
+              <tr><th>日期</th><th class="num">输入 Session</th><th class="num">输入 Trace</th><th class="num">已评测 Trace</th><th class="num">待评测 Trace</th><th>进度</th></tr>
+            </thead>
+            <tbody id="spDates"></tbody>
+          </table>
+        </div>
+      </div>
+    </article>
   </div>`;
 }
 
-export function buildTrackStats(data) {
+/* 进度条：外层为已评测占比，内层叠加已聚类占比（聚类 ⊆ 评测）。 */
+function stackCell(attrRatio, clRatio = null) {
+  const a = Math.max(0, Math.min(1, Number(attrRatio) || 0));
+  const c = clRatio == null ? null : Math.max(0, Math.min(a, Number(clRatio) || 0));
+  return `<td class="sp-prog-cell"><span class="sp-mini-bar"><i style="width:${(a * 100).toFixed(1)}%"></i>${c == null ? "" : `<i class="is-cl" style="width:${(c * 100).toFixed(1)}%"></i>`}</span><span class="num">${(a * 100).toFixed(1)}%</span></td>`;
+}
+
+export function modelRowsHTML(data) {
   const models = data?.models || [];
-  const clModels = new Map((data?.cluster?.models || []).map((c) => [c.name, c]));
-  const locksByModel = new Map();
-  for (const l of (data?.queue?.locks || [])) {
-    if (l.model) locksByModel.set(l.model, (locksByModel.get(l.model) || 0) + 1);
-  }
-  const status = deriveEvalStatus(data);
+  if (!models.length) return `<tr><td colspan="7" class="empty">等待数据…</td></tr>`;
+  const cl = new Map((data?.cluster?.models || []).map((c) => [c.name, Number(c.traces) || 0]));
   return models.map((m) => {
     const inTr = Number(m.input_traces) || 0;
     const attrTr = Number(m.attr_traces) || 0;
-    const compTr = Number(m.compact) || 0;
-    const remTr = Math.max(0, inTr - attrTr);
-    const cl = clModels.get(m.name);
-    const clDone = cl ? (Number(cl.traces) || 0) : 0;
-    const clPending = cl ? (Number(cl.pending) || 0) : 0;
-    const clTotal = clDone + clPending;
-    const hasLock = (locksByModel.get(m.name) || 0) > 0;
-    const done = inTr > 0 && remTr === 0 && clPending === 0;
-    const trackState = hasLock || (status.running && (remTr > 0 || clPending > 0))
-      ? { label: hasLock ? `进行中 · ${locksByModel.get(m.name)}` : "进行中", cls: "is-live" }
-      : done
-        ? { label: "已完成", cls: "is-done" }
-        : { label: status.running ? "排队中" : "中断中", cls: "is-hold" };
-    return {
-      name: m.name,
-      inTraces: inTr,
-      attrTraces: attrTr,
-      compTraces: compTr,
-      remTraces: remTr,
-      clDone,
-      clPending,
-      clTotal,
-      compRatio: inTr > 0 ? Math.min(1, compTr / inTr) : 0,
-      attrRatio: inTr > 0 ? Math.min(1, attrTr / inTr) : 0,
-      clRatio: clTotal > 0 ? Math.min(1, clDone / clTotal) : 0,
-      state: trackState,
-    };
-  });
+    const clTr = cl.get(m.name) || 0;
+    return `<tr>
+      <td><button type="button" class="sp-model-btn" data-sp-model="${esc(m.name)}">${esc(m.name)}</button></td>
+      <td class="num">${num(m.input_sessions)}</td>
+      <td class="num">${num(inTr)}</td>
+      <td class="num">${num(attrTr)}</td>
+      <td class="num">${cl.has(m.name) ? num(clTr) : "—"}</td>
+      <td class="num">${num(Math.max(0, inTr - attrTr))}</td>
+      ${stackCell(inTr ? attrTr / inTr : 0, inTr && cl.has(m.name) ? clTr / inTr : null)}
+    </tr>`;
+  }).join("");
 }
 
-export function renderTracksHTML(data) {
-  const tracks = buildTrackStats(data);
-  if (!tracks.length) return `<div class="empty">等待进程数据…</div>`;
-  return tracks.map((t) => `<article class="sp-track">
-    <div class="sp-track-head">
-      <button type="button" class="sp-model-btn" data-sp-model="${esc(t.name)}">${esc(t.name)}</button>
-      <span class="sp-track-state ${t.state.cls}"><i></i>${esc(t.state.label)}</span>
-    </div>
-    <div class="sp-track-bars">
-      <div class="sp-stage-row">
-        <span class="sp-stage-lbl">压缩</span>
-        <div class="sp-stage-bar"><i style="width:${(t.compRatio * 100).toFixed(1)}%;--c:var(--loc-vir)"></i></div>
-        <span class="sp-stage-val num"><b>${(t.compRatio * 100).toFixed(1)}%</b><span class="sp-stage-rem">${compact(t.compTraces)}/${compact(t.inTraces)}</span></span>
-      </div>
-      <div class="sp-stage-row">
-        <span class="sp-stage-lbl">归因</span>
-        <div class="sp-stage-bar"><i style="width:${(t.attrRatio * 100).toFixed(1)}%;--c:var(--accent)"></i></div>
-        <span class="sp-stage-val num"><b>${(t.attrRatio * 100).toFixed(1)}%</b><span class="sp-stage-rem">${t.remTraces ? `待 ${compact(t.remTraces)}` : `${compact(t.attrTraces)}`}</span></span>
-      </div>
-      <div class="sp-stage-row">
-        <span class="sp-stage-lbl">聚类</span>
-        <div class="sp-stage-bar"><i style="width:${(t.clRatio * 100).toFixed(1)}%;--c:var(--loc-ulq)"></i></div>
-        <span class="sp-stage-val num"><b>${t.clTotal ? `${(t.clRatio * 100).toFixed(1)}%` : "—"}</b><span class="sp-stage-rem">${t.clPending ? `待 ${compact(t.clPending)}` : (t.clDone ? `${compact(t.clDone)}` : "暂无")}</span></span>
-      </div>
-    </div>
-  </article>`).join("");
-}
-
-function setNodeWave(root, stage, ratio) {
-  const g = $(`[data-wave-shift="${stage}"]`, root);
-  if (!g) return;
-  const r = Math.max(0, Math.min(1, Number(ratio) || 0));
-  const x = r >= 0.999 ? 248 : r <= 0.001 ? -8 : 240 * r;
-  g.setAttribute("transform", `translate(${x.toFixed(1)} 0)`);
-}
 
 function renderGateways(root, gw) {
   const g = gw || {};
@@ -495,7 +485,7 @@ function renderDates(root, model) {
     setText(root, "spDatePageInfo", "共 0 天");
     $("#spDatePrev", root).disabled = true;
     $("#spDateNext", root).disabled = true;
-    setHTML(root, "spDates", `<tr><td colspan="8" class="empty">暂无日期数据</td></tr>`);
+    setHTML(root, "spDates", `<tr><td colspan="6" class="empty">暂无日期数据</td></tr>`);
     return;
   }
   const years = [...new Set(dates.map((d) => d.date.slice(0, 4)))].sort().reverse();
@@ -511,27 +501,25 @@ function renderDates(root, model) {
   S.dateFilter.page = Math.min(Math.max(1, S.dateFilter.page), pages);
   const start = (S.dateFilter.page - 1) * DATE_PAGE_SIZE;
   const pageRows = filtered.slice(start, start + DATE_PAGE_SIZE);
-  setText(root, "spDatePageInfo", filtered.length ? `${model.name} · ${filtered.length} 天 (${S.dateFilter.page}/${pages})` : "当前筛选无日期");
+  setText(root, "spDateTitle", model.name);
+  setText(root, "spDatePageInfo", filtered.length ? `${filtered.length} 天 · ${S.dateFilter.page}/${pages}` : "当前筛选无日期");
   $("#spDatePrev", root).disabled = S.dateFilter.page <= 1;
   $("#spDateNext", root).disabled = S.dateFilter.page >= pages;
 
   if (!pageRows.length) {
-    setHTML(root, "spDates", `<tr><td colspan="8" class="empty">当前筛选暂无日期</td></tr>`);
+    setHTML(root, "spDates", `<tr><td colspan="6" class="empty">当前筛选暂无日期</td></tr>`);
     return;
   }
   const html = pageRows.map((d) => {
-    const remSess = Math.max(0, (d.input_sessions || 0) - (d.attr_sessions || 0));
-    const remTr = Math.max(0, (d.input_traces || 0) - (d.attr_traces || 0));
-    const ratio = d.input_sessions ? d.attr_sessions / d.input_sessions : 0;
+    const inTr = Number(d.input_traces) || 0;
+    const attrTr = Number(d.attr_traces) || 0;
     return `<tr>
       <td class="num">${esc(d.date)}</td>
       <td class="num">${num(d.input_sessions)}</td>
-      <td class="num">${num(d.input_traces)}</td>
-      <td class="num">${num(d.attr_sessions)}</td>
-      <td class="num">${num(d.attr_traces)}</td>
-      <td class="num">${num(remSess)}</td>
-      <td class="num">${num(remTr)}</td>
-      ${progressBarCell(ratio)}
+      <td class="num">${num(inTr)}</td>
+      <td class="num">${num(attrTr)}</td>
+      <td class="num">${num(Math.max(0, inTr - attrTr))}</td>
+      ${stackCell(inTr ? attrTr / inTr : 0)}
     </tr>`;
   }).join("");
   setHTML(root, "spDates", html);
@@ -897,59 +885,69 @@ function handleChartLeave(root) {
 }
 
 /* Miniature animated flow diagram mirroring 评测体系 (`fx-diagram` wires + comet sparks + spinning hub). */
-function wireMiniFlow(root) {
+/* 评测流水线缩略图（照搬评测体系 fx-diagram 的视觉，横向排布）。
+   粒子由真实进度指挥：每次轮询把「压缩 / 归因 / 聚类」的新增量拆成若干粒子，
+   在下一次轮询前陆续送达；粒子到站时对应计数才往上走，液面才上涨。
+   评测进行中时，另按在途速率放出不计数的流动粒子；中断时整张图静止变淡。 */
+function wireFlow(root) {
   S.fx?.destroy();
   S.fx = null;
-  const diagram = $("#spFlowMini", root);
+  const diagram = $("#spFx", root);
   const svg = $("#spFxWires", root);
   const canvas = $("#spFxSparks", root);
-  if (!diagram || !svg || !canvas || typeof canvas.getContext !== "function") return;
-
-  const ctx = canvas.getContext("2d");
-  const ring = $(".sp-mini-ring", diagram);
-  const tiles = $$(".sp-mini-core i", diagram);
-  const nodes = $$(".sp-node", diagram);
+  if (!diagram || !svg || !canvas) return;
+  const ctx = typeof canvas.getContext === "function" ? canvas.getContext("2d") : null;
+  const hub = $(".sp-hub", diagram);
+  const ring = $(".fx-ring", diagram);
+  const tiles = $$(".fx-core i", diagram);
+  const ins = $$(".fx-in", diagram);
+  const outs = $$(".fx-out", diagram);
+  const pool = $("#spPool", diagram);
   const paths = new Map();
   const geo = { dpr: 1, w: 0, h: 0 };
+  const shown = { compact: null, attr: null, cluster: null };
+  const target = { compact: null, attr: null, cluster: null };
+  const sparks = [];
+  let running = false;
+  let ambientEvery = 0;
+  let lastAmbient = 0;
+  let raf = 0;
+  let rot = 0;
+  let step = 0;
+  let lastHub = 0;
+  let colors = null;
+
+  const paint = () => {
+    for (const k of ["compact", "attr", "cluster"]) {
+      const id = k === "compact" ? "spFxCompact" : k === "attr" ? "spFxAttr" : "spFxCluster";
+      setText(root, id, shown[k] == null ? "—" : num(Math.round(shown[k])));
+    }
+    const ratio = shown.attr > 0 && shown.cluster != null ? Math.max(0, Math.min(1, shown.cluster / shown.attr)) : 0;
+    const level = $("#spPoolLevel", diagram);
+    if (level) level.setAttribute("transform", `translate(0 ${(120 * (1 - ratio) - 4).toFixed(1)})`);
+    setText(root, "spPoolPct", shown.attr > 0 ? `${(ratio * 100).toFixed(1)}%` : "—");
+  };
 
   const redraw = () => {
     const h = diagram.getBoundingClientRect();
     if (!h.width) return;
     const rel = (el) => {
       const r = el.getBoundingClientRect();
-      return {
-        l: r.left - h.left, r: r.right - h.left,
-        t: r.top - h.top, b: r.bottom - h.top,
-        cx: r.left + r.width / 2 - h.left, cy: r.top + r.height / 2 - h.top,
-      };
+      return { l: r.left - h.left, r: r.right - h.left, cy: r.top + r.height / 2 - h.top };
     };
-    const hcurve = (x0, y0, x1, y1, id, cls = "") => {
-      const xm = (x0 + x1) / 2;
-      return `<path id="${id}" class="sp-fx-w ${cls}" d="M${x0.toFixed(1)} ${y0.toFixed(1)}C${xm.toFixed(1)} ${y0.toFixed(1)} ${xm.toFixed(1)} ${y1.toFixed(1)} ${x1.toFixed(1)} ${y1.toFixed(1)}"/>`;
-    };
-    const vcurve = (x0, y0, x1, y1, id, cls = "") => {
-      const ym = (y0 + y1) / 2;
-      return `<path id="${id}" class="sp-fx-w ${cls}" d="M${x0.toFixed(1)} ${y0.toFixed(1)}C${x0.toFixed(1)} ${ym.toFixed(1)} ${x1.toFixed(1)} ${ym.toFixed(1)} ${x1.toFixed(1)} ${y1.toFixed(1)}"/>`;
+    const curve = (a, b, id, cls) => {
+      const xm = (a[0] + b[0]) / 2;
+      return `<path id="${id}" class="fx-w ${cls}" d="M${a[0].toFixed(1)} ${a[1].toFixed(1)}C${xm.toFixed(1)} ${a[1].toFixed(1)} ${xm.toFixed(1)} ${b[1].toFixed(1)} ${b[0].toFixed(1)} ${b[1].toFixed(1)}"/>`;
     };
     let d = "";
-    for (let i = 0; i < nodes.length - 1; i++) {
-      const a = rel(nodes[i]);
-      const b = rel(nodes[i + 1]);
-      if (Math.abs(a.cy - b.cy) < 30 && b.l > a.r) {
-        d += hcurve(a.r, a.cy, b.l, b.cy, `spw-s${i}`);
-      } else {
-        d += vcurve(a.cx, a.b, b.cx, b.t, `spw-s${i}`);
-      }
+    if (hub) {
+      const hr = rel(hub);
+      ins.forEach((b, i) => { const r = rel(b); d += curve([r.r, r.cy], [hr.l + 14, hr.cy], `spw-i${i}`, "in"); });
+      outs.forEach((b, j) => { const r = rel(b); d += curve([hr.r - 14, hr.cy], [r.l, r.cy], `spw-o${j}`, "out"); });
     }
-    const tracksEl = $("#spModelList", diagram);
-    if (tracksEl && !tracksEl.hidden) {
-      const nAttr = nodes[2] && rel(nodes[2]);
-      const nCl = nodes[3] && rel(nodes[3]);
-      $$(".sp-track", tracksEl).forEach((tr, k) => {
-        const r = rel(tr);
-        const src = nCl && nAttr ? (r.cx < (nAttr.cx + nCl.cx) / 2 ? nAttr : nCl) : (nCl || nAttr);
-        if (src && r.t > src.b) d += vcurve(src.cx, src.b, r.cx, r.t, `spw-b${k}`, "funnel");
-      });
+    if (pool) {
+      const pr = rel(pool);
+      outs.forEach((b, j) => { const r = rel(b); d += curve([r.r, r.cy], [pr.l, pr.cy], `spw-c${j}`, "funnel"); });
     }
     svg.setAttribute("viewBox", `0 0 ${h.width} ${h.height}`);
     svg.innerHTML = d;
@@ -962,140 +960,154 @@ function wireMiniFlow(root) {
     canvas.height = Math.round(h.height * geo.dpr);
   };
 
+  const flash = (el, cls = "is-on", ms = 420) => {
+    if (!el) return;
+    el.classList.remove(cls);
+    void el.offsetWidth;
+    el.classList.add(cls);
+    setTimeout(() => el.classList.remove(cls), ms);
+  };
+  const hubHit = (now) => {
+    if (now - lastHub < 220) return;
+    lastHub = now;
+    rot += 40;
+    if (ring) ring.style.transform = `rotate(${rot}deg)`;
+    flash(hub, "is-hit", 460);
+    step = (step + 1) % MINI_STEPS.length;
+    const lit = new Set([4, step % 9, (step * 4 + 1) % 9]);
+    tiles.forEach((t, k) => t.style.setProperty("--c", lit.has(k) ? MINI_STEPS[step] : "var(--sev-none)"));
+  };
+  const along = (id, u) => {
+    const p = paths.get(id);
+    if (!p || typeof p.getTotalLength !== "function") return null;
+    try { return p.getPointAtLength(p.getTotalLength() * u); } catch { return null; }
+  };
+  const readColors = () => {
+    const cs = getComputedStyle(document.documentElement);
+    const v = (n, f) => cs.getPropertyValue(n).trim() || f;
+    colors = {
+      in: v("--accent", "#3552d8"),
+      outs: [v("--sev-1", "#bf3822"), v("--sev-0", "#a01e26"), v("--accent", "#3552d8"), v("--t1", "#596273")],
+      pool: v("--loc-ulq", "#1d7d72"),
+    };
+  };
+  /* kind: compact 止于压缩核心；attr 止于归因；cluster 止于聚类池；flow 为在途流动，不计数。 */
+  const spawn = (kind, share, at) => {
+    sparks.push({
+      kind, share, t0: at, phase: 0, launched: false,
+      i: Math.floor(Math.random() * Math.max(1, ins.length)),
+      j: Math.floor(Math.random() * Math.max(1, outs.length)),
+      trail: [],
+    });
+  };
+  const arrive = (s) => {
+    if (s.share > 0 && shown[s.kind] != null) {
+      shown[s.kind] = Math.min(target[s.kind], shown[s.kind] + s.share);
+      paint();
+    }
+  };
+  const DUR = [760, 640, 700];
+
+  const frame = (now) => {
+    raf = 0;
+    const visible = !document.hidden && document.documentElement.dataset.view === "speed";
+    if (!visible) return;
+    if (!colors) readColors();
+    if (running && ambientEvery && now - lastAmbient > ambientEvery) {
+      lastAmbient = now;
+      spawn("flow", 0, now);
+    }
+    ctx.setTransform(geo.dpr, 0, 0, geo.dpr, 0, 0);
+    ctx.clearRect(0, 0, geo.w, geo.h);
+    for (let n = sparks.length - 1; n >= 0; n--) {
+      const s = sparks[n];
+      if (now < s.t0) continue;
+      if (!s.launched) {
+        s.launched = true;
+        flash(ins[s.i]);
+      }
+      const u = Math.min(1, (now - s.t0) / DUR[s.phase]);
+      const id = s.phase === 0 ? `spw-i${s.i}` : s.phase === 1 ? `spw-o${s.j}` : `spw-c${s.j}`;
+      const pt = along(id, u < 0.5 ? 4 * u * u * u : 1 - (-2 * u + 2) ** 3 / 2);
+      if (pt) {
+        s.trail.push(pt);
+        if (s.trail.length > 12) s.trail.shift();
+        const col = s.phase === 0 ? colors.in : s.phase === 1 ? colors.outs[s.j] || colors.in : colors.pool;
+        ctx.lineCap = "round";
+        for (let k = 1; k < s.trail.length; k++) {
+          const t = k / s.trail.length;
+          ctx.strokeStyle = col;
+          ctx.globalAlpha = t * (s.kind === "flow" ? 0.32 : 0.6);
+          ctx.lineWidth = (s.kind === "flow" ? 2 : 2.8) * t;
+          ctx.beginPath();
+          ctx.moveTo(s.trail[k - 1].x, s.trail[k - 1].y);
+          ctx.lineTo(s.trail[k].x, s.trail[k].y);
+          ctx.stroke();
+        }
+        ctx.fillStyle = col;
+        ctx.globalAlpha = s.kind === "flow" ? 0.55 : 0.95;
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, s.kind === "flow" ? 2.2 : 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+      if (u < 1) continue;
+      s.trail.length = 0;
+      if (s.phase === 0) {
+        hubHit(now);
+        if (s.kind === "compact") { arrive(s); sparks.splice(n, 1); continue; }
+      } else if (s.phase === 1) {
+        flash(outs[s.j]);
+        if (s.kind === "attr" || s.kind === "flow") { arrive(s); sparks.splice(n, 1); continue; }
+      } else {
+        flash(pool, "is-hit", 520);
+        arrive(s);
+        sparks.splice(n, 1);
+        continue;
+      }
+      s.phase += 1;
+      s.t0 = now;
+    }
+    if (sparks.length || running) raf = requestAnimationFrame(frame);
+  };
+  const kick = () => {
+    if (!raf && ctx && !REDUCED && typeof requestAnimationFrame === "function") raf = requestAnimationFrame(frame);
+  };
+
   redraw();
   const ro = typeof ResizeObserver === "function" ? new ResizeObserver(redraw) : null;
   ro?.observe(diagram);
 
-  if (REDUCED || typeof requestAnimationFrame !== "function") {
-    S.fx = { redraw, destroy() { ro?.disconnect(); } };
-    return;
-  }
-
-  let rot = 0;
-  let step = 0;
-  let lastSpawn = 0;
-  let lastPulse = 0;
-  let raf = 0;
-  const sparks = [];
-  let accent = "";
-  let vir = "";
-  let ulq = "";
-  const refreshColors = () => {
-    const cs = getComputedStyle(document.documentElement);
-    accent = cs.getPropertyValue("--accent").trim() || "#3552d8";
-    vir = cs.getPropertyValue("--loc-vir").trim() || "#6a43b8";
-    ulq = cs.getPropertyValue("--loc-ulq").trim() || "#1d7d72";
-  };
-  const along = (id, u) => {
-    const p = paths.get(id);
-    if (!p || !p.getTotalLength) return null;
-    try { return p.getPointAtLength(p.getTotalLength() * u); } catch { return null; }
-  };
-  const pulseCompact = (now) => {
-    if (now - lastPulse < 480) return;
-    lastPulse = now;
-    rot += 36;
-    if (ring) ring.style.transform = `rotate(${rot}deg)`;
-    step = (step + 1) % MINI_STEPS.length;
-    const c = MINI_STEPS[step];
-    const lit = new Set([4, step % 9, (step * 3 + 2) % 9]);
-    tiles.forEach((t, k) => t.style.setProperty("--c", lit.has(k) ? c : "var(--sev-none)"));
-  };
-  const pulseNode = (idx) => {
-    const n = nodes[idx];
-    if (!n) return;
-    n.classList.add("is-hit");
-    setTimeout(() => n.classList.remove("is-hit"), 340);
-  };
-
-  const frame = (now) => {
-    raf = 0;
-    const active = S.evalRunning && !document.hidden && document.documentElement.dataset.view === "speed";
-    diagram.classList.toggle("is-paused", !S.evalRunning);
-    if (!active) {
-      if (sparks.length) {
-        sparks.length = 0;
-        ctx.setTransform(geo.dpr, 0, 0, geo.dpr, 0, 0);
-        ctx.clearRect(0, 0, geo.w, geo.h);
-      }
-      return;
-    }
-    if (!accent) refreshColors();
-    if (now - lastSpawn > 680) {
-      lastSpawn = now;
-      const trackIds = [...paths.keys()].filter((k) => k.startsWith("spw-b"));
-      const bId = trackIds.length ? trackIds[Math.floor(Math.random() * trackIds.length)] : null;
-      sparks.push({ phase: 0, t0: now, dur: 520, bId, trail: [] });
-    }
-    ctx.setTransform(geo.dpr, 0, 0, geo.dpr, 0, 0);
-    ctx.clearRect(0, 0, geo.w, geo.h);
-
-    for (let i = sparks.length - 1; i >= 0; i--) {
-      const s = sparks[i];
-      const u = Math.min(1, (now - s.t0) / s.dur);
-      const id = s.phase < 3 ? `spw-s${s.phase}` : s.bId;
-      const pt = id ? along(id, u) : null;
-      if (!pt) {
-        if (s.phase < 3 && u >= 1) { s.phase += 1; s.t0 = now; continue; }
-        sparks.splice(i, 1);
-        continue;
-      }
-      s.trail.push({ x: pt.x, y: pt.y });
-      if (s.trail.length > 10) s.trail.shift();
-      const col = s.phase === 0 ? vir : s.phase === 1 ? accent : ulq;
-      for (let k = 1; k < s.trail.length; k++) {
-        const t = k / s.trail.length;
-        ctx.strokeStyle = col;
-        ctx.globalAlpha = t * 0.45;
-        ctx.lineWidth = 2.6 * t;
-        ctx.lineCap = "round";
-        ctx.beginPath();
-        ctx.moveTo(s.trail[k - 1].x, s.trail[k - 1].y);
-        ctx.lineTo(s.trail[k].x, s.trail[k].y);
-        ctx.stroke();
-      }
-      ctx.fillStyle = col;
-      ctx.globalAlpha = 0.9;
-      ctx.beginPath();
-      ctx.arc(pt.x, pt.y, 2.6, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.globalAlpha = 1;
-
-      if (u >= 1) {
-        if (s.phase === 0) pulseCompact(now);
-        else if (s.phase === 1) pulseNode(2);
-        else if (s.phase === 2) pulseNode(3);
-        s.phase += 1;
-        s.t0 = now;
-        s.trail.length = 0;
-        if (s.phase > 3 || (s.phase === 3 && !s.bId)) sparks.splice(i, 1);
-      }
-    }
-    raf = requestAnimationFrame(frame);
-  };
-
-  const kick = () => {
-    if (S.evalRunning && !raf && !document.hidden && document.documentElement.dataset.view === "speed") {
-      raf = requestAnimationFrame(frame);
-    } else if (!S.evalRunning) {
-      diagram.classList.add("is-paused");
-    }
-  };
   S.fx = {
     redraw,
-    sync(running) {
-      S.evalRunning = running;
-      diagram.classList.toggle("is-paused", !running);
-      if (!running) {
-        if (raf) { cancelAnimationFrame(raf); raf = 0; }
-        if (sparks.length) {
-          sparks.length = 0;
-          ctx.setTransform(geo.dpr, 0, 0, geo.dpr, 0, 0);
-          ctx.clearRect(0, 0, geo.w, geo.h);
+    /* next: {compact, attr, cluster} 的最新真实值；status: deriveEvalStatus 的结果；inflight: 在途条/分。 */
+    feed(next, status, inflight) {
+      running = !!status?.running;
+      diagram.classList.toggle("is-idle", !running);
+      ambientEvery = running ? Math.max(450, Math.min(3200, 60000 / Math.max(1, inflight || 0))) : 0;
+      const animate = !!ctx && !REDUCED && !document.hidden;
+      for (const k of ["compact", "attr", "cluster"]) {
+        const v = Number(next[k]);
+        if (!Number.isFinite(v)) continue;
+        const prevTarget = target[k];
+        target[k] = v;
+        // 上一轮没送完的增量直接落账，避免累积。
+        shown[k] = prevTarget == null ? v : prevTarget;
+        const delta = prevTarget == null ? 0 : v - prevTarget;
+        if (delta <= 0 || !animate) { shown[k] = v; continue; }
+        const count = Math.max(1, Math.min(14, Math.round(Math.sqrt(delta) * 1.6)));
+        const base = performance.now();
+        const span = POLL_MS * 0.82;
+        let left = delta;
+        for (let c = 0; c < count; c++) {
+          const share = c === count - 1 ? left : Math.round(delta / count);
+          left -= share;
+          spawn(k, share, base + (span * (c + Math.random() * 0.8)) / count);
         }
-      } else {
-        kick();
       }
+      sparks.forEach((s) => { if (s.share > 0 && s.t0 < performance.now() - POLL_MS) s.share = 0; });
+      paint();
+      kick();
     },
     destroy() {
       if (raf) cancelAnimationFrame(raf);
@@ -1103,7 +1115,6 @@ function wireMiniFlow(root) {
       ro?.disconnect();
     },
   };
-  kick();
 }
 
 export function applyData(root, data) {
@@ -1114,7 +1125,7 @@ export function applyData(root, data) {
     const sites = sitesMap();
     const aimeUrl = sites.aime?.url ? `${sites.aime.url.replace(/\/+$/, "")}/?view=speed&product=aime` : "";
     root.innerHTML = `<div class="bento"><article class="card" style="--span:12"><div class="sp-unavail">
-      <h2>评测与聚类进程</h2>
+      <h2>评测总览</h2>
       <p>${esc(data?.error || "当前节点未挂载 AIME 评测流水线目录。")}</p>
       ${aimeUrl ? `<a class="sp-unavail-btn" href="${esc(aimeUrl)}">打开弗吉尼亚 AIME 评测速度</a>` : ""}
     </div></article></div>`;
@@ -1123,85 +1134,70 @@ export function applyData(root, data) {
     return;
   }
 
-  if (!$("#spFlowMini", root)) {
+  if (!$("#spFx", root)) {
     root.innerHTML = shellHTML();
     wireControls(root);
-    wireMiniFlow(root);
+    wireFlow(root);
   }
 
   const ready = data.total != null;
   const inTr = Number(data.input_traces) || 0;
-  const inSess = Number(data.input_sessions) || 0;
   const attrTr = Number(data.attr_traces) || 0;
   const compTr = Number(data.compact) || 0;
   const remTr = Number(data.remaining_traces) || 0;
   const remSess = Number(data.remaining_sessions) || 0;
   const cl = data.cluster || {};
-  const clTraces = Number(cl.traces) || 0;
+  const clTr = Number(cl.traces) || 0;
   const clPending = Number(cl.pending) || 0;
-  const clTotal = clTraces + clPending;
-
-  const attrRatio = inTr > 0 ? Math.min(1, attrTr / inTr) : Math.max(0, Math.min(1, data.progress || 0));
-  const compRatio = inTr > 0 ? Math.min(1, compTr / inTr) : 0;
-  const clRatio = clTotal > 0 ? Math.min(1, clTraces / clTotal) : 0;
+  const attrRatio = inTr > 0 ? Math.min(1, attrTr / inTr) : 0;
+  const clRatio = inTr > 0 ? Math.min(attrRatio, clTr / inTr) : 0;
 
   setText(root, "spInputTraces", ready ? num(inTr) : "—");
-  setText(root, "spNodeInSess", ready ? `${compact(inSess)} Session` : "—");
-  const lost = data.lost_user || {};
-  setText(root, "spInputSub", (lost.input_traces || 0) > 0
-    ? `含流失召回 ${compact(lost.attr_traces)}/${compact(lost.input_traces)}`
-    : "Trace 总量");
-
-  setText(root, "spCompactTotal", num(compTr));
-  setText(root, "spCompactPct", inTr ? `${(compRatio * 100).toFixed(1)}%` : "—");
-
+  setText(root, "spInputSessions", ready ? num(data.input_sessions) : "—");
   setText(root, "spAttrTraces", num(attrTr));
-  setText(root, "spRemainingTraces", ready ? num(remTr) : "—");
-  setText(root, "spPercent", data.progress == null && !inTr ? "—" : `${(attrRatio * 100).toFixed(1)}%`);
-
-  setText(root, "spClusterTraces", num(clTraces));
-  setText(root, "spClusterPending", num(clPending));
-  setText(root, "spClusterPct", clTotal ? `${(clRatio * 100).toFixed(1)}%` : "—");
-
-  setNodeWave(root, "in", ready && inTr > 0 ? 1 : 0);
-  setNodeWave(root, "compact", compRatio);
-  setNodeWave(root, "attr", attrRatio);
-  setNodeWave(root, "cluster", clRatio);
+  setText(root, "spAttrPct", inTr ? `占输入 ${(attrRatio * 100).toFixed(1)}%` : "—");
+  setText(root, "spClusterTraces", num(clTr));
+  setText(root, "spClusterPct", attrTr ? `占已评测 ${pct(clTr, attrTr, 1)}` : "—");
+  const fa = $("#spFunnelAttr", root);
+  const fc = $("#spFunnelCl", root);
+  if (fa) fa.style.width = `${(attrRatio * 100).toFixed(2)}%`;
+  if (fc) fc.style.width = `${(clRatio * 100).toFixed(2)}%`;
+  setText(root, "spKeyClPending", num(clPending));
+  setText(root, "spKeyRemain", ready ? num(remTr) : "—");
+  setText(root, "spFxIn", ready ? num(inTr) : "—");
 
   const r = data.rates || {};
   const attrRate = r.attr == null || (Number(r.attr) === 0 && Number(r.parts_attr) > 0) ? r.parts_attr : r.attr;
   const compactRate = r.compact == null || (Number(r.compact) === 0 && Number(r.parts_compact) > 0) ? r.parts_compact : r.compact;
-  setText(root, "spCompactSub", compactRate != null && Number(compactRate) > 0 ? `${rate(compactRate)} 条/分` : "已压缩 Trace");
   setText(root, "spAttrRate", rate(attrRate));
   setText(root, "spCompactRate", rate(compactRate));
-  setText(root, "spPartsAttrSub", `实时在途 ${rate(r.parts_attr)} 条/分钟`);
-  setText(root, "spPartsCompactSub", `实时在途 ${rate(r.parts_compact)} 条/分钟`);
+  setText(root, "spPartsAttrSub", `在途 ${rate(r.parts_attr)} 条/分钟`);
+  setText(root, "spPartsCompactSub", `在途 ${rate(r.parts_compact)} 条/分钟`);
   setText(root, "spEta", etaLabel(data.eta_minutes));
-  setText(root, "spEtaSub", `剩余 ${compact(remTr)} Trace · ${compact(remSess)} Session`);
+  setText(root, "spEtaSub", `剩余 ${compact(remTr)} trace · ${compact(remSess)} session`);
 
   const ev = deriveEvalStatus(data);
   const evalEl = $("#spEvalState", root);
   if (evalEl) evalEl.className = `sp-conn ${ev.cls}`;
   setText(root, "spEvalStateText", ev.detail ? `${ev.label} · ${ev.detail}` : ev.label);
-  S.fx?.sync(ev.running);
-
   const conn = $("#spConn", root);
   if (conn) {
     conn.className = `sp-conn is-quiet ${data.ok ? "is-ok" : "is-bad"}`;
-    conn.title = data.updated_at ? `更新于 ${clock(data.updated_at)}` : "";
-    setText(root, "spConnText", data.ok ? `实时 ${clock(data.updated_at)}` : "连接异常");
+    setText(root, "spConnText", data.ok ? `更新 ${clock(data.updated_at)}` : "连接异常");
   }
 
-  setHTML(root, "spTracks", renderTracksHTML(data));
+  S.fx?.feed({ compact: compTr, attr: attrTr, cluster: clTr }, ev, (Number(r.parts_attr) || 0) + (Number(r.parts_compact) || 0) || Number(attrRate) || 0);
+
   renderGateways(root, data.gateways);
+  setHTML(root, "spModels", modelRowsHTML(data));
   if (S.selectedModel) {
     const model = (data.models || []).find((m) => m.name === S.selectedModel);
     if (model) renderDates(root, model);
     else closeDates(root);
   }
-  S.fx?.redraw();
   drawChart(root);
 }
+
 
 function openDates(root, modelName) {
   const model = (S.data?.models || []).find((m) => m.name === modelName);
@@ -1337,10 +1333,10 @@ function showEmpty(root) {
 export async function render(root, c) {
   S.root = root;
   S.ctx = c;
-  if (!root.firstChild || (!$("#spFlowMini", root) && !$("#spEmpty", root))) {
+  if (!root.firstChild || (!$("#spFx", root) && !$("#spEmpty", root))) {
     root.innerHTML = shellHTML();
     wireControls(root);
-    wireMiniFlow(root);
+    wireFlow(root);
   }
   await fetchSpeed();
   if (!S.timer) {

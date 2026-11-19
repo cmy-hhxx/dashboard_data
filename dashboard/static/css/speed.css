@@ -20,135 +20,88 @@
   50% { box-shadow: 0 0 0 5px color-mix(in oklab, var(--loc-ulq) 32%, transparent); }
 }
 
-/* 缩略全景流水线图（复用评测体系视觉语言） */
-.sp-flow-mini {
-  position: relative; display: grid; gap: var(--sp-5); padding: var(--sp-2) 0 var(--sp-1);
+/* 评测总览：三个数 + 一条嵌套覆盖条（聚类 ⊆ 评测 ⊆ 输入） */
+.sp-ov { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--gap); }
+.sp-ov-stat { display: grid; gap: 6px; min-width: 0; padding-left: var(--sp-4); border-left: 3px solid var(--c); }
+.sp-ov-lbl { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--fs-small); }
+.sp-ov-lbl i { display: none; }
+.sp-ov-val { display: flex; align-items: baseline; gap: 6px; }
+.sp-ov-val .big { color: var(--ink); }
+.sp-ov-stat:nth-child(2) .sp-ov-val .big { color: var(--accent); }
+.sp-ov-stat:nth-child(3) .sp-ov-val .big { color: var(--loc-ulq); }
+.sp-ov-sub { color: var(--muted); font-size: var(--fs-meta); }
+.sp-ov-sub b { color: var(--ink-2); font-weight: var(--w-medium); }
+
+.sp-funnel {
+  position: relative; height: 14px; margin-top: var(--sp-6); border-radius: 999px; overflow: hidden;
+  background: var(--well-2);
 }
-.sp-fx-wires, .sp-fx-sparks {
-  position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible;
+.sp-funnel i {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: inherit;
+  transition: width 900ms cubic-bezier(0.16, 1, 0.3, 1);
 }
+.sp-funnel-attr {
+  background: linear-gradient(90deg, color-mix(in oklab, var(--accent) 70%, var(--lift)), var(--accent));
+}
+.sp-funnel-cl {
+  background: linear-gradient(90deg, color-mix(in oklab, var(--loc-ulq) 72%, var(--lift)), var(--loc-ulq));
+  box-shadow: 2px 0 0 var(--card);
+}
+.sp-funnel i::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.32), rgba(255, 255, 255, 0) 60%);
+}
+.sp-funnel-keys { display: flex; flex-wrap: wrap; gap: 6px 20px; margin-top: var(--sp-3); font-size: var(--fs-meta); color: var(--muted); }
+.sp-funnel-keys span { display: inline-flex; align-items: center; gap: 6px; }
+.sp-funnel-keys i { width: 8px; height: 8px; border-radius: 2.5px; background: var(--c); }
+.sp-funnel-keys b { color: var(--ink-2); font-weight: var(--w-medium); }
+
+/* 评测流水线：评测体系 fx-diagram 的横向缩小版 */
+.sp-fx {
+  position: relative; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: center; column-gap: var(--sp-6); padding: var(--sp-2) var(--sp-2) 0;
+}
+.sp-fx-wires, .sp-fx-sparks { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
 .sp-fx-wires { z-index: 0; }
 .sp-fx-sparks { z-index: 3; }
-.sp-fx-w { fill: none; stroke: var(--t4); stroke-width: 1.25; stroke-dasharray: 3 5; stroke-linecap: round; }
-.sp-fx-w.funnel { stroke: color-mix(in oklab, var(--accent) 26%, var(--t4)); }
-.sp-flow-mini.is-paused .sp-fx-w { opacity: 0.55; stroke-dasharray: 2 6; }
+.sp-fx-col { position: relative; z-index: 1; display: grid; justify-items: center; gap: var(--sp-3); min-width: 0; }
+.sp-fx-stack { display: grid; gap: var(--sp-2); width: 100%; max-width: 168px; }
+.sp-fx .fx-box { height: 34px; padding: 0 var(--sp-3); gap: 8px; border-radius: 10px; justify-content: flex-start; }
+.sp-fx .fx-box b { font-size: var(--fs-small); }
+.sp-fx .fx-ico { width: 20px; height: 20px; border-radius: 6px; }
+.sp-fx .fx-ico i { width: 7px; height: 7px; }
+.sp-fx .fx-ico.is-sev i { width: 2.5px; height: 10px; }
+.sp-fx .fx-in.is-on { transform: translateX(2px); }
+.sp-fx .sp-hub { width: 132px; height: 132px; }
+.sp-fx .sp-hub .fx-orbit { inset: 20px; }
+.sp-fx .sp-hub .fx-core { width: 62px; height: 62px; border-radius: 18px; }
+.sp-fx .sp-hub .fx-core > span { grid-template-columns: repeat(3, 10px); gap: 3px; }
+.sp-fx .sp-hub .fx-core i { width: 10px; height: 10px; border-radius: 2.5px; }
+.sp-fx-foot { display: inline-flex; align-items: baseline; gap: 5px; font-size: var(--fs-meta); color: var(--muted); }
+.sp-fx-foot b { font-size: var(--fs-title); font-weight: var(--w-title); color: var(--ink); }
 
-.sp-flow-grid {
-  position: relative; z-index: 1; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-5);
+.sp-pool { position: relative; width: 132px; height: 132px; }
+.sp-pool svg { display: block; width: 100%; height: 100%; filter: drop-shadow(0 6px 14px rgba(23, 28, 36, 0.08)); }
+.sp-pool-bg { fill: var(--lift); }
+.sp-pool-level { transition: transform 900ms cubic-bezier(0.16, 1, 0.3, 1); }
+.sp-pool-back { fill: color-mix(in oklab, var(--loc-ulq) 16%, var(--lift)); animation: sp-pool-drift 4.2s linear infinite; }
+.sp-pool-front { fill: color-mix(in oklab, var(--loc-ulq) 30%, var(--lift)); animation: sp-pool-drift 2.6s linear infinite reverse; }
+.sp-pool-sheen { opacity: 0.7; animation: sp-pool-drift 2.6s linear infinite reverse; }
+.sp-pool-ring { stroke: color-mix(in oklab, var(--ink) 9%, transparent); stroke-width: 1; transition: stroke 240ms; }
+.sp-pool.is-hit .sp-pool-ring { stroke: var(--loc-ulq); stroke-width: 2; }
+.sp-pool.is-hit { animation: sp-pool-bump 520ms cubic-bezier(0.22, 1, 0.36, 1); }
+.sp-pool-pct {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  font-size: var(--fs-num-s); font-weight: var(--w-light); color: var(--ink); letter-spacing: -0.02em;
 }
-.sp-node {
-  position: relative; overflow: hidden; display: grid; gap: 8px; padding: var(--sp-4);
-  min-width: 0; border-radius: 16px; background: var(--lift);
-  box-shadow: var(--shadow), inset 0 0 0 1px color-mix(in oklab, var(--ink) 6%, transparent);
-  transition: box-shadow 200ms cubic-bezier(0.22, 1, 0.36, 1), transform 200ms cubic-bezier(0.22, 1, 0.36, 1), opacity 240ms;
-}
-.sp-node-wave {
-  position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0;
-}
-.sp-node-wave-shift { transition: transform 420ms cubic-bezier(0.22, 1, 0.36, 1); }
-.sp-node[data-stage="in"] .sp-nw-back { fill: color-mix(in oklab, var(--ink) 4%, transparent); }
-.sp-node[data-stage="in"] .sp-nw-front { fill: color-mix(in oklab, var(--ink) 7%, transparent); }
-.sp-node[data-stage="compact"] .sp-nw-back { fill: color-mix(in oklab, var(--loc-vir) 7%, var(--lift)); animation: sp-wave-up 3.4s linear infinite; }
-.sp-node[data-stage="compact"] .sp-nw-front { fill: color-mix(in oklab, var(--loc-vir) 14%, var(--lift)); animation: sp-wave-down 2.2s linear infinite; }
-.sp-node[data-stage="compact"] .sp-nw-crest { stroke: color-mix(in oklab, var(--loc-vir) 55%, #ffffff); stroke-width: 1.4; }
-.sp-node[data-stage="attr"] .sp-nw-back { fill: color-mix(in oklab, var(--accent) 8%, var(--lift)); animation: sp-wave-up 3.1s linear infinite; }
-.sp-node[data-stage="attr"] .sp-nw-front { fill: color-mix(in oklab, var(--accent) 16%, var(--lift)); animation: sp-wave-down 2.0s linear infinite; }
-.sp-node[data-stage="attr"] .sp-nw-crest { stroke: color-mix(in oklab, var(--accent) 62%, #ffffff); stroke-width: 1.45; }
-.sp-node[data-stage="cluster"] .sp-nw-back { fill: color-mix(in oklab, var(--loc-ulq) 8%, var(--lift)); animation: sp-wave-up 3.3s linear infinite; }
-.sp-node[data-stage="cluster"] .sp-nw-front { fill: color-mix(in oklab, var(--loc-ulq) 16%, var(--lift)); animation: sp-wave-down 2.1s linear infinite; }
-.sp-node[data-stage="cluster"] .sp-nw-crest { stroke: color-mix(in oklab, var(--loc-ulq) 60%, #ffffff); stroke-width: 1.45; }
-.sp-nw-sheen { pointer-events: none; opacity: 0.65; }
-.sp-flow-mini.is-paused .sp-nw-back,
-.sp-flow-mini.is-paused .sp-nw-front { animation-play-state: paused; }
-@keyframes sp-wave-up { from { transform: translateY(0); } to { transform: translateY(-100px); } }
-@keyframes sp-wave-down { from { transform: translateY(-100px); } to { transform: translateY(0); } }
+@keyframes sp-pool-drift { from { transform: translateX(0); } to { transform: translateX(-60px); } }
+@keyframes sp-pool-bump { 40% { transform: scale(1.04); } }
 
-.sp-node-top, .sp-node-body, .sp-node-sub { position: relative; z-index: 1; min-width: 0; }
-.sp-node-top { display: flex; align-items: center; gap: 7px; }
-.sp-node-step { font: var(--w-medium) var(--fs-meta) var(--mono); color: var(--accent); }
-.sp-node-name { font-size: var(--fs-small); font-weight: var(--w-title); color: var(--ink); }
-.sp-node-pct { margin-left: auto; font-size: var(--fs-meta); font-weight: var(--w-title); color: var(--ink-2); }
-.sp-node-body { display: flex; align-items: center; gap: 10px; min-height: 44px; }
-.sp-node-nums { display: grid; gap: 1px; min-width: 0; }
-.sp-node-main { font-size: 22px; line-height: 1.15; font-weight: var(--w-light); letter-spacing: -0.02em; color: var(--ink); }
-.sp-node-sub { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: var(--fs-meta); color: var(--muted); }
-.sp-node-sub b { color: var(--ink-2); font-weight: var(--w-medium); }
-.sp-node.is-hit { box-shadow: 0 0 0 1.5px var(--c, var(--accent)), var(--shadow-pop); }
-
-/* 缩略版图标（沿用评测体系造型） */
-.sp-dot { width: 8px; height: 8px; border-radius: 2.5px; background: var(--accent); flex: none; }
-.sp-ico {
-  width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; flex: none;
-  background: color-mix(in oklab, var(--c) 15%, var(--lift));
-}
-.sp-ico i { width: 11px; height: 11px; border-radius: 3.5px; background: var(--c); }
-.sp-ico.is-sev { display: flex; align-items: center; justify-content: center; gap: 2px; }
-.sp-ico.is-sev i { width: 3.5px; height: 14px; border-radius: 2px; transform-origin: 50% 100%; }
-.sp-node.is-hit .sp-ico.is-sev i { animation: sp-eq 540ms cubic-bezier(0.22, 1, 0.36, 1) calc(var(--k, 0) * 45ms); }
-@keyframes sp-eq { 40% { transform: scaleY(0.4); } 75% { transform: scaleY(1.12); } }
-
-/* 缩略版轨迹压缩脉冲核心 (scaled fx-hub) */
-.sp-mini-hub {
-  position: relative; width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; flex: none;
-  background: radial-gradient(circle, color-mix(in oklab, var(--loc-vir) 10%, transparent) 0 58%, transparent 74%);
-}
-.sp-mini-ring { position: absolute; inset: 0; width: 100%; height: 100%; transition: transform 640ms cubic-bezier(0.22, 1, 0.36, 1); }
-.sp-mini-ring line { stroke: var(--t4); stroke-width: 1.6; stroke-linecap: round; }
-.sp-mini-ring line.c { stroke: var(--loc-vir); stroke-width: 2.1; }
-.sp-mini-orbit {
-  position: absolute; inset: 4px; border-radius: 50%; border: 1px dashed var(--t4);
-  animation: sp-spin 8s linear infinite; pointer-events: none;
-}
-.sp-mini-orbit i {
-  position: absolute; top: -2.5px; left: calc(50% - 2.5px); width: 5px; height: 5px;
-  border-radius: 50%; background: var(--loc-vir);
-}
-.sp-flow-mini.is-paused .sp-mini-orbit { animation-play-state: paused; }
-.sp-mini-core {
-  position: relative; z-index: 1; width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center;
-  background: var(--lift); box-shadow: var(--shadow), inset 0 -2px 4px color-mix(in oklab, var(--ink) 6%, transparent);
-}
-.sp-mini-core > span { display: grid; grid-template-columns: repeat(3, 4px); gap: 1.5px; }
-.sp-mini-core i { width: 4px; height: 4px; border-radius: 1px; background: var(--c); transition: background 240ms; }
-@keyframes sp-spin { to { transform: rotate(360deg); } }
-
-/* 下游各流水线进程管理卡片 (压缩 / 归因 / 聚类 真实进度) */
-.sp-branches {
-  position: relative; z-index: 1;
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: var(--gap);
-}
-.sp-track {
-  display: grid; gap: 10px; padding: var(--sp-4); border-radius: 14px; background: var(--well);
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ink) 5%, transparent);
-  transition: background var(--snap), box-shadow var(--snap);
-}
-.sp-track:hover { background: color-mix(in oklab, var(--well-2) 65%, var(--well)); }
-.sp-track-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.sp-track-state {
-  display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-meta); color: var(--muted); white-space: nowrap;
-}
-.sp-track-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
-.sp-track-state.is-live { color: var(--loc-ulq); font-weight: var(--w-medium); }
-.sp-track-state.is-live i { background: var(--loc-ulq); }
-.sp-track-state.is-done { color: var(--ink-2); }
-.sp-track-state.is-done i { background: var(--loc-ulq); }
-.sp-track-state.is-hold { color: var(--sev-2); }
-.sp-track-state.is-hold i { background: var(--sev-2); }
-
-.sp-track-bars { display: grid; gap: 8px; }
-.sp-stage-row { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; gap: 8px; }
-.sp-stage-lbl { font-size: var(--fs-meta); color: var(--muted); }
-.sp-stage-bar {
-  height: 6px; border-radius: 999px; background: var(--card); overflow: hidden;
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ink) 5%, transparent);
-}
-.sp-stage-bar i {
-  display: block; height: 100%; border-radius: inherit; background: var(--c, var(--accent));
-  transition: width 420ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-.sp-stage-val { font-size: var(--fs-meta); color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.sp-stage-val b { color: var(--ink); font-weight: var(--w-title); }
-.sp-stage-rem { color: var(--muted); margin-left: 4px; }
+.sp-fx.is-idle .fx-w { opacity: 0.45; }
+.sp-fx.is-idle .fx-orbit,
+.sp-fx.is-idle .sp-pool-back,
+.sp-fx.is-idle .sp-pool-front,
+.sp-fx.is-idle .sp-pool-sheen { animation-play-state: paused; }
 
 /* 3-up speed cards */
 .sp-rate-card .sp-rate { display: flex; align-items: baseline; gap: 4px; }
@@ -220,7 +173,10 @@
 }
 
 .sp-mini-bar { display: inline-block; width: 100%; max-width: 140px; height: 6px; border-radius: 999px; background: var(--well); overflow: hidden; vertical-align: middle; margin-right: 8px; }
-.sp-mini-bar i { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+.sp-mini-bar { position: relative; }
+.sp-mini-bar i { position: absolute; left: 0; top: 0; bottom: 0; display: block; border-radius: inherit; background: var(--accent); }
+.sp-mini-bar i.is-cl { background: var(--loc-ulq); }
+.sp-date-title { font-size: var(--fs-body); font-weight: var(--w-title); color: var(--ink); }
 .sp-prog-cell { min-width: 150px; }
 
 /* Model drill & date filters */
@@ -255,21 +211,22 @@
 .sp-unavail-btn:active { transform: scale(0.97); }
 
 @media (max-width: 1180px) {
-  .sp-flow-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sp-gw-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sp-rate-card { grid-column: span 4 !important; }
 }
 @media (max-width: 860px) {
+  .sp-fx { column-gap: 20px; }
+  .sp-fx .sp-hub, .sp-pool { width: 96px; height: 96px; }
   .sp-rate-card { grid-column: 1 / -1 !important; }
   .sp-chart { height: 200px; }
   .sp-chart-tools { margin-left: 0; }
 }
 @media (max-width: 620px) {
-  .sp-flow-grid, .sp-gw-kpis, .sp-branches { grid-template-columns: minmax(0, 1fr); }
+  .sp-gw-kpis, .sp-ov { grid-template-columns: minmax(0, 1fr); }
   .sp-date-head .pager { margin-left: 0; width: 100%; justify-content: space-between; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .sp-conn.is-live i, .sp-mini-orbit, .sp-nw-back, .sp-nw-front { animation: none; }
+  .sp-conn.is-live i, .sp-pool-back, .sp-pool-front, .sp-pool-sheen { animation: none; }
 }
 
 .sp-empty {
