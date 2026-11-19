@@ -8,6 +8,18 @@ const { deriveEvalStatus, shellHTML, modelRowsHTML, applyData } = await import("
 const speedCss = fs.readFileSync(new URL("../static/css/speed.css", import.meta.url), "utf8");
 const speedJs = fs.readFileSync(new URL("../static/js/speed.js", import.meta.url), "utf8");
 
+const SAMPLE_TAX = {
+  phases: [{ id: "execute", name: "执行" }],
+  stages: [{ id: "S1", name: "工具调用", phase: "execute", def: "调用外部工具" }],
+  mechanisms: [{ id: "M1", name: "空转未执行", def: "未触发步骤" }],
+  l2: {},
+  patterns: {
+    "S1.M1.1": { name: "工具未调用", plain: "未发起必须的工具请求" },
+    "S1.M1.2": { name: "重试缺失", plain: "失败后未重试" },
+  },
+};
+const SAMPLE_PD = { clusters: { "S1.M1.1": 120, "S1.M1.2": 40 } };
+
 const PAYLOAD = {
   available: true,
   ok: true,
@@ -35,29 +47,51 @@ const PAYLOAD = {
   rpm_history: [[1000, 130, 18, 22], [1300, 140, 18, 22]],
 };
 
-test("speed UI has no chunk concept and no verbose meta clutter", () => {
-  const html = shellHTML();
+test("speed UI has no chunk, no funnel progress bar, and no verbose meta clutter", () => {
+  const html = shellHTML(SAMPLE_TAX, SAMPLE_PD);
   assert.ok(!/chunk/i.test(html));
   assert.ok(!/chunk/i.test(speedCss));
+  assert.ok(!html.includes("sp-funnel"));
+  assert.ok(!speedCss.includes("sp-funnel"));
   assert.ok(!html.includes("spQueue"));
   assert.ok(!html.includes('class="meta'));
   assert.ok(!html.includes(".parts"));
   assert.ok(!speedJs.includes("sp-gw-url"));
 });
 
-test("overview card shows input sessions+traces, evaluated traces and clustered traces with a nested funnel", () => {
-  const html = shellHTML();
+test("overview card uses concentric ring chart and shows input sessions+traces, evaluated traces and clustered traces", () => {
+  const html = shellHTML(SAMPLE_TAX, SAMPLE_PD);
   const ov = html.slice(0, html.indexOf("评测流水线"));
-  for (const id of ["spInputTraces", "spInputSessions", "spAttrTraces", "spClusterTraces", "spFunnelAttr", "spFunnelCl", "spEvalState"]) {
+  for (const id of ["spRingAttr", "spRingCl", "spRingPct", "spInputTraces", "spInputSessions", "spAttrTraces", "spClusterTraces", "spEvalState"]) {
     assert.ok(ov.includes(`id="${id}"`), `overview missing ${id}`);
   }
   assert.ok(!ov.includes("spAttrSessions"), "evaluated count must be trace-only");
 });
 
-test("pipeline card mirrors the system fx-diagram (inputs, hub, outputs, cluster pool) and date distribution sits last", () => {
-  const html = shellHTML();
-  for (const token of ["spFx", "spFxWires", "spFxSparks", "fx-box fx-in", "fx-hub sp-hub", "fx-ring", "fx-core", "fx-box fx-out", "fx-ico is-sev", "spPool", "spPoolLevel", "原始对话", "轨迹压缩", "问题归因", "层级聚类"]) {
-    assert.ok(html.includes(token), `pipeline missing ${token}`);
+test("pipeline card reuses native horizontal fx-diagram from system.js with full cluster tree nodes", () => {
+  const html = shellHTML(SAMPLE_TAX, SAMPLE_PD);
+  for (const token of [
+    'class="fx-diagram is-horiz"',
+    'id="spfxDiagram"',
+    'id="spfxTree"',
+    'id="spfxRootClip"',
+    "fx-box fx-in",
+    "fx-hub",
+    "fx-ring",
+    "fx-core",
+    "fx-box fx-out",
+    "fx-ico is-sev",
+    "全部问题",
+    "is-phase",
+    "is-stage",
+    "is-cell",
+    "is-leaf",
+    "原始对话",
+    "轨迹压缩",
+    "问题归因",
+    "层级聚类",
+  ]) {
+    assert.ok(html.includes(token), `native horizontal pipeline missing ${token}`);
   }
   assert.ok(html.indexOf("评测流水线") > html.indexOf("评测总览"));
   assert.ok(html.lastIndexOf("<article") < html.indexOf("日期分布"), "日期分布 must be the last card");
@@ -92,7 +126,7 @@ test("modelRowsHTML lists trace-based progress with nested cluster bar", () => {
   assert.ok(html.includes('class="is-cl"'));
 });
 
-test("applyData fills the overview and pipeline counters from real numbers", () => {
+test("applyData updates concentric rings and KPI counters from real numbers", () => {
   const byId = new Map();
   const node = (id) => {
     const el = {
@@ -127,8 +161,11 @@ test("applyData fills the overview and pipeline counters from real numbers", () 
   assert.equal(byId.get("spInputSessions").textContent, "400");
   assert.equal(byId.get("spAttrTraces").textContent, "750");
   assert.equal(byId.get("spClusterTraces").textContent, "600");
-  assert.equal(byId.get("spFunnelAttr").style.width, "75.00%");
-  assert.equal(byId.get("spFunnelCl").style.width, "60.00%");
+  assert.equal(byId.get("spRingPct").textContent, "75.0%");
+  const outOff = Number(byId.get("spRingAttr").getAttribute("stroke-dashoffset"));
+  const inOff = Number(byId.get("spRingCl").getAttribute("stroke-dashoffset"));
+  assert.ok(Math.abs(outOff - 2 * Math.PI * 56 * 0.25) < 0.05);
+  assert.ok(Math.abs(inOff - 2 * Math.PI * 42 * 0.40) < 0.05);
   assert.equal(byId.get("spEvalStateText").textContent, "进行中 · 2 实例");
   assert.ok(byId.get("spModels").innerHTML.includes("aime_fast"));
   applyData(root, { ...PAYLOAD, gateways: { ...PAYLOAD.gateways, control: { paused: true } } });

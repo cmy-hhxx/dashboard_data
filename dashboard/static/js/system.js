@@ -494,7 +494,11 @@ function linkCurve(n) {
   return { x0: p.x, y0, ym, x1: n.x, y1 };
 }
 
-function treeSVG(model, W = TREE_W) {
+function treeSVG(model, W = TREE_W, { idPrefix = "fx" } = {}) {
+  const clipId = `${idPrefix}RootClip`;
+  const sheenId = `${idPrefix}LiquidSheen`;
+  const glossId = `${idPrefix}RootGloss`;
+  const sweepId = `${idPrefix}RootSweep`;
   const links = model.all.filter((n) => n.parent).map((n) => {
     const c = linkCurve(n);
     return `<path class="fx-link r${n.row}" data-link="${esc(n.id)}" pathLength="1" d="M${c.x0.toFixed(1)} ${c.y0.toFixed(1)}C${c.x0.toFixed(1)} ${c.ym.toFixed(1)} ${c.x1.toFixed(1)} ${c.ym.toFixed(1)} ${c.x1.toFixed(1)} ${c.y1.toFixed(1)}"/>`;
@@ -522,18 +526,18 @@ function treeSVG(model, W = TREE_W) {
         `<circle class="fx-bubble" cx="${(rx - dx).toFixed(1)}" cy="${(ry + dy).toFixed(1)}" r="${r}" style="--bd:${del};--bt:${dur}"/>`
       ).join("");
       rootClip = `<defs>
-        <clipPath id="fxRootClip"><rect x="${rx}" y="${ry}" width="236" height="44" rx="22"/></clipPath>
-        <linearGradient id="fxLiquidSheen" x1="0%" y1="0%" x2="0%" y2="100%">
+        <clipPath id="${clipId}"><rect x="${rx}" y="${ry}" width="236" height="44" rx="22"/></clipPath>
+        <linearGradient id="${sheenId}" x1="0%" y1="0%" x2="0%" y2="100%">
           <stop offset="0%" stop-color="#ffffff" stop-opacity="0.34"/>
           <stop offset="55%" stop-color="#ffffff" stop-opacity="0.06"/>
           <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
         </linearGradient>
-        <linearGradient id="fxRootGloss" x1="0%" y1="0%" x2="0%" y2="100%">
+        <linearGradient id="${glossId}" x1="0%" y1="0%" x2="0%" y2="100%">
           <stop offset="0%" stop-color="#ffffff" stop-opacity="0.42"/>
           <stop offset="65%" stop-color="#ffffff" stop-opacity="0.06"/>
           <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
         </linearGradient>
-        <linearGradient id="fxRootSweep" x1="0%" y1="0%" x2="100%" y2="0%">
+        <linearGradient id="${sweepId}" x1="0%" y1="0%" x2="100%" y2="0%">
           <stop offset="0%" stop-color="#ffffff" stop-opacity="0"/>
           <stop offset="50%" stop-color="#ffffff" stop-opacity="0.38"/>
           <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
@@ -541,20 +545,20 @@ function treeSVG(model, W = TREE_W) {
       </defs>`;
       return `<g class="fx-tn is-root" ${at} data-rx="${rx}">
         <rect class="fx-root-bg" x="${rx}" y="${ry}" width="236" height="44" rx="22"/>
-        <g clip-path="url(#fxRootClip)">
+        <g clip-path="url(#${clipId})">
           <g class="fx-root-shift">
             <path class="fx-wave-back" d="${waveBack}"/>
             <path class="fx-wave-mid" d="${waveMid}"/>
             <g class="fx-wave-front-wrap">
               <path class="fx-wave-front" d="${waveFront}"/>
-              <path class="fx-wave-sheen" d="${waveFront}" fill="url(#fxLiquidSheen)"/>
+              <path class="fx-wave-sheen" d="${waveFront}" fill="url(#${sheenId})"/>
               <path class="fx-wave-glow" d="${waveCrest}" fill="none"/>
               <path class="fx-wave-crest" d="${waveCrest}" fill="none"/>
             </g>
             <g class="fx-bubbles" aria-hidden="true">${bubbles}</g>
           </g>
-          <rect class="fx-root-gloss" x="${rx}" y="${ry}" width="236" height="22" fill="url(#fxRootGloss)"/>
-          <rect class="fx-root-sweep" x="${rx - 90}" y="${ry}" width="90" height="44" fill="url(#fxRootSweep)"/>
+          <rect class="fx-root-gloss" x="${rx}" y="${ry}" width="236" height="22" fill="url(#${glossId})"/>
+          <rect class="fx-root-sweep" x="${rx - 90}" y="${ry}" width="90" height="44" fill="url(#${sweepId})"/>
         </g>
         <rect class="fx-root-ring" x="${rx}" y="${ry}" width="236" height="44" rx="22" fill="none"/>
         <text class="fx-tn-k" x="${(n.x - 94).toFixed(1)}" y="${n.y + 5}">全部问题</text>
@@ -586,7 +590,7 @@ function treeSVG(model, W = TREE_W) {
     return `<g class="fx-tn is-leaf" ${at} role="button" tabindex="0" aria-label="${esc(`${n.name}：${fmt(n.n)}，查看口径`)}"><circle cx="${n.x.toFixed(1)}" cy="${n.y}" r="${n.r.toFixed(1)}"/><circle class="fx-tn-hit" cx="${n.x.toFixed(1)}" cy="${n.y}" r="10"/>${lbl}</g>`;
   }).join("");
 
-  return `<svg class="fx-tree" id="fxTree" viewBox="0 0 ${W} ${TREE_H}" width="${W}" height="${TREE_H}" role="img" aria-label="聚类树：全部问题按阶段、环节、错法逐层展开到标准模式">
+  return `<svg class="fx-tree" id="${idPrefix}Tree" viewBox="0 0 ${W} ${TREE_H}" width="${W}" height="${TREE_H}" role="img" aria-label="聚类树：全部问题按阶段、环节、错法逐层展开到标准模式">
     ${rootClip}
     <g class="fx-links">${links}</g>
     <g class="fx-nodes">${nodes}</g>
@@ -595,7 +599,7 @@ function treeSVG(model, W = TREE_W) {
   </svg>`;
 }
 
-export function flowCard(tax, pd) {
+export function fxDiagramHTML(tax, pd, { horizontal = false, showMatrix = true, showControls = true, idPrefix = "fx", treeW = TREE_W } = {}) {
   const ticks = Array.from({ length: 60 }, (_, k) => {
     const c = k % 9 === 0 ? FX_STEPS[(k / 9) % FX_STEPS.length][1] : "";
     const a = (k * Math.PI) / 30;
@@ -612,31 +616,35 @@ export function flowCard(tax, pd) {
     return `<div class="fx-box fx-out" data-o="${i}" style="--c:${c}">${ico}<b>${t}</b></div>`;
   }).join("");
 
-  const model = tax ? layoutTree(selectOptimalTree(treeModel(tax, pd), { maxCells: Infinity, maxLeaves: Infinity }), TREE_W) : null;
+  const model = tax ? layoutTree(selectOptimalTree(treeModel(tax, pd), { maxCells: Infinity, maxLeaves: Infinity }), treeW) : null;
   const hasTree = !!(model && model.leaves.length);
   const treeBlock = hasTree
-    ? `<div class="fx-tree-wrap">${treeSVG(model, TREE_W)}</div>
-      ${taxGrid(tax, pd)}`
+    ? `<div class="fx-tree-wrap">${treeSVG(model, treeW, { idPrefix })}</div>
+      ${showMatrix ? taxGrid(tax, pd) : ""}`
     : `<div class="empty">聚类树待接入</div>`;
 
+  return `<div class="fx-diagram${horizontal ? " is-horiz" : ""}" id="${idPrefix}Diagram">
+    <svg class="fx-wires" aria-hidden="true"></svg>
+    <canvas class="fx-sparks" aria-hidden="true"></canvas>
+    <section class="fx-stage"><div class="fx-label"><span class="num">01</span>原始对话</div><div class="fx-row">${ins}</div></section>
+    <section class="fx-stage fx-mid"><div class="fx-label"><span class="num">02</span>轨迹压缩</div>
+      <div class="fx-hub"><span class="fx-orbit"><i></i></span><svg class="fx-ring" viewBox="-80 -80 160 160" aria-hidden="true">${ticks}</svg><span class="fx-core"><span>${tiles}</span></span></div>
+    </section>
+    <section class="fx-stage"><div class="fx-label"><span class="num">03</span>问题归因</div><div class="fx-row">${outs}</div></section>
+    <section class="fx-stage fx-tax" id="${idPrefix}Tax">
+      <div class="fx-tax-head">
+        <div class="fx-label"><span class="num">04</span>层级聚类</div>
+        ${hasTree && showControls ? `<div class="fx-ctls"><button type="button" class="fx-ctl" id="${idPrefix}Pause" aria-pressed="false">暂停</button><button type="button" class="fx-ctl" id="${idPrefix}Speed" aria-pressed="false">加速</button></div>` : ""}
+      </div>
+      ${treeBlock}
+    </section>
+  </div>`;
+}
+
+export function flowCard(tax, pd) {
   return `<article class="card fx-card" style="--span:12">
     <header class="card-head"><h2>评测体系</h2></header>
-    <div class="fx-diagram" id="fxDiagram">
-      <svg class="fx-wires" aria-hidden="true"></svg>
-      <canvas class="fx-sparks" aria-hidden="true"></canvas>
-      <section class="fx-stage"><div class="fx-label"><span class="num">01</span>原始对话</div><div class="fx-row">${ins}</div></section>
-      <section class="fx-stage fx-mid"><div class="fx-label"><span class="num">02</span>轨迹压缩</div>
-        <div class="fx-hub"><span class="fx-orbit"><i></i></span><svg class="fx-ring" viewBox="-80 -80 160 160" aria-hidden="true">${ticks}</svg><span class="fx-core"><span>${tiles}</span></span></div>
-      </section>
-      <section class="fx-stage"><div class="fx-label"><span class="num">03</span>问题归因</div><div class="fx-row">${outs}</div></section>
-      <section class="fx-stage fx-tax" id="fxTax">
-        <div class="fx-tax-head">
-          <div class="fx-label"><span class="num">04</span>层级聚类</div>
-          ${hasTree ? `<div class="fx-ctls"><button type="button" class="fx-ctl" id="fxPause" aria-pressed="false">暂停</button><button type="button" class="fx-ctl" id="fxSpeed" aria-pressed="false">加速</button></div>` : ""}
-        </div>
-        ${treeBlock}
-      </section>
-    </div>
+    ${fxDiagramHTML(tax, pd)}
   </article>`;
 }
 
@@ -1522,9 +1530,9 @@ export function buildReplaySchedule(model) {
   return { seedMap, events };
 }
 
-function wireCluster(tx, tax, state) {
+function wireCluster(tx, tax, state, { onOpen = null } = {}) {
   bindTips(tx, (el) => (el.closest(".fx-g") || el.closest(".fx-tree") ? taxTip(tax, el, state) : null));
-  const treeSvg = $("#fxTree", tx);
+  const treeSvg = $(".fx-tree", tx);
   const gridEl = $(".fx-g", tx);
   const clearHl = () => {
     $$(".is-hl", tx).forEach((x) => x.classList.remove("is-hl"));
@@ -1534,15 +1542,17 @@ function wireCluster(tx, tax, state) {
   const hlAncestors = (node) => {
     treeSvg?.classList.add("is-hovering");
     for (let cur = node; cur; cur = cur.parent) {
-      $(`#fxTree .fx-tn[data-node="${cur.id}"]`, tx)?.classList.add("is-hl");
-      if (cur.parent) $(`#fxTree .fx-link[data-link="${cur.id}"]`, tx)?.classList.add("is-hl");
+      if (treeSvg) {
+        $(`.fx-tn[data-node="${escAttr(cur.id)}"]`, treeSvg)?.classList.add("is-hl");
+        if (cur.parent) $(`.fx-link[data-link="${escAttr(cur.id)}"]`, treeSvg)?.classList.add("is-hl");
+      }
     }
   };
   const hlSubtree = (node) => {
     treeSvg?.classList.add("is-hovering");
-    $(`#fxTree .fx-tn[data-node="${node.id}"]`, tx)?.classList.add("is-hl");
+    if (treeSvg) $(`.fx-tn[data-node="${escAttr(node.id)}"]`, treeSvg)?.classList.add("is-hl");
     (node.children || []).forEach((ch) => {
-      $(`#fxTree .fx-link[data-link="${ch.id}"]`, tx)?.classList.add("is-hl");
+      if (treeSvg) $(`.fx-link[data-link="${escAttr(ch.id)}"]`, treeSvg)?.classList.add("is-hl");
       hlSubtree(ch);
     });
   };
@@ -1660,6 +1670,7 @@ function wireCluster(tx, tax, state) {
     if (!tn || !state?.model) return false;
     const n = state.model.byId.get(tn.dataset.node);
     if (!n) return false;
+    if (onOpen) onOpen();
     if (n.row === 2) { openCellModal(n.s, null, tn); return true; }
     if (n.row === 3) { openCellModal(n.s, n.m, tn); return true; }
     if (n.row === 4) { openCellModal(n.s, n.m, tn, n.id.endsWith(".~") ? null : n.id); return true; }
@@ -1702,26 +1713,33 @@ function evalVBezier(seg, u) {
   };
 }
 
-function wireFx(root, tax, pd) {
-  const diagram = $("#fxDiagram", root);
-  if (!diagram) return;
+export function mountFxDiagram(root, tax, pd, {
+  horizontal = false,
+  idPrefix = "fx",
+  treeW = TREE_W,
+  liveControl = false,
+  nav = null,
+  product = null,
+} = {}) {
+  const diagram = $(`#${idPrefix}Diagram`, root);
+  if (!diagram) return null;
   const svg = $(".fx-wires", diagram);
   const canvas = $(".fx-sparks", diagram);
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas && typeof canvas.getContext === "function" ? canvas.getContext("2d") : null;
   const hub = $(".fx-hub", diagram);
   const ring = $(".fx-ring", diagram);
   const tiles = $$(".fx-core i", diagram);
   const ins = $$(".fx-in", diagram);
   const outs = $$(".fx-out", diagram);
-  const tx = $("#fxTax", diagram);
-  const treeSvg = $("#fxTree", diagram);
+  const tx = $(`#${idPrefix}Tax`, diagram);
+  const treeSvg = $(`#${idPrefix}Tree`, diagram);
   const fxLayer = treeSvg ? $(".fx-fx", treeSvg) : null;
   const toastLayer = treeSvg ? $(".fx-toasts", treeSvg) : null;
-  const pauseBtn = $("#fxPause", diagram);
-  const speedBtn = $("#fxSpeed", diagram);
+  const pauseBtn = $(`#${idPrefix}Pause`, diagram);
+  const speedBtn = $(`#${idPrefix}Speed`, diagram);
 
   const matModel = tax ? matrixModel(tax, pd) : null;
-  const tree = tax && treeSvg ? layoutTree(selectOptimalTree(treeModel(tax, pd), { maxCells: Infinity, maxLeaves: Infinity }), TREE_W) : null;
+  const tree = tax && treeSvg ? layoutTree(selectOptimalTree(treeModel(tax, pd), { maxCells: Infinity, maxLeaves: Infinity }), treeW) : null;
   const liveLeaf = new Map();
   const live = new Map();
   if (tree) {
@@ -1773,23 +1791,40 @@ function wireFx(root, tax, pd) {
       const ym = (y0 + y1) / 2;
       return `<path id="${id}" class="fx-w ${cls}" d="M${x0.toFixed(1)} ${y0.toFixed(1)}C${x0.toFixed(1)} ${ym.toFixed(1)} ${x1.toFixed(1)} ${ym.toFixed(1)} ${x1.toFixed(1)} ${y1.toFixed(1)}"/>`;
     };
+    const hcurve = (x0, y0, x1, y1, id, cls) => {
+      const xm = (x0 + x1) / 2;
+      return `<path id="${id}" class="fx-w ${cls}" d="M${x0.toFixed(1)} ${y0.toFixed(1)}C${xm.toFixed(1)} ${y0.toFixed(1)} ${xm.toFixed(1)} ${y1.toFixed(1)} ${x1.toFixed(1)} ${y1.toFixed(1)}"/>`;
+    };
     const hr = rel(hub);
+    const firstIn = ins[0] ? rel(ins[0]) : null;
+    const horizFlow = horizontal && firstIn && hr.l > firstIn.r - 4;
     let d = "";
-    ins.forEach((b, i) => { const r = rel(b); d += vcurve(r.cx, r.b, hr.cx, hr.t + 18, `fw-i${i}`, "in"); });
-    outs.forEach((b, i) => { const r = rel(b); d += vcurve(hr.cx, hr.b - 18, r.cx, r.t, `fw-o${i}`, "out"); });
+    if (horizFlow) {
+      ins.forEach((b, i) => { const r = rel(b); d += hcurve(r.r, r.cy, hr.l + 14, hr.cy, `${idPrefix}w-i${i}`, "in"); });
+      outs.forEach((b, i) => { const r = rel(b); d += hcurve(hr.r - 14, hr.cy, r.l, r.cy, `${idPrefix}w-o${i}`, "out"); });
+    } else {
+      ins.forEach((b, i) => { const r = rel(b); d += vcurve(r.cx, r.b, hr.cx, hr.t + 18, `${idPrefix}w-i${i}`, "in"); });
+      outs.forEach((b, i) => { const r = rel(b); d += vcurve(hr.cx, hr.b - 18, r.cx, r.t, `${idPrefix}w-o${i}`, "out"); });
+    }
 
     geo.links.clear();
     geo.hasTree = false;
     if (tree && treeSvg) {
       const tr = treeSvg.getBoundingClientRect();
       if (tr.width > 0 && tr.height > 0) {
-        const sx = tr.width / TREE_W;
+        const sx = tr.width / treeW;
         const sy = tr.height / tree.treeH;
         const mapPt = (nx, ny) => ({ x: tr.left - h.left + nx * sx, y: tr.top - h.top + ny * sy });
-        const rootTop = mapPt(tree.root.x, tree.root.y - 22);
+        const lastOut = outs[0] ? rel(outs[0]) : null;
+        const treeToRight = horizFlow && lastOut && (tr.left - h.left) > lastOut.r - 8;
+        const rootTarget = treeToRight
+          ? mapPt(tree.root.x - 118, tree.root.y)
+          : mapPt(tree.root.x, tree.root.y - 22);
         outs.forEach((b, i) => {
           const r = rel(b);
-          d += vcurve(r.cx, r.b, rootTop.x, rootTop.y, `fw-c${i}`, "funnel");
+          d += treeToRight
+            ? hcurve(r.r, r.cy, rootTarget.x, rootTarget.y, `${idPrefix}w-c${i}`, "funnel")
+            : vcurve(r.cx, r.b, rootTarget.x, rootTarget.y, `${idPrefix}w-c${i}`, "funnel");
         });
         tree.all.filter((n) => n.parent).forEach((n) => {
           const c = linkCurve(n);
@@ -1808,13 +1843,24 @@ function wireFx(root, tax, pd) {
     geo.dpr = Math.min(2, window.devicePixelRatio || 1);
     geo.w = h.width;
     geo.h = h.height;
-    canvas.width = Math.round(h.width * geo.dpr);
-    canvas.height = Math.round(h.height * geo.dpr);
+    if (canvas) {
+      canvas.width = Math.round(h.width * geo.dpr);
+      canvas.height = Math.round(h.height * geo.dpr);
+    }
   };
   draw();
-  const ro = new ResizeObserver(draw);
-  ro.observe(diagram);
-  if (tx && tax) wireCluster(tx, tax, fxState);
+  const ro = typeof ResizeObserver === "function" ? new ResizeObserver(draw) : null;
+  ro?.observe(diagram);
+  if (tx && tax) {
+    wireCluster(tx, tax, fxState, {
+      onOpen: () => {
+        E.tax = tax;
+        E.pd = pd;
+        if (nav) E.nav = nav;
+        if (product) E.product = product;
+      },
+    });
+  }
 
   const timers = new Set();
   const later = (fn, ms) => { const id = setTimeout(() => { timers.delete(id); fn(); }, ms); timers.add(id); };
@@ -1962,10 +2008,15 @@ function wireFx(root, tax, pd) {
   };
 
   const still = REDUCED || document.documentElement.hasAttribute("data-still");
-  if (still || !tree || !tree.leaves.length) {
+  if (still || !tree || !tree.leaves.length || !ctx) {
     snapToFinal();
-    E.fx = { destroy() { ro.disconnect(); timers.forEach(clearTimeout); } };
-    return;
+    return {
+      redraw: draw,
+      setLiveProgress({ ratio } = {}) {
+        if (ratio != null) updateProgress(Math.max(0, Math.min(1, Number(ratio))) * 1000, 1000);
+      },
+      destroy() { ro?.disconnect(); timers.forEach(clearTimeout); },
+    };
   }
 
   let rot = 0;
@@ -2031,7 +2082,7 @@ function wireFx(root, tax, pd) {
   const measureLabelW = (s) => {
     let w = 26;
     for (const ch of String(s || "")) w += ch.charCodeAt(0) > 127 ? 11.4 : 6.6;
-    return Math.max(120, Math.min(TREE_W - 24, Math.ceil(w)));
+    return Math.max(120, Math.min(treeW - 24, Math.ceil(w)));
   };
 
   const spawnToast = (leaf, delta = 0) => {
@@ -2209,9 +2260,15 @@ function wireFx(root, tax, pd) {
     sproutCol = cs.getPropertyValue("--loc-ulq").trim() || "#1d7d72";
   };
 
+  const liveCtl = { ratio: null, running: true, rateMult: 1.0, done: false };
+  const getCap = () => (liveControl && liveCtl.ratio != null
+    ? Math.max(1, Math.round(schedule.events.length * liveCtl.ratio))
+    : schedule.events.length);
+
   const spawn = (forcedInput, forcedEv, forcedOut = null, delayMs = 0) => {
     if (!forcedEv && sparks.length >= 16) return;
-    const ev = forcedEv || (phaseState === "replay" && evIdx < schedule.events.length ? schedule.events[evIdx++] : null);
+    const cap = getCap();
+    const ev = forcedEv || (phaseState === "replay" && evIdx < cap ? schedule.events[evIdx++] : null);
     if (!ev) return;
     refreshColors();
     const i = forcedInput != null ? forcedInput : Math.floor(Math.random() * ins.length);
@@ -2229,10 +2286,11 @@ function wireFx(root, tax, pd) {
   };
 
   const spawnWave = (now) => {
-    if (evIdx >= schedule.events.length || sparks.length >= 13) return null;
+    const cap = getCap();
+    if (evIdx >= cap || sparks.length >= 13) return null;
     const batch = [];
     let hasSprout = false;
-    while (evIdx < schedule.events.length && batch.length < 3 && sparks.length + batch.length < 16) {
+    while (evIdx < cap && batch.length < 3 && sparks.length + batch.length < 16) {
       const nextEv = schedule.events[evIdx];
       if (nextEv.isNew && hasSprout) break;
       if (nextEv.isNew) hasSprout = true;
@@ -2291,31 +2349,41 @@ function wireFx(root, tax, pd) {
     if (!diagram.isConnected || paused || !visible || document.hidden) return;
     const rawDt = lastFrame ? Math.min(50, Math.max(0, rawNow - lastFrame)) : 16;
     lastFrame = rawNow;
-    simNow += rawDt * SPEED_TIERS[speedTier].mult;
+    simNow += rawDt * SPEED_TIERS[speedTier].mult * (liveControl ? liveCtl.rateMult : 1);
     const now = simNow;
 
     if (!accent) refreshColors();
 
+    const cap = getCap();
     if (phaseState === "replay") {
-      if (evIdx < schedule.events.length && now >= nextSpawnAt) {
+      if (evIdx < cap && now >= nextSpawnAt) {
         const nextT = spawnWave(now);
         if (nextT != null) nextSpawnAt = nextT;
-      } else if (evIdx >= schedule.events.length && !sparks.some((s) => s.ev.delta > 0)) {
+      } else if (evIdx >= cap && !sparks.some((s) => s.ev.delta > 0)) {
         phaseState = "hold";
         holdSince = now;
-        snapToFinal();
+        if (!liveControl || liveCtl.ratio == null || liveCtl.ratio >= 0.999) {
+          snapToFinal();
+        } else {
+          updateProgress(liveCtl.ratio * 1000, 1000);
+        }
       }
     } else if (phaseState === "hold") {
-      if (now - lastSpawn > 950 && tree.leaves.length) {
+      const activeLeaves = liveControl
+        ? tree.leaves.filter((lf) => (liveLeaf.get(lf.id) || 0) > 0)
+        : tree.leaves;
+      const pool = activeLeaves.length ? activeLeaves : tree.leaves;
+      const holdGap = liveControl ? 760 : 950;
+      if (now - lastSpawn > holdGap && pool.length) {
         lastSpawn = now;
         const in0 = Math.floor(Math.random() * ins.length);
         const out0 = Math.floor(Math.random() * outs.length);
         for (let k = 0; k < 2; k++) {
-          const lf = tree.leaves[Math.floor(Math.random() * tree.leaves.length)];
+          const lf = pool[Math.floor(Math.random() * pool.length)];
           spawn((in0 + k) % ins.length, { leaf: lf, delta: 0, isNew: false }, (out0 + k) % outs.length, k * 140);
         }
       }
-      if (holdSince && now - holdSince > 5500 && !tx?._hovering && !MOD.el) {
+      if (!liveControl && holdSince && now - holdSince > 5500 && !tx?._hovering && !MOD.el) {
         phaseState = "drain";
         drainSince = now;
         let seededSum = 0;
@@ -2345,7 +2413,7 @@ function wireFx(root, tax, pd) {
       let pt = null;
       if (s.phase < 3) {
         const u = Math.min(1, el / DUR[s.phase]);
-        const id = s.phase === 0 ? `fw-i${s.i}` : s.phase === 1 ? `fw-o${s.j}` : `fw-c${s.j}`;
+        const id = s.phase === 0 ? `${idPrefix}w-i${s.i}` : s.phase === 1 ? `${idPrefix}w-o${s.j}` : `${idPrefix}w-c${s.j}`;
         pt = along(id, easeInOut(u));
         if (u >= 1) {
           if (s.phase === 0) receive();
@@ -2432,8 +2500,10 @@ function wireFx(root, tax, pd) {
     speedBtn.textContent = tier.label;
   });
 
-  const io = new IntersectionObserver(([en]) => { visible = en.isIntersecting; kick(); }, { threshold: 0.05 });
-  io.observe(diagram);
+  const io = typeof IntersectionObserver === "function"
+    ? new IntersectionObserver(([en]) => { visible = en.isIntersecting; kick(); }, { threshold: 0.05 })
+    : null;
+  io?.observe(diagram);
   const onVis = () => { kick(); };
   document.addEventListener("visibilitychange", onVis);
 
@@ -2449,13 +2519,41 @@ function wireFx(root, tax, pd) {
 
   kick();
 
-  E.fx = {
+  return {
+    redraw: draw,
+    setLiveProgress({ ratio = null, running = true, rate = 0, done = false } = {}) {
+      liveCtl.running = !!running;
+      liveCtl.done = !!done;
+      liveCtl.ratio = ratio != null ? Math.max(0.02, Math.min(1, Number(ratio))) : null;
+      liveCtl.rateMult = running
+        ? Math.max(0.85, Math.min(2.2, 0.9 + (Number(rate) || 0) / 45))
+        : (done ? 0.65 : 0.45);
+      diagram.classList.toggle("is-standby", !running && !done);
+      if (liveCtl.ratio != null) {
+        const capNow = getCap();
+        if (phaseState === "hold") {
+          if (evIdx < capNow) {
+            phaseState = "replay";
+            nextSpawnAt = simNow;
+          } else if (liveCtl.ratio >= 0.999) {
+            snapToFinal();
+          } else {
+            updateProgress(liveCtl.ratio * 1000, 1000);
+          }
+        }
+      }
+      kick();
+    },
     destroy() {
       cancelAnimationFrame(raf);
-      ro.disconnect();
-      io.disconnect();
+      ro?.disconnect();
+      io?.disconnect();
       document.removeEventListener("visibilitychange", onVis);
       timers.forEach(clearTimeout);
     },
   };
+}
+
+function wireFx(root, tax, pd) {
+  E.fx = mountFxDiagram(root, tax, pd);
 }

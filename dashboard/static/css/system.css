@@ -112,6 +112,47 @@
 .fx-tree.is-hovering .fx-tn:not(.is-hl):not(.is-hidden) { opacity: 0.36; }
 .fx-tree.is-hovering .fx-link:not(.is-hl):not(.is-hidden) { opacity: 0.22; }
 
+/* Horizontal compact mode (reused natively by 评测速度) */
+.fx-diagram.is-horiz {
+  grid-template-columns: 124px 116px 124px minmax(0, 1fr);
+  align-items: center;
+  gap: 0 clamp(16px, 2.2vw, 30px);
+  padding-top: var(--sp-1);
+}
+.fx-diagram.is-horiz .fx-stage { gap: var(--sp-3); }
+.fx-diagram.is-horiz .fx-row { grid-template-columns: minmax(0, 1fr); gap: 8px; width: 100%; }
+.fx-diagram.is-horiz .fx-box {
+  height: 36px; padding: 0 10px; gap: 7px; border-radius: 11px; justify-content: flex-start;
+}
+.fx-diagram.is-horiz .fx-box b { font-size: var(--fs-meta); }
+.fx-diagram.is-horiz .fx-in.is-on { transform: translateX(2px); }
+.fx-diagram.is-horiz .fx-ico { width: 20px; height: 20px; border-radius: 6px; }
+.fx-diagram.is-horiz .fx-ico i { width: 7px; height: 7px; border-radius: 2.5px; }
+.fx-diagram.is-horiz .fx-ico.is-sev i { width: 2.5px; height: 10px; }
+.fx-diagram.is-horiz .fx-hub { width: 112px; height: 112px; }
+.fx-diagram.is-horiz .fx-orbit { inset: 17px; }
+.fx-diagram.is-horiz .fx-core { width: 54px; height: 54px; border-radius: 15px; }
+.fx-diagram.is-horiz .fx-core > span { grid-template-columns: repeat(3, 8px); gap: 3px; }
+.fx-diagram.is-horiz .fx-core i { width: 8px; height: 8px; border-radius: 2px; }
+.fx-diagram.is-horiz .fx-tax { gap: var(--sp-2); align-self: stretch; }
+.fx-diagram.is-horiz .fx-tax-head { grid-template-columns: 1fr auto 1fr; gap: var(--sp-2); }
+.fx-diagram.is-horiz .fx-tree-wrap { padding: 0; }
+.fx-diagram.is-horiz .fx-tree { max-width: none; min-width: 520px; }
+.fx-diagram.is-horiz.is-standby .fx-w { opacity: 0.65; }
+.fx-diagram.is-horiz.is-standby .fx-orbit { animation-duration: 18s; }
+@media (max-width: 1080px) {
+  .fx-diagram.is-horiz {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    row-gap: 28px;
+  }
+  .fx-diagram.is-horiz .fx-tax { grid-column: 1 / -1; }
+  .fx-diagram.is-horiz .fx-tree { min-width: 680px; }
+}
+@media (max-width: 640px) {
+  .fx-diagram.is-horiz { grid-template-columns: minmax(0, 1fr); }
+  .fx-diagram.is-horiz .fx-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 .fx-link {
   fill: none; stroke: color-mix(in oklab, var(--ink) 14%, var(--card)); stroke-linecap: round;
   transition: stroke 220ms cubic-bezier(0.22, 1, 0.36, 1), stroke-width 220ms, opacity 240ms;
