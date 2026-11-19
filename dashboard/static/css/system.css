@@ -114,39 +114,72 @@
 
 /* Horizontal compact mode (reused natively by 评测速度) */
 .fx-diagram.is-horiz {
-  grid-template-columns: 124px 116px 124px minmax(0, 1fr);
-  align-items: center;
-  gap: 0 clamp(16px, 2.2vw, 30px);
+  grid-template-columns: 112px 104px 112px minmax(0, 1fr);
+  align-items: stretch;
+  gap: 0 clamp(14px, 1.8vw, 24px);
   padding-top: var(--sp-1);
 }
-.fx-diagram.is-horiz .fx-stage { gap: var(--sp-3); }
+.fx-diagram.is-horiz .fx-stage {
+  grid-template-rows: auto 1fr;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.fx-diagram.is-horiz .fx-label { align-self: start; }
 .fx-diagram.is-horiz .fx-row { grid-template-columns: minmax(0, 1fr); gap: 8px; width: 100%; }
 .fx-diagram.is-horiz .fx-box {
-  height: 36px; padding: 0 10px; gap: 7px; border-radius: 11px; justify-content: flex-start;
+  height: 36px; padding: 0 9px; gap: 7px; border-radius: 11px; justify-content: flex-start;
 }
 .fx-diagram.is-horiz .fx-box b { font-size: var(--fs-meta); }
 .fx-diagram.is-horiz .fx-in.is-on { transform: translateX(2px); }
 .fx-diagram.is-horiz .fx-ico { width: 20px; height: 20px; border-radius: 6px; }
 .fx-diagram.is-horiz .fx-ico i { width: 7px; height: 7px; border-radius: 2.5px; }
 .fx-diagram.is-horiz .fx-ico.is-sev i { width: 2.5px; height: 10px; }
-.fx-diagram.is-horiz .fx-hub { width: 112px; height: 112px; }
-.fx-diagram.is-horiz .fx-orbit { inset: 17px; }
-.fx-diagram.is-horiz .fx-core { width: 54px; height: 54px; border-radius: 15px; }
-.fx-diagram.is-horiz .fx-core > span { grid-template-columns: repeat(3, 8px); gap: 3px; }
-.fx-diagram.is-horiz .fx-core i { width: 8px; height: 8px; border-radius: 2px; }
+.fx-diagram.is-horiz .fx-hub { width: 104px; height: 104px; }
+.fx-diagram.is-horiz .fx-orbit { inset: 15px; }
+.fx-diagram.is-horiz .fx-core { width: 50px; height: 50px; border-radius: 14px; }
+.fx-diagram.is-horiz .fx-core > span { grid-template-columns: repeat(3, 7.5px); gap: 3px; }
+.fx-diagram.is-horiz .fx-core i { width: 7.5px; height: 7.5px; border-radius: 2px; }
 .fx-diagram.is-horiz .fx-tax { gap: var(--sp-2); align-self: stretch; }
-.fx-diagram.is-horiz .fx-tax-head { grid-template-columns: 1fr auto 1fr; gap: var(--sp-2); }
-.fx-diagram.is-horiz .fx-tree-wrap { padding: 0; }
-.fx-diagram.is-horiz .fx-tree { max-width: none; min-width: 520px; }
-.fx-diagram.is-horiz.is-standby .fx-w { opacity: 0.65; }
-.fx-diagram.is-horiz.is-standby .fx-orbit { animation-duration: 18s; }
-@media (max-width: 1080px) {
+.fx-diagram.is-horiz .fx-tax-head { grid-template-columns: 1fr auto 1fr; gap: var(--sp-2); align-self: start; }
+.fx-diagram.is-horiz .fx-tree-wrap { padding: 0; align-items: center; }
+.fx-diagram.is-horiz .fx-tree { max-width: none; min-width: 560px; }
+.fx-diagram.is-horiz .fx-tn.is-root .fx-root-shift { transition: transform 420ms cubic-bezier(0.22, 1, 0.36, 1); }
+
+/* Idle / paused state on live-controlled pipeline: zero flow motion, charging-like glow on progress edge only */
+.fx-diagram.is-idle .fx-w { opacity: 0.55; }
+.fx-diagram.is-idle .fx-orbit,
+.fx-diagram.is-idle .fx-tn.is-root .fx-wave-back,
+.fx-diagram.is-idle .fx-tn.is-root .fx-wave-mid,
+.fx-diagram.is-idle .fx-tn.is-root .fx-wave-front-wrap,
+.fx-diagram.is-idle .fx-tn.is-root .fx-bubble {
+  animation-play-state: paused;
+}
+.fx-diagram.is-idle .fx-tn.is-root .fx-bubbles { opacity: 0; transition: opacity 280ms; }
+.fx-diagram.is-idle .fx-tn.is-root.is-flowing .fx-wave-glow {
+  stroke: color-mix(in oklab, var(--accent) 44%, transparent);
+  stroke-width: 7;
+  animation: fx-charge-glow 2.6s ease-in-out infinite;
+}
+.fx-diagram.is-idle .fx-tn.is-root.is-flowing .fx-wave-crest {
+  stroke: color-mix(in oklab, var(--accent) 78%, #ffffff);
+  stroke-width: 1.85;
+  animation: fx-charge-crest 2.6s ease-in-out infinite;
+}
+@keyframes fx-charge-glow {
+  0%, 100% { opacity: 0.26; }
+  50% { opacity: 0.98; }
+}
+@keyframes fx-charge-crest {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+@media (max-width: 1120px) {
   .fx-diagram.is-horiz {
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    row-gap: 28px;
+    row-gap: 24px;
   }
   .fx-diagram.is-horiz .fx-tax { grid-column: 1 / -1; }
-  .fx-diagram.is-horiz .fx-tree { min-width: 680px; }
+  .fx-diagram.is-horiz .fx-tree { min-width: 640px; }
 }
 @media (max-width: 640px) {
   .fx-diagram.is-horiz { grid-template-columns: minmax(0, 1fr); }
@@ -264,7 +297,8 @@
   100% { opacity: 0; transform: translateX(340px); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .fx-tn.is-root .fx-wave-back, .fx-tn.is-root .fx-wave-mid, .fx-tn.is-root .fx-wave-front-wrap, .fx-tn.is-root .fx-bubble, .fx-tn.is-root .fx-root-sweep { animation: none; }
+  .fx-tn.is-root .fx-wave-back, .fx-tn.is-root .fx-wave-mid, .fx-tn.is-root .fx-wave-front-wrap, .fx-tn.is-root .fx-bubble, .fx-tn.is-root .fx-root-sweep,
+  .fx-diagram.is-idle .fx-tn.is-root.is-flowing .fx-wave-glow, .fx-diagram.is-idle .fx-tn.is-root.is-flowing .fx-wave-crest { animation: none; }
 }
 .fx-tn-k { font-size: 13px; fill: var(--muted); font-weight: var(--w-medium); }
 .fx-tn-big { font-size: 16px; fill: var(--ink); font-weight: var(--w-title); font-family: var(--mono); }

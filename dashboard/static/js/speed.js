@@ -8,7 +8,7 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 const CHART_PAD = { L: 48, R: 24, T: 18, B: 32 };
 const RING_OUT_C = 2 * Math.PI * 56;
 const RING_IN_C = 2 * Math.PI * 42;
-const HORIZ_TREE_W = 960;
+const HORIZ_TREE_W = 820;
 
 const S = {
   data: null,
@@ -25,6 +25,8 @@ const S = {
   modeSeg: null,
   taxKey: "",
   fx: null,
+  prevAttrTraces: null,
+  prevClusterTraces: null,
   sourceUrl: "speed.json",
   root: null,
   ctx: null,
@@ -171,7 +173,7 @@ export function shellHTML(tax = null, pd = null) {
 
     <article class="card fx-card" style="--span:12">
       <header class="card-head"><h2>评测流水线</h2></header>
-      <div id="spFxHost">${fxDiagramHTML(tax, pd, { horizontal: true, showMatrix: false, showControls: true, idPrefix: "spfx", treeW: HORIZ_TREE_W })}</div>
+      <div id="spFxHost">${fxDiagramHTML(tax, pd, { horizontal: true, showMatrix: false, showControls: false, idPrefix: "spfx", treeW: HORIZ_TREE_W })}</div>
     </article>
 
     <article class="card sp-rate-card is-rate-attr" style="--span:4">
@@ -857,6 +859,8 @@ export function applyData(root, data) {
   if (!data || data.available === false) {
     S.fx?.destroy();
     S.fx = null;
+    S.prevAttrTraces = null;
+    S.prevClusterTraces = null;
     const sites = sitesMap();
     const aimeUrl = sites.aime?.url ? `${sites.aime.url.replace(/\/+$/, "")}/?view=speed&product=aime` : "";
     root.innerHTML = `<div class="bento"><article class="card" style="--span:12"><div class="sp-unavail">
@@ -883,10 +887,8 @@ export function applyData(root, data) {
   const remSess = Number(data.remaining_sessions) || 0;
   const cl = data.cluster || {};
   const clTr = Number(cl.traces) || 0;
-  const clTotal = clTr + (Number(cl.pending) || 0);
   const attrRatio = inTr > 0 ? Math.min(1, attrTr / inTr) : 0;
   const clInRatio = inTr > 0 ? Math.min(attrRatio, clTr / inTr) : 0;
-  const clStageRatio = clTotal > 0 ? Math.min(1, clTr / clTotal) : attrRatio;
 
   setText(root, "spInputTraces", ready ? num(inTr) : "—");
   setText(root, "spInputSessions", ready ? num(data.input_sessions) : "—");
@@ -918,11 +920,18 @@ export function applyData(root, data) {
     setText(root, "spConnText", data.ok ? `更新 ${clock(data.updated_at)}` : "连接异常");
   }
 
+  const deltaAttr = S.prevAttrTraces != null ? Math.max(0, attrTr - S.prevAttrTraces) : 0;
+  const deltaCl = S.prevClusterTraces != null ? Math.max(0, clTr - S.prevClusterTraces) : 0;
+  S.prevAttrTraces = attrTr;
+  S.prevClusterTraces = clTr;
+  const delta = deltaAttr + deltaCl;
   const liveRate = (Number(r.parts_attr) || 0) + (Number(r.parts_compact) || 0) || Number(attrRate) || 0;
   S.fx?.setLiveProgress({
-    ratio: clTotal > 0 ? clStageRatio : attrRatio,
+    ratio: attrRatio,
     running: ev.running,
     rate: liveRate,
+    delta,
+    windowMs: POLL_MS * 0.92,
     done: ev.key === "done",
   });
 
@@ -1078,7 +1087,7 @@ export async function render(root, c) {
     mountPipeline(root, c);
   } else if (S.taxKey !== nextTaxKey && $("#spFxHost", root)) {
     const host = $("#spFxHost", root);
-    host.innerHTML = fxDiagramHTML(tax, pd, { horizontal: true, showMatrix: false, showControls: true, idPrefix: "spfx", treeW: HORIZ_TREE_W });
+    host.innerHTML = fxDiagramHTML(tax, pd, { horizontal: true, showMatrix: false, showControls: false, idPrefix: "spfx", treeW: HORIZ_TREE_W });
     mountPipeline(root, c);
   }
   await fetchSpeed();

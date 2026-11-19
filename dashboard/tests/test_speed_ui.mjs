@@ -6,6 +6,7 @@ globalThis.location = { search: "" };
 globalThis.window = {};
 const { deriveEvalStatus, shellHTML, modelRowsHTML, applyData } = await import("../static/js/speed.js");
 const speedCss = fs.readFileSync(new URL("../static/css/speed.css", import.meta.url), "utf8");
+const systemCss = fs.readFileSync(new URL("../static/css/system.css", import.meta.url), "utf8");
 const speedJs = fs.readFileSync(new URL("../static/js/speed.js", import.meta.url), "utf8");
 
 const SAMPLE_TAX = {
@@ -68,13 +69,16 @@ test("overview card uses concentric ring chart and shows input sessions+traces, 
   assert.ok(!ov.includes("spAttrSessions"), "evaluated count must be trace-only");
 });
 
-test("pipeline card reuses native horizontal fx-diagram from system.js with full cluster tree nodes", () => {
+test("pipeline card reuses native horizontal fx-diagram with horizontal cluster tree and no fake playback controls", () => {
   const html = shellHTML(SAMPLE_TAX, SAMPLE_PD);
   for (const token of [
     'class="fx-diagram is-horiz"',
+    'class="fx-tree is-horiz"',
     'id="spfxDiagram"',
     'id="spfxTree"',
     'id="spfxRootClip"',
+    'data-rw="188"',
+    'viewBox="0 0 820 420"',
     "fx-box fx-in",
     "fx-hub",
     "fx-ring",
@@ -93,6 +97,9 @@ test("pipeline card reuses native horizontal fx-diagram from system.js with full
   ]) {
     assert.ok(html.includes(token), `native horizontal pipeline missing ${token}`);
   }
+  assert.ok(!html.includes("spfxPause"), "speed pipeline must not have pause button");
+  assert.ok(!html.includes("spfxSpeed"), "speed pipeline must not have speed button");
+  assert.ok(systemCss.includes(".fx-diagram.is-idle") && systemCss.includes("fx-charge-glow"), "idle charging glow styles missing");
   assert.ok(html.indexOf("评测流水线") > html.indexOf("评测总览"));
   assert.ok(html.lastIndexOf("<article") < html.indexOf("日期分布"), "日期分布 must be the last card");
   assert.ok(html.includes('id="spDateView"'));
@@ -170,4 +177,11 @@ test("applyData updates concentric rings and KPI counters from real numbers", ()
   assert.ok(byId.get("spModels").innerHTML.includes("aime_fast"));
   applyData(root, { ...PAYLOAD, gateways: { ...PAYLOAD.gateways, control: { paused: true } } });
   assert.equal(byId.get("spEvalStateText").textContent, "中断中 · 调度暂停");
+  // When input_traces grows, both evaluated and clustered ratios must adjust downward proportionally.
+  applyData(root, { ...PAYLOAD, input_traces: 1500, remaining_traces: 750 });
+  assert.equal(byId.get("spRingPct").textContent, "50.0%");
+  const grownOutOff = Number(byId.get("spRingAttr").getAttribute("stroke-dashoffset"));
+  const grownInOff = Number(byId.get("spRingCl").getAttribute("stroke-dashoffset"));
+  assert.ok(Math.abs(grownOutOff - 2 * Math.PI * 56 * 0.5) < 0.05);
+  assert.ok(Math.abs(grownInOff - 2 * Math.PI * 42 * 0.6) < 0.05);
 });
