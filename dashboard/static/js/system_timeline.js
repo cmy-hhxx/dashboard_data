@@ -1,8 +1,7 @@
 /* 归因时序: embedded in the 评测体系 page after 证据闭环.
-   Three interactive blocks in one system card:
+   Two interactive blocks in one system card:
    01 一条 Trace 的时间线 (Gantt + failure simulation + readout + 11-16 measured table)
-   02 整批怎么调度 (16-Trace discrete simulation + concurrency / model-request steppers)
-   03 引文在哪几步被核对 (T1/T2/T3 verification + tamper diff) */
+   02 整批怎么调度 (16-Trace discrete simulation + concurrency / model-request steppers) */
 import { $, $$, segmented, REDUCED } from "./core.js";
 
 const NS = "http://www.w3.org/2000/svg";
@@ -49,14 +48,12 @@ export function timelineCardHTML() {
   return `<article class="card tl-card" id="tlCard" style="--span:12" aria-label="归因时序说明">
     <header class="card-head">
       <h2>归因时序</h2>
-      <span class="meta">1 条 Trace · 9 个字段调用 · 每组 1 次调查 · 1 次小结</span>
     </header>
 
     <div class="tl-sections">
       <section class="tl-sec" aria-label="单条 Trace 的时间线">
         <div class="tl-subhead">
           <h3><span class="tl-num num">01</span>一条 Trace 的时间线</h3>
-          <span class="meta" id="tl-case-meta"></span>
           <div class="tl-end">
             <div class="seg" id="tl-lens-seg" role="group" aria-label="视角">
               <span class="seg-knob" aria-hidden="true"></span>
@@ -71,15 +68,15 @@ export function timelineCardHTML() {
         </div>
 
         <div class="tl-pipe" aria-label="阶段顺序">
-          <div class="tl-pipe-step is-model"><b>① 字段摘要</b><code>attribution-compact-field</code><span>模型 · 9 次并行，无工具</span></div>
+          <div class="tl-pipe-step is-model"><b>① 字段摘要</b><span>模型 · 9 次并行，无工具</span></div>
           <span class="tl-pipe-arrow" aria-hidden="true">→</span>
-          <div class="tl-pipe-step is-code"><b>② 拼装 + 验收</b><code>attribution-compact</code><span>程序 · 写出 compact 行</span></div>
+          <div class="tl-pipe-step is-code"><b>② 拼装 + 验收</b><span>程序 · 写出 compact 行</span></div>
           <span class="tl-pipe-arrow" aria-hidden="true">→</span>
-          <div class="tl-pipe-step is-model"><b>③ 组件调查</b><code>attribution-component</code><span>模型 · 每组 1 任务，带工具</span></div>
+          <div class="tl-pipe-step is-model"><b>③ 组件调查</b><span>模型 · 每组 1 任务，带工具</span></div>
           <span class="tl-pipe-arrow" aria-hidden="true">→</span>
-          <div class="tl-pipe-step is-model"><b>④ 小结</b><code>attribution-trace</code><span>模型 · 1 次，写 summary</span></div>
+          <div class="tl-pipe-step is-model"><b>④ 小结</b><span>模型 · 1 次，写 summary</span></div>
           <span class="tl-pipe-arrow" aria-hidden="true">→</span>
-          <div class="tl-pipe-step is-code"><b>⑤ 组装整行</b><code>attribution-session</code><span>程序 · 写出 attribution 行</span></div>
+          <div class="tl-pipe-step is-code"><b>⑤ 组装整行</b><span>程序 · 写出 attribution 行</span></div>
         </div>
 
         <div class="tl-canvas-wrap"><svg class="tl-canvas" id="tl-c-canvas" role="img" aria-label="单条 Trace 的甘特图：字段摘要、拼装验收、组件调查、小结、组装整行"></svg></div>
@@ -122,10 +119,9 @@ export function timelineCardHTML() {
       <section class="tl-sec" aria-label="整批调度">
         <div class="tl-subhead">
           <h3><span class="tl-num num">02</span>整批怎么调度</h3>
-          <span class="meta" id="tl-global-meta"></span>
           <div class="tl-end">
-            <div class="tl-step"><span class="tl-step-k">并发 Trace <code>--concurrency</code></span><button type="button" data-tl-g="conc" data-d="-1" aria-label="减少并发 Trace">−</button><b class="num" id="tl-v-conc">6</b><button type="button" data-tl-g="conc" data-d="1" aria-label="增加并发 Trace">+</button></div>
-            <div class="tl-step"><span class="tl-step-k">请求上限 <code>--model-requests</code></span><button type="button" data-tl-g="req" data-d="-2" aria-label="降低模型请求上限">−</button><b class="num" id="tl-v-req">12</b><button type="button" data-tl-g="req" data-d="2" aria-label="提高模型请求上限">+</button></div>
+            <div class="tl-step"><span class="tl-step-k">并发 Trace</span><button type="button" data-tl-g="conc" data-d="-1" aria-label="减少并发 Trace">−</button><b class="num" id="tl-v-conc">6</b><button type="button" data-tl-g="conc" data-d="1" aria-label="增加并发 Trace">+</button></div>
+            <div class="tl-step"><span class="tl-step-k">请求上限</span><button type="button" data-tl-g="req" data-d="-2" aria-label="降低模型请求上限">−</button><b class="num" id="tl-v-req">12</b><button type="button" data-tl-g="req" data-d="2" aria-label="提高模型请求上限">+</button></div>
             <button class="icon-btn tl-play" id="tl-g-play" type="button" aria-pressed="false" aria-label="播放">${PLAY_SVG}</button>
           </div>
         </div>
@@ -144,46 +140,6 @@ export function timelineCardHTML() {
           <div class="tl-rule"><b>单条 Trace 窗口</b><span>每条 Trace 最多同时 <code>--task-concurrency</code> 个任务（默认 12），9 个字段一次发齐。</span></div>
           <div class="tl-rule"><b>全局请求上限</b><span>在飞模型请求不超过 <code>--model-requests</code>（默认 256）；缓冲低时字段优先，高时调查与小结优先。</span></div>
           <div class="tl-rule"><b>compact 缓冲</b><span>已写 compact、未写 attribution 的 Trace 数上限 = <code>--compact-backlog</code>，Trace 结束或失败立即释放。</span></div>
-        </div>
-      </section>
-
-      <section class="tl-sec" aria-label="引文核对">
-        <div class="tl-subhead">
-          <h3><span class="tl-num num">03</span>引文在哪几步被核对</h3>
-          <span class="meta">逐字比对 · 最长 400 字</span>
-          <div class="tl-end">
-            <span class="tl-ev-state" id="tl-ev-state">一致</span>
-            <button class="tl-pill" id="tl-ev-tamper" type="button" aria-pressed="false">改一字测试</button>
-          </div>
-        </div>
-
-        <div class="tl-ev">
-          <div class="tl-ev-col">
-            <div class="tl-ev-time"><b class="num">T1</b><span>记下（模型提交时）</span></div>
-            <div class="tl-ev-steps">
-              <div class="tl-ev-step"><i class="num">1</i><span>模型只报证据编号</span></div>
-              <div class="tl-ev-step"><i class="num">2</i><span>程序把编号换成原文坐标</span></div>
-              <div class="tl-ev-step"><i class="num">3</i><span>程序按坐标取回原文</span></div>
-            </div>
-          </div>
-          <div class="tl-ev-col">
-            <div class="tl-ev-time"><b class="num">T2</b><span>验收（进入下一阶段前）</span></div>
-            <div class="tl-ev-steps">
-              <div class="tl-ev-step" data-tl-ev="quote"><i class="num">4</i><span>引文与原文逐字再比一次</span></div>
-              <div class="tl-ev-step" data-tl-ev="range"><i class="num">5</i><span>坐标范围核对一遍</span></div>
-            </div>
-          </div>
-          <div class="tl-ev-col">
-            <div class="tl-ev-time"><b class="num">T3</b><span>写盘（导出正式行）</span></div>
-            <div class="tl-ev-steps">
-              <div class="tl-ev-step" data-tl-ev="schema"><i class="num">6</i><span>按 Schema 再验一次</span></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="tl-ev-diff">
-          <div class="tl-ev-line"><span class="tl-ev-tag">原文</span><span class="tl-ev-text" id="tl-ev-src"></span></div>
-          <div class="tl-ev-line"><span class="tl-ev-tag">引文</span><span class="tl-ev-text" id="tl-ev-quote"></span></div>
         </div>
       </section>
     </div>
@@ -431,8 +387,7 @@ export function wireTimeline(root) {
   }
 
   function refreshCase() {
-    const { P, geo } = cBoard;
-    let running = 0;
+    const { geo } = cBoard;
     Object.entries(cBoard.rowNodes).forEach(([id, entry]) => {
       const { row } = entry;
       const state = statusOf(row);
@@ -441,7 +396,6 @@ export function wireTimeline(root) {
       if (row._done) {
         const w = clamp(geo.x(Math.min(S.t, row.end)) - geo.x(row.start), 0, geo.x(row.end) - geo.x(row.start));
         row._done.setAttribute("width", String(Math.max(0, w)));
-        if (state !== "blocked" && S.t >= row.start && S.t < row.end) running++;
       }
     });
     const ph = cBoard.playhead;
@@ -450,8 +404,6 @@ export function wireTimeline(root) {
     add(ph, "path", { d: "M-4,0 L4,0 L0,6 z", transform: `translate(0,${cBoard.top - 6})` });
     ph.setAttribute("transform", `translate(${geo.x(S.t).toFixed(1)},0)`);
 
-    const calls = (S.noTool ? 7 : 9) + P.groups + 1;
-    $("#tl-case-meta", host).innerHTML = `模型调用 <b class="num">${calls}</b> 次 · 全程约 <b class="num">${fmtSec(P.doneAt)}</b> · 播放头 <b class="num">${fmtSec(S.t)}</b>（<b class="num">${running}</b> 个在跑）`;
     syncReadout();
     syncOutcome();
   }
@@ -687,9 +639,6 @@ export function wireTimeline(root) {
 
   function paintGlobal() {
     const { data } = G;
-    const landed = data.cases.filter((cs) => cs.end <= G.t + 1e-6).length;
-    const peak = data.samples.reduce((m, s) => Math.max(m, s[1]), 0);
-    $("#tl-global-meta", host).innerHTML = `整批约 <b class="num">${fmtSec(data.end)}</b> · 已写出 <b class="num">${landed}</b> / ${G.total} · 请求峰值 <b class="num">${peak}</b> / ${G.req}`;
     const ph = gBoard.playhead;
     ph.textContent = "";
     if (!G.play && G.t >= data.end - 1e-6) return;
@@ -727,7 +676,7 @@ export function wireTimeline(root) {
     add(svgRoot, "line", { x1: L, y1: y(G.req), x2: R, y2: y(G.req), class: "cap-line" });
     add(svgRoot, "text", { x: L - 6, y: y(G.req) + 4, "text-anchor": "end", class: "cap-label" }, String(G.req));
     add(svgRoot, "text", { x: L - 6, y: base + 4, "text-anchor": "end", class: "cap-label" }, "0");
-    add(svgRoot, "text", { x: L + 6, y: chartTop - 6, class: "cap-label" }, "在飞模型请求数（虚线 = --model-requests）");
+    add(svgRoot, "text", { x: L + 6, y: chartTop - 6, class: "cap-label" }, "在飞模型请求数");
     const pts = data.samples.filter((_, k) => k % 2 === 0);
     if (pts.length) {
       let d = `M${x(pts[0][0]).toFixed(1)},${base}`;
@@ -802,30 +751,8 @@ export function wireTimeline(root) {
     });
   });
 
-  /* 03 · 引文核对 */
-  const tamperBtn = $("#tl-ev-tamper", host);
-  let tampered = false;
-  const srcText = "…收盘 3,412.87 点，成交额 84.2 亿元，较前一交易日回落…";
-  function paintEv() {
-    tamperBtn?.setAttribute("aria-pressed", String(tampered));
-    const state = $("#tl-ev-state", host);
-    if (state) {
-      state.textContent = tampered ? "不一致：在 T2 被拦下" : "一致";
-      state.classList.toggle("is-bad", tampered);
-    }
-    const mark = tampered ? "is-hit" : "is-same";
-    $("#tl-ev-src", host).innerHTML = srcText.replace("3,412.87", `<mark class="${mark}">3,412.87</mark>`);
-    $("#tl-ev-quote", host).innerHTML = srcText.replace("3,412.87", `<mark class="${mark}">${tampered ? "3,412.78" : "3,412.87"}</mark>`);
-    $$("[data-tl-ev]", host).forEach((node) => {
-      node.classList.toggle("is-bad", tampered && node.dataset.tlEv !== "schema");
-      node.classList.toggle("is-off", tampered && node.dataset.tlEv === "schema");
-    });
-  }
-  tamperBtn?.addEventListener("click", () => { tampered = !tampered; paintEv(); });
-
   renderCase();
   drawGlobal();
-  paintEv();
 
   host._tlCleanup = () => {
     stopCase();

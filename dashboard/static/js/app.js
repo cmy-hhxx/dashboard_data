@@ -269,7 +269,7 @@ async function boot() {
   viewSeg = glassTabMenu($("#viewSwitch"), (v) => {
     announce(`切换到${VIEW_NAME[v]}`);
     const leaveBench = state.view === "bench" && v !== "bench" ? { ...BENCH_PARAMS, trace: null } : {};
-    navigate({ view: v, doc: null, ...leaveBench, ...(v === "compare" || v === "forecast" ? SAMPLE_PARAMS : {}), ...(v === "data" ? { detail: null, ed: null, em: null, ep: null, edp: null } : {}), ...COMPARE_PARAMS });
+    navigate({ view: v, doc: null, cell: null, ...leaveBench, ...(v === "compare" || v === "forecast" ? SAMPLE_PARAMS : {}), ...(v === "data" ? { detail: null, ed: null, em: null, ep: null, edp: null } : {}), ...COMPARE_PARAMS });
   });
   productSeg = segmented($("#productSwitch"), (p) => {
     const away = awayURL(p, { view: state.view, product: p });
@@ -278,7 +278,7 @@ async function boot() {
   });
   // Back from the other product's server (bfcache): the knob moved before leaving; put it back.
   window.addEventListener("pageshow", (e) => e.persisted && productSeg.set(state.product, { silent: true }));
-  // 数据 / 文档 tab already active on a subpage: clicking it returns to the root index.
+  // 数据 / 文档 / 评测体系 tab already active on a subpage: clicking it returns to the root index.
   $("#viewSwitch").addEventListener("click", (e) => {
     const dataBtn = e.target.closest('button[data-value="data"]');
     if (dataBtn && new URLSearchParams(location.search).get("detail")) {
@@ -288,6 +288,11 @@ async function boot() {
     const docsBtn = e.target.closest('button[data-value="docs"]');
     if (docsBtn && new URLSearchParams(location.search).get("doc")) {
       navigate({ view: "docs", doc: null });
+      return;
+    }
+    const sysBtn = e.target.closest('button[data-value="system"]');
+    if (sysBtn && new URLSearchParams(location.search).get("cell")) {
+      navigate({ view: "system", cell: null });
     }
   });
   // The theme switch is a pixel day/night toggle. Flipping it (click, drag or keyboard) grows the

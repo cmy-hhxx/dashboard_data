@@ -1,12 +1,14 @@
-<div class="p4-shell" id="p4Top">
-<aside class="rail">
+<div class="doc-shell p4-shell" id="p4Top">
+<aside class="doc-side rail">
     <div class="dc-side-head">
       <button type="button" class="dc-back" data-back><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>全部文档</button>
     </div>
-    <div class="cap-side-title">P0–P4 口径与实例<span class="p4-side-meta num">75 例 · 205 条证据</span></div>
+    <div class="doc-side-title">P0–P4 定级标准</div>
     <nav class="rail-nav" aria-label="目录">
-      <a href="#flow"><span class="rail-code">01</span><span class="rail-label">判级</span></a>
-      <a href="#overview"><span class="rail-code">02</span><span class="rail-label">五个等级</span></a>
+      <a href="#flow"><span class="rail-code">01</span><span class="rail-label">判级流程</span></a>
+      <a href="#overview"><span class="rail-code">02</span><span class="rail-label">五档定义</span></a>
+      <a href="#edge"><span class="rail-code">03</span><span class="rail-label">边界对照</span></a>
+      <a href="#evidence"><span class="rail-code">04</span><span class="rail-label">证据与分布</span></a>
       <div class="rail-sep"></div>
       <div class="rail-group" data-level="p0">
         <a class="rail-row" href="#p0" aria-expanded="false" aria-controls="rail-p0"><span class="rail-code">P0</span><span class="rail-label">核心结论</span><svg class="rail-caret" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 2.5 8 6l-3.5 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="rail-count">15</span></a>
@@ -108,17 +110,19 @@
           <a href="#P4-15" title="多季度取数只返回最新单季"><span class="rail-sub-code">P4-15</span><span class="rail-sub-title">多季度取数只返回最新单季</span></a>
         </div>
       </div>
-      <div class="rail-sep"></div>
-      <a href="#edge"><span class="rail-code">03</span><span class="rail-label">边界</span></a>
-      <a href="#evidence"><span class="rail-code">04</span><span class="rail-label">证据</span></a>
-      <a href="#data"><span class="rail-code">05</span><span class="rail-label">数据</span></a>
+
     </nav>
   </aside>
 
-  <main class="cap-main p4-main" id="main">
-    <div class="bento">
-    <section class="card section" id="flow" style="--span:12">
-      <header class="card-head"><h2>判级</h2></header>
+  <div class="doc-main p4-main">
+    <div class="doc-flow">
+    <header class="doc-hero">
+      <h1>P0–P4 问题定级标准</h1>
+      <p class="doc-lead">所有问题只按「对最终交付是否还有剩余影响」定级，不按异常类型、报错次数或修复难度判级。先判有没有剩余影响，再从 P0 往下取最先成立的一档。</p>
+    </header>
+    <section class="doc-sec section" id="flow">
+      <div class="doc-sec-head"><span class="doc-idx num">01</span><h2>判级流程</h2></div>
+      <p class="doc-lead">先判断问题对最终交付是否还有剩余影响：已证实没有记 P4，说不清则不定级，已确认有则从 P0 往下取最先成立的一档。</p>
       <svg class="decision" viewBox="0 0 1000 318" role="img" aria-label="判级流程：先问这个问题对最终交付有没有剩余影响。已证实没有，记 P4；说不清，不定级、先补证；已确认有，按影响大小从 P0 到 P3 取最先成立的一档。">
         <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--muted)"></path></marker></defs>
         <rect x="240" y="0" width="520" height="54" rx="7" fill="var(--accent)"></rect>
@@ -194,8 +198,9 @@
       </ul>
     </section>
 
-    <section class="card section" id="overview" style="--span:12">
-      <header class="card-head"><h2>五个等级</h2></header>
+    <section class="doc-sec section" id="overview">
+      <div class="doc-sec-head card-head"><span class="doc-idx num">02</span><h2>五个等级</h2></div>
+      <p class="doc-lead">按剩余影响由重到轻逐档提问；点击任意一行可直接跳到对应档位的判据与真实案例。</p>
       <div class="cap-table-wrap">
         <table class="cap-table overview"><thead><tr><th>等级</th><th>口径（逐档问）</th><th class="num">案例</th></tr></thead><tbody>
           <tr data-jump="#p0"><td><span class="tag p0"><i></i>P0</span></td><td>核心结论错误，或关键依据虚构，整份回答不可采信？</td><td class="num">15</td></tr>
@@ -207,7 +212,67 @@
       </div>
     </section>
 
-    <section class="card p4-cases-card" id="p4CasesCard" style="--span:12">
+    <section class="doc-sec section" id="edge">
+      <div class="doc-sec-head"><span class="doc-idx num">03</span><h2>边界对照</h2></div>
+      <p class="doc-lead">遇到相邻两档难以取舍、答案合成与上游工具责任交叉，或工具异常影响未明时，严格按以下 12 条硬边界裁定。</p>
+      <div class="cap-table-wrap">
+        <table class="cap-table edge"><thead><tr><th style="width:20%">对照</th><th>怎么分</th></tr></thead><tbody>
+          <tr><td><b>P0 / P1</b></td><td>整份回答还能不能采信？核心结论错或关键依据虚构，不能采信 → P0；还能用，但重要内容要实质修改 → P1。</td></tr>
+          <tr><td><b>P1 / P2</b></td><td>错的是重要内容（核心数据、关键段落、硬条件），还是局部？重要内容错或缺、需实质修改 → P1，即使主方向不变；局部错、修正后主要结论不变 → P2。</td></tr>
+          <tr><td><b>P2 / P3</b></td><td>错的是事实或数值，还是表达或展示？事实 / 数值 → P2；表达 / 展示且已确认有轻微影响 → P3。</td></tr>
+          <tr><td><b>P3 / P4</b></td><td>错的东西进没进终稿？进了且有轻微影响 → P3；没进、已替代或已修正，且有终稿或后续实际回执作证 → P4。</td></tr>
+          <tr><td><b>答案合成</b></td><td>终稿自身的问题一律影响交付，只定 P0–P3，不记 P4。上游回执已错、终稿只是沿用，记在上游，不另记终稿问题。</td></tr>
+          <tr><td><b>已恢复但有残余</b></td><td>按残余影响定 P0–P3，不记 P4。</td></tr>
+          <tr><td><b>影响未确认</b></td><td>不能记 P4，也不够 P0–P3。先补读终稿和后续回执；仍确认不了的工具异常记 uncertain，不关联问题。P4 不是兜底。</td></tr>
+          <tr><td><b>P4 的“已证实”</b></td><td>证实的是最终交付没受影响，不是每个枝节都核实过：终稿未采用、已替代或已修正后，某个次要细节仍未核实，照样可记 P4。</td></tr>
+          <tr><td><b>工具异常处置</b></td><td>unresolved_impact、recovered_impact → 按剩余影响定 P0–P3；recovered_no_impact（须引用报错之后的实际回执）、no_delivery_impact（须说明交付为何不受影响）→ P4；uncertain → 不关联问题。计划或终稿自述不能证明已恢复。</td></tr>
+          <tr><td><b>同一回答</b></td><td>可以同时有 P4 与 P0–P3；P4 不代表回答成功。</td></tr>
+          <tr><td><b>同类问题</b></td><td>不同回答可以有不同等级；只按本次已确认影响，不按异常类型、次数或修复难度。</td></tr>
+          <tr><td><b>不推测</b></td><td>未被采用的回执、已消除的检索偏差、空计划本身不证明终稿缺失；也不推测额度浪费。</td></tr>
+        </tbody></table>
+      </div>
+    </section>
+
+    <section class="doc-sec section" id="evidence">
+      <div class="doc-sec-head"><span class="doc-idx num">04</span><h2>证据规范与案例分布</h2></div>
+      <p class="doc-lead">每条定级结论必须附带可回链原文的逐字证据；下方 75 个对照案例按各档 15 例均衡收录自问财与 AIME 真实对话。</p>
+      <div class="doc-sub">
+        <div class="doc-sub-head"><h3>证据结构与字段要求</h3></div>
+        <div class="dc-codebox" id="evSampleBox">
+        <div class="dc-codehead"><span>证据字段结构示例</span></div>
+        <pre class="sample"><code>{
+  &quot;position&quot;: &quot;trace_index 0 / message_index 17 / path /output/0/content / evidence_id ev_...&quot;,
+  &quot;component&quot;: &quot;answer: 终稿生成轮&quot;,
+  &quot;quote&quot;: &quot;……原文……&quot;,
+  &quot;reason&quot;: &quot;这段原文直接证明了什么&quot;
+}</code></pre>
+      </div>
+      <div class="cap-table-wrap" style="margin-top:var(--sp-4)">
+        <table class="cap-table ev-table"><thead><tr><th style="width:24%">字段</th><th>作用</th></tr></thead><tbody>
+          <tr><td><code>position</code></td><td>原始轮次、消息、字段路径和 evidence_id；回到来源系统。</td></tr>
+          <tr><td><code>component</code></td><td>证据出处：question / material / tool_call / answer / model。</td></tr>
+          <tr><td><code>quote</code></td><td>精确连续原文，最长 400 字；只做 HTML 转义，不拼接、不改写。</td></tr>
+          <tr><td><code>reason</code></td><td>这段原文直接证明什么，不重复结论。</td></tr>
+        </tbody></table>
+      </div>
+      </div>
+      <div class="doc-sub" id="data">
+        <div class="doc-sub-head"><h3>对照案例分布（共 75 例）</h3></div>
+        <div class="cap-table-wrap">
+        <table class="cap-table data-table"><thead><tr><th>等级</th><th class="num">问财</th><th class="num">AIME</th><th class="num">合计</th></tr></thead><tbody>
+          <tr><td><span class="tag p0"><i></i>P0</span></td><td class="num">3</td><td class="num">12</td><td class="num">15</td></tr>
+          <tr><td><span class="tag p1"><i></i>P1</span></td><td class="num">8</td><td class="num">7</td><td class="num">15</td></tr>
+          <tr><td><span class="tag p2"><i></i>P2</span></td><td class="num">8</td><td class="num">7</td><td class="num">15</td></tr>
+          <tr><td><span class="tag p3"><i></i>P3</span></td><td class="num">8</td><td class="num">7</td><td class="num">15</td></tr>
+          <tr><td><span class="tag p4"><i></i>P4</span></td><td class="num">8</td><td class="num">7</td><td class="num">15</td></tr>
+        </tbody></table>
+      </div>
+      </div>
+    </section>
+
+    <section class="doc-sec p4-cases-card" id="p4CasesCard">
+      <div class="doc-sec-head"><span class="doc-idx num">05</span><h2>分级细则与 75 个真实对照案例</h2></div>
+      <p class="doc-lead">每档先说明正式定义、判据与边界，再列出 15 个真实对照案例；支持按产品筛选、关键词检索、只看人话或隐藏译文。</p>
     <div class="toolbar">
       <div class="seg" id="sourceSeg">
         <span class="seg-knob" aria-hidden="true"></span>
@@ -8912,60 +8977,6 @@ Alert me when SNT reports Q3 results on November 6
       </div>
     </section>
     </section>
-
-    <section class="card section" id="edge" style="--span:12">
-      <header class="card-head"><h2>边界</h2></header>
-      <div class="cap-table-wrap">
-        <table class="cap-table edge"><thead><tr><th style="width:20%">对照</th><th>怎么分</th></tr></thead><tbody>
-          <tr><td><b>P0 / P1</b></td><td>整份回答还能不能采信？核心结论错或关键依据虚构，不能采信 → P0；还能用，但重要内容要实质修改 → P1。</td></tr>
-          <tr><td><b>P1 / P2</b></td><td>错的是重要内容（核心数据、关键段落、硬条件），还是局部？重要内容错或缺、需实质修改 → P1，即使主方向不变；局部错、修正后主要结论不变 → P2。</td></tr>
-          <tr><td><b>P2 / P3</b></td><td>错的是事实或数值，还是表达或展示？事实 / 数值 → P2；表达 / 展示且已确认有轻微影响 → P3。</td></tr>
-          <tr><td><b>P3 / P4</b></td><td>错的东西进没进终稿？进了且有轻微影响 → P3；没进、已替代或已修正，且有终稿或后续实际回执作证 → P4。</td></tr>
-          <tr><td><b>答案合成</b></td><td>终稿自身的问题一律影响交付，只定 P0–P3，不记 P4。上游回执已错、终稿只是沿用，记在上游，不另记终稿问题。</td></tr>
-          <tr><td><b>已恢复但有残余</b></td><td>按残余影响定 P0–P3，不记 P4。</td></tr>
-          <tr><td><b>影响未确认</b></td><td>不能记 P4，也不够 P0–P3。先补读终稿和后续回执；仍确认不了的工具异常记 uncertain，不关联问题。P4 不是兜底。</td></tr>
-          <tr><td><b>P4 的“已证实”</b></td><td>证实的是最终交付没受影响，不是每个枝节都核实过：终稿未采用、已替代或已修正后，某个次要细节仍未核实，照样可记 P4。</td></tr>
-          <tr><td><b>工具异常处置</b></td><td>unresolved_impact、recovered_impact → 按剩余影响定 P0–P3；recovered_no_impact（须引用报错之后的实际回执）、no_delivery_impact（须说明交付为何不受影响）→ P4；uncertain → 不关联问题。计划或终稿自述不能证明已恢复。</td></tr>
-          <tr><td><b>同一回答</b></td><td>可以同时有 P4 与 P0–P3；P4 不代表回答成功。</td></tr>
-          <tr><td><b>同类问题</b></td><td>不同回答可以有不同等级；只按本次已确认影响，不按异常类型、次数或修复难度。</td></tr>
-          <tr><td><b>不推测</b></td><td>未被采用的回执、已消除的检索偏差、空计划本身不证明终稿缺失；也不推测额度浪费。</td></tr>
-        </tbody></table>
-      </div>
-    </section>
-
-    <section class="card section" id="evidence" style="--span:7">
-      <header class="card-head"><h2>证据</h2></header>
-      <div class="dc-codebox" id="evSampleBox">
-        <div class="dc-codehead"><span>证据字段结构示例</span></div>
-        <pre class="sample"><code>{
-  &quot;position&quot;: &quot;trace_index 0 / message_index 17 / path /output/0/content / evidence_id ev_...&quot;,
-  &quot;component&quot;: &quot;answer: 终稿生成轮&quot;,
-  &quot;quote&quot;: &quot;……原文……&quot;,
-  &quot;reason&quot;: &quot;这段原文直接证明了什么&quot;
-}</code></pre>
-      </div>
-      <div class="cap-table-wrap" style="margin-top:var(--sp-4)">
-        <table class="cap-table ev-table"><thead><tr><th style="width:24%">字段</th><th>作用</th></tr></thead><tbody>
-          <tr><td><code>position</code></td><td>原始轮次、消息、字段路径和 evidence_id；回到来源系统。</td></tr>
-          <tr><td><code>component</code></td><td>证据出处：question / material / tool_call / answer / model。</td></tr>
-          <tr><td><code>quote</code></td><td>精确连续原文，最长 400 字；只做 HTML 转义，不拼接、不改写。</td></tr>
-          <tr><td><code>reason</code></td><td>这段原文直接证明什么，不重复结论。</td></tr>
-        </tbody></table>
-      </div>
-    </section>
-
-    <section class="card section" id="data" style="--span:5">
-      <header class="card-head"><h2>数据</h2></header>
-      <div class="cap-table-wrap">
-        <table class="cap-table data-table"><thead><tr><th>等级</th><th class="num">问财</th><th class="num">AIME</th><th class="num">合计</th></tr></thead><tbody>
-          <tr><td><span class="tag p0"><i></i>P0</span></td><td class="num">3</td><td class="num">12</td><td class="num">15</td></tr>
-          <tr><td><span class="tag p1"><i></i>P1</span></td><td class="num">8</td><td class="num">7</td><td class="num">15</td></tr>
-          <tr><td><span class="tag p2"><i></i>P2</span></td><td class="num">8</td><td class="num">7</td><td class="num">15</td></tr>
-          <tr><td><span class="tag p3"><i></i>P3</span></td><td class="num">8</td><td class="num">7</td><td class="num">15</td></tr>
-          <tr><td><span class="tag p4"><i></i>P4</span></td><td class="num">8</td><td class="num">7</td><td class="num">15</td></tr>
-        </tbody></table>
-      </div>
-    </section>
     </div>
-  </main>
+  </div>
 </div>

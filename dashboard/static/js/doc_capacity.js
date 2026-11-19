@@ -1,4 +1,4 @@
-/* 评测容量说明 (doc=capacity): four views switched by the left TOC (概览 / 消耗 / 速度 / 观测).
+/* 评测容量说明 (doc=capacity): progressive 5-chapter editorial document.
    Uses the dashboard's shared tooltip (#tip via showTip / hideTip / bindTips) and counter formatting. */
 import { $, $$, fmt, compact, pct, showTip, hideTip, bindTips, runCounters, copyBtnHTML } from "./core.js";
 
@@ -63,10 +63,10 @@ const CALIBRATION = {
 };
 
 const ENGINEER_STRIP = [
-  { k: "重启跳过", v: "136 ms", note: "不调用模型" },
-  { k: "两进程合并", v: "0 重复", note: "各 4/4" },
-  { k: "百万行索引", v: "0.48 s", note: "890 MB" },
-  { k: "32 条并发", v: "357.6 s", note: "322 行/h" },
+  { k: "重启跳过", v: "136 ms", note: "跳过已完成，不调用模型" },
+  { k: "两进程合并", v: "0 重复", note: "双进程各完成 4/4" },
+  { k: "百万行索引", v: "0.48 s", note: "扫描 890 MB 输入文件" },
+  { k: "32 条并发", v: "357.6 s", note: "322 行/小时短批实测" },
 ];
 
 const PER_ROW = {
@@ -80,7 +80,6 @@ const PER_ROW = {
 
 const rowsPerHour = (r) => (r.attribution * 3600) / r.wall;
 const budgetShare = (r) => Math.max(1, Math.floor(r.budget / r.cases));
-const attributionRate = (r) => r.attribution / r.admitted;
 const serviceTime = (r) => (r.cases * 3600) / rowsPerHour(r);
 const stageOf = (k) => CALIBRATION.stages.find((s) => s.key === k);
 const stageDerived = (s) => {
@@ -227,13 +226,17 @@ export function capacityDocHTML() {
   }).join("");
 
   const rateFigures = LADDER.map((r) => {
-    const tag = r.cases === 64 ? '<span class="cap-prov" data-kind="measured">最快</span>' : r.cases === 128 ? '<span class="cap-prov" data-kind="warn">拥堵</span>' : "";
-    return `<div class="cap-fig">${tag}<b class="num">${pct(r.attribution, r.admitted, 0)}</b><small>${r.cases} 并发 · 归因 ${r.attribution} / ${r.admitted}</small></div>`;
+    const note = r.cases === 64 ? "峰值" : r.cases === 128 ? "拥堵" : "";
+    return `<div class="cap-fig${r.cases === 64 ? " is-peak" : r.cases === 128 ? " is-warn" : ""}">
+      <span class="cap-k">${r.cases} 并发 / ${r.budget} 额度${note ? ` · ${note}` : ""}</span>
+      <b class="num">${pct(r.attribution, r.admitted, 0)}</b>
+      <span class="cap-fig-detail">归因 ${r.attribution} / 准入 ${r.admitted}</span>
+    </div>`;
   }).join("");
 
   const fixRows = FIXES.map((f) => `<tr><td><b>${f.title}</b><span class="cap-sub">${f.after}</span></td><td>${f.before}</td><td class="muted">${f.look}</td></tr>`).join("");
 
-  const engCells = ENGINEER_STRIP.map((e) => `<div class="cap-fig"><span class="cap-k">${e.k}</span><b class="num">${e.v}</b><small>${e.note}</small></div>`).join("");
+  const engCells = ENGINEER_STRIP.map((e) => `<div class="cap-fig"><span class="cap-k">${e.k}</span><b class="num">${e.v}</b><span class="cap-fig-detail">${e.note}</span></div>`).join("");
 
   const artRows = ARTIFACTS.map((a) => `<tr><td><b>${a.name}</b><span class="cap-sub"><code>${a.owner.replace(/</g, "&lt;")}</code></span></td><td>${a.use}</td><td class="muted">${a.limit}</td></tr>`).join("");
 
@@ -244,9 +247,9 @@ export function capacityDocHTML() {
     return `${head}<tr><td><code>${f.key}</code></td><td>${f.def}</td><td class="muted">${f.use}</td></tr>`;
   }).join("");
 
-  const recipeItems = RECIPES.map((r, i) => `<li class="cap-recipe"><div class="cap-recipe-head"><span class="num">0${i + 1}</span><h3>${r.q}</h3>${copyBtnHTML("复制命令", { pre: true })}</div><pre class="code">${r.cmd}</pre><p>${r.read}</p></li>`).join("");
+  const recipeItems = RECIPES.map((r, i) => `<li class="cap-recipe"><div class="cap-recipe-head"><span class="num">0${i + 1}</span><h4>${r.q}</h4>${copyBtnHTML("复制命令", { pre: true })}</div><pre class="code">${r.cmd}</pre><p>${r.read}</p></li>`).join("");
 
-  const sampleWallCells = SAMPLE.walls.map((w) => `<div class="cap-fig"><b class="num">${w.seconds} s</b><small>整批墙钟 · ${w.label}</small></div>`).join("");
+  const sampleWallCells = SAMPLE.walls.map((w) => `<div class="cap-fig"><span class="cap-k">${w.label}</span><b class="num">${w.seconds} s</b><span class="cap-fig-detail">整批墙钟</span></div>`).join("");
 
   const sampleStageRows = SAMPLE.stages.map((s, idx) => `<tr>
     <td><span class="cap-name" style="--c:var(--cap-c${idx + 1})"><i></i><b>${s.name}</b></span><span class="cap-sub"><code>${s.stage}</code>${s.toolCalls ? ` · 均值 ${s.toolCalls} 次工具调用` : ""}</span></td>
@@ -271,117 +274,148 @@ export function capacityDocHTML() {
 
   const sourceRows = SOURCES.map((s) => `<div class="cap-src"><div class="cap-src-head"><b>${s.title}</b><time class="num">${s.date}</time></div><p>${s.result}</p></div>`).join("");
 
-  return `<div class="cap-shell">
-    <aside class="cap-side">
+  return `<div class="doc-shell cap-shell">
+    <aside class="doc-side">
       <div class="dc-side-head">
         <button type="button" class="dc-back" data-back><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>全部文档</button>
       </div>
-      <div class="cap-side-title">评测容量说明</div>
-      <nav class="cap-toc" id="capToc" aria-label="容量章节">
-        <button type="button" data-cap-view="overview" aria-pressed="true"><span class="num">01</span>概览</button>
-        <button type="button" data-cap-view="consumption" aria-pressed="false"><span class="num">02</span>消耗</button>
-        <button type="button" data-cap-view="speed" aria-pressed="false"><span class="num">03</span>速度</button>
-        <button type="button" data-cap-view="observability" aria-pressed="false"><span class="num">04</span>观测</button>
+      <div class="doc-side-title">容量与性能说明</div>
+      <nav class="doc-toc" id="capToc" aria-label="容量章节">
+        <a href="#cap-baseline"><span class="num">01</span><span>口径与基准</span></a>
+        <a href="#cap-cost"><span class="num">02</span><span>分阶段消耗</span></a>
+        <a href="#cap-speed"><span class="num">03</span><span>并发与瓶颈</span></a>
+        <a href="#cap-calc"><span class="num">04</span><span>容量试算</span></a>
+        <a href="#cap-obs"><span class="num">05</span><span>观测与排查</span></a>
       </nav>
     </aside>
 
-    <div class="cap-main">
-      <!-- 01 概览 -->
-      <section class="cap-view is-active" data-cap-panel="overview" aria-label="概览">
-        <div class="bento">
-          <article class="card cap-hero" style="--span:12">
-            <div class="cap-hero-grid">
-              <div class="cap-hero-copy">
-                <div class="cap-badges">
-                  <span class="cap-prov" data-kind="measured">实测 · 2026-11-09</span>
-                  <span class="cap-prov">AIME 2026-11-05</span>
-                  <span class="cap-prov" data-kind="calibration">单条用量标定 200 条批次</span>
-                  ${copyBtnHTML("复制基准", { fn: "capHero" })}
-                </div>
-                <h2>一条归因 41.3 万 token · 17.7 次调用</h2>
-                <p>100 条 Trace 并发、200 个模型请求额度下，Runner 28 分钟读完输入产出 <b>138 行正式归因</b>，折合每小时 <b>292.8 行</b>。</p>
-              </div>
-              <div class="cap-hero-num">
-                <div><b class="num" data-count="292.8" data-d="1">292.8</b><em>行/h</em></div>
-                <code>138 行 × 3600 ÷ 1,697 s</code>
-              </div>
-            </div>
-          </article>
+    <div class="doc-main">
+      <header class="doc-hero">
+        <div class="doc-hero-top">
+          <h1>容量与性能说明</h1>
+          ${copyBtnHTML("复制基准", { fn: "capHero" })}
+        </div>
+        <p class="doc-lead">200 条 AIME 标定显示，每产出 1 行正式归因平均消耗 41.3 万 token、17.65 次模型调用、1,199 秒模型工时（其中 92% 为前缀缓存读写）。100 条并发、200 个模型请求额度下，Runner 28 分钟（1,697 秒）产出 138 行正式归因，实测吞吐 292.8 行/小时。</p>
+        <div class="doc-kpis">
+          <div class="doc-kpi"><b class="num" data-count="292.8" data-d="1">292.8</b><span>行 / 小时（100 并发 / 200 额度）</span></div>
+          <div class="doc-kpi"><b class="num">412,885</b><span>token / 条（92% 缓存读写）</span></div>
+          <div class="doc-kpi"><b class="num">17.65</b><span>次模型调用 / 条（1,199 s 工时）</span></div>
+        </div>
+      </header>
 
-          <article class="card" style="--span:12">
-            <header class="card-head"><h2>计量层级</h2><span class="meta">速度统一按「正式归因行」计算</span></header>
-            <div class="cap-chain">
-              <div class="cap-chain-node"><span class="num">01</span><b>输入行</b><code>1 行 JSONL</code><span>一条会话记录</span></div>
-              <div class="cap-chain-node"><span class="num">02</span><b>Trace</b><code>1 : 1</code><span>每条 Trace 产出一行归因</span></div>
-              <div class="cap-chain-node"><span class="num">03</span><b>attempt</b><code>17.7 : 1</code><span>一次 agent 任务，含多次请求与重试</span></div>
-              <div class="cap-chain-node"><span class="num">04</span><b>token</b><code>2.34 万 : 1</code><span>输入 + 输出 + 缓存读写</span></div>
-            </div>
-          </article>
-
-          <article class="card" style="--span:6">
-            <header class="card-head"><h2>速度公式</h2>${copyBtnHTML("复制公式", { text: "行/h = 归因行 × 3600 ÷ 墙钟 = case 并发 × 3600 ÷ 单条墙钟（实测 292.8 行/h，100 并发 / 200 额度）" })}</header>
+      <section class="doc-sec" id="cap-baseline" aria-label="口径与基准">
+        <div class="doc-sec-head"><span class="doc-idx num">01</span><h2>计量口径与核心公式</h2></div>
+        <p class="doc-lead">所有速度与成本均以最终交付的「正式归因行」为统一分母，避免单次调用、中间草稿或失败重试把吞吐数字抬高。一条 Trace 按如下四级逐层拆解。</p>
+        <div class="cap-chain">
+          <div class="cap-chain-node"><span class="num">01</span><b>输入行</b><code>1 行 JSONL</code><span>一条会话输入记录</span></div>
+          <div class="cap-chain-node"><span class="num">02</span><b>Trace</b><code>1 : 1</code><span>每条 Trace 产出一行正式归因</span></div>
+          <div class="cap-chain-node"><span class="num">03</span><b>attempt</b><code>17.65 : 1</code><span>一次 agent 任务，含多次请求与重试</span></div>
+          <div class="cap-chain-node"><span class="num">04</span><b>token</b><code>2.34 万 : 1</code><span>输入 + 输出 + 缓存读写</span></div>
+        </div>
+        <div class="doc-formula-pair">
+          <div class="doc-sub">
+            <div class="doc-sub-head"><h3>速度公式</h3>${copyBtnHTML("复制公式", { text: "行/h = 归因行 × 3600 ÷ 墙钟 = case 并发 × 3600 ÷ 单条墙钟（实测 292.8 行/h，100 并发 / 200 额度）" })}</div>
             <div class="cap-formula">
               <div><em>行/h</em> = 归因行 × 3600 ÷ 墙钟 = case 并发 × 3600 ÷ 单条墙钟</div>
-              <div class="cap-formula-out"><b class="num">292.8</b><span>行/h（100 并发 / 200 额度）</span></div>
+              <div class="cap-formula-out"><b class="num">292.8</b><span>行/h（138 行 × 3600 ÷ 1,697 s）</span></div>
             </div>
-          </article>
-
-          <article class="card" style="--span:6">
-            <header class="card-head"><h2>消耗公式</h2>${copyBtnHTML("复制公式", { text: "token/条 = Σ 次数/条 × token/次 · 工时/条 = Σ 次数/条 × 单次秒数（标定 412,885 token/条，92% 缓存读写）" })}</header>
+          </div>
+          <div class="doc-sub">
+            <div class="doc-sub-head"><h3>消耗公式</h3>${copyBtnHTML("复制公式", { text: "token/条 = Σ 次数/条 × token/次 · 工时/条 = Σ 次数/条 × 单次秒数（标定 412,885 token/条，92% 缓存读写）" })}</div>
             <div class="cap-formula">
               <div><em>token/条</em> = Σ 次数/条 × token/次 · <em>工时/条</em> = Σ 次数/条 × 单次秒数</div>
               <div class="cap-formula-out"><b class="num">412,885</b><span>token/条（92% 缓存读写）</span></div>
             </div>
-          </article>
-
-          <article class="card" style="--span:12">
-            <header class="card-head"><h2>关键结论</h2></header>
-            <div class="cap-figs" style="--cols:3">
-              <div class="cap-fig"><span class="cap-prov" data-kind="measured">实测</span><b class="num">271 → 37 行/h</b><small>并发从 64 翻倍到 128 而额度保持 128 时，每条只剩 1 个在途请求，速度降至 1/7。</small></div>
-              <div class="cap-fig"><span class="cap-prov" data-kind="derived">推算</span><b class="num">1.12 亿 token/h</b><small>271 行/h 峰值下的小时 token 吞吐量。</small></div>
-              <div class="cap-fig"><span class="cap-prov" data-kind="measured">实测 11-16</span><b class="num">36 s / 66 s</b><small>Component 单次模型时间中位 / p90，返工率 11–16%，是决定全流程耗时的核心环节。</small></div>
-            </div>
-          </article>
+          </div>
         </div>
       </section>
 
-      <!-- 02 消耗 -->
-      <section class="cap-view" data-cap-panel="consumption" aria-label="消耗">
-        <div class="bento">
-          <article class="card" style="--span:12">
-            <header class="card-head"><h2>分阶段工作量</h2><span class="meta">200 条 AIME 标定批次 · 均值 / p95 为单任务模型时间</span></header>
-            <div class="cap-table-wrap">
-              <table class="cap-table">
-                <thead><tr><th>阶段</th><th class="num">次 / 条</th><th class="num">token / 次</th><th class="num">token / 条</th><th class="num">均值 (s)</th><th class="num">p95 (s)</th></tr></thead>
-                <tbody>${workRows}</tbody>
-              </table>
-            </div>
-          </article>
-
-          <article class="card" style="--span:7">
-            <header class="card-head"><h2>调用、token、模型时间占比</h2></header>
+      <section class="doc-sec" id="cap-cost" aria-label="分阶段消耗">
+        <div class="doc-sec-head"><span class="doc-idx num">02</span><h2>分阶段消耗拆解</h2></div>
+        <p class="doc-lead">单条归因的 92% token 为缓存读写，成本与耗时大头不在字段摘要而在组件调查（Component）——它只占 22.7% 的调用次数，却占用了 77.9% 的总 token 与 85.8% 的模型时间。</p>
+        <div class="doc-sub">
+          <div class="doc-sub-head"><h3>分阶段工作量（200 条 AIME 标定）</h3></div>
+          <div class="cap-table-wrap">
+            <table class="cap-table">
+              <thead><tr><th>阶段</th><th class="num">次 / 条</th><th class="num">token / 次</th><th class="num">token / 条</th><th class="num">均值 (s)</th><th class="num">p95 (s)</th></tr></thead>
+              <tbody>${workRows}</tbody>
+            </table>
+          </div>
+        </div>
+        <div class="doc-split">
+          <div class="doc-sub">
+            <div class="doc-sub-head"><h3>调用、token 与模型时间占比</h3></div>
             <div class="cap-table-wrap">
               <table class="cap-table">
                 <thead><tr><th>阶段</th><th>调用占比</th><th>token 占比</th><th>时间占比</th></tr></thead>
                 <tbody>${shareRows}</tbody>
               </table>
             </div>
-          </article>
-
-          <article class="card" style="--span:5">
-            <header class="card-head"><h2>token 构成</h2><span class="meta">缓存 92.0% · 输入输出 8.0%</span></header>
-            <div class="cap-stackbar">
-              <i style="width:${(PER_ROW.ioShare * 100).toFixed(1)}%;background:var(--cap-c3)" title="输入 + 输出：${pct(PER_ROW.ioShare, 1, 1)}"></i>
-              <i style="width:${(PER_ROW.cacheShare * 100).toFixed(1)}%;background:var(--cap-c4)" title="缓存读写：${pct(PER_ROW.cacheShare, 1, 1)}"></i>
+          </div>
+          <div class="doc-sub">
+            <div class="doc-sub-head"><h3>token 构成</h3></div>
+            <div class="cap-stack-card">
+              <div class="cap-stackbar">
+                <i style="width:${(PER_ROW.ioShare * 100).toFixed(1)}%;background:var(--cap-c3)" title="输入 + 输出：${pct(PER_ROW.ioShare, 1, 1)}"></i>
+                <i style="width:${(PER_ROW.cacheShare * 100).toFixed(1)}%;background:var(--cap-c4)" title="缓存读写：${pct(PER_ROW.cacheShare, 1, 1)}"></i>
+              </div>
+              <div class="cap-stacklegend">
+                <div><i style="background:var(--cap-c3)"></i><span>输入 + 输出（新内容）</span><b class="num">${pct(PER_ROW.ioShare, 1, 1)}</b></div>
+                <div><i style="background:var(--cap-c4)"></i><span>缓存读写（前缀复用）</span><b class="num">${pct(PER_ROW.cacheShare, 1, 1)}</b></div>
+              </div>
             </div>
-            <div class="cap-stacklegend">
-              <div><i style="background:var(--cap-c3)"></i><span>输入 + 输出（新内容）</span><b class="num">${pct(PER_ROW.ioShare, 1, 1)}</b></div>
-              <div><i style="background:var(--cap-c4)"></i><span>缓存读写（前缀复用）</span><b class="num">${pct(PER_ROW.cacheShare, 1, 1)}</b></div>
-            </div>
-          </article>
+          </div>
+        </div>
+        <div class="doc-sub">
+          <div class="doc-sub-head"><h3>优化杠杆效果（相对 200 条批次总量）</h3></div>
+          <div class="cap-table-wrap">
+            <table class="cap-table">
+              <thead><tr><th>优化方式</th><th class="num">调用次数</th><th class="num">总 token</th><th class="num">模型时间</th></tr></thead>
+              <tbody>${leverRows}</tbody>
+            </table>
+          </div>
+        </div>
+      </section>
 
-          <article class="card" style="--span:12">
-            <header class="card-head"><h2>批量规划器</h2><span class="meta">按批量与目标速度折算资源消耗</span>${copyBtnHTML("复制测算", { fn: "capPlan" })}</header>
+      <section class="doc-sec" id="cap-speed" aria-label="并发与瓶颈">
+        <div class="doc-sec-head"><span class="doc-idx num">03</span><h2>并发阶梯与瓶颈定位</h2></div>
+        <p class="doc-lead">决定整批墙钟的关键约束是「每条在途 case 至少保有 2 个模型请求额度」，让同一条 Trace 内的多组组件调查得以并行推进。64 并发 / 128 额度实测最快（271.2 行/小时）；并发翻倍到 128 而额度仍为 128 时，每条只剩 1 个请求，吞吐骤降至 37.2 行/小时。</p>
+        <div class="doc-sub">
+          <div class="doc-sub-head"><h3>五档容量阶梯（2026-11-09 实测 · 540 s 准入 + 120 s 排空）</h3></div>
+          <div class="cap-chart-box">
+            <div class="cap-chart-wrap"><svg id="capLadderChart" class="cap-chart" role="img" aria-label="五档实测容量阶梯"></svg></div>
+            <div class="cap-figs" style="--cols:5">${rateFigures}</div>
+          </div>
+        </div>
+        <div class="doc-split">
+          <div class="doc-sub">
+            <div class="doc-sub-head"><h3>单条等效占用时间（推算 · 对数轴）</h3></div>
+            <div class="cap-chart-box">
+              <div class="cap-chart-wrap"><svg id="capServiceChart" class="cap-chart" role="img" aria-label="单条归因占用时间"></svg></div>
+            </div>
+          </div>
+          <div class="doc-sub">
+            <div class="doc-sub-head"><h3>本机工程性能基线（非瓶颈）</h3></div>
+            <div class="cap-figs" style="--cols:2">${engCells}</div>
+          </div>
+        </div>
+        <div class="doc-sub">
+          <div class="doc-sub-head"><h3>2026-11-16 修复的三处调度卡点</h3></div>
+          <div class="cap-table-wrap">
+            <table class="cap-table">
+              <thead><tr><th>卡点与修复</th><th>修复前现象</th><th>日志特征</th></tr></thead>
+              <tbody>${fixRows}</tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="doc-sec" id="cap-calc" aria-label="容量试算">
+        <div class="doc-sec-head"><span class="doc-idx num">04</span><h2>容量与配比试算</h2></div>
+        <p class="doc-lead">基于 200 条单位标定与五档实测规则，按批量规模、并发数、模型请求额度或目标吞吐量直接测算资源需求。</p>
+        <div class="doc-sub">
+          <div class="doc-sub-head"><h3>批量规划器</h3>${copyBtnHTML("复制测算", { fn: "capPlan" })}</div>
+          <div class="cap-calc-card">
             <div class="cap-calc-grid">
               <div class="cap-controls">
                 <div class="cap-presets" role="group" aria-label="常用批量">
@@ -403,156 +437,115 @@ export function capacityDocHTML() {
                 </div>
               </div>
             </div>
-          </article>
-
-          <article class="card" style="--span:12">
-            <header class="card-head"><h2>优化杠杆效果</h2><span class="meta">相对 200 条批次总量</span></header>
-            <div class="cap-table-wrap">
-              <table class="cap-table">
-                <thead><tr><th>优化方式</th><th class="num">调用次数</th><th class="num">总 token</th><th class="num">模型时间</th></tr></thead>
-                <tbody>${leverRows}</tbody>
-              </table>
-            </div>
-          </article>
+          </div>
         </div>
-      </section>
-
-      <!-- 03 速度 -->
-      <section class="cap-view" data-cap-panel="speed" aria-label="速度">
-        <div class="bento">
-          <article class="card" style="--span:12">
-            <header class="card-head"><h2>五档容量阶梯</h2><span class="meta">2026-11-09 实测 · 540 s 准入 + 120 s 排空</span></header>
-            <div class="cap-chart-wrap"><svg id="capLadderChart" class="cap-chart" role="img" aria-label="五档实测容量阶梯"></svg></div>
-            <div class="cap-figs" style="--cols:5;margin-top:var(--sp-4);padding-top:var(--sp-4);border-top:1px solid var(--well-2)">${rateFigures}</div>
-          </article>
-
-          <article class="card" style="--span:6">
-            <header class="card-head"><h2>单条等效占用时间</h2><span class="cap-prov" data-kind="derived">推算 · 对数轴</span></header>
-            <div class="cap-chart-wrap"><svg id="capServiceChart" class="cap-chart" role="img" aria-label="单条归因占用时间"></svg></div>
-          </article>
-
-          <article class="card" style="--span:6">
-            <header class="card-head"><h2>并发与额度配比试算</h2>${copyBtnHTML("复制配置", { fn: "capShare" })}</header>
-            <div class="cap-controls">
-              <div class="cap-presets" role="group" aria-label="常见配比">
-                <button type="button" data-share-preset="64,128" aria-pressed="true">推荐 64 / 128</button>
-                <button type="button" data-share-preset="100,200">100 / 200</button>
-                <button type="button" data-share-preset="128,128">过载 128 / 128</button>
+        <div class="doc-split">
+          <div class="doc-sub">
+            <div class="doc-sub-head"><h3>并发与额度配比试算</h3>${copyBtnHTML("复制配置", { fn: "capShare" })}</div>
+            <div class="cap-calc-card">
+              <div class="cap-controls">
+                <div class="cap-presets" role="group" aria-label="常见配比">
+                  <button type="button" data-share-preset="64,128" aria-pressed="true">推荐 64 / 128</button>
+                  <button type="button" data-share-preset="100,200">100 / 200</button>
+                  <button type="button" data-share-preset="128,128">过载 128 / 128</button>
+                </div>
+                <label class="cap-range"><span>同时跑 case 数 <b class="num" id="capShareCasesOut">64</b></span><input id="capShareCases" type="range" min="4" max="256" step="4" value="64"></label>
+                <label class="cap-range"><span>模型请求额度 <b class="num" id="capShareBudgetOut">128</b></span><input id="capShareBudget" type="range" min="32" max="512" step="8" value="128"></label>
               </div>
-              <label class="cap-range"><span>同时跑 case 数 <b class="num" id="capShareCasesOut">64</b></span><input id="capShareCases" type="range" min="8" max="256" step="8" value="64"></label>
-              <label class="cap-range"><span>模型请求额度 <b class="num" id="capShareBudgetOut">128</b></span><input id="capShareBudget" type="range" min="32" max="512" step="32" value="128"></label>
-            </div>
-            <div class="cap-ro-grid" style="margin-top:var(--sp-4)">
-              <div><span>每条在途上限</span><b class="num"><span id="capShareValue">2</span> 个</b></div>
-              <div><span>实际在用请求</span><b class="num"><span id="capShareStreams">128</span> 个</b></div>
-              <div><span>额度 : 并发</span><b class="num" id="capShareRatio">2.00 : 1</b></div>
-            </div>
-            <div class="cap-callout" id="capShareVerdict" data-tone="ok">
-              <b>每条 2 个在途请求</b>
-              <span>多组组件调查可以并行推进，对应实测最快的 64 并发 / 128 额度档。</span>
-            </div>
-          </article>
-
-          <article class="card" style="--span:6">
-            <header class="card-head"><h2>目标速度反推并发流</h2><span class="cap-prov" data-kind="model">假设模型</span>${copyBtnHTML("复制结果", { fn: "capTarget" })}</header>
-            <div class="cap-controls">
-              <label class="cap-range"><span>目标速度 <b class="num"><span id="capTargetRateOut">300</span> 行/h</b></span><input id="capTargetRate" type="range" min="100" max="600" step="5" value="300"></label>
-              <label class="cap-range"><span>单条模型工时 <b class="num"><span id="capTargetWorkOut">1,200</span> s</b></span><input id="capTargetWork" type="range" min="400" max="2400" step="50" value="1200"></label>
-            </div>
-            <div class="cap-readout" style="margin-top:var(--sp-4)">
-              <div class="cap-ro-main"><span>需常驻在途请求</span><div><b class="num" id="capTargetStreams">100.0</b><em>条</em></div></div>
               <div class="cap-ro-grid">
-                <div><span>每 100 条流产出</span><b class="num"><span id="capTargetPer100">300</span> 行/h</b></div>
-                <div><span>128 额度评估</span><b id="capTargetBadge" class="cap-prov" data-kind="measured">128 够用</b></div>
+                <div><span>每条在途上限</span><b class="num"><span id="capShareValue">2</span> 个</b></div>
+                <div><span>实际在用请求</span><b class="num"><span id="capShareStreams">128</span> 个</b></div>
+                <div><span>额度 : 并发</span><b class="num" id="capShareRatio">2.00 : 1</b></div>
+              </div>
+              <div class="cap-callout" id="capShareVerdict" data-tone="ok">
+                <b>每条 2 个在途请求</b>
+                <span>多组组件调查可以并行推进，对应实测最快的 64 并发 / 128 额度档。</span>
               </div>
             </div>
-          </article>
-
-          <article class="card" style="--span:6">
-            <header class="card-head"><h2>本机工程性能基线</h2><span class="meta">排除本机与 I/O 瓶颈</span></header>
-            <div class="cap-figs" style="--cols:2">${engCells}</div>
-          </article>
-
-          <article class="card" style="--span:12">
-            <header class="card-head"><h2>2026-11-16 修复的三处调度卡点</h2></header>
-            <div class="cap-table-wrap">
-              <table class="cap-table">
-                <thead><tr><th>卡点与修复</th><th>修复前现象</th><th>日志特征</th></tr></thead>
-                <tbody>${fixRows}</tbody>
-              </table>
-            </div>
-          </article>
-        </div>
-      </section>
-
-      <!-- 04 观测 -->
-      <section class="cap-view" data-cap-panel="observability" aria-label="观测">
-        <div class="bento">
-          <article class="card" style="--span:12">
-            <header class="card-head"><h2>jq 排查配方</h2><span class="meta">耗时单位均为毫秒</span></header>
-            <ol class="cap-recipes">${recipeItems}</ol>
-          </article>
-
-          <article class="card" style="--span:12">
-            <header class="card-head"><h2>Runner 产物职责</h2></header>
-            <div class="cap-table-wrap">
-              <table class="cap-table">
-                <thead><tr><th style="width:24%">产物</th><th>回答什么</th><th style="width:28%">边界</th></tr></thead>
-                <tbody>${artRows}</tbody>
-              </table>
-            </div>
-          </article>
-
-          <article class="card" style="--span:12">
-            <header class="card-head"><h2>runtime.log 事件与字段</h2><span class="meta">每行一个 JSON，按 event 区分</span></header>
-            <div class="cap-table-wrap">
-              <table class="cap-table">
-                <thead><tr><th style="width:32%">字段</th><th>定义</th><th style="width:24%">排查用途</th></tr></thead>
-                <tbody>${fieldRows}</tbody>
-              </table>
-            </div>
-          </article>
-
-          <article class="card" style="--span:12">
-            <header class="card-head"><h2>抽样实测拆解</h2><span class="meta">${SAMPLE.date} · ${SAMPLE.cases} 条 · ${SAMPLE.model} · 并发 ${SAMPLE.concurrency} / 额度 ${SAMPLE.modelRequests}</span></header>
-            <div class="cap-figs" style="--cols:3">${sampleWallCells}</div>
-            <div class="cap-table-wrap" style="margin-top:var(--sp-4)">
-              <table class="cap-table">
-                <thead><tr><th>阶段</th><th class="num">次 / 批</th><th class="num">模型中位</th><th class="num">p90</th><th class="num">返工率</th><th class="num">缓存 token</th><th class="num">输出 token</th></tr></thead>
-                <tbody>${sampleStageRows}</tbody>
-              </table>
-            </div>
-            <div class="cap-split" style="margin-top:var(--sp-5)">
-              <div>
-                <div class="cap-subhead">最慢 Compact 字段（中位 / p90）</div>
-                <div class="cap-fieldbars">${slowBars}</div>
+          </div>
+          <div class="doc-sub">
+            <div class="doc-sub-head"><h3>目标速度反推并发流</h3>${copyBtnHTML("复制结果", { fn: "capTarget" })}</div>
+            <div class="cap-calc-card">
+              <div class="cap-controls">
+                <label class="cap-range"><span>目标速度 <b class="num"><span id="capTargetRateOut">300</span> 行/h</b></span><input id="capTargetRate" type="range" min="100" max="600" step="5" value="300"></label>
+                <label class="cap-range"><span>单条模型工时 <b class="num"><span id="capTargetWorkOut">1,200</span> s</b></span><input id="capTargetWork" type="range" min="400" max="2400" step="50" value="1200"></label>
               </div>
-              <div>
-                <div class="cap-subhead">返工原因（submissionCodes 合计）</div>
-                <div class="cap-table-wrap">
-                  <table class="cap-table">
-                    <thead><tr><th>代码</th><th>含义</th><th class="num">次数</th></tr></thead>
-                    <tbody>${codeRows}</tbody>
-                  </table>
+              <div class="cap-readout">
+                <div class="cap-ro-main"><span>需常驻在途请求</span><div><b class="num" id="capTargetStreams">100.0</b><em>条</em></div></div>
+                <div class="cap-ro-grid cap-ro-grid-2">
+                  <div><span>每 100 条流产出</span><b class="num"><span id="capTargetPer100">300</span> 行/h</b></div>
+                  <div><span>128 额度评估</span><b id="capTargetBadge" class="cap-verdict-num">128 够用</b></div>
                 </div>
               </div>
             </div>
-          </article>
+          </div>
+        </div>
+      </section>
 
-          <article class="card" style="--span:6">
-            <header class="card-head"><h2>核心术语</h2></header>
+      <section class="doc-sec" id="cap-obs" aria-label="观测与排查">
+        <div class="doc-sec-head"><span class="doc-idx num">05</span><h2>线上观测与排查手册</h2></div>
+        <p class="doc-lead">运行变慢、准入停滞或产出骤降时，按「整批摘要 → 分阶段延迟 → 返工与排队 → 失败网关」的顺序直接运行以下命令定位。</p>
+        <div class="doc-sub">
+          <div class="doc-sub-head"><h3>常用 jq 排查命令（耗时单位均为毫秒）</h3></div>
+          <ol class="cap-recipes">${recipeItems}</ol>
+        </div>
+        <div class="doc-sub">
+          <div class="doc-sub-head"><h3>Runner 产物职责</h3></div>
+          <div class="cap-table-wrap">
+            <table class="cap-table">
+              <thead><tr><th style="width:24%">产物</th><th>回答什么</th><th style="width:28%">边界</th></tr></thead>
+              <tbody>${artRows}</tbody>
+            </table>
+          </div>
+        </div>
+        <div class="doc-sub">
+          <div class="doc-sub-head"><h3>runtime.log 事件与字段</h3></div>
+          <div class="cap-table-wrap">
+            <table class="cap-table">
+              <thead><tr><th style="width:32%">字段</th><th>定义</th><th style="width:24%">排查用途</th></tr></thead>
+              <tbody>${fieldRows}</tbody>
+            </table>
+          </div>
+        </div>
+        <div class="doc-sub">
+          <div class="doc-sub-head"><h3>34 条抽样实测拆解（${SAMPLE.date} · ${SAMPLE.model} · ${SAMPLE.concurrency} 并发 / ${SAMPLE.modelRequests} 额度）</h3></div>
+          <div class="cap-figs" style="--cols:3">${sampleWallCells}</div>
+          <div class="cap-table-wrap">
+            <table class="cap-table">
+              <thead><tr><th>阶段</th><th class="num">次 / 批</th><th class="num">模型中位</th><th class="num">p90</th><th class="num">返工率</th><th class="num">缓存 token</th><th class="num">输出 token</th></tr></thead>
+              <tbody>${sampleStageRows}</tbody>
+            </table>
+          </div>
+          <div class="doc-split">
+            <div>
+              <h4 class="cap-subhead">最慢 Compact 字段（中位 / p90）</h4>
+              <div class="cap-fieldbars">${slowBars}</div>
+            </div>
+            <div>
+              <h4 class="cap-subhead">返工原因（submissionCodes 合计）</h4>
+              <div class="cap-table-wrap">
+                <table class="cap-table">
+                  <thead><tr><th>代码</th><th>含义</th><th class="num">次数</th></tr></thead>
+                  <tbody>${codeRows}</tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="doc-split">
+          <div class="doc-sub">
+            <div class="doc-sub-head"><h3>核心术语</h3></div>
             <div class="cap-table-wrap">
               <table class="cap-table">
                 <thead><tr><th style="width:30%">术语</th><th>定义</th></tr></thead>
                 <tbody>${metricRows}</tbody>
               </table>
             </div>
-          </article>
-
-          <article class="card" style="--span:6">
-            <header class="card-head"><h2>数据来源记录</h2></header>
+          </div>
+          <div class="doc-sub">
+            <div class="doc-sub-head"><h3>数据来源记录</h3></div>
             <div class="cap-srcs">${sourceRows}</div>
-          </article>
+          </div>
         </div>
       </section>
     </div>
@@ -673,20 +666,8 @@ function drawServiceChart(svgNode) {
 export function wireCapacityDoc(root) {
   bindTips(root);
   runCounters(root);
-
-  const showPanel = (name) => {
-    $$("[data-cap-panel]", root).forEach((p) => p.classList.toggle("is-active", p.dataset.capPanel === name));
-    $$("#capToc [data-cap-view]", root).forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.capView === name)));
-    if (name === "speed") {
-      drawLadderChart($("#capLadderChart", root));
-      drawServiceChart($("#capServiceChart", root));
-    }
-  };
-
-  $("#capToc", root)?.addEventListener("click", (e) => {
-    const btn = e.target.closest("[data-cap-view]");
-    if (btn) showPanel(btn.dataset.capView);
-  });
+  drawLadderChart($("#capLadderChart", root));
+  drawServiceChart($("#capServiceChart", root));
 
   // 批量规划器
   const rowsIn = $("#capPlanRows", root);
@@ -782,7 +763,7 @@ export function wireCapacityDoc(root) {
     const badge = $("#capTargetBadge", root);
     if (badge) {
       badge.textContent = streams <= 128 ? "128 够用" : streams <= 200 ? "需 200 额度" : "需 >200 额度";
-      badge.dataset.kind = streams <= 128 ? "measured" : streams <= 200 ? "derived" : "model";
+      badge.dataset.tone = streams <= 128 ? "ok" : "warn";
     }
   };
   tRateIn?.addEventListener("input", syncTarget);

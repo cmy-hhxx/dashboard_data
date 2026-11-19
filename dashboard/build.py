@@ -2363,10 +2363,14 @@ def taxonomy_out(taxonomy, used_patterns):
     patterns = {}
     for pid, p in taxonomy["patterns"].items():
         entry = {"name": p["name"], "plain": p["plain"], "tags": p["tags"]}
-        if pid in used_patterns:
-            entry.update({"def": p["def"], "include": p["include"], "exclude": p["exclude"]})
+        for field in ("def", "include", "exclude"):
+            if p.get(field):
+                entry[field] = p[field]
         patterns[pid] = entry
-    l2 = {k: {"name": v["name"], "mech": v["mech"]} for k, v in taxonomy["l2"].items()}
+    l2 = {
+        k: {"name": v["name"], "mech": v["mech"], **({"def": v["def"]} if v.get("def") else {})}
+        for k, v in taxonomy["l2"].items()
+    }
     return {
         "meta": taxonomy["meta"], "runs": taxonomy.get("runs", []), "phases": PHASES,
         "stages": stages, "mechanisms": mechs, "l2": l2, "patterns": patterns,

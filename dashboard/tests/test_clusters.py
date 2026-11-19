@@ -49,6 +49,8 @@ class ClusterTaxonomyTests(unittest.TestCase):
             payload = build.taxonomy_out(taxonomy, {"S1.M1.1.1"})
             entry = payload["patterns"]["S1.M1.1.1"]
             self.assertEqual((entry["name"], entry["def"]), ("子模式", "子模式 定义"))
+            self.assertEqual(payload["l2"]["S1.M1"]["def"], "机制 定义")
+            self.assertEqual(payload["patterns"]["S1.M1.1"]["def"], "模式 定义")
 
     def test_problem_index_item_is_indexed_without_json_path(self):
         with tempfile.TemporaryDirectory() as folder:
