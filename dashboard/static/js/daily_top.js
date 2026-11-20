@@ -243,6 +243,13 @@ export function buildDailyTopModel(trend, tax = {}) {
       return node.counts[di];
     };
 
+    const sparkOf = (node) => {
+      const from = Math.max(0, di - 6);
+      const pts = [];
+      for (let k = from; k <= di; k += 1) pts.push(node.counts[k] || 0);
+      return pts;
+    };
+
     // 1. Top 10 most frequent specific problems on day `di` (strictly descending by count, then delta)
     const appearSorted = [...nodes]
       .sort((a, b) => (
@@ -273,6 +280,7 @@ export function buildDailyTopModel(trend, tax = {}) {
         prevSevs: scaleSevs(node, prev),
         hits: node.hits[di],
         share: problems > 0 ? (100 * count) / problems : 0,
+        spark: sparkOf(node),
       };
     });
 
@@ -316,6 +324,7 @@ export function buildDailyTopModel(trend, tax = {}) {
         sevs: node.sevs[di],
         prevSevs: scaleSevs(node, prev),
         hits: node.hits[di],
+        spark: sparkOf(node),
       });
     };
 
@@ -478,14 +487,13 @@ function tipDaySevGridHTML(tCounts, pCounts, { interactive = false, activeSev = 
       const shareStr = `${fmt(shareNum, 1)}%`;
       const isSel = Boolean(activeSev && activeSev === meta.key);
       const inner = `<span class="mxd-tip-sev"><i style="--c:${meta.color}"></i><span>${esc(meta.label)}</span></span>
-        <span class="mxd-modal-bar" aria-hidden="true"><i style="width:${Math.min(100, shareNum).toFixed(1)}%;background:${meta.color}"></i></span>
         <b class="mxd-tip-pct num">${esc(shareStr)}</b>
         <span class="mxd-tip-tr num">${fmt(tVal)} Trace</span>
         <span class="mxd-tip-pr num">${fmt(pVal)} 问题</span>`;
       if (interactive) {
-        return `<button type="button" class="mxd-tip-line is-interactive${isSel ? " is-active" : ""}" data-daily-sev="${esc(meta.key)}" aria-pressed="${isSel}" style="--c:${meta.color}">${inner}</button>`;
+        return `<button type="button" class="mxd-tip-line is-interactive${isSel ? " is-active" : ""}" data-daily-sev="${esc(meta.key)}" aria-pressed="${isSel}" style="--c:${meta.color};--w:${Math.min(100, shareNum).toFixed(1)}%">${inner}</button>`;
       }
-      return `<div class="mxd-tip-line">${inner}</div>`;
+      return `<div class="mxd-tip-line" style="--c:${meta.color};--w:${Math.min(100, shareNum).toFixed(1)}%">${inner}</div>`;
     }).join("")}
   </div>`;
 }
@@ -590,7 +598,7 @@ export function resolveDailyTip(target) {
     const prvCounts = prevSevs ? parseCounts(prevSevs, 5) : curCounts;
     return `<div class="mxd-board-tip">
       <div class="t-head">${esc(stage)} · ${esc(name)}</div>
-      <div class="t-row"><span>今日出现</span><b class="num">${esc(count)} 次${share ? ` (${esc(share)})` : ""}</b></div>
+      <div class="t-row"><span>今日出现</span><b class="num is-key">${esc(count)} 次${share ? ` (${esc(share)})` : ""}</b></div>
       <div class="t-row"><span>前一日</span><b class="num">${esc(prev)} 次</b></div>
       <div class="t-row"><span>较前日变化</span><b class="num ${moveCls}">${esc(move)}</b></div>
       ${tipBoardSevStripHTML(prvCounts, curCounts)}
@@ -606,7 +614,7 @@ export function resolveDailyTip(target) {
     return `<div class="mxd-board-tip">
       <div class="t-head">${esc(stage)} · ${esc(name)}</div>
       <div class="t-row"><span>前一日</span><b class="num">${esc(prev)} 次</b></div>
-      <div class="t-row"><span>今日出现</span><b class="num">${esc(count)} 次</b></div>
+      <div class="t-row"><span>今日出现</span><b class="num is-key">${esc(count)} 次</b></div>
       <div class="t-row"><span>较前日下降</span><b class="num is-down">${esc(minusDrop)}${cleanPct ? ` (-${esc(cleanPct)})` : ""}</b></div>
       ${tipBoardSevStripHTML(prvCounts, curCounts)}
       ${plain ? `<div class="t-note">${esc(plain)}</div>` : ""}
@@ -615,40 +623,59 @@ export function resolveDailyTip(target) {
   return null;
 }
 
+function sparkSVG(pts, toneCls) {
+  const list = Array.isArray(pts) && pts.length ? pts : [0];
+  const W = 52;
+  const H = 18;
+  const padX = 2.5;
+  const padY = 3;
+  const min = Math.min(...list);
+  const max = Math.max(...list);
+  const span = max - min;
+  const coords = list.map((v, i) => {
+    const x = list.length === 1 ? W - padX : padX + (i * (W - padX * 2)) / (list.length - 1);
+    const norm = span > 0 ? (v - min) / span : 0.5;
+    const y = H - padY - norm * (H - padY * 2);
+    return [x, y];
+  });
+  const poly = coords.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  const last = coords[coords.length - 1];
+  return `<span class="mxd-spark ${toneCls}" aria-hidden="true"><svg viewBox="0 0 ${W} ${H}" fill="none">${coords.length > 1 ? `<polyline points="${poly}"/>` : ""}<circle cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="2.1"/></svg></span>`;
+}
+
 export function dailyTopBoardsHTML(day) {
   if (!day) return "";
   const maxAppear = Math.max(1, ...day.topAppear.map((x) => x.count));
   const maxDrop = Math.max(1, ...day.topDrop.map((x) => Math.abs(x.delta)));
 
   const appearRows = day.topAppear.map((item, i) => {
-    const w = item.count > 0 ? Math.max(3, (100 * item.count) / maxAppear) : 0;
-    const wP01 = item.p01 > 0 ? Math.max(2, (100 * item.p01) / maxAppear) : 0;
+    const w = item.count > 0 ? Math.max(6, (100 * item.count) / maxAppear) : 0;
     const deltaCls = item.delta > 0 ? "is-up" : item.delta < 0 ? "is-down" : "is-flat";
     const sevsStr = (item.sevs || []).join(",");
     const prevSevsStr = (item.prevSevs || []).join(",");
     const shareStr = `${fmt(item.share, 1)}%`;
-    return `<button type="button" class="mxd-row is-top" data-daily-code="${esc(item.code)}" data-daily-name="${esc(item.name)}" data-tip="1" data-mxd-tip-kind="top" data-name="${esc(item.name)}" data-stage="${esc(item.stageName)}" data-prev="${esc(fmt(item.prev))}" data-count="${esc(fmt(item.count))}" data-delta="${esc(String(item.delta))}" data-p01="${esc(fmt(item.p01))}" data-share="${esc(shareStr)}" data-sevs="${esc(sevsStr)}" data-prev-sevs="${esc(prevSevsStr)}" data-plain="${esc(item.plain || "")}">
+    return `<button type="button" class="mxd-row is-top" style="--w:${w.toFixed(1)}%" data-daily-code="${esc(item.code)}" data-daily-name="${esc(item.name)}" data-tip="1" data-mxd-tip-kind="top" data-name="${esc(item.name)}" data-stage="${esc(item.stageName)}" data-prev="${esc(fmt(item.prev))}" data-count="${esc(fmt(item.count))}" data-delta="${esc(String(item.delta))}" data-p01="${esc(fmt(item.p01))}" data-share="${esc(shareStr)}" data-sevs="${esc(sevsStr)}" data-prev-sevs="${esc(prevSevsStr)}" data-plain="${esc(item.plain || "")}">
       <span class="mxd-rank num">${String(i + 1).padStart(2, "0")}</span>
       <span class="mxd-stage">${esc(item.stageName)}</span>
       <span class="mxd-name">${esc(item.name)}</span>
-      <span class="mxd-bar is-top" aria-hidden="true"><i class="mxd-bar-fill" style="width:${w.toFixed(1)}%"></i>${wP01 > 0 ? `<i class="mxd-bar-p01" style="width:${Math.min(w, wP01).toFixed(1)}%"></i>` : ""}</span>
-      <b class="mxd-count num">${fmt(item.count)}</b>
-      <span class="mxd-delta num ${deltaCls}">${signed(item.delta)}</span>
+      ${sparkSVG(item.spark, deltaCls === "is-down" ? "is-down" : "is-up")}
+      <span class="mxd-pair num"><span class="is-from">${pairNum(item.prev)}</span><i aria-hidden="true">→</i><b class="is-to">${pairNum(item.count)}</b></span>
+      <b class="mxd-delta num ${deltaCls}">${signed(item.delta)}</b>
     </button>`;
   }).join("");
 
   const dropRows = day.topDrop.map((item, i) => {
-    const w = item.delta !== 0 ? Math.max(3, (100 * Math.abs(item.delta)) / maxDrop) : 0;
+    const w = item.delta !== 0 ? Math.max(6, (100 * Math.abs(item.delta)) / maxDrop) : 0;
     const deltaCls = item.delta < 0 ? "is-down" : item.delta > 0 ? "is-up" : "is-flat";
     const sevsStr = (item.sevs || []).join(",");
     const prevSevsStr = (item.prevSevs || []).join(",");
     const dropPctStr = `${fmt(item.dropPct, 0)}%`;
-    return `<button type="button" class="mxd-row is-drop" data-daily-code="${esc(item.code)}" data-daily-name="${esc(item.name)}" data-tip="1" data-mxd-tip-kind="drop" data-name="${esc(item.name)}" data-stage="${esc(item.stageName)}" data-prev="${esc(fmt(item.prev))}" data-count="${esc(fmt(item.count))}" data-drop="${esc(fmt(Math.abs(item.delta)))}" data-drop-pct="${esc(dropPctStr)}" data-sevs="${esc(sevsStr)}" data-prev-sevs="${esc(prevSevsStr)}" data-plain="${esc(item.plain || "")}">
+    return `<button type="button" class="mxd-row is-drop" style="--w:${w.toFixed(1)}%" data-daily-code="${esc(item.code)}" data-daily-name="${esc(item.name)}" data-tip="1" data-mxd-tip-kind="drop" data-name="${esc(item.name)}" data-stage="${esc(item.stageName)}" data-prev="${esc(fmt(item.prev))}" data-count="${esc(fmt(item.count))}" data-drop="${esc(fmt(Math.abs(item.delta)))}" data-drop-pct="${esc(dropPctStr)}" data-sevs="${esc(sevsStr)}" data-prev-sevs="${esc(prevSevsStr)}" data-plain="${esc(item.plain || "")}">
       <span class="mxd-rank num">${String(i + 1).padStart(2, "0")}</span>
       <span class="mxd-stage">${esc(item.stageName)}</span>
       <span class="mxd-name">${esc(item.name)}</span>
-      <span class="mxd-bar is-drop" aria-hidden="true"><i class="mxd-bar-fill" style="width:${w.toFixed(1)}%"></i></span>
-      <span class="mxd-pair num"><span class="is-from">${pairNum(item.prev)}</span><i aria-hidden="true">→</i><span class="is-to">${pairNum(item.count)}</span></span>
+      ${sparkSVG(item.spark, "is-down")}
+      <span class="mxd-pair num"><span class="is-from">${pairNum(item.prev)}</span><i aria-hidden="true">→</i><b class="is-to">${pairNum(item.count)}</b></span>
       <b class="mxd-delta num ${deltaCls}">${signed(item.delta)}</b>
     </button>`;
   }).join("");
@@ -680,7 +707,24 @@ function cellHeatValue(model, day, metric) {
   return day.problems > 0 ? 0.05 + 0.90 * (r ** 0.78) : 0;
 }
 
-function heatGridHTML(model, activeDate, pageIndex, metric = "problems", activeMonth = "") {
+const WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"];
+
+function heatHeadHTML(metric = "problems") {
+  const metricSeg = `<div class="seg mxd-dir-seg mxd-metric-seg" role="group" aria-label="热力图口径">
+    <button type="button" data-daily-metric="problems" aria-pressed="${metric === "problems"}">问题数</button>
+    <button type="button" data-daily-metric="traces" aria-pressed="${metric === "traces"}">Trace 数</button>
+    <button type="button" data-daily-metric="ratio" aria-pressed="${metric === "ratio"}">问题 / Trace</button>
+  </div>`;
+  return `<div class="mxd-head">
+      <div class="mxd-heat-controls">${metricSeg}</div>
+      <button type="button" class="mxd-flip-btn" data-daily-flip="line" aria-label="翻转查看问题折线走势">
+        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 11.5l3.8-4 2.8 2.4L14 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M11 4.5h3v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>问题走势</span>
+      </button>
+    </div>`;
+}
+
+function calendarCardHTML(model, activeDate, pageIndex, metric = "problems", activeMonth = "") {
   const pageCount = model.pages.length;
   const page = Math.max(0, Math.min(pageCount - 1, pageIndex));
   const baseSlice = model.pages[page] || model.days;
@@ -690,28 +734,31 @@ function heatGridHTML(model, activeDate, pageIndex, metric = "problems", activeM
   const slice = matchedPageIdx >= 0
     ? model.pages[matchedPageIdx]
     : buildCalendarMonthSlice(monthLabel, model.byDate);
-  const firstDate = slice[0]?.date.slice(5) || "";
-  const lastDate = slice[slice.length - 1]?.date.slice(5) || "";
 
-  // Full calendar month laid out across 3 uniform rows (10 cols for 28–30 days, 11 cols for 31 days).
-  const cols = slice.length > HEAT_COLS * HEAT_ROWS ? 11 : HEAT_COLS;
-  const totalSlots = Math.max(cols, Math.ceil(slice.length / cols) * cols);
+  // Apple Calendar alignment: Monday = 0 ... Sunday = 6
+  const [yy, mm] = monthLabel.split("-").map(Number);
+  const firstDow = Number.isFinite(yy) && Number.isFinite(mm)
+    ? (new Date(Date.UTC(yy, mm - 1, 1)).getUTCDay() + 6) % 7
+    : 0;
   const cells = [];
-  for (let i = 0; i < totalSlots; i += 1) {
-    const day = slice[i];
-    if (!day) {
-      cells.push(`<span class="mxd-day is-void" aria-hidden="true"></span>`);
-      continue;
-    }
+  for (let i = 0; i < firstDow; i += 1) {
+    cells.push(`<span class="mxd-day is-void" aria-hidden="true"></span>`);
+  }
+  for (const day of slice) {
+    const dayNum = String(Number(day.date.slice(8)));
     if (day.hasData === false) {
-      cells.push(`<span class="mxd-day is-empty" aria-label="${esc(`${day.date} 暂无评测数据`)}"><span class="mxd-day-date num">${esc(day.date.slice(5))}</span></span>`);
+      cells.push(`<span class="mxd-day is-empty" aria-label="${esc(`${day.date} 暂无评测数据`)}"><span class="mxd-day-date num">${esc(dayNum)}</span></span>`);
       continue;
     }
     const active = day.date === activeDate;
     const v = cellHeatValue(model, day, metric);
-    cells.push(`<button type="button" class="mxd-day${active ? " is-active" : ""}${v > 0.52 ? " hot" : ""}" data-daily-day="${esc(day.date)}" aria-pressed="${active}" style="--v:${v.toFixed(3)}">
-      <span class="mxd-day-date num">${esc(day.date.slice(5))}</span>
+    cells.push(`<button type="button" class="mxd-day${active ? " is-active" : ""}${v > 0.52 ? " hot" : ""}" data-daily-day="${esc(day.date)}" aria-pressed="${active}" aria-label="${esc(day.date)}" style="--v:${v.toFixed(3)}">
+      <span class="mxd-day-date num">${esc(dayNum)}</span>
     </button>`);
+  }
+  const trailing = (7 - (cells.length % 7)) % 7;
+  for (let i = 0; i < trailing; i += 1) {
+    cells.push(`<span class="mxd-day is-void" aria-hidden="true"></span>`);
   }
 
   const latestYm = model.pages[pageCount - 1]?.[0]?.date.slice(0, 7) || baseYm;
@@ -721,31 +768,19 @@ function heatGridHTML(model, activeDate, pageIndex, metric = "problems", activeM
   const nextPage = matchedPageIdx >= 0 && matchedPageIdx < pageCount - 1 ? matchedPageIdx + 1 : pageCount - 1;
   const atEarliest = monthLabel <= "2020-01";
   const atLatest = monthLabel >= latestYm;
-  const spanText = monthLabel ? `${monthLabel} (${firstDate} ~ ${lastDate})` : `${firstDate} ~ ${lastDate}`;
-  const idxBadge = pageCount > 1 && matchedPageIdx >= 0
-    ? `<span class="mxd-page-idx num">${matchedPageIdx + 1} / ${pageCount}</span>`
-    : "";
-  const pager = `<div class="mxd-pager" role="group" aria-label="月份切换">
-      <button type="button" class="mxd-page-btn" data-daily-month="${esc(prevYm)}" data-daily-page="${prevPage}" aria-label="上一个月"${atEarliest ? " disabled" : ""}>${CHEVRON_LEFT_SVG}</button>
-      <span class="mxd-page-span num">${esc(spanText)}</span>
-      ${idxBadge}
-      <button type="button" class="mxd-page-btn" data-daily-month="${esc(nextYm)}" data-daily-page="${nextPage}" aria-label="下一个月"${atLatest ? " disabled" : ""}>${CHEVRON_RIGHT_SVG}</button>
+  const titleText = Number.isFinite(yy) && Number.isFinite(mm) ? `${yy} 年 ${mm} 月` : monthLabel;
+
+  return `<div class="mxd-cal">
+      <div class="mxd-cal-bar">
+        <span class="mxd-cal-title num">${esc(titleText)}</span>
+        <div class="mxd-pager" role="group" aria-label="月份切换">
+          <button type="button" class="mxd-page-btn" data-daily-month="${esc(prevYm)}" data-daily-page="${prevPage}" aria-label="上一个月"${atEarliest ? " disabled" : ""}>${CHEVRON_LEFT_SVG}</button>
+          <button type="button" class="mxd-page-btn" data-daily-month="${esc(nextYm)}" data-daily-page="${nextPage}" aria-label="下一个月"${atLatest ? " disabled" : ""}>${CHEVRON_RIGHT_SVG}</button>
+        </div>
+      </div>
+      <div class="mxd-cal-week" aria-hidden="true">${WEEKDAYS.map((w) => `<span>${w}</span>`).join("")}</div>
+      <div class="mxd-heat" role="group" aria-label="日期热力图">${cells.join("")}</div>
     </div>`;
-
-  const metricSeg = `<div class="seg mxd-dir-seg mxd-metric-seg" role="group" aria-label="热力图口径">
-    <button type="button" data-daily-metric="problems" aria-pressed="${metric === "problems"}">问题数</button>
-    <button type="button" data-daily-metric="traces" aria-pressed="${metric === "traces"}">Trace 数</button>
-    <button type="button" data-daily-metric="ratio" aria-pressed="${metric === "ratio"}">问题 / Trace</button>
-  </div>`;
-
-  return `<div class="mxd-head">
-      <div class="mxd-heat-controls">${metricSeg}${pager}</div>
-      <button type="button" class="mxd-flip-btn" data-daily-flip="line" aria-label="翻转查看问题折线走势">
-        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 11.5l3.8-4 2.8 2.4L14 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M11 4.5h3v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <span>问题走势</span>
-      </button>
-    </div>
-    <div class="mxd-heat" role="group" aria-label="日期热力图" style="--heat-cols:${cols}">${cells.join("")}</div>`;
 }
 
 function lineCandidatesFor(day, dir) {
@@ -807,11 +842,18 @@ export function dailyTopHTML(model, selectedDate = "", options = {}) {
 
   return `<div class="mxd">
     <div class="mxd-top${flipped ? " is-line" : ""}" id="mxdTop">
-      <div class="mxd-face mxd-face-heat" id="mxdHeatFace"${flipped ? " hidden" : ""}>${heatGridHTML(model, activeDay.date, page, metric, activeMonth)}</div>
+      <div class="mxd-face mxd-face-heat" id="mxdHeatFace"${flipped ? " hidden" : ""}>
+        <div id="mxdHeatHead">${heatHeadHTML(metric)}</div>
+        <div class="mxd-tri">
+          <div class="mxd-cal-stage${modalDay ? " is-flipped" : ""}" id="mxdCalStage">
+            <div class="mxd-cal-face mxd-cal-front" id="mxdCalFront">${calendarCardHTML(model, activeDay.date, page, metric, activeMonth)}</div>
+            <div class="mxd-cal-face mxd-cal-back mxd-modal-slot" id="mxdModalSlot">${modalDay ? dayModalHTML(modalDay, modalSev) : ""}</div>
+          </div>
+          <div class="mxd-boards" id="mxdBoards">${dailyTopBoardsHTML(activeDay)}</div>
+        </div>
+      </div>
       <div class="mxd-face mxd-face-line" id="mxdLineFace"${flipped ? "" : " hidden"}>${lineFaceHTML(activeDay, dir, disabledSet, zoomUnlocked)}</div>
     </div>
-    <div class="mxd-modal-slot" id="mxdModalSlot">${modalDay ? dayModalHTML(modalDay, modalSev) : ""}</div>
-    <div class="mxd-boards" id="mxdBoards">${dailyTopBoardsHTML(activeDay)}</div>
   </div>`;
 }
 
@@ -859,6 +901,11 @@ export function mountDailyTop(host, trend, tax, state = {}, actions = {}) {
     modalSev: state.dailyModalSev,
   });
 
+  const repaintCalendar = () => {
+    const calFront = host.querySelector("#mxdCalFront");
+    if (calFront) calFront.innerHTML = calendarCardHTML(model, state.dailyDay, state.dailyPage, state.dailyMetric, state.dailyMonth);
+  };
+
   const setModalDate = (date) => {
     const nextDate = date && model.byDate.has(date) ? date : null;
     if (nextDate !== state.dailyModalDate) state.dailyModalSev = "";
@@ -869,6 +916,7 @@ export function mountDailyTop(host, trend, tax, state = {}, actions = {}) {
         ? dayModalHTML(model.byDate.get(state.dailyModalDate), state.dailyModalSev)
         : "";
     }
+    host.querySelector("#mxdCalStage")?.classList?.toggle("is-flipped", Boolean(state.dailyModalDate));
   };
 
   if (typeof document !== "undefined") {
@@ -932,17 +980,16 @@ export function mountDailyTop(host, trend, tax, state = {}, actions = {}) {
       },
       releases: model.releases,
       volume: model.dates.map((time, di) => ({ time, value: model.traces[di] || 0 })),
-      topAlpha: 0.03,
+      topAlpha: 0.08,
       bottomAlpha: 0,
       wheelZoom: () => !!state.dailyZoom,
-      height: 186,
+      height: 310,
       onPick: ({ time }) => {
         if (!time || !model.byDate.has(time) || time === state.dailyDay) return;
         state.dailyDay = time;
         state.dailyPage = heatPageForDate(model.pages, time);
         state.dailyMonth = time.slice(0, 7);
-        const heatFace = host.querySelector("#mxdHeatFace");
-        if (heatFace) heatFace.innerHTML = heatGridHTML(model, state.dailyDay, state.dailyPage, state.dailyMetric, state.dailyMonth);
+        repaintCalendar();
         const boards = host.querySelector("#mxdBoards");
         if (boards) boards.innerHTML = dailyTopBoardsHTML(model.byDate.get(time));
       },
@@ -973,7 +1020,9 @@ export function mountDailyTop(host, trend, tax, state = {}, actions = {}) {
       } else {
         host._mxdChart?.destroy();
         host._mxdChart = null;
-        heatFace.innerHTML = heatGridHTML(model, state.dailyDay, state.dailyPage, state.dailyMetric, state.dailyMonth);
+        const headEl = host.querySelector("#mxdHeatHead");
+        if (headEl) headEl.innerHTML = heatHeadHTML(state.dailyMetric);
+        repaintCalendar();
       }
     };
     if (REDUCED || typeof topEl.animate !== "function") {
@@ -1023,8 +1072,7 @@ export function mountDailyTop(host, trend, tax, state = {}, actions = {}) {
       if (targetPage !== state.dailyPage || targetMonth !== state.dailyMonth) {
         state.dailyPage = targetPage;
         state.dailyMonth = targetMonth;
-        const heatFace = host.querySelector("#mxdHeatFace");
-        if (heatFace) heatFace.innerHTML = heatGridHTML(model, state.dailyDay, state.dailyPage, state.dailyMetric, state.dailyMonth);
+        repaintCalendar();
       } else {
         host.querySelectorAll("[data-daily-day]").forEach((btn) => {
           const on = btn.dataset.dailyDay === nextDate;
@@ -1091,8 +1139,9 @@ export function mountDailyTop(host, trend, tax, state = {}, actions = {}) {
       const nextMetric = metricBtn.dataset.dailyMetric;
       if (!["problems", "traces", "ratio"].includes(nextMetric) || nextMetric === state.dailyMetric) return;
       state.dailyMetric = nextMetric;
-      const heatFace = host.querySelector("#mxdHeatFace");
-      if (heatFace) heatFace.innerHTML = heatGridHTML(model, state.dailyDay, state.dailyPage, state.dailyMetric, state.dailyMonth);
+      const headEl = host.querySelector("#mxdHeatHead");
+      if (headEl) headEl.innerHTML = heatHeadHTML(state.dailyMetric);
+      repaintCalendar();
       return;
     }
     const pageBtn = e.target.closest("[data-daily-month], [data-daily-page]");
@@ -1110,8 +1159,7 @@ export function mountDailyTop(host, trend, tax, state = {}, actions = {}) {
         state.dailyPage = nextPage;
         state.dailyMonth = model.pages[nextPage]?.[0]?.date.slice(0, 7) || state.dailyMonth;
       }
-      const heatFace = host.querySelector("#mxdHeatFace");
-      if (heatFace) heatFace.innerHTML = heatGridHTML(model, state.dailyDay, state.dailyPage, state.dailyMetric, state.dailyMonth);
+      repaintCalendar();
       return;
     }
     const zoomBtn = e.target.closest("[data-daily-zoom]");

@@ -136,7 +136,7 @@
   padding: var(--py-lg) calc(var(--col-pad) + 8px) 14px;
 }
 .sample-head h2 {
-  display: block; min-width: 0; font-size: 17px; font-weight: var(--w-title); line-height: 1.5; letter-spacing: -0.005em;
+  display: block; min-width: 0; font-size: var(--fs-title); font-weight: var(--w-title); line-height: 1.5; letter-spacing: -0.005em;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .headline { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-width: 0; }   /* 一行放不下时 ID 行整体换行，不撑出横向滚动 */
@@ -552,7 +552,7 @@
 .filters .fc-sel select:last-child:nth-child(odd) { grid-column: 1 / -1; }
 .filters .fc-sel select.is-on { background: var(--active); color: var(--ink); }
 .vchips { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: 6px; }
-.vchip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; line-height: 1; padding: 3px 7px; border-radius: 999px;
+.vchip { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-micro); line-height: 1; padding: 3px 7px; border-radius: 999px;
   color: var(--ink-2, var(--ink)); background: color-mix(in oklab, var(--c) 12%, var(--card)); border: 1px solid transparent; }
 .vchip i { width: 6px; height: 6px; border-radius: 50%; background: var(--c); }
 .vchip.is-off { opacity: 0.4; }

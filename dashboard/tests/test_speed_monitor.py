@@ -249,6 +249,50 @@ class SpeedMonitorTests(unittest.TestCase):
             httpd.shutdown()
             httpd.server_close()
 
+    def test_48h_history_persistence_and_downtime_part_reseed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            cache_dir = root / "cache"
+            persist_file = root / "datasets" / "speed_stats.json"
+            cache_dir.mkdir(parents=True)
+            persist_file.parent.mkdir(parents=True)
+            now = time.time()
+            # Keep 47h points, drop 49h points; simulate a 10-minute downtime gap in saved_at
+            sample = {
+                "version": 6,
+                "history": [
+                    {"t": now - 49 * 3600, "a": 100, "c": 100, "k": 100},
+                    {"t": now - 47 * 3600, "a": 200, "c": 200, "k": 200},
+                    {"t": now - 600, "a": 300, "c": 300, "k": 300},
+                ],
+                "rpm_history": [
+                    {"t": now - 49 * 3600, "rpm": 10.0, "pa": 1.0, "pc": 1.0},
+                    {"t": now - 47 * 3600, "rpm": 240.0, "pa": 6.0, "pc": 8.0},
+                ],
+                "queue_history": [
+                    {"t": now - 49 * 3600, "done": 1},
+                    {"t": now - 30 * 3600, "done": 12},
+                ],
+                "part_files": {"stale.jsonl": {"size": 100}},
+                "parts_seeded": True,
+                "parts_seeded_at": now - 900,
+                "part_events": [{"t": now - 600, "a": 5, "c": 5, "r": 50}],
+                "saved_at": now - 600,
+            }
+            persist_file.write_text(json.dumps(sample), encoding="utf-8")
+            # Corrupt the primary cache file to verify fallback to persistent mirror
+            (cache_dir / "speed_stats.json").write_text("{corrupt", encoding="utf-8")
+
+            speed_monitor.reset_for_test(cache_dir=cache_dir)
+            self.assertFalse(speed_monitor._load_stats(cache_dir / "speed_stats.json"))
+            self.assertTrue(speed_monitor._load_stats(persist_file))
+            self.assertEqual(len(speed_monitor._STATE["history"]), 2)
+            self.assertEqual(len(speed_monitor._STATE["rpm_history"]), 1)
+            self.assertEqual(len(speed_monitor._STATE["queue_history"]), 1)
+            # Downtime > 90s must reset parts baseline to prevent post-restart RPM spike
+            self.assertFalse(speed_monitor._STATE["parts_seeded"])
+            self.assertEqual(speed_monitor._STATE["part_files"], {})
+
 
 if __name__ == "__main__":
     unittest.main()

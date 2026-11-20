@@ -74,10 +74,10 @@
   position: relative; width: 168px; height: 168px; border-radius: 50%; display: grid; place-items: center;
   background: radial-gradient(circle, color-mix(in oklab, var(--ink) 5%, transparent) 0 52%, transparent 71%);
 }
-.fx-ring { position: absolute; inset: 0; width: 100%; height: 100%; transition: transform 720ms cubic-bezier(0.22, 1, 0.36, 1); }
+.fx-ring { position: absolute; inset: 0; width: 100%; height: 100%; transition: transform 960ms cubic-bezier(0.22, 1, 0.36, 1); }
 .fx-ring line { stroke: var(--t4); stroke-width: 2; stroke-linecap: round; }
 .fx-ring line.c { stroke: var(--c); stroke-width: 2.6; }
-.fx-orbit { position: absolute; inset: 26px; border-radius: 50%; border: 1px dashed var(--t4); animation: fx-spin 9s linear infinite; pointer-events: none; }
+.fx-orbit { position: absolute; inset: 26px; border-radius: 50%; border: 1px dashed var(--t4); animation: fx-spin 14s linear infinite; pointer-events: none; }
 .fx-orbit i { position: absolute; top: -3.5px; left: calc(50% - 3.5px); width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
 .fx-core {
   position: relative; z-index: 1; width: 80px; height: 80px; border-radius: 22px; display: grid; place-items: center; background: var(--lift);
@@ -182,7 +182,7 @@
 .fx-pool.has-pending .fx-pool-fill::after { opacity: 1; }
 .fx-pool-lbl { position: relative; z-index: 1; font-size: var(--fs-meta); color: var(--muted); font-weight: var(--w-medium); }
 .fx-pool-num {
-  position: relative; z-index: 1; font-size: 16.5px; line-height: 1.1;
+  position: relative; z-index: 1; font-size: var(--fs-title); line-height: 1.1;
   font-weight: var(--w-title); color: var(--ink); font-variant-numeric: tabular-nums;
   transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1), color 200ms;
 }
@@ -204,7 +204,7 @@
   animation: fx-pool-danmu-float 1900ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 .fx-pool-danmu.is-burst {
-  font-size: 11.5px; padding: 2px 8px;
+  font-size: var(--fs-meta); padding: 2px 8px;
   animation-duration: 2350ms;
 }
 @keyframes fx-pool-danmu-float {
@@ -220,7 +220,7 @@
   animation: fx-svg-danmu 1100ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 .fx-live-danmu.is-burst {
-  font-size: 13.5px; fill: var(--accent);
+  font-size: var(--fs-body); fill: var(--accent);
   animation-duration: 1700ms;
 }
 @keyframes fx-svg-danmu {
@@ -232,7 +232,7 @@
 .fx-pool-tag {
   position: relative; z-index: 1; margin-top: 4px; padding: 2px 7px; border-radius: 999px;
   background: color-mix(in oklab, var(--ink) 6%, transparent);
-  font-size: 10px; line-height: 1.3; color: var(--muted); white-space: nowrap;
+  font-size: var(--fs-micro); line-height: 1.3; color: var(--muted); white-space: nowrap;
 }
 .fx-pool.is-on {
   box-shadow: 0 0 0 1.5px var(--accent), var(--shadow-pop);
@@ -254,17 +254,17 @@
 .fx-diagram.is-horiz .fx-tree-wrap { padding: var(--sp-1) 0; align-items: center; }
 .fx-diagram.is-horiz .fx-tree { width: 100%; max-width: none; min-width: 720px; }
 .fx-diagram.is-horiz .fx-tn.is-root .fx-root-shift { transition: transform 420ms cubic-bezier(0.22, 1, 0.36, 1); }
-.fx-tree.is-horiz .fx-tn-k { font-size: 11.5px; fill: var(--muted); }
-.fx-tree.is-horiz .fx-tn.is-vroot .fx-tn-big { font-size: 16.5px; }
-.fx-tree.is-horiz .fx-tn-sub { font-size: 10px; fill: var(--muted); font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.fx-tree.is-horiz .fx-tn-k { font-size: var(--fs-meta); fill: var(--muted); }
+.fx-tree.is-horiz .fx-tn.is-vroot .fx-tn-big { font-size: var(--fs-title); }
+.fx-tree.is-horiz .fx-tn-sub { font-size: var(--fs-micro); fill: var(--muted); font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .fx-tree.is-horiz .fx-tn.is-phase .fx-tn-name,
 .fx-tree.is-horiz .fx-tn.is-phase .fx-tn-num,
-.fx-tree.is-horiz .fx-tn.is-stage .fx-tn-name { font-size: 12.5px; }
-.fx-tree.is-horiz .fx-tn.is-stage .fx-tn-num { font-size: 11.5px; }
+.fx-tree.is-horiz .fx-tn.is-stage .fx-tn-name { font-size: var(--fs-small); }
+.fx-tree.is-horiz .fx-tn.is-stage .fx-tn-num { font-size: var(--fs-meta); }
 .fx-tree.is-horiz .fx-tn.is-cell.is-circle circle {
   fill: color-mix(in oklab, var(--accent) calc(4% + var(--h, 0) * 16%), var(--well));
 }
-.fx-tree.is-horiz .fx-tn.is-cell.is-circle .fx-tn-code { font-size: 9.5px; }
+.fx-tree.is-horiz .fx-tn.is-cell.is-circle .fx-tn-code { font-size: var(--fs-micro); }
 .fx-tree.is-horiz .fx-link.r4 { stroke-width: 0.9; stroke: color-mix(in oklab, var(--ink) 9%, var(--card)); }
 .fx-tree.is-horiz .fx-link.r4.is-lit,
 .fx-tree.is-horiz .fx-link.r4.is-hl { stroke: var(--accent); stroke-width: 2.1; }
@@ -473,13 +473,13 @@
   .fx-tn.is-root .fx-wave-back, .fx-tn.is-root .fx-wave-mid, .fx-tn.is-root .fx-wave-front-wrap, .fx-tn.is-root .fx-bubble, .fx-tn.is-root .fx-root-sweep,
   .fx-tn.is-root .fx-ant-active { animation: none; }
 }
-.fx-tn-k { font-size: 13px; fill: var(--muted); font-weight: var(--w-medium); }
-.fx-tn-big { font-size: 16px; fill: var(--ink); font-weight: var(--w-title); font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.fx-tn-k { font-size: var(--fs-small); fill: var(--muted); font-weight: var(--w-medium); }
+.fx-tn-big { font-size: var(--fs-title); fill: var(--ink); font-weight: var(--w-title); font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
 .fx-tn.is-phase rect { fill: var(--well); stroke: color-mix(in oklab, var(--ink) 8%, transparent); stroke-width: 1; transition: stroke 180ms, fill 180ms; }
 .fx-tn.is-phase.is-on rect, .fx-tn.is-phase.is-hl rect { fill: color-mix(in oklab, var(--accent) 10%, var(--lift)); stroke: var(--accent); }
-.fx-tn-name { font-size: 12px; fill: var(--ink-2); font-weight: var(--w-medium); }
-.fx-tn-num { font-size: 12px; fill: var(--ink); font-weight: var(--w-title); font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.fx-tn-name { font-size: var(--fs-meta); fill: var(--ink-2); font-weight: var(--w-medium); }
+.fx-tn-num { font-size: var(--fs-meta); fill: var(--ink); font-weight: var(--w-title); font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
 .fx-tn.is-stage rect { fill: var(--lift); stroke: color-mix(in oklab, var(--ink) 10%, transparent); stroke-width: 1; transition: stroke 180ms, fill 180ms; }
 .fx-tn.is-stage:hover rect, .fx-tn.is-stage.is-hl rect, .fx-tn.is-stage.is-sel rect {
@@ -487,7 +487,7 @@
 }
 .fx-tn.is-stage.is-on rect { stroke: var(--accent); }
 .fx-tn.is-stage .fx-tn-name { fill: var(--ink); }
-.fx-tn.is-stage .fx-tn-num { font-size: 11px; fill: var(--muted); }
+.fx-tn.is-stage .fx-tn-num { font-size: var(--fs-micro); fill: var(--muted); }
 
 .fx-tn.is-cell rect, .fx-tn.is-cell circle {
   fill: var(--well); stroke: color-mix(in oklab, var(--ink) 11%, transparent); stroke-width: 1; transition: stroke 180ms, fill 180ms;
@@ -500,7 +500,7 @@
   fill: color-mix(in oklab, var(--accent) 12%, var(--lift)); stroke: var(--accent); stroke-width: 1.4;
 }
 .fx-tn-code { font: var(--w-medium) 9px var(--mono); fill: var(--ink-2); pointer-events: none; }
-.fx-tn.is-cell.is-circle .fx-tn-code { font-size: 8.5px; }
+.fx-tn.is-cell.is-circle .fx-tn-code { font-size: var(--fs-micro); }
 .fx-tn-cnum { font: 9px var(--mono); fill: var(--muted); pointer-events: none; }
 
 .fx-tn.is-leaf circle:first-child {
@@ -523,7 +523,7 @@
 .fx-toast { pointer-events: none; animation: fx-toast-life 2400ms cubic-bezier(0.22, 1, 0.36, 1) forwards; }
 .fx-toast-stem { stroke: var(--loc-ulq); stroke-width: 1.3; stroke-dasharray: 3 3; opacity: 0.72; }
 .fx-toast rect { fill: var(--lift); stroke: var(--loc-ulq); stroke-width: 1.25; filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.12)); }
-.fx-toast text { font-size: 11px; fill: var(--ink); font-weight: var(--w-medium); }
+.fx-toast text { font-size: var(--fs-micro); fill: var(--ink); font-weight: var(--w-medium); }
 @keyframes fx-toast-life {
   0% { opacity: 0; transform: translateY(-6px); }
   12%, 78% { opacity: 1; transform: none; }
@@ -656,7 +656,7 @@ button.fx-g-sum:hover, .fx-g-sum.is-hl, .fx-g-sum.is-tick {
 .sm-tag {
   display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px;
   background: color-mix(in oklab, var(--accent) 12%, transparent); color: var(--accent);
-  font-size: 11px; font-weight: var(--w-medium); letter-spacing: 0.02em;
+  font-size: var(--fs-micro); font-weight: var(--w-medium); letter-spacing: 0.02em;
 }
 .sm-spec-head code { padding: 1px 6px; border-radius: 6px; background: var(--card); color: var(--muted); font: var(--w-medium) 11px var(--mono); }
 .sm-spec-head b { font-size: var(--fs-title); font-weight: var(--w-title); color: var(--ink); }
@@ -890,7 +890,7 @@ button.fx-g-sum:hover, .fx-g-sum.is-hl, .fx-g-sum.is-tick {
 @keyframes et-step-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
 .et-claim { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); }
-.et-claim b { font-size: 17px; font-weight: var(--w-title); line-height: 1.4; color: var(--ink); }
+.et-claim b { font-size: var(--fs-title); font-weight: var(--w-title); line-height: 1.4; color: var(--ink); }
 .et-sev { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 var(--sp-2); border-radius: var(--r-chip); background: color-mix(in oklab, var(--c) 14%, var(--card)); color: var(--ink); font-size: var(--fs-meta); font-weight: var(--w-medium); }
 .et-sev i { width: 8px; height: 8px; border-radius: 2px; background: var(--c); }
 .et-sev small { color: var(--muted); font-weight: normal; }
@@ -1100,30 +1100,30 @@ button.fx-g-sum:hover, .fx-g-sum.is-hl, .fx-g-sum.is-tick {
 .tl-canvas { display: block; width: 100%; height: auto; }
 .tl-canvas text { font-family: var(--font); }
 .tl-canvas .sec-bg { fill: var(--well); }
-.tl-canvas .sec-title { font-size: 13px; font-weight: var(--w-title); fill: var(--ink); }
-.tl-canvas .sec-note { font-size: 12px; fill: var(--muted); }
-.tl-canvas .row-label { font-size: 13px; fill: var(--ink-2); transition: fill 160ms; }
+.tl-canvas .sec-title { font-size: var(--fs-small); font-weight: var(--w-title); fill: var(--ink); }
+.tl-canvas .sec-note { font-size: var(--fs-meta); fill: var(--muted); }
+.tl-canvas .row-label { font-size: var(--fs-small); fill: var(--ink-2); transition: fill 160ms; }
 .tl-canvas .row-hit { fill: transparent; cursor: pointer; transition: fill 160ms; }
 .tl-canvas .row:focus { outline: none; }
 .tl-canvas .row:focus-visible .row-hit { stroke: var(--accent); stroke-width: 1.5; }
 .tl-canvas .row-hit:hover, .tl-canvas .row.is-sel .row-hit { fill: var(--hover); }
 .tl-canvas .row.is-sel .row-label, .tl-canvas .row.is-run .row-label { fill: var(--ink); font-weight: var(--w-medium); }
 .tl-canvas .grid-line { stroke: color-mix(in oklab, var(--ink) 6%, transparent); stroke-width: 1; }
-.tl-canvas .axis-label { font-family: var(--mono); font-size: 11px; fill: var(--muted); }
-.tl-canvas .dur { font-family: var(--mono); font-size: 12px; fill: var(--muted); }
+.tl-canvas .axis-label { font-family: var(--mono); font-size: var(--fs-micro); fill: var(--muted); }
+.tl-canvas .dur { font-family: var(--mono); font-size: var(--fs-meta); fill: var(--muted); }
 .tl-canvas .bar-model { fill: var(--c-model-later); }
 .tl-canvas .bar-model-done { fill: var(--c-model); }
 .tl-canvas .row.is-run .bar-model-done { fill: color-mix(in oklab, var(--accent) 85%, var(--ink)); }
 .tl-canvas .bar-tick { stroke: var(--card); stroke-width: 1.4; }
 .tl-canvas .bar-reject { stroke: var(--sev-2); stroke-width: 2; }
-.tl-canvas .reject-label { font-size: 12px; fill: var(--sev-2); }
+.tl-canvas .reject-label { font-size: var(--fs-meta); fill: var(--sev-2); }
 .tl-canvas .wait-line { stroke: var(--c-wait); stroke-width: 1.2; stroke-dasharray: 2 3; }
 .tl-canvas .code-mark { fill: var(--card); stroke: var(--ink-2); stroke-width: 1.4; }
-.tl-canvas .code-label, .tl-canvas .skip-label { font-size: 12px; fill: var(--muted); }
+.tl-canvas .code-label, .tl-canvas .skip-label { font-size: var(--fs-meta); fill: var(--muted); }
 .tl-canvas .file-mark { fill: var(--card); stroke: var(--ink); stroke-width: 1.2; }
-.tl-canvas .file-label { font-size: 12px; fill: var(--ink); font-weight: var(--w-medium); }
+.tl-canvas .file-label { font-size: var(--fs-meta); fill: var(--ink); font-weight: var(--w-medium); }
 .tl-canvas .gate { stroke: color-mix(in oklab, var(--accent) 30%, transparent); stroke-width: 1; stroke-dasharray: 4 4; transition: stroke 240ms; }
-.tl-canvas .gate-label { fill: var(--muted); font-size: 12px; transition: fill 240ms; }
+.tl-canvas .gate-label { fill: var(--muted); font-size: var(--fs-meta); transition: fill 240ms; }
 .tl-canvas .gate-g.is-passed .gate { stroke: var(--accent); stroke-dasharray: none; }
 .tl-canvas .gate-g.is-passed .gate-label { fill: var(--accent); font-weight: var(--w-medium); }
 .tl-canvas .row.is-fail .bar-model, .tl-canvas .row.is-fail .bar-model-done { fill: color-mix(in oklab, var(--release) 70%, var(--card)); }
@@ -1135,7 +1135,7 @@ button.fx-g-sum:hover, .fx-g-sum.is-hl, .fx-g-sum.is-tick {
 .tl-canvas .playhead { pointer-events: none; }
 .tl-canvas .playhead line { stroke: var(--accent); stroke-opacity: 0.55; stroke-width: 1.2; }
 .tl-canvas .playhead rect { fill: var(--accent); }
-.tl-canvas .playhead text { fill: var(--card); font-family: var(--mono); font-size: 11px; font-weight: var(--w-medium); }
+.tl-canvas .playhead text { fill: var(--card); font-family: var(--mono); font-size: var(--fs-micro); font-weight: var(--w-medium); }
 .tl-canvas .g-wait { stroke: var(--c-wait); stroke-width: 1.4; stroke-dasharray: 2 3; }
 .tl-canvas .g-compact { fill: var(--c-compact); }
 .tl-canvas .g-attr { fill: var(--c-model); }
@@ -1144,8 +1144,8 @@ button.fx-g-sum:hover, .fx-g-sum.is-hl, .fx-g-sum.is-tick {
 .tl-canvas .occ-area { fill: color-mix(in oklab, var(--accent) 12%, transparent); }
 .tl-canvas .occ-line { fill: none; stroke: var(--accent); stroke-width: 1.4; }
 .tl-canvas .cap-line { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 4; }
-.tl-canvas .cap-label { font-size: 12px; fill: var(--muted); }
-.tl-canvas .case-label { font-family: var(--mono); font-size: 11px; fill: var(--muted); }
+.tl-canvas .cap-label { font-size: var(--fs-meta); fill: var(--muted); }
+.tl-canvas .case-label { font-family: var(--mono); font-size: var(--fs-micro); fill: var(--muted); }
 
 .tl-legend { display: flex; flex-wrap: wrap; gap: var(--sp-3) var(--sp-5); }
 .tl-lg { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--fs-small); }

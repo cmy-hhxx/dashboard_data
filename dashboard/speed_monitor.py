@@ -1186,6 +1186,8 @@ def _trim_history_locked() -> None:
         _STATE["history"].popleft()
     while _STATE["rpm_history"] and _STATE["rpm_history"][0]["t"] < cutoff:
         _STATE["rpm_history"].popleft()
+    while _STATE["queue_history"] and _STATE["queue_history"][0]["t"] < cutoff:
+        _STATE["queue_history"].popleft()
     ev_cutoff = time.time() - 1800.0
     while _STATE["part_events"] and _STATE["part_events"][0]["t"] < ev_cutoff:
         _STATE["part_events"].popleft()
@@ -1262,12 +1264,12 @@ def _update_output_cache(old: dict[str, dict], meta: dict[str, dict], counts: di
 
 
 def _mirror_stats(text: str) -> None:
-    """Copy the cache to the persistent disk every few minutes (survives container rebuild)."""
+    """Copy the 48h stats cache to the persistent disk every 60s (survives container rebuild)."""
     global _MIRROR_AT
     if not _PERSIST_FILE:
         return
     now = time.time()
-    if now - _MIRROR_AT < 300:
+    if now - _MIRROR_AT < 60:
         return
     try:
         _PERSIST_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -1279,11 +1281,12 @@ def _mirror_stats(text: str) -> None:
         pass
 
 
-def _load_stats() -> bool:
-    if not _CACHE_FILE or not _CACHE_FILE.is_file():
+def _load_stats(source: Path | None = None) -> bool:
+    target = source or _CACHE_FILE
+    if not target or not target.is_file():
         return False
     try:
-        payload_data = json.loads(_CACHE_FILE.read_text(encoding="utf-8"))
+        payload_data = json.loads(target.read_text(encoding="utf-8"))
         version = int(payload_data.get("version") or 0)
         if version not in (4, 5, 6):
             return False
@@ -1309,6 +1312,9 @@ def _load_stats() -> bool:
                 pc = round(max(0.0, (float(cur.get("c") or 0) - float(base.get("c") or 0)) / span * 60.0), 1)
                 # No cap here: the real ceiling is whatever the key reports, not a hardcoded 500.
                 rpm_hist.append({"t": t, "rpm": round(pa * 13.0 + pc * 14.0, 1), "pa": pa, "pc": pc})
+        saved_at = float(payload_data.get("saved_at") or 0.0)
+        stale_gap = max(90.0, float(_CONFIG.get("refresh_seconds", 15)) * 4.0)
+        parts_fresh = bool(saved_at and (time.time() - saved_at) <= stale_gap)
         with _LOCK:
             _STATE["input_files"] = payload_data.get("input_files") or {}
             _STATE["output_files"] = payload_data.get("output_files") or {}
@@ -1316,10 +1322,18 @@ def _load_stats() -> bool:
             _STATE["keys_sig"] = payload_data.get("keys_sig") or ""
             _STATE["history"] = collections.deque(hist)
             _STATE["rpm_history"] = collections.deque(rpm_hist)
-            _STATE["part_files"] = payload_data.get("part_files") or {}
-            _STATE["parts_seeded"] = bool(payload_data.get("parts_seeded", False))
-            _STATE["parts_seeded_at"] = float(payload_data.get("parts_seeded_at") or 0.0)
-            _STATE["part_events"] = collections.deque(payload_data.get("part_events") or [])
+            _STATE["queue_history"] = collections.deque(payload_data.get("queue_history") or [])
+            if parts_fresh:
+                _STATE["part_files"] = payload_data.get("part_files") or {}
+                _STATE["parts_seeded"] = bool(payload_data.get("parts_seeded", False))
+                _STATE["parts_seeded_at"] = float(payload_data.get("parts_seeded_at") or 0.0)
+                _STATE["part_events"] = collections.deque(payload_data.get("part_events") or [])
+            else:
+                # Downtime gap: keep full 48h history, re-seed .parts baseline to avoid fake RPM spike.
+                _STATE["part_files"] = {}
+                _STATE["parts_seeded"] = False
+                _STATE["parts_seeded_at"] = 0.0
+                _STATE["part_events"] = collections.deque()
             _STATE["gateway_prev"] = {k: tuple(v) for k, v in (payload_data.get("gateway_prev") or {}).items()}
             _STATE["cluster"] = payload_data.get("cluster") or {}
             _STATE["cluster_stats"] = payload_data.get("cluster_stats") or {}
@@ -1349,6 +1363,7 @@ def _save_stats() -> None:
                 "history_metric": "traces",
                 "history": list(_STATE["history"]),
                 "rpm_history": list(_STATE["rpm_history"]),
+                "queue_history": list(_STATE["queue_history"]),
                 "part_files": _STATE["part_files"],
                 "parts_seeded": _STATE["parts_seeded"],
                 "parts_seeded_at": _STATE["parts_seeded_at"],
@@ -1490,7 +1505,8 @@ def collect_outputs() -> None:
                 _STATE["queue"] = queue
                 qh = _STATE["queue_history"]
                 qh.append({"t": now, "done": int(queue.get("done") or 0)})
-                while qh and qh[0]["t"] < now - 7200:
+                q_cutoff = now - float(_CONFIG["history_seconds"])
+                while qh and qh[0]["t"] < q_cutoff:
                     qh.popleft()
             _STATE["locks"] = locks
             if key_stats:
@@ -1872,7 +1888,8 @@ def payload() -> dict:
         "remaining_sessions": remaining_sessions,
         "remaining_traces": remaining_traces,
         "remaining": remaining,
-        "progress": (attr_sessions / input_sessions) if input_sessions else None,
+        "progress": (attr_traces / input_traces) if input_traces else None,
+        "session_progress": (attr_sessions / input_sessions) if input_sessions else None,
         "rates": {
             "attr": a_rate,
             "compact": c_rate,
@@ -1954,15 +1971,27 @@ def start(cache_dir: str | Path, overrides: dict | None = None,
         _PERSIST_FILE = Path(persist_path) if persist_path else None
     if not available:
         return False
-    if (_PERSIST_FILE and _PERSIST_FILE.is_file() and not _CACHE_FILE.is_file()):
-        # Container rebuilt: /opt went back to an image without the cache, so take the
-        # copy we keep on the persistent disk instead of rescanning every input file.
-        try:
-            _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(_PERSIST_FILE, _CACHE_FILE)
-        except OSError:
-            pass
-    _load_stats()
+    candidates = []
+    for p in (_CACHE_FILE, _PERSIST_FILE):
+        if p and p.is_file():
+            try:
+                candidates.append((p.stat().st_mtime, p))
+            except OSError:
+                pass
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    loaded = False
+    for _, src in candidates:
+        if _load_stats(src):
+            loaded = True
+            if src != _CACHE_FILE and _CACHE_FILE:
+                try:
+                    _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(src, _CACHE_FILE)
+                except OSError:
+                    pass
+            break
+    if not loaded:
+        _load_stats()
     threading.Thread(target=_output_loop, name="speed-output", daemon=True).start()
     threading.Thread(target=_input_loop, name="speed-input", daemon=True).start()
     return True

@@ -268,7 +268,7 @@
 .seg button:hover { color: var(--ink-2); }
 /* Each product wears its server's name above it, small and in that server's own hue. */
 #productSwitch button { display: grid; place-content: center; justify-items: center; gap: 1px; padding: 0 12px; line-height: 1.1; }
-.seg-loc { font-size: 10px; letter-spacing: 0.04em; color: var(--loc); opacity: 0.7; transition: opacity var(--snap); }
+.seg-loc { font-size: var(--fs-micro); letter-spacing: 0.04em; color: var(--loc); opacity: 0.7; transition: opacity var(--snap); }
 #productSwitch button[aria-pressed="true"] .seg-loc { opacity: 1; }
 [data-value="wencai"] > .seg-loc { --loc: var(--loc-ulq); }
 [data-value="aime"] > .seg-loc { --loc: var(--loc-vir); }
@@ -349,12 +349,12 @@ html[data-view="samples"] main, html[data-view="forecast"] main { max-width: non
 .tip.is-on { opacity: 1; transform: none; }
 .t-head, .kl-tip-head {
   margin-bottom: var(--sp-2); color: var(--ink); font-size: var(--fs-small); font-weight: var(--w-medium);
-  line-height: 1.45; white-space: normal; overflow-wrap: anywhere;
+  line-height: 1.45; white-space: nowrap; max-width: none;
 }
-.t-head, .t-note { max-width: 300px; }
+.t-note { white-space: nowrap; max-width: none; }
 .t-row, .kl-tip-row { display: flex; align-items: baseline; gap: var(--sp-3); white-space: nowrap; }
 .t-row b, .kl-tip-row b {
-  margin-left: auto; color: var(--ink); font-weight: var(--w-medium); font-variant-numeric: tabular-nums;
+  margin-left: auto; color: var(--ink); font-size: var(--fs-body); font-weight: var(--w-title); font-variant-numeric: tabular-nums;
 }
 .t-note, .mx-tip-pats { margin-top: var(--sp-2); }
 

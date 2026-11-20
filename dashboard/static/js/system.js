@@ -2277,11 +2277,7 @@ export function mountFxDiagram(root, tax, pd, {
     if (entry.b) entry.b.textContent = val ? fmt(val) : "·";
     if (pulse && tx && !tx._hovering) {
       entry.el.classList.add("is-pulse");
-      later(() => entry.el.classList.remove("is-pulse"), 440);
-      tickEl($(`.fx-g-row[data-s="${entry.s}"]`, tx));
-      tickEl($(`.fx-g-col[data-m="${entry.m}"]`, tx));
-      tickEl($(`.fx-g-sum[data-row-sum="${entry.s}"]`, tx));
-      tickEl($(`.fx-g-sum[data-col-sum="${entry.m}"]`, tx));
+      later(() => entry.el.classList.remove("is-pulse"), 520);
     }
   };
 
@@ -2405,18 +2401,18 @@ export function mountFxDiagram(root, tax, pd, {
   let lastHit = 0;
   const receive = () => {
     const now = performance.now();
-    if (now - lastHit < 240) return;
+    if (now - lastHit < 720) return;
     lastHit = now;
-    rot += 40;
+    rot += 24;
     ring.style.transform = `rotate(${rot}deg)`;
     restart(hub, "is-hit");
     step = (step + 1) % FX_STEPS.length;
     const c = FX_STEPS[step][1];
     const lit = new Set([4]);
-    while (lit.size < 3 + (step % 3)) lit.add(Math.floor(Math.random() * 9));
+    while (lit.size < 3 + (step % 2)) lit.add(Math.floor(Math.random() * 9));
     tiles.forEach((t, k) => {
       t.style.setProperty("--c", lit.has(k) ? c : "var(--sev-none)");
-      t.style.animationDelay = `${((k % 3) + Math.floor(k / 3)) * 28}ms`;
+      t.style.animationDelay = `${((k % 3) + Math.floor(k / 3)) * 34}ms`;
       restart(t, "pop");
     });
   };
@@ -2474,7 +2470,7 @@ export function mountFxDiagram(root, tax, pd, {
     const ty = 408;
     for (let i = activeToasts.length - 1; i >= 0; i--) {
       const other = activeToasts[i];
-      if (Math.abs(other.x - tx) < (other.w + w) / 2 + 12 || activeToasts.length >= 2) {
+      if (Math.abs(other.x - tx) < (other.w + w) / 2 + 12 || activeToasts.length >= 1) {
         other.el.remove();
         activeToasts.splice(i, 1);
       }
@@ -2669,11 +2665,11 @@ export function mountFxDiagram(root, tax, pd, {
     initSeed();
   }
 
-  const DUR = liveControl ? [1420, 1220, 1120] : [860, 720, 660];
-  const HOP_DUR = liveControl ? [540, 480, 460, 540] : [360, 320, 300, 360];
-  const MATCH_GAP = 540;
-  const SPROUT_GAP = 680;
-  const DRAIN_DUR = 480;
+  const DUR = liveControl ? [1420, 1220, 1120] : [1180, 980, 900];
+  const HOP_DUR = liveControl ? [540, 480, 460, 540] : [460, 400, 380, 440];
+  const MATCH_GAP = 1080;
+  const SPROUT_GAP = 1420;
+  const DRAIN_DUR = 880;
   const liveBatchDelta = (ratePerMin, scale = 1) => {
     const r = Math.max(0.5, Number(ratePerMin) || 0.5);
     const base = Math.max(2, Math.round((r / 60) * 12 * scale));
@@ -2738,19 +2734,20 @@ export function mountFxDiagram(root, tax, pd, {
 
   const spawnWave = (now) => {
     const cap = getCap();
-    if (evIdx >= cap || sparks.length >= 13) return null;
+    if (evIdx >= cap || sparks.length >= 5) return null;
     const batch = [];
     let hasSprout = false;
-    while (evIdx < cap && batch.length < 3 && sparks.length + batch.length < 16) {
+    while (evIdx < cap && batch.length < 2 && sparks.length + batch.length < 5) {
       const nextEv = schedule.events[evIdx];
-      if (nextEv.isNew && hasSprout) break;
+      if (nextEv.isNew && (hasSprout || batch.length > 0)) break;
       if (nextEv.isNew) hasSprout = true;
       batch.push(schedule.events[evIdx++]);
+      if (hasSprout) break;
     }
     if (!batch.length) return null;
     const in0 = Math.floor(Math.random() * ins.length);
     const out0 = Math.floor(Math.random() * outs.length);
-    batch.forEach((ev, k) => spawn((in0 + k) % ins.length, ev, (out0 + k) % outs.length, k * 125));
+    batch.forEach((ev, k) => spawn((in0 + k) % ins.length, ev, (out0 + k) % outs.length, k * 320));
     return now + (hasSprout ? SPROUT_GAP : MATCH_GAP);
   };
 
@@ -2764,15 +2761,15 @@ export function mountFxDiagram(root, tax, pd, {
         const b = trail[k + 1];
         const t = 1 - k / trail.length;
         ctx.strokeStyle = col;
-        ctx.globalAlpha = t * 0.20;
-        ctx.lineWidth = (isSprout ? 6.4 : 5.4) * t;
+        ctx.globalAlpha = t * 0.14;
+        ctx.lineWidth = (isSprout ? 5.8 : 4.8) * t;
         ctx.beginPath();
         ctx.moveTo(a.x, a.y);
         ctx.lineTo(b.x, b.y);
         ctx.stroke();
 
-        ctx.globalAlpha = t * 0.72;
-        ctx.lineWidth = (isSprout ? 2.8 : 2.3) * t;
+        ctx.globalAlpha = t * 0.64;
+        ctx.lineWidth = (isSprout ? 2.5 : 2.1) * t;
         ctx.beginPath();
         ctx.moveTo(a.x, a.y);
         ctx.lineTo(b.x, b.y);
@@ -2781,14 +2778,14 @@ export function mountFxDiagram(root, tax, pd, {
     }
     const head = trail[0];
     ctx.fillStyle = col;
-    ctx.globalAlpha = 0.22;
+    ctx.globalAlpha = 0.18;
     ctx.beginPath();
-    ctx.arc(head.x, head.y, isSprout ? 7.2 : 6.0, 0, Math.PI * 2);
+    ctx.arc(head.x, head.y, isSprout ? 6.4 : 5.4, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.globalAlpha = 0.96;
+    ctx.globalAlpha = 0.94;
     ctx.beginPath();
-    ctx.arc(head.x, head.y, isSprout ? 3.5 : 3.0, 0, Math.PI * 2);
+    ctx.arc(head.x, head.y, isSprout ? 3.2 : 2.8, 0, Math.PI * 2);
     ctx.fill();
     ctx.globalAlpha = 1;
   };
@@ -2840,16 +2837,14 @@ export function mountFxDiagram(root, tax, pd, {
           snapToFinal();
         }
       } else if (phaseState === "hold") {
-        if (now - lastSpawn > 950 && tree.leaves.length) {
+        if (now - lastSpawn > 1800 && sparks.length < 3 && tree.leaves.length) {
           lastSpawn = now;
           const in0 = Math.floor(Math.random() * ins.length);
           const out0 = Math.floor(Math.random() * outs.length);
-          for (let k = 0; k < 2; k++) {
-            const lf = tree.leaves[Math.floor(Math.random() * tree.leaves.length)];
-            spawn((in0 + k) % ins.length, { leaf: lf, delta: 0, isNew: false }, (out0 + k) % outs.length, k * 140);
-          }
+          const lf = tree.leaves[Math.floor(Math.random() * tree.leaves.length)];
+          spawn(in0, { leaf: lf, delta: 0, isNew: false }, out0, 0);
         }
-        if (holdSince && now - holdSince > 5500 && !tx?._hovering && !MOD.el) {
+        if (holdSince && now - holdSince > 8500 && !tx?._hovering && !MOD.el) {
           phaseState = "drain";
           drainSince = now;
           let seededSum = 0;

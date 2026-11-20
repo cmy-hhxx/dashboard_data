@@ -47,7 +47,7 @@
 .bn-fstage-sub span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .bn-fstage-sub em { font-style: normal; color: var(--muted); }
 .bn-fsep {
-  display: grid; place-items: center; color: var(--t2); font-size: 16px; user-select: none;
+  display: grid; place-items: center; color: var(--t2); font-size: var(--fs-title); user-select: none;
 }
 
 /* Nested tier proportional stepper inside final funnel block */
@@ -63,7 +63,7 @@
 .bn-nest-btn:active { transform: scale(0.96); }
 .bn-nest-btn.is-on { background: var(--ink); color: var(--card); font-weight: var(--w-medium); }
 .bn-nest-btn.is-in:not(.is-on) { background: color-mix(in oklab, var(--accent) 16%, var(--well-2)); color: var(--accent); }
-.bn-nest-sub { color: var(--muted); font-size: 10px; }
+.bn-nest-sub { color: var(--muted); font-size: var(--fs-micro); }
 .bn-nest-btn.is-on .bn-nest-sub { color: color-mix(in oklab, var(--card) 72%, transparent); }
 
 .bn-quota-card { --span: 5; display: flex; flex-direction: column; }
@@ -169,8 +169,8 @@
 }
 .bn-mbar[aria-pressed="true"] .bn-mbar-col { background: var(--accent); }
 .bn-mbar.is-zero .bn-mbar-col { background: var(--t4); }
-.bn-mbar-n { font-size: 10px; color: var(--ink-2); font-variant-numeric: tabular-nums; line-height: 1; }
-.bn-mbar-k { font-size: 10.5px; color: var(--muted); line-height: 1.15; white-space: nowrap; }
+.bn-mbar-n { font-size: var(--fs-micro); color: var(--ink-2); font-variant-numeric: tabular-nums; line-height: 1; }
+.bn-mbar-k { font-size: var(--fs-micro); color: var(--muted); line-height: 1.15; white-space: nowrap; }
 
 /* ---- Card 2B: Multi-dim Distribution & Δpp Audit ---- */
 .bn-dimgroups {
@@ -277,7 +277,7 @@
 .bn-day-p { background: var(--t3); }
 .bn-day-ticks {
   display: flex; align-items: center; justify-content: space-between; padding: 0 10px 0 38px;
-  font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; line-height: 1.2;
+  font-size: var(--fs-micro); color: var(--muted); font-variant-numeric: tabular-nums; line-height: 1.2;
 }
 
 .bn-day-div {
@@ -285,7 +285,7 @@
   border-radius: var(--r-well); background: var(--well);
 }
 .bn-day-axis {
-  position: absolute; left: 6px; width: 28px; text-align: right; font-size: 10px;
+  position: absolute; left: 6px; width: 28px; text-align: right; font-size: var(--fs-micro);
   color: var(--muted); font-variant-numeric: tabular-nums; pointer-events: none; line-height: 1;
 }
 .bn-day-axis.is-top { top: 6px; }
@@ -324,7 +324,7 @@ button.bn-scell[aria-pressed="true"] { background: var(--accent-soft); }
 .bn-matrix { --mx-headh: 34px; --mx-rowh: 28px; --mx-colw: 44px; min-width: 0; }
 .bn-matrix .mx-corner {
   display: flex; align-items: center; height: var(--mx-headh); padding: 0 6px;
-  font-size: 11px; color: var(--muted); white-space: nowrap;
+  font-size: var(--fs-micro); color: var(--muted); white-space: nowrap;
 }
 .bn-matrix .rh {
   width: 100%; max-width: 104px; justify-content: space-between; gap: 6px;
@@ -332,7 +332,7 @@ button.bn-scell[aria-pressed="true"] { background: var(--accent-soft); }
 }
 .bn-matrix .rh .mx-caret { margin: 0; }
 .bn-matrix .mx-total-lab { margin-left: 0; padding: 0 6px; }
-.bn-matrix .mh { font-size: 11px; line-height: 1.25; text-align: center; white-space: nowrap; align-items: center; justify-content: center; padding: 0 2px; }
+.bn-matrix .mh { font-size: var(--fs-micro); line-height: 1.25; text-align: center; white-space: nowrap; align-items: center; justify-content: center; padding: 0 2px; }
 .bn-matrix .cell-main { font-size: var(--fs-meta); font-variant-numeric: tabular-nums; }
 .bn-matrix .mx-scroll { padding-bottom: 4px; scrollbar-width: none; -ms-overflow-style: none; }
 .bn-matrix .mx-scroll::-webkit-scrollbar { display: none; }
@@ -344,7 +344,7 @@ button.bn-scell[aria-pressed="true"] { background: var(--accent-soft); }
   padding: 0 8px; font-variant-numeric: tabular-nums;
 }
 .matrix.bn-matrix .rowtot-head {
-  height: var(--mx-headh); align-items: center; font-size: 11px; color: var(--muted);
+  height: var(--mx-headh); align-items: center; font-size: var(--fs-micro); color: var(--muted);
 }
 .matrix.bn-matrix .rowtot-head span { text-align: right; white-space: nowrap; }
 .matrix.bn-matrix .rowtot,
@@ -469,7 +469,7 @@ button.bn-scell[aria-pressed="true"] { background: var(--accent-soft); }
 .bn-more-wrap.is-open .bn-more-plus { transform: rotate(45deg); }
 .bn-more-badge {
   display: inline-grid; place-items: center; min-width: 15px; height: 15px; padding: 0 4px;
-  border-radius: 999px; background: var(--accent); color: #fff; font-size: 10px; line-height: 1;
+  border-radius: 999px; background: var(--accent); color: #fff; font-size: var(--fs-micro); line-height: 1;
 }
 .bn-more-pop {
   position: absolute; left: 0; top: calc(100% + 8px); z-index: var(--z-overlay);
@@ -521,7 +521,7 @@ button.bn-scell[aria-pressed="true"] { background: var(--accent-soft); }
 }
 .bn-lq { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .bn-lq-txt {
-  font-size: 13.5px; line-height: 1.4; color: var(--ink); font-weight: var(--w-body);
+  font-size: var(--fs-body); line-height: 1.4; color: var(--ink); font-weight: var(--w-body);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
 }
 .bn-lq-flags { display: inline-flex; align-items: center; gap: 4px; flex: none; }
@@ -645,7 +645,7 @@ button.bn-scell[aria-pressed="true"] { background: var(--accent-soft); }
   border-radius: var(--r-well); background: var(--well); min-width: 0;
 }
 .bn-sh-q {
-  font-size: 15px; line-height: 1.55; font-weight: var(--w-medium); color: var(--ink);
+  font-size: var(--fs-title); line-height: 1.55; font-weight: var(--w-medium); color: var(--ink);
   overflow-wrap: anywhere; word-break: break-word;
 }
 .bn-sh-q.is-clamped {
@@ -788,7 +788,7 @@ button.bn-scell[aria-pressed="true"] { background: var(--accent-soft); }
 @media (max-width: 520px) {
   .bn-qrow { grid-template-columns: 76px minmax(0, 1fr) 72px; }
   .bn-qtgt { display: none; }
-  .bn-mbar-k { font-size: 9.5px; }
+  .bn-mbar-k { font-size: var(--fs-micro); }
 }
 
 @media (prefers-reduced-motion: reduce) {

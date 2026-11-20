@@ -11,13 +11,13 @@
     "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", sans-serif;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 
-  /* Type scale: five steps instead of the old 7.5/9/10/10.5/11/11.5/12/12.5/13.5px drift. */
-  --fs-micro: 11px;   /* dense numbers only: matrix cells, chart legends, ring centres */
-  --fs-meta: 12px;    /* labels, ids, counts */
-  --fs-small: 13px;   /* secondary text */
-  --fs-body: 14px;    /* message and card text */
-  --fs-title: 15px;   /* card and section heads */
-  /* Display numbers (light weight): three sizes for every KPI, ring centre and hero figure. */
+  /* 5-step text scale: strictly 5 sizes across the entire dashboard, clear hierarchy (11/12/13/14/16). */
+  --fs-micro: 11px;   /* L1 dense/micro: matrix ratios, sub-metrics, legends, badges */
+  --fs-meta: 12px;    /* L2 labels/controls: matrix headers, filters, breadcrumbs, meta */
+  --fs-small: 13px;   /* L3 data/items: matrix cells, board titles, secondary copy */
+  --fs-body: 14px;    /* L4 body/anchors: matrix row headers, key tip figures, prose */
+  --fs-title: 16px;   /* L5 titles: card & section heads, modal titles */
+  /* Display numbers (light weight): three sizes for hero KPIs only. */
   --fs-num-s: 20px;
   --fs-num-m: 28px;
   --fs-num-l: 40px;
@@ -132,7 +132,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font: var(--w-body) 14px/1.55 var(--font);
+  font: var(--w-body) var(--fs-body)/1.55 var(--font);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   font-variant-numeric: tabular-nums;

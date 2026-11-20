@@ -45,7 +45,7 @@
 .sp-ring-center b { font-size: var(--fs-num-s); line-height: 1.05; font-weight: var(--w-title); color: var(--ink); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 .sp-ring-center span { font-size: var(--fs-micro); color: var(--muted); line-height: 1.2; }
 .sp-ring-cl {
-  font-style: normal; font-size: 10.5px; line-height: 1.2; margin-top: 2px;
+  font-style: normal; font-size: var(--fs-micro); line-height: 1.2; margin-top: 2px;
   color: var(--loc-ulq); font-weight: var(--w-medium); font-variant-numeric: tabular-nums;
 }
 
@@ -53,7 +53,7 @@
 .sp-ov-stat { display: grid; gap: var(--sp-2); min-width: 0; padding-left: var(--sp-4); border-left: 3px solid var(--c); }
 .sp-ov-lbl { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--fs-small); font-weight: var(--w-medium); }
 .sp-ring-tag {
-  font-style: normal; font-size: 10px; line-height: 1; padding: 3px 6px; border-radius: 999px;
+  font-style: normal; font-size: var(--fs-micro); line-height: 1; padding: 3px 6px; border-radius: 999px;
   font-weight: var(--w-medium);
 }
 .sp-ring-tag.is-attr { background: color-mix(in oklab, var(--accent) 12%, transparent); color: var(--accent); }
@@ -87,8 +87,14 @@
 .sp-chart .sp-grid line.sp-grid-v { stroke: var(--well); stroke-width: 1; stroke-dasharray: 2 4; }
 .sp-chart .sp-axis text { fill: var(--muted); font-size: var(--fs-micro); font-family: var(--font); font-variant-numeric: tabular-nums; }
 .sp-chart .sp-line { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.sp-chart .sp-line-attr, .sp-chart .sp-line-rpm { stroke: var(--accent); }
-.sp-chart .sp-line-comp { stroke: var(--loc-vir); }
+.sp-chart .sp-line-attr, .sp-chart .sp-line-rpm {
+  stroke: var(--accent);
+  filter: drop-shadow(0 0 4px color-mix(in oklab, var(--accent) 42%, transparent));
+}
+.sp-chart .sp-line-comp {
+  stroke: var(--loc-vir);
+  filter: drop-shadow(0 0 4px color-mix(in oklab, var(--loc-vir) 40%, transparent));
+}
 .sp-chart .sp-line-quota { stroke: var(--sev-2); stroke-dasharray: 4 4; stroke-width: 1.5; opacity: 0.78; }
 .sp-chart .sp-area-attr { fill: color-mix(in oklab, var(--accent) 9%, transparent); }
 .sp-chart .sp-area-comp { fill: color-mix(in oklab, var(--loc-vir) 8%, transparent); }
@@ -279,7 +285,7 @@ button.sp-ring-card:hover .sp-rc-arrow { color: var(--accent); transform: transl
   animation: sp-danmu-rise 2200ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 .sp-danmu.is-burst {
-  font-size: 12px; padding: 2px 9px;
+  font-size: var(--fs-meta); padding: 2px 9px;
   background: color-mix(in oklab, var(--accent) 14%, var(--card));
   color: var(--accent);
   box-shadow: 0 4px 12px -3px color-mix(in oklab, var(--accent) 32%, transparent),
@@ -304,7 +310,7 @@ button.sp-ring-card:hover .sp-rc-arrow { color: var(--accent); transform: transl
               inset 0 0 0 1px color-mix(in oklab, var(--ink) 26%, transparent);
 }
 .sp-danmu.is-micro {
-  font-size: 10.5px; padding: 1px 6px;
+  font-size: var(--fs-micro); padding: 1px 6px;
   animation: sp-danmu-micro 1550ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 .sp-danmu.is-micro.is-cl {

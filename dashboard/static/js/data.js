@@ -2217,7 +2217,7 @@ const trendLineModelName = (trend, line) => {
   if (!all.length || sel.length === all.length) return "全部模型";
   return sel.map((m) => trendModelName(trend, m) || m).filter(Boolean).join("+");
 };
-const trendLevelsName = (levels) => (levels && levels.length ? levels.join("+") : "全部问题");
+const trendLevelsName = (levels) => (levels && levels.length ? levels.join("+") : "全部等级");
 const trendLineName = (trend, line) => `${trendLineSourceName(trend, line)} · ${trendLineModelName(trend, line)} · ${trendLevelsName(line.levels)}`;
 
 /* 纵轴上限：四格刻度（含 0），刻度走 1/2/4/5/10 阶梯，标签永远是整数（计数）
@@ -2355,7 +2355,7 @@ function trendPalette(data, line) {
     <span class="mxt-pick-label">模型</span>${trendChip("models", "all", "全部模型", !line.models.length)}${models.map((m) => trendChip("models", m, trendModelName(data, m) || m, line.models.includes(m))).join("")}
   </span>
   <span class="mxt-pickgroup" role="group" aria-label="等级">
-    <span class="mxt-pick-label">等级</span>${[["all", "全部问题"], ...TREND_SEV.map((s) => [s, s])].map(([v]) => trendChip("level", v, v === "all" ? "全部问题" : v, v === "all" ? !line.levels.length : line.levels.includes(v))).join("")}
+    <span class="mxt-pick-label">等级</span>${[["all", "全部等级"], ...TREND_SEV.map((s) => [s, s])].map(([v, lbl]) => trendChip("level", v, lbl, v === "all" ? !line.levels.length : line.levels.includes(v))).join("")}
   </span>`;
 }
 
@@ -2384,33 +2384,63 @@ function trendSeg(id, key, items, value) {
     .join("")}</div>`;
 }
 
-function trendBodyHTML(data, spec, title) {
+function trendFilterCount(spec) {
+  let n = 0;
+  const lines = Array.isArray(spec?.lines) ? spec.lines : [];
+  if (lines.length > 1) n += lines.length - 1;
+  lines.forEach((l) => {
+    if (l?.uts?.length) n += 1;
+    if (l?.models?.length) n += 1;
+    if (l?.levels?.length) n += 1;
+  });
+  if (spec?.rowName && spec.rowName !== "全部场景" && spec.scope === "all") n += 1;
+  return n;
+}
+
+function trendBarHTML(data, spec, crumb) {
   const active = spec.lines[spec.active];
-  return `<div class="mxt mx-swap-panel" data-own-tip>
-    <div class="mxt-bar">
-      <div class="mxt-bar-top">
-        <div class="mxt-tools">
-          ${trendSeg("mxtMeasure", "measure", [["count", TREND_MEASURE.count], ["ratio", TREND_MEASURE.ratio]], spec.measure)}
-          ${spec.rowName === "全部场景" ? "" : trendSeg("mxtScope", "scope", [["row", `本场景：${spec.rowName || "—"}`], ["all", "全部场景"]], spec.scope)}
+  const moreCount = trendFilterCount(spec);
+  const hasScope = Boolean(spec.rowName && spec.rowName !== "全部场景");
+  return `<div class="mxt-bar is-head">
+    ${crumb ? `<span class="mxt-crumb" title="${esc(crumb.full)}">${crumb.prefix ? `<span class="mxt-crumb-p">${esc(crumb.prefix)}</span><i aria-hidden="true">/</i>` : ""}<b>${esc(crumb.label)}</b></span>` : ""}
+    <div class="mxt-tools">
+      ${trendSeg("mxtMeasure", "measure", [["count", TREND_MEASURE.count], ["ratio", TREND_MEASURE.ratio]], spec.measure)}
+    </div>
+    <div class="bn-more-wrap mxt-more-wrap" id="mxtMoreWrap">
+      <button type="button" class="bn-more-toggle${moreCount ? " has-active" : ""}" id="mxtMoreToggle" aria-haspopup="true" aria-expanded="false">
+        <span class="bn-more-plus" aria-hidden="true"></span>
+        <span>筛选</span>
+        <span class="bn-more-badge" id="mxtMoreBadge"${moreCount ? "" : " hidden"}>${moreCount}</span>
+      </button>
+      <div class="bn-more-pop mxt-more-pop" id="mxtMorePop" inert>
+        ${hasScope ? `<div class="mxt-pop-sec"><span class="mxt-pick-label">场景范围</span>${trendSeg("mxtScope", "scope", [["row", `本场景：${spec.rowName}`], ["all", "全部场景"]], spec.scope)}</div>` : ""}
+        <div class="mxt-pop-sec">
+          <div class="mxt-lines" id="mxtLines">${trendLinesHTML(spec.lines, data, spec.active)}</div>
         </div>
         <div class="mxt-palette" id="mxtPalette">${active ? trendPalette(data, active) : ""}</div>
-      </div>
-      <div class="mxt-bar-lines">
-        <div class="mxt-lines" id="mxtLines">${trendLinesHTML(spec.lines, data, spec.active)}</div>
-        <button type="button" class="mxt-zoom" id="mxtZoom" aria-pressed="${!!spec.zoom}" aria-label="${spec.zoom ? "滚轮缩放已解锁" : "滚轮缩放已锁定"}" title="${spec.zoom ? "点击锁定滚轮缩放" : "点击解锁滚轮缩放"}">
-          <svg class="i-zoom-lock" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="4" y="7" width="8" height="6" rx="1.2" stroke="currentColor" stroke-width="1.3"/><path d="M6 7V5.3a2 2 0 0 1 4 0V7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-          <svg class="i-zoom-unlock" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="4" y="7" width="8" height="6" rx="1.2" stroke="currentColor" stroke-width="1.3"/><path d="M6 7V5.3a2 2 0 0 1 3.8-.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-        </button>
-        <span class="mxt-vol-key"><i aria-hidden="true"></i>Trace 数量</span>
+        <div class="bn-more-foot">
+          <span class="mxt-pop-hint" id="mxtMoreHint">${moreCount ? `已启用 ${moreCount} 项条件` : "按来源 / 模型 / 等级筛选或添加对比线"}</span>
+          <button type="button" class="bn-chip-clear" id="mxtMoreClr"${moreCount ? "" : " hidden"}>重置筛选</button>
+        </div>
       </div>
     </div>
+    <button type="button" class="mxt-zoom" id="mxtZoom" aria-pressed="${!!spec.zoom}" aria-label="${spec.zoom ? "滚轮缩放已解锁" : "滚轮缩放已锁定"}" title="${spec.zoom ? "点击锁定滚轮缩放" : "点击解锁滚轮缩放"}">
+      <svg class="i-zoom-lock" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="4" y="7" width="8" height="6" rx="1.2" stroke="currentColor" stroke-width="1.3"/><path d="M6 7V5.3a2 2 0 0 1 4 0V7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+      <svg class="i-zoom-unlock" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="4" y="7" width="8" height="6" rx="1.2" stroke="currentColor" stroke-width="1.3"/><path d="M6 7V5.3a2 2 0 0 1 3.8-.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+    </button>
+    <span class="mxt-vol-key"><i aria-hidden="true"></i>Trace 数量</span>
+  </div>`;
+}
+
+function trendBodyHTML(_data, _spec, title) {
+  return `<div class="mxt mxt-stage mx-swap-panel" data-own-tip>
     ${trendSampleFrame(`<div class="mxt-plot" id="mxtPlot" data-own-tip aria-label="${esc(title)}"></div>`)}
   </div>`;
 }
 
 const plotWidth = (box) => ($("#mxtPlot", box) || box).clientWidth;
 
-function paintTrendPlot(box, spec, trend, onOpenChange = null, wheelZoom = null) {
+function paintTrendPlot(box, spec, trend, onOpenChange = null, wheelZoom = null, initialPickDate = null) {
   const plot = $("#mxtPlot", box);
   if (!plot) return;
   plot._drawer?.destroy();
@@ -2441,7 +2471,7 @@ function paintTrendPlot(box, spec, trend, onOpenChange = null, wheelZoom = null)
       wheelZoom: typeof wheelZoom === "function" ? wheelZoom : () => false,
       height: box.closest(".mx-card.is-mx-full")
         ? Math.max(420, Math.min(760, Math.round(window.innerHeight - 220)))
-        : Math.max(260, Math.min(460, Math.round(plotWidth(box) * 0.32))),
+        : Math.max(280, Math.min(460, Math.round(plotWidth(box) * 0.32))),
       onPick: ({ time, seriesIndex }) => {
         const i = view.win.findIndex((w) => w.d === time);
         const series = view.series[seriesIndex];
@@ -2454,6 +2484,12 @@ function paintTrendPlot(box, spec, trend, onOpenChange = null, wheelZoom = null)
     onOpenChange ? { onOpenChange } : {});
   plot._drawer = drawer;
   draw();
+  if (initialPickDate && view.series.length) {
+    const idx = view.win.findIndex((w) => w.d === initialPickDate);
+    if (idx >= 0) {
+      drawer.open({ date: initialPickDate, series: view.series[0], seriesIndex: 0, index: idx });
+    }
+  }
 }
 
 /* 默认折线先看总盘：全部来源 × 全部模型 × 全部问题合成一条线。 */
@@ -2493,7 +2529,7 @@ function matrixCard(p, tax) {
     : "";
   const matrix = (body, actions = "", chrome = false) => `<article class="card mx-card${page ? " is-page" : ""}" id="mxCard" style="--span:12">
     <div class="mx-face mx-matrix-face" id="mxMatrixFace">
-      <header class="card-head mx-card-head"><h2>聚类矩阵</h2>${actions ? `<div class="mx-head-actions">${actions}</div>` : ""}</header>
+      <header class="card-head mx-card-head"><h2>聚类矩阵</h2><div class="mx-head-mxt" id="mxHeadMxt" hidden></div>${actions ? `<div class="mx-head-actions">${actions}</div>` : ""}</header>
       ${body}
       ${chrome ? `<section class="mx-daily" id="mxDaily" hidden aria-label="每日 TOP 问题"></section>` : ""}
     </div>
@@ -3619,8 +3655,8 @@ function wire(bento, p, tax, u) {
     function renderDailyTop(reveal = true) {
       if (!dailyEl || !dailyOpen || !trendData) return;
       const update = () => mountDailyTop(dailyEl, trendData, tax, u.mx, {
-        onPickProblem: ({ code, name, source }) => {
-          openTrend({ name: "全部场景", all: true }, { name, prefix: code, pat: code }, source, true);
+        onPickProblem: ({ code, name, date, source }) => {
+          openTrend({ name: "全部场景", all: true }, { name, prefix: code, pat: code }, source, true, date || null);
         },
       });
       if (reveal) layoutPanels(update);
@@ -3752,12 +3788,45 @@ function wire(bento, p, tax, u) {
     }
     setKlinePanelsOpen = setPanelsOpen;
 
-    function trendFrame(row, animate = true, source = null) {
+    const headMxt = $("#mxHeadMxt", bento);
+    const clearHeadMxt = () => {
+      if (!headMxt) return;
+      if (headMxt._docClick) {
+        document.removeEventListener("click", headMxt._docClick);
+        headMxt._docClick = null;
+      }
+      if (headMxt._docKey) {
+        document.removeEventListener("keydown", headMxt._docKey);
+        headMxt._docKey = null;
+      }
+      headMxt.innerHTML = "";
+      headMxt.hidden = true;
+    };
+
+    const trendCrumb = (row, node) => {
+      const code = String(node || "");
+      const stageId = code.split(".")[0] || "";
+      const stageObj = (tax.stages || []).find((s) => s.id === stageId);
+      const label = patName(tax, code) || code;
+      const prefix = row && row.name && row.name !== "全部场景"
+        ? row.name
+        : (stageObj && stageObj.name !== label ? stageObj.name : "");
+      return { prefix, label, full: prefix ? `${prefix} / ${label}` : label };
+    };
+
+    function trendFrame(row, animate = true, source = null, pickDate = null) {
+      clearHeadMxt();
       const spec = trendSpec(row);
       const title = trendTitle(row, spec.node);
+      const crumb = trendCrumb(row, spec.node);
+      if (headMxt) {
+        headMxt.innerHTML = trendBarHTML(trendData, spec, crumb);
+        headMxt.hidden = false;
+      }
       swapShell(shell, trendBodyHTML(trendData, spec, title), animate, source, () => setDailyOpen(false));
       const box = $(".mxt", shell);
-      const zoomBtn = $("#mxtZoom", box);
+      const barHost = $(".mxt-bar", headMxt) || headMxt || box;
+      const zoomBtn = $("#mxtZoom", barHost);
       const setZoom = (on) => {
         trend.zoom = on;
         if (!zoomBtn) return;
@@ -3767,33 +3836,83 @@ function wire(bento, p, tax, u) {
       };
       zoomBtn?.addEventListener("click", () => setZoom(!trend.zoom));
       setZoom(!!trend.zoom);
+
+      /* Unified frosted-glass "+" filter popover (same interaction model as Bench .bn-more-wrap) */
+      const moreWrap = $("#mxtMoreWrap", barHost);
+      const moreBtn = $("#mxtMoreToggle", barHost);
+      const morePop = $("#mxtMorePop", barHost);
+      const moreBadge = $("#mxtMoreBadge", barHost);
+      const moreHint = $("#mxtMoreHint", barHost);
+      const moreClr = $("#mxtMoreClr", barHost);
+      let moreOpen = false;
+      const setMoreOpen = (open) => {
+        moreOpen = !!open;
+        moreWrap?.classList.toggle("is-open", moreOpen);
+        morePop?.classList.toggle("is-open", moreOpen);
+        if (morePop) morePop.inert = !moreOpen;
+        moreBtn?.setAttribute("aria-expanded", String(moreOpen));
+      };
+      const syncMoreBadge = () => {
+        const cnt = trendFilterCount(trendSpec(row));
+        moreBtn?.classList.toggle("has-active", cnt > 0);
+        if (moreBadge) {
+          moreBadge.textContent = String(cnt);
+          moreBadge.hidden = cnt <= 0;
+        }
+        if (moreHint) {
+          moreHint.textContent = cnt ? `已启用 ${cnt} 项条件` : "按来源 / 模型 / 等级筛选或添加对比线";
+        }
+        if (moreClr) moreClr.hidden = cnt <= 0;
+      };
+      moreBtn?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        setMoreOpen(!moreOpen);
+      });
+      if (headMxt) {
+        const onDocClick = (e) => {
+          if (moreOpen && moreWrap && !moreWrap.contains(e.target)) setMoreOpen(false);
+        };
+        const onDocKey = (e) => {
+          if (moreOpen && e.key === "Escape") setMoreOpen(false);
+        };
+        headMxt._docClick = onDocClick;
+        headMxt._docKey = onDocKey;
+        document.addEventListener("click", onDocClick);
+        document.addEventListener("keydown", onDocKey);
+      }
+
       /* Opening the sample drawer splits the frame and narrows the map: that resize is expected
          and must not rebuild (and thereby close) the drawer. Defer the repaint instead and play
          it once the drawer is back, so condition changes made meanwhile still land. */
       let deferred = false;
+      let pendingPickDate = pickDate || null;
       const paintPlot = (force = false) => {
         const plot = $("#mxtPlot", box);
         if (!force && plot?._drawer?.isOpen?.()) { deferred = true; return; }
         deferred = false;
+        const initDate = pendingPickDate;
+        pendingPickDate = null;
         paintTrendPlot(box, trendSpec(row), trendData, (open) => {
           if (open) return;
           setTimeout(() => { if (deferred && box.isConnected) paintPlot(true); }, 280);
-        }, () => !!trend.zoom);
+        }, () => !!trend.zoom, initDate);
       };
       const bind = (id, key) => {
-        const el = $(`#${id}`, box);
-        if (!el) return;
+        const el = $(`#${id}`, barHost);
+        if (!el) return null;
         const seg = segmented(el, (v) => {
           trend[key] = v;
+          syncMoreBadge();
           paintPlot();
         });
         seg.set(String(trend[key]), { silent: true });
+        return seg;
       };
       bind("mxtMeasure", "measure");
-      bind("mxtScope", "scope");
+      const scopeSeg = bind("mxtScope", "scope");
       // 条件池编辑当前选中的折线；点卡片切换，拖条件到卡片也能改；最多 4 条，可删到 0 条。
-      const paletteEl = $("#mxtPalette", box);
-      const linesEl = $("#mxtLines", box);
+      const paletteEl = $("#mxtPalette", barHost);
+      const linesEl = $("#mxtLines", barHost);
       let active = trend.active;
       const sortList = (kind, list) => {
         const order = kind === "uts" ? (trendData.uts || []) : (trendData.models || []);
@@ -3805,6 +3924,7 @@ function wire(bento, p, tax, u) {
       };
       const renderLines = () => {
         if (linesEl) linesEl.innerHTML = trendLinesHTML(trend.lines, trendData, active);
+        syncMoreBadge();
       };
       const paint = () => paintPlot();
       const setActive = (i) => {
@@ -3856,7 +3976,19 @@ function wire(bento, p, tax, u) {
         renderLines();
         paint();
       };
-      box.addEventListener("click", (e) => {
+      moreClr?.addEventListener("click", () => {
+        trend.lines = trendDefaultLines(trendData);
+        active = 0;
+        trend.active = 0;
+        if (row && row.name !== "全部场景") {
+          trend.scope = "row";
+          scopeSeg?.set("row", { silent: true });
+        }
+        renderPalette();
+        renderLines();
+        paint();
+      });
+      barHost.addEventListener("click", (e) => {
         const chip = e.target.closest(".mxt-chip");
         if (chip) {
           applyChip(trend.lines[active], chip.dataset.kind, chip.dataset.value);
@@ -3871,7 +4003,7 @@ function wire(bento, p, tax, u) {
         const card = e.target.closest(".mxt-linecard");
         if (card) setActive(Number(card.dataset.line));
       });
-      box.addEventListener("keydown", (e) => {
+      barHost.addEventListener("keydown", (e) => {
         if (e.key !== "Enter" && e.key !== " ") return;
         if (e.target.closest("button")) return;
         const card = e.target.closest(".mxt-linecard");
@@ -3882,34 +4014,34 @@ function wire(bento, p, tax, u) {
       const payloadOf = (e) => {
         try { return JSON.parse(e.dataTransfer.getData("text/plain") || "null"); } catch { return null; }
       };
-      box.addEventListener("dragstart", (e) => {
+      barHost.addEventListener("dragstart", (e) => {
         const chip = e.target.closest(".mxt-chip");
         if (!chip) return;
         e.dataTransfer.setData("text/plain", JSON.stringify({ kind: chip.dataset.kind, value: chip.dataset.value }));
         e.dataTransfer.effectAllowed = "copy";
         chip.classList.add("is-dragging");
-        box.classList.add("is-dragging");
+        barHost.classList.add("is-dragging");
       });
-      box.addEventListener("dragend", (e) => {
+      barHost.addEventListener("dragend", (e) => {
         const chip = e.target.closest(".mxt-chip");
         if (chip) chip.classList.remove("is-dragging");
-        box.classList.remove("is-dragging");
-        $$(".mxt-linecard.is-over", box).forEach((el) => el.classList.remove("is-over"));
+        barHost.classList.remove("is-dragging");
+        $$(".mxt-linecard.is-over", barHost).forEach((el) => el.classList.remove("is-over"));
       });
-      box.addEventListener("dragover", (e) => {
-        if (!box.classList.contains("is-dragging")) return;
+      barHost.addEventListener("dragover", (e) => {
+        if (!barHost.classList.contains("is-dragging")) return;
         const card = e.target.closest(".mxt-linecard");
         if (!card) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = "copy";
-        $$(".mxt-linecard.is-over", box).forEach((el) => { if (el !== card) el.classList.remove("is-over"); });
+        $$(".mxt-linecard.is-over", barHost).forEach((el) => { if (el !== card) el.classList.remove("is-over"); });
         card.classList.add("is-over");
       });
-      box.addEventListener("dragleave", (e) => {
+      barHost.addEventListener("dragleave", (e) => {
         const card = e.target.closest(".mxt-linecard");
         if (card && !card.contains(e.relatedTarget)) card.classList.remove("is-over");
       });
-      box.addEventListener("drop", (e) => {
+      barHost.addEventListener("drop", (e) => {
         const card = e.target.closest(".mxt-linecard");
         if (!card) return;
         e.preventDefault();
@@ -3927,6 +4059,7 @@ function wire(bento, p, tax, u) {
         paint();
       });
       renderPalette();
+      renderLines();
       paintPlot();
       if (window.ResizeObserver) {
         let wide = plotWidth(box);
@@ -3941,7 +4074,7 @@ function wire(bento, p, tax, u) {
       }
     }
 
-    async function openTrend(row, col, source = null, allScenes = false) {
+    async function openTrend(row, col, source = null, allScenes = false, pickDate = null) {
       const node = col.prefix || col.pat;
       if (!node) return;
       hideTip();
@@ -3970,18 +4103,20 @@ function wire(bento, p, tax, u) {
       if (token !== trendToken || !trend.open || !shell.isConnected) return;
       $$(".mx-trend-probe, .mx-swap-probe", shell).forEach((el) => el.remove());
       if (!data || !data.dates || !data.dates.length) {
+        clearHeadMxt();
         swapShell(shell, `<div class="mxt mx-swap-panel"><div class="empty">暂无趋势数据</div></div>`, !!ready, source, () => setDailyOpen(false));
         return;
       }
       trendData = data;
       trendData.modelLabels = data.modelLabels || (p.models || []).map((m) => ({ id: m.id, label: m.label }));
       normalizeTrend(trend, data);
-      trendFrame(row, !!ready, source);
+      trendFrame(row, !!ready, source, pickDate);
     }
 
     function closeTrend(source = null) {
       trend.open = false;
       trendToken += 1;
+      clearHeadMxt();
       $$(".mx-trend-probe, .mx-swap-probe", shell).forEach((el) => el.remove());
       paint(true, source);
     }

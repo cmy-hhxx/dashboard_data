@@ -179,6 +179,7 @@ test("applyData updates concentric rings and KPI counters from real numbers", ()
   assert.equal(byId.get("spClusterTraces").textContent, "600");
   assert.equal(byId.get("spRingPct").textContent, "75.0%");
   assert.equal(byId.get("spRingClPct").textContent, "聚类 60.0%");
+  assert.ok(byId.get("spAttrPct").textContent.includes("待评测 250"));
   assert.ok(byId.get("spClusterPct").textContent.includes("待聚类 150"));
   const outOff = Number(byId.get("spRingAttr").getAttribute("stroke-dashoffset"));
   const inOff = Number(byId.get("spRingCl").getAttribute("stroke-dashoffset"));
