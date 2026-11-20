@@ -523,7 +523,7 @@ function bellOrder(items, valueOf, mode = "bell") {
   return out;
 }
 
-const barCountText = (n) => (Number(n) >= 10000 ? compact(n) : fmt(n));
+const barCountText = (n) => fmt(Number(n) || 0);
 
 /* Left-to-right 5-tier cluster tree (竖式全部问题液态池 → 阶段 → 环节 → 错法 → 正态分布单列标准模式柱条). */
 const HTREE_W = 940;
@@ -921,7 +921,6 @@ export function fxDiagramHTML(tax, pd, { horizontal = false, showMatrix = true, 
           <div class="fx-pool-fill" id="${idPrefix}PoolFill" style="height:0%"></div>
           <span class="fx-pool-lbl">待聚类</span>
           <b class="fx-pool-num num" id="${idPrefix}PoolNum">—</b>
-          <span class="fx-pool-tag">2h 批量</span>
         </div>
       </section>`
     : "";
@@ -2557,7 +2556,12 @@ export function mountFxDiagram(root, tax, pd, {
 
     if (ev.delta > 0) {
       if (liveControl) {
-        const gain = ev.delta;
+        let gain = ev.delta;
+        if (!ev.skipOverviewTick && typeof onLiveTick === "function") {
+          const applied = onLiveTick({ kind: "cluster", delta: gain, pending: liveCtl.simPending, leaf: lf });
+          if (typeof applied === "number") gain = applied;
+        }
+        if (gain <= 0) return;
         if (!ev.skipOverviewTick) {
           liveCtl.simPending = Math.max(0, liveCtl.simPending - gain);
           liveCtl.simCluster += gain;
@@ -2574,15 +2578,12 @@ export function mountFxDiagram(root, tax, pd, {
           if (cur === lf) liveLeaf.set(lf.id, nextVal);
           const numEl = numElMap.get(cur.id);
           if (numEl) {
-            numEl.textContent = numEl.dataset.compact === "1" ? barCountText(nextVal) : fmt(nextVal);
+            numEl.textContent = fmt(nextVal);
             tickEl(numEl, 680);
           }
           if (cur.row >= 1) land(nodeElMap.get(cur.id), 560);
         }
         land(nodeElMap.get("root"), 520);
-        if (!ev.skipOverviewTick && typeof onLiveTick === "function") {
-          onLiveTick({ kind: "cluster", delta: gain, pending: liveCtl.simPending, leaf: lf });
-        }
         return;
       }
       liveLeaf.set(lf.id, (liveLeaf.get(lf.id) || 0) + ev.delta);
@@ -2670,11 +2671,18 @@ export function mountFxDiagram(root, tax, pd, {
   const MATCH_GAP = 1080;
   const SPROUT_GAP = 1420;
   const DRAIN_DUR = 880;
-  const liveBatchDelta = (ratePerMin, scale = 1) => {
+  const LIVE_ATTR_CADENCE_MS = 4000;
+  const LIVE_CLUSTER_CADENCE_MS = 6000;
+  let liveLeafCursor = 0;
+  const nextLiveLeaf = () => {
+    if (!tree.leaves.length) return null;
+    const lf = tree.leaves[liveLeafCursor % tree.leaves.length];
+    liveLeafCursor = (liveLeafCursor + 1) % tree.leaves.length;
+    return lf;
+  };
+  const liveBatchDelta = (ratePerMin, cadenceSec = 4) => {
     const r = Math.max(0.5, Number(ratePerMin) || 0.5);
-    const base = Math.max(2, Math.round((r / 60) * 12 * scale));
-    const spread = Math.max(1, Math.round(base * 0.35));
-    return Math.max(2, Math.min(28, base + Math.floor(Math.random() * (spread * 2 + 1)) - spread));
+    return Math.max(1, Math.min(20, Math.round((r / 60) * cadenceSec)));
   };
 
   const along = (id, u) => {
@@ -2804,16 +2812,16 @@ export function mountFxDiagram(root, tax, pd, {
 
     if (liveControl) {
       if (liveCtl.running && liveCtl.rateInterval > 0 && now >= liveCtl.nextRateAt && sparks.length < 5 && tree.leaves.length) {
-        liveCtl.nextRateAt = now + liveCtl.rateInterval * (0.88 + Math.random() * 0.28);
-        const lf = tree.leaves[Math.floor(Math.random() * tree.leaves.length)];
-        const n = liveBatchDelta(liveCtl.rate, 1);
-        spawn(null, { leaf: lf, delta: n, poolDelta: n, isNew: false }, null, 0, poolEl ? "attr" : "full");
+        liveCtl.nextRateAt = now + liveCtl.rateInterval;
+        const lf = nextLiveLeaf();
+        const n = liveBatchDelta(liveCtl.rate, liveCtl.rateInterval / 1000);
+        if (lf) spawn(null, { leaf: lf, delta: n, poolDelta: n, isNew: false }, null, 0, poolEl ? "attr" : "full");
       }
       if (liveCtl.running && poolEl && liveCtl.simPending > 0 && liveCtl.clusterInterval > 0 && now >= liveCtl.nextClusterAt && sparks.length < 5 && tree.leaves.length) {
-        liveCtl.nextClusterAt = now + liveCtl.clusterInterval * (0.88 + Math.random() * 0.28);
-        const lf = tree.leaves[Math.floor(Math.random() * tree.leaves.length)];
-        const n = Math.min(liveCtl.simPending, liveBatchDelta(liveCtl.rate, 0.8));
-        if (n > 0) spawn(0, { leaf: lf, delta: n, isNew: false }, 0, 0, "cluster");
+        liveCtl.nextClusterAt = now + liveCtl.clusterInterval;
+        const lf = nextLiveLeaf();
+        const n = Math.min(liveCtl.simPending, liveBatchDelta(liveCtl.rate, liveCtl.clusterInterval / 1000));
+        if (lf && n > 0) spawn(0, { leaf: lf, delta: n, isNew: false }, 0, 0, "cluster");
       }
       if (!liveCtl.running && !sparks.length) {
         poolEl?.classList.remove("is-flushing");
@@ -2893,19 +2901,22 @@ export function mountFxDiagram(root, tax, pd, {
           if (s.phase === 2) {
             if (s.kind === "attr") {
               land(poolEl, 520);
-              const gain = Math.max(0, Number(s.ev?.poolDelta) || 0);
+              let gain = Math.max(0, Number(s.ev?.poolDelta) || 0);
               if (liveControl && liveCtl.running && gain > 0) {
-                liveCtl.simPending += gain;
-                liveCtl.simAttr += gain;
-                updatePool({
-                  pending: liveCtl.simPending,
-                  attrTraces: liveCtl.simAttr,
-                  clusterTraces: liveCtl.simCluster,
-                  flushing: sparks.some((sp) => sp.kind === "cluster"),
-                });
-                spawnPoolDanmu(gain, false);
                 if (typeof onLiveTick === "function") {
-                  onLiveTick({ kind: "attr", delta: gain, pending: liveCtl.simPending });
+                  const applied = onLiveTick({ kind: "attr", delta: gain, pending: liveCtl.simPending + gain });
+                  if (typeof applied === "number") gain = applied;
+                }
+                if (gain > 0) {
+                  liveCtl.simPending += gain;
+                  liveCtl.simAttr += gain;
+                  updatePool({
+                    pending: liveCtl.simPending,
+                    attrTraces: liveCtl.simAttr,
+                    clusterTraces: liveCtl.simCluster,
+                    flushing: sparks.some((sp) => sp.kind === "cluster"),
+                  });
+                  spawnPoolDanmu(gain, false);
                 }
               }
               sparks.splice(n, 1);
@@ -3039,28 +3050,22 @@ export function mountFxDiagram(root, tax, pd, {
       const rawP = Math.max(0, Math.round(Number(pending) || 0));
       const rawA = Math.max(0, Math.round(Number(attrTraces) || 0));
       const rawC = Math.max(0, Math.round(Number(clusterTraces) || 0));
-      if (!liveCtl.seeded || !running) {
-        liveCtl.simPending = rawP;
-        liveCtl.simAttr = rawA;
-        liveCtl.simCluster = rawC;
-        liveCtl.seeded = true;
-      } else {
-        liveCtl.simPending = rawP < liveCtl.simPending - 50 ? rawP : Math.max(liveCtl.simPending, rawP);
-        liveCtl.simAttr = Math.max(liveCtl.simAttr, rawA);
-        liveCtl.simCluster = Math.max(liveCtl.simCluster, rawC);
-      }
+      // 始终与顶部总览口径严格一致（已完成评测 = 已聚类 + 待聚类）
+      liveCtl.simPending = rawP;
+      liveCtl.simAttr = rawA;
+      liveCtl.simCluster = rawC;
+      liveCtl.seeded = true;
       updatePool({
         pending: liveCtl.simPending,
         attrTraces: liveCtl.simAttr,
         clusterTraces: liveCtl.simCluster,
         flushing: dCl > 0 || sparks.some((s) => s.kind === "cluster"),
       });
-      if (dAttr > 0) spawnPoolDanmu(dAttr, true);
 
       const r = Math.max(0, Number(rate) || 0);
       liveCtl.rate = r;
-      liveCtl.rateInterval = running && r > 0 ? Math.max(2800, Math.min(5200, 145000 / Math.max(r, 24))) : 0;
-      liveCtl.clusterInterval = running && r > 0 && rawP > 0 ? Math.max(4400, Math.min(7200, liveCtl.rateInterval * 1.55)) : 0;
+      liveCtl.rateInterval = running && r > 0 ? LIVE_ATTR_CADENCE_MS : 0;
+      liveCtl.clusterInterval = running && r > 0 ? LIVE_CLUSTER_CADENCE_MS : 0;
 
       if (!running) {
         for (let i = sparks.length - 1; i >= 0; i--) {
@@ -3068,38 +3073,18 @@ export function mountFxDiagram(root, tax, pd, {
         }
       }
 
-      const span = Math.max(3000, Number(windowMs) || 14000);
-      if (dAttr > 0 && running && tree.leaves.length) {
-        const count = Math.min(2, Math.max(1, Math.round(dAttr / 4)));
-        for (let k = 0; k < count; k++) {
-          const lf = tree.leaves[Math.floor(Math.random() * tree.leaves.length)];
-          spawn(k % ins.length, { leaf: lf, delta: 0, poolDelta: 0, isNew: false }, k % outs.length, k * 1400, poolEl ? "attr" : "full");
-        }
-        liveCtl.nextRateAt = simNow + Math.max(3200, liveCtl.rateInterval);
-      } else if (running && !wasRunning && r > 0 && tree.leaves.length) {
-        // Gentle opening wave: 1 calm attribution spark + 1 delayed cluster spark
-        const lf1 = tree.leaves[Math.floor(Math.random() * tree.leaves.length)];
-        const n1 = liveBatchDelta(r, 1);
-        spawn(0, { leaf: lf1, delta: n1, poolDelta: n1, isNew: false }, 0, 260, poolEl ? "attr" : "full");
+      if (running && !wasRunning && r > 0 && tree.leaves.length) {
+        // 固定节拍起拍：第 0.4s 发出首波归因，错开 2.4s 发出首波聚类，之后严格按 4s / 6s 交替推进
+        const lf1 = nextLiveLeaf();
+        const n1 = liveBatchDelta(r, LIVE_ATTR_CADENCE_MS / 1000);
+        if (lf1) spawn(0, { leaf: lf1, delta: n1, poolDelta: n1, isNew: false }, 0, 400, poolEl ? "attr" : "full");
         if (poolEl && rawP > 0) {
-          const lf2 = tree.leaves[Math.floor(Math.random() * tree.leaves.length)];
-          const n2 = liveBatchDelta(r, 0.8);
-          spawn(0, { leaf: lf2, delta: n2, isNew: false }, 0, 1900, "cluster");
+          const lf2 = nextLiveLeaf();
+          const n2 = Math.min(rawP, liveBatchDelta(r, LIVE_CLUSTER_CADENCE_MS / 1000));
+          if (lf2 && n2 > 0) spawn(0, { leaf: lf2, delta: n2, isNew: false }, 0, 2400, "cluster");
         }
-        liveCtl.nextRateAt = simNow + Math.max(3200, liveCtl.rateInterval);
-        liveCtl.nextClusterAt = simNow + Math.max(5200, liveCtl.clusterInterval || 5200);
-      }
-
-      if (dCl > 0 && running && tree.leaves.length) {
-        const count = Math.min(2, Math.max(1, Math.round(dCl / 4)));
-        let rem = dCl;
-        for (let k = 0; k < count && rem > 0; k++) {
-          const share = k === count - 1 ? rem : Math.max(1, Math.round(rem / (count - k)));
-          rem -= share;
-          const lf = tree.leaves[Math.floor(Math.random() * tree.leaves.length)];
-          spawn(0, { leaf: lf, delta: share, skipOverviewTick: true, isNew: false }, 0, 600 + k * 1800, poolEl ? "cluster" : "full");
-        }
-        liveCtl.nextClusterAt = simNow + Math.max(4600, liveCtl.clusterInterval || 4600);
+        liveCtl.nextRateAt = simNow + LIVE_ATTR_CADENCE_MS;
+        liveCtl.nextClusterAt = simNow + LIVE_CLUSTER_CADENCE_MS + 1400;
       }
 
       const active = liveCtl.running || sparks.length > 0;
@@ -3110,8 +3095,8 @@ export function mountFxDiagram(root, tax, pd, {
         ctx.clearRect(0, 0, geo.w, geo.h);
         return;
       }
-      if (liveCtl.running && dAttr === 0 && liveCtl.nextRateAt < simNow) liveCtl.nextRateAt = simNow + 900;
-      if (liveCtl.running && dCl === 0 && liveCtl.nextClusterAt < simNow) liveCtl.nextClusterAt = simNow + 1800;
+      if (liveCtl.running && liveCtl.nextRateAt < simNow) liveCtl.nextRateAt = simNow + LIVE_ATTR_CADENCE_MS;
+      if (liveCtl.running && liveCtl.nextClusterAt < simNow) liveCtl.nextClusterAt = simNow + LIVE_CLUSTER_CADENCE_MS;
       kick();
     },
     destroy() {

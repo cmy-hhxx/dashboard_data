@@ -943,14 +943,15 @@ function handleChartLeave(root) {
 
 /* 当流水线批次粒子落地到「待聚类」或「聚类树」时，同步递增顶部总览数字并在仅有的两处总览指标弹出 +n 弹幕 */
 function handleLiveTick(root, evt) {
-  if (!root || !S.data || !S.liveRunning || !evt) return;
+  if (!root || !S.data || !S.liveRunning || !evt) return 0;
   const inTr = Number(S.data.input_traces) || 0;
   const d = Math.max(0, Math.round(Number(evt.delta) || 0));
-  if (d <= 0) return;
+  if (d <= 0) return 0;
   if (evt.kind === "attr") {
     const cap = S.simMaxCarry > 0 ? S.simMaxCarry : 30;
-    const allowed = Math.max(0, Math.min(d, cap - S.simAttrCarry));
-    if (allowed <= 0) return;
+    const remainSpace = inTr > 0 ? Math.max(0, inTr - S.shownAttrTraces) : d;
+    const allowed = Math.max(0, Math.min(d, cap - S.simAttrCarry, remainSpace));
+    if (allowed <= 0) return 0;
     S.simAttrCarry += allowed;
     S.simPendingCarry += allowed;
     S.shownAttrTraces = Math.min(inTr || Infinity, S.shownAttrTraces + allowed);
@@ -982,10 +983,12 @@ function handleLiveTick(root, evt) {
       const nextRem = Math.max(0, curRem - allowed);
       activeRem.textContent = nextRem > 0 ? `待测 ${num(nextRem)}` : "已完成";
     }
-  } else if (evt.kind === "cluster") {
+    return allowed;
+  }
+  if (evt.kind === "cluster") {
     const avail = Math.max(0, S.shownAttrTraces - S.shownClusterTraces);
     const allowed = Math.max(0, Math.min(d, avail));
-    if (allowed <= 0) return;
+    if (allowed <= 0) return 0;
     S.simClusterCarry += allowed;
     S.simPendingCarry = Math.max(0, S.simPendingCarry - allowed);
     S.shownClusterTraces = Math.min(S.shownAttrTraces, S.shownClusterTraces + allowed);
@@ -1004,7 +1007,9 @@ function handleLiveTick(root, evt) {
       const cur = Number(String(activeCl.textContent || "").replace(/,/g, "")) || 0;
       activeCl.textContent = num(cur + allowed);
     }
+    return allowed;
   }
+  return 0;
 }
 
 function mountPipeline(root, c) {
@@ -1089,25 +1094,18 @@ export function applyData(root, data) {
 
   const hasPrev = S.prevInputTraces != null;
   const maxCarry = ev.running && liveRate >= 0.05
-    ? Math.min(rawRemTr, Math.max(4, Math.round((liveRate / 60) * 30)))
+    ? Math.min(rawRemTr, Math.max(12, Math.round((liveRate / 60) * 45)))
     : 0;
   S.simMaxCarry = maxCarry;
   if (isBrowser() && hasPrev && ev.running && liveRate >= 0.05) {
-    // 真实落盘已赶上或超过前端预测时自然清零；仍在落盘窗口内时受 maxCarry 上限约束，避免连点刷新无限累加
-    if (rawAttrTr >= S.shownAttrTraces) {
-      S.simAttrCarry = 0;
-    } else {
-      const carryNow = Math.max(0, S.shownAttrTraces - rawAttrTr);
-      const stepWave = Math.max(1, Math.round((liveRate / 60) * 8));
-      S.simAttrCarry = Math.min(maxCarry, carryNow + (carryNow < maxCarry ? stepWave : 0));
-    }
-    if (rawClTr >= S.shownClusterTraces) {
-      S.simClusterCarry = 0;
-    } else if (rawPendingTr + S.simAttrCarry > 0) {
-      const carryCl = Math.max(0, S.shownClusterTraces - rawClTr);
-      const maxClCarry = Math.min(rawPendingTr + S.simAttrCarry, maxCarry);
-      S.simClusterCarry = Math.min(maxClCarry, carryCl);
-    }
+    // 固定 4s/6s 节拍负责实时推进，30s 轮询只与真实落盘对齐，不额外叠波
+    S.simAttrCarry = rawAttrTr >= S.shownAttrTraces
+      ? 0
+      : Math.min(maxCarry, Math.max(0, S.shownAttrTraces - rawAttrTr));
+    const nextAttr = Math.min(rawInTr || Infinity, rawAttrTr + S.simAttrCarry);
+    S.simClusterCarry = rawClTr >= S.shownClusterTraces
+      ? 0
+      : Math.min(Math.max(0, nextAttr - rawClTr), Math.max(0, S.shownClusterTraces - rawClTr));
   } else {
     S.simAttrCarry = 0;
     S.simClusterCarry = 0;
@@ -1125,8 +1123,10 @@ export function applyData(root, data) {
   const attrRatio = inTr > 0 ? Math.min(1, attrTr / inTr) : 0;
   const clInRatio = inTr > 0 ? Math.min(attrRatio, clTr / inTr) : 0;
 
-  const deltaAttr = hasPrev ? Math.max(0, attrTr - S.prevAttrTraces) : 0;
-  const deltaCluster = hasPrev ? Math.max(0, clTr - S.prevClusterTraces) : 0;
+  const prevShownAttr = hasPrev ? S.shownAttrTraces : attrTr;
+  const prevShownCluster = hasPrev ? S.shownClusterTraces : clTr;
+  const deltaAttr = hasPrev ? Math.max(0, attrTr - prevShownAttr) : 0;
+  const deltaCluster = hasPrev ? Math.max(0, clTr - prevShownCluster) : 0;
   const numAttrRate = Number(attrRate) || 0;
   const numCompRate = Number(compactRate) || 0;
   const numGwRpm = Number(data.gateways?.realtime_rpm);
@@ -1270,7 +1270,7 @@ function wireControls(root) {
         const p = Number(el.dataset.pending) || 0;
         const a = Number(el.dataset.attr) || 0;
         const c = Number(el.dataset.clustered) || 0;
-        return `<div class="t-head">待聚类池 · 每 2 小时批量聚类</div>
+        return `<div class="t-head">待聚类池</div>
           <div class="t-row">待聚类<b class="num">${fmt(p)} trace</b></div>
           <div class="t-row">已聚类<b class="num">${fmt(c)} trace</b></div>
           <div class="t-row">已归因<b class="num">${fmt(a)} trace</b></div>`;

@@ -80,7 +80,6 @@ test("pipeline card reuses native horizontal fx-diagram with pending cluster poo
     'id="spfxPoolFill"',
     'id="spfxPoolNum"',
     "待聚类",
-    "2h 批量",
     'id="spfxTree"',
     'id="spfxRootClip"',
     'data-rw="86"',

@@ -198,3 +198,41 @@ test("index.html #viewSwitch exposes 4 main tabs and 5 overflow items in + menu"
   assert.deepEqual(actions, ["评测速度", "评测体系", "评测评测", "预测数据", "文档"]);
   assert.ok(nav.includes('class="vs-toggle"'), "must include + toggle button");
 });
+
+test("buildBenchDailyModel computes cumulative pool/bench growth and day-over-day deltas", () => {
+  const daily = benchMod.buildBenchDailyModel(
+    {
+      pool_daily: [
+        { key: "2026-11-17", count: 128 },
+        { key: "2026-11-18", count: 448 },
+        { key: "2026-11-19", count: 263 },
+      ],
+      pool_stats: {
+        dims: {
+          day: [
+            { key: "2026-11-17", count: 94 },
+            { key: "2026-11-18", count: 105 },
+            { key: "2026-11-19", count: 38 },
+          ],
+        },
+      },
+    },
+    {
+      dims: {
+        day: [
+          { key: "2026-11-17", count: 10 },
+          { key: "2026-11-18", count: 14 },
+          { key: "2026-11-19", count: 6 },
+        ],
+      },
+    },
+  );
+  assert.equal(daily.days.length, 3);
+  assert.equal(daily.hasRawPool, true);
+  assert.equal(daily.totalPoolCum, 839);
+  assert.equal(daily.totalBenchCum, 30);
+  assert.equal(daily.byDate.get("2026-11-18").poolDelta, 320);
+  assert.equal(daily.byDate.get("2026-11-19").poolCum, 839);
+  assert.equal(daily.last7Pool, 839);
+  assert.equal(daily.last7Bench, 30);
+});

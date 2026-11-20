@@ -335,6 +335,7 @@ export function normalizeBenchPayload(raw, taxonomy) {
       pool_size: Number(md?.pool_size ?? md?.pool_stats?.pool_size ?? 0),
       base_pool: Number(md?.base_pool ?? Math.max(0, (md?.pool_size || 0) - (md?.long_pool || 0))),
       long_pool: Number(md?.long_pool ?? 0),
+      pool_daily: Array.isArray(md?.pool_daily) ? md.pool_daily : [],
       pool_stats: md?.pool_stats || {},
       tiers: md?.tiers || {},
       long_tiers: md?.long_tiers || {},
@@ -362,6 +363,104 @@ export function normalizeBenchPayload(raw, taxonomy) {
     stageNames,
     mechNames,
     patNames,
+  };
+}
+
+const ISO_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const BN_WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"];
+const BN_CHEVRON_L = `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 3.5L5.5 8 10 12.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const BN_CHEVRON_R = `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 3.5L10.5 8 6 12.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const BN_CLOSE_X = `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
+
+function shiftYm(ym, deltaMonths) {
+  const [y, m] = String(ym || "").split("-").map(Number);
+  if (!Number.isFinite(y) || !Number.isFinite(m)) return ym;
+  const d = new Date(Date.UTC(y, m - 1 + deltaMonths, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function compactPlus(n) {
+  const v = Math.round(Number(n) || 0);
+  if (v <= 0) return "";
+  if (v >= 10000) return `+${(v / 10000).toFixed(1)}w`;
+  if (v >= 1000) return `+${(v / 1000).toFixed(1)}k`;
+  return `+${v}`;
+}
+
+function signedDelta(n) {
+  const v = Math.round(Number(n) || 0);
+  if (v > 0) return `+${fmt(v)}`;
+  if (v < 0) return `-${fmt(Math.abs(v))}`;
+  return "0";
+}
+
+/* Merge daily pool_daily, pool_stats.dims.day and tierData.dims.day into a cumulative dynamic timeline. */
+export function buildBenchDailyModel(md, tierData) {
+  const rawPoolMap = new Map();
+  (md?.pool_daily || []).forEach((r) => {
+    const k = String(r?.key || "").slice(0, 10);
+    if (ISO_DAY_RE.test(k)) rawPoolMap.set(k, Number(r.count || 0));
+  });
+  const usableMap = new Map();
+  (md?.pool_stats?.dims?.day || []).forEach((r) => {
+    const k = String(r?.key || "").slice(0, 10);
+    if (ISO_DAY_RE.test(k)) usableMap.set(k, Number(r.count || 0));
+  });
+  const benchMap = new Map();
+  (tierData?.dims?.day || []).forEach((r) => {
+    const k = String(r?.key || "").slice(0, 10);
+    if (ISO_DAY_RE.test(k)) benchMap.set(k, Number(r.count || 0));
+  });
+
+  const hasRawPool = rawPoolMap.size > 0;
+  const allDates = [...new Set([...rawPoolMap.keys(), ...usableMap.keys(), ...benchMap.keys()])].sort();
+  let poolCum = 0;
+  let usableCum = 0;
+  let benchCum = 0;
+  let prevPool = null;
+  let prevBench = null;
+  const days = [];
+  const byDate = new Map();
+
+  for (const date of allDates) {
+    const usableAdded = usableMap.get(date) || 0;
+    const poolAdded = hasRawPool ? (rawPoolMap.get(date) || 0) : usableAdded;
+    const benchAdded = benchMap.get(date) || 0;
+    poolCum += poolAdded;
+    usableCum += usableAdded;
+    benchCum += benchAdded;
+    const rec = {
+      date,
+      poolAdded,
+      usableAdded,
+      benchAdded,
+      poolCum,
+      usableCum,
+      benchCum,
+      poolDelta: prevPool == null ? 0 : poolAdded - prevPool,
+      benchDelta: prevBench == null ? 0 : benchAdded - prevBench,
+    };
+    prevPool = poolAdded;
+    prevBench = benchAdded;
+    days.push(rec);
+    byDate.set(date, rec);
+  }
+
+  const months = [...new Set(days.map((d) => d.date.slice(0, 7)))].sort();
+  const tail7 = days.slice(-7);
+  return {
+    days,
+    byDate,
+    months,
+    hasRawPool,
+    latestDay: days[days.length - 1] || null,
+    firstDay: days[0] || null,
+    last7Pool: tail7.reduce((s, d) => s + d.poolAdded, 0),
+    last7Bench: tail7.reduce((s, d) => s + d.benchAdded, 0),
+    maxPoolAdded: Math.max(1, ...days.map((d) => d.poolAdded)),
+    maxBenchAdded: Math.max(1, ...days.map((d) => d.benchAdded)),
+    totalPoolCum: poolCum,
+    totalBenchCum: benchCum,
   };
 }
 
@@ -633,6 +732,11 @@ export async function render(root, ctx) {
     sunburstState: { focus: "b", open: null },
     stepFilter: "all",
     showFullQ: false,
+    calMonth: "",
+    calMode: "pool",
+    calModalDate: "",
+    flippedStages: new Set(),
+    stageFocus: new Map(),
   };
 
   const currentModel = () => models[S.model] || Object.values(models)[0];
@@ -734,14 +838,496 @@ export async function render(root, ctx) {
     return full;
   };
 
-  /* ---- Render sub-sections ---- */
-  function renderHeroHTML(md, tierData) {
+  function benchDayTipHTML(rec, isBenchMode, tierLabel) {
+    if (!rec) return "";
+    const added = isBenchMode ? rec.benchAdded : rec.poolAdded;
+    const cum = isBenchMode ? rec.benchCum : rec.poolCum;
+    const dlt = isBenchMode ? rec.benchDelta : rec.poolDelta;
+    const dCls = dlt > 0 ? "is-up" : dlt < 0 ? "is-down" : "";
+    return `<div class="t-head">${esc(rec.date)}</div>
+      <div class="t-row"><span>${isBenchMode ? `入选 ${tierLabel}` : "当日动态入池"}</span><b class="num is-key">+${fmt(added)}</b></div>
+      <div class="t-row"><span>较前日变化</span><b class="num ${dCls}">${signedDelta(dlt)}</b></div>
+      <div class="t-row"><span>累计规模</span><b class="num">${fmt(cum)}</b></div>
+      ${isBenchMode
+        ? `<div class="t-row"><span>当日候选池新增</span><b class="num">+${fmt(rec.poolAdded)}</b></div>`
+        : `<div class="t-row"><span>入选 ${tierLabel}</span><b class="num">${fmt(rec.benchAdded)}</b></div>`}`;
+  }
+
+  function renderGrowthChartHTML(daily, isBenchMode, tierLabel) {
+    const days = daily.days || [];
+    const last7 = isBenchMode ? daily.last7Bench : daily.last7Pool;
+    const latest = daily.latestDay;
+    const totalCum = isBenchMode ? daily.totalBenchCum : daily.totalPoolCum;
+    const firstCum = days.length ? (isBenchMode ? days[0].benchCum : days[0].poolCum) : 0;
+    const latestVal = latest ? (isBenchMode ? latest.benchAdded : latest.poolAdded) : 0;
+    if (!days.length) {
+      return `<div class="bn-growth-card"><div class="bn-growth-head"><span class="bn-fstage-k">动态增长</span><b class="num">—</b></div></div>`;
+    }
+    const W = 460;
+    const H = 84;
+    const padX = 8;
+    const padT = 10;
+    const padB = 8;
+    const plotW = W - padX * 2;
+    const plotH = H - padT - padB;
+    const maxAdd = Math.max(1, isBenchMode ? daily.maxBenchAdded : daily.maxPoolAdded);
+    const maxCum = Math.max(1, totalCum);
+    const stepX = days.length > 1 ? plotW / (days.length - 1) : 0;
+    const barW = Math.max(2.5, Math.min(9, (plotW / Math.max(1, days.length)) * 0.62));
+
+    const pts = days.map((d, i) => {
+      const add = isBenchMode ? d.benchAdded : d.poolAdded;
+      const cum = isBenchMode ? d.benchCum : d.poolCum;
+      const x = days.length > 1 ? padX + i * stepX : W / 2;
+      const yCum = padT + (1 - cum / maxCum) * plotH;
+      const barH = Math.max(2, (add / maxAdd) * (plotH * 0.72));
+      return { d, x, yCum, barH, add };
+    });
+
+    const lineD = pts.map((p, i) => `${i ? "L" : "M"}${p.x.toFixed(1)},${p.yCum.toFixed(1)}`).join("");
+    const baseY = (padT + plotH).toFixed(1);
+    const areaD = pts.length > 1
+      ? `${lineD}L${pts[pts.length - 1].x.toFixed(1)},${baseY}L${pts[0].x.toFixed(1)},${baseY}Z`
+      : "";
+    const lastPt = pts[pts.length - 1];
+    const bars = pts.map((p) => {
+      const active = S.f.day === p.d.date || S.calModalDate === p.d.date;
+      const tip = benchDayTipHTML(p.d, isBenchMode, tierLabel);
+      return `<rect class="bn-g-bar${active ? " is-on" : ""}" x="${(p.x - barW / 2).toFixed(1)}" y="${(padT + plotH - p.barH).toFixed(1)}" width="${barW.toFixed(1)}" height="${p.barH.toFixed(1)}" rx="1.5" data-bn-day="${esc(p.d.date)}" data-tip="1" data-tip-html="${esc(tip)}"/>`;
+    }).join("");
+
+    return `<div class="bn-growth-card">
+      <div class="bn-growth-head">
+        <span class="bn-fstage-k">${isBenchMode ? `${tierLabel} 累计增长` : "动态入池走势"}</span>
+        <div class="bn-growth-kpis num">
+          <span class="bn-g-range">${fmt(firstCum)} → <b>${fmt(totalCum)}</b></span>
+          ${latest ? `<span class="bn-delta-pill is-live">${esc(latest.date.slice(5))} +${fmt(latestVal)}</span>` : ""}
+          <span class="bn-delta-pill">近 7 日 +${fmt(last7)}</span>
+        </div>
+      </div>
+      <div class="bn-growth-plot">
+        <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Bench 每日入库与累计增长曲线">
+          ${areaD ? `<path class="bn-g-area" d="${areaD}"/>` : ""}
+          <g class="bn-g-bars">${bars}</g>
+          ${lineD ? `<path class="bn-g-line" d="${lineD}"/>` : ""}
+          ${lastPt ? `<circle class="bn-g-halo" cx="${lastPt.x.toFixed(1)}" cy="${lastPt.yCum.toFixed(1)}" r="6"/><circle class="bn-g-dot" cx="${lastPt.x.toFixed(1)}" cy="${lastPt.yCum.toFixed(1)}" r="3.2"/>` : ""}
+        </svg>
+      </div>
+    </div>`;
+  }
+
+  function renderCalFrontHTML(daily, isBenchMode, tierLabel) {
+    const months = daily.months || [];
+    const latestYm = months[months.length - 1] || new Date().toISOString().slice(0, 7);
+    const activeYm = /^\d{4}-\d{2}$/.test(S.calMonth) ? S.calMonth : latestYm;
+    const [yy, mm] = activeYm.split("-").map(Number);
+    const daysInMonth = Number.isFinite(yy) && Number.isFinite(mm)
+      ? new Date(Date.UTC(yy, mm, 0)).getUTCDate()
+      : 30;
+    const firstDow = Number.isFinite(yy) && Number.isFinite(mm)
+      ? (new Date(Date.UTC(yy, mm - 1, 1)).getUTCDay() + 6) % 7
+      : 0;
+    const maxVal = Math.max(1, isBenchMode ? daily.maxBenchAdded : daily.maxPoolAdded);
+    const prevYm = shiftYm(activeYm, -1);
+    const nextYm = shiftYm(activeYm, 1);
+    const atEarliest = activeYm <= "2020-01";
+    const atLatest = activeYm >= latestYm;
+
+    const cells = [];
+    for (let i = 0; i < firstDow; i += 1) {
+      cells.push(`<span class="bn-cal-cell is-void" aria-hidden="true"></span>`);
+    }
+    let monthAdded = 0;
+    for (let d = 1; d <= daysInMonth; d += 1) {
+      const dateStr = `${activeYm}-${String(d).padStart(2, "0")}`;
+      const rec = daily.byDate.get(dateStr);
+      const val = rec ? (isBenchMode ? rec.benchAdded : rec.poolAdded) : 0;
+      monthAdded += val;
+      if (!rec || val <= 0) {
+        cells.push(`<span class="bn-cal-cell is-empty" aria-label="${esc(dateStr)}"><span class="bn-cal-d num">${d}</span></span>`);
+        continue;
+      }
+      const ratio = val / maxVal;
+      const heat = 0.08 + 0.88 * (ratio ** 0.72);
+      const isActive = S.f.day === dateStr || S.calModalDate === dateStr;
+      const tip = benchDayTipHTML(rec, isBenchMode, tierLabel);
+      cells.push(`<button type="button" class="bn-cal-cell${isActive ? " is-active" : ""}${heat > 0.56 ? " is-hot" : ""}" data-bn-day="${esc(dateStr)}" data-tip="1" data-tip-html="${esc(tip)}" aria-pressed="${isActive}" style="--v:${heat.toFixed(3)}">
+        <span class="bn-cal-d num">${d}</span>
+        <b class="bn-cal-v num">${esc(compactPlus(val))}</b>
+      </button>`);
+    }
+    const trailing = (7 - (cells.length % 7)) % 7;
+    for (let i = 0; i < trailing; i += 1) {
+      cells.push(`<span class="bn-cal-cell is-void" aria-hidden="true"></span>`);
+    }
+
+    const title = Number.isFinite(yy) && Number.isFinite(mm) ? `${yy} 年 ${mm} 月` : activeYm;
+    return `<div class="bn-cal">
+      <div class="bn-cal-bar">
+        <div class="bn-cal-head-l">
+          <span class="bn-cal-title num">${esc(title)}</span>
+          ${monthAdded > 0 ? `<span class="bn-delta-pill num">+${fmt(monthAdded)}</span>` : ""}
+        </div>
+        <div class="bn-cal-head-r">
+          <div class="bn-cal-mode" role="group" aria-label="日历口径">
+            <button type="button" data-bn-cal-mode="pool" aria-pressed="${!isBenchMode}">入池</button>
+            <button type="button" data-bn-cal-mode="bench" aria-pressed="${isBenchMode}">当前档</button>
+          </div>
+          <div class="bn-cal-nav" role="group" aria-label="月份切换">
+            <button type="button" class="bn-cal-navbtn" data-bn-cal-month="${esc(prevYm)}" aria-label="上一个月"${atEarliest ? " disabled" : ""}>${BN_CHEVRON_L}</button>
+            <button type="button" class="bn-cal-navbtn" data-bn-cal-month="${esc(nextYm)}" aria-label="下一个月"${atLatest ? " disabled" : ""}>${BN_CHEVRON_R}</button>
+          </div>
+        </div>
+      </div>
+      <div class="bn-cal-week" aria-hidden="true">${BN_WEEKDAYS.map((w) => `<span>${w}</span>`).join("")}</div>
+      <div class="bn-cal-grid" role="group" aria-label="动态入库日历">${cells.join("")}</div>
+    </div>`;
+  }
+
+  function renderCalBackHTML(daily, dateStr, isBenchMode, tierLabel) {
+    const rec = daily.byDate.get(dateStr);
+    if (!rec) return "";
+    const idx = daily.days.findIndex((d) => d.date === dateStr);
+    const hasPrev = idx > 0;
+    const hasNext = idx >= 0 && idx < daily.days.length - 1;
+    const added = isBenchMode ? rec.benchAdded : rec.poolAdded;
+    const cum = isBenchMode ? rec.benchCum : rec.poolCum;
+    const dlt = isBenchMode ? rec.benchDelta : rec.poolDelta;
+    const dCls = dlt > 0 ? "is-up" : dlt < 0 ? "is-down" : "";
+    const isFiltered = S.f.day === dateStr;
+
+    // 7-day momentum window centered around selected day
+    const start = Math.max(0, Math.min(daily.days.length - 7, idx - 3));
+    const win = daily.days.slice(start, start + 7);
+    const winMax = Math.max(1, ...win.map((x) => (isBenchMode ? x.benchAdded : x.poolAdded)));
+    const W = 320;
+    const H = 82;
+    const padX = 16;
+    const padT = 16;
+    const padB = 18;
+    const pH = H - padT - padB;
+    const step = win.length > 1 ? (W - padX * 2) / (win.length - 1) : 0;
+    const pts = win.map((w, i) => {
+      const v = isBenchMode ? w.benchAdded : w.poolAdded;
+      const x = win.length > 1 ? padX + i * step : W / 2;
+      const h = Math.max(3, (v / winMax) * pH);
+      const y = padT + pH - h;
+      return { w, v, x, y, h, cur: w.date === dateStr };
+    });
+    const lineD = pts.map((p, i) => `${i ? "L" : "M"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join("");
+    const barsSVG = pts.map((p) => `<g class="bn-mbar-g${p.cur ? " is-cur" : ""}">
+      <rect x="${(p.x - 10).toFixed(1)}" y="${p.y.toFixed(1)}" width="20" height="${p.h.toFixed(1)}" rx="4"/>
+      <text class="bn-mbar-val" x="${p.x.toFixed(1)}" y="${Math.max(11, p.y - 4).toFixed(1)}" text-anchor="middle">${esc(compactPlus(p.v))}</text>
+      <text class="bn-mbar-day" x="${p.x.toFixed(1)}" y="${H - 4}" text-anchor="middle">${esc(p.w.date.slice(8))}</text>
+    </g>`).join("");
+
+    return `<div class="bn-cal-detail">
+      <div class="bn-cal-dhead">
+        <div class="bn-cal-dnav">
+          <button type="button" class="bn-cal-navbtn" data-bn-cal-step="-1" aria-label="前一天"${hasPrev ? "" : " disabled"}>${BN_CHEVRON_L}</button>
+          <span class="bn-cal-ddate num">${esc(dateStr)}</span>
+          <button type="button" class="bn-cal-navbtn" data-bn-cal-step="1" aria-label="后一天"${hasNext ? "" : " disabled"}>${BN_CHEVRON_R}</button>
+        </div>
+        <button type="button" class="bn-cal-close" data-bn-cal-close aria-label="返回日历">${BN_CLOSE_X}</button>
+      </div>
+      <div class="bn-cal-dkpis num">
+        <div class="bn-cal-dkpi is-accent"><span>当日新增</span><b>+${fmt(added)}</b></div>
+        <div class="bn-cal-dkpi"><span>累计规模</span><b>${fmt(cum)}</b></div>
+        <div class="bn-cal-dkpi"><span>较前日</span><b class="${dCls}">${signedDelta(dlt)}</b></div>
+      </div>
+      <div class="bn-cal-dmom">
+        <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="前后 7 日动态入库量">
+          ${barsSVG}
+          ${pts.length > 1 ? `<path class="bn-g-line" d="${lineD}"/>` : ""}
+          ${pts.map((p) => `<circle class="bn-dmom-dot${p.cur ? " is-cur" : ""}" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${p.cur ? 3.6 : 2.2}"/>`).join("")}
+        </svg>
+      </div>
+      <div class="bn-cal-dfoot">
+        <div class="bn-cal-dpills num">
+          <span>候选池 <b>+${fmt(rec.poolAdded)}</b></span>
+          <span>${esc(tierLabel)} <b>${fmt(rec.benchAdded)}</b></span>
+        </div>
+        <button type="button" class="bn-cal-filterbtn${isFiltered ? " is-on" : ""}" data-bn-day-filter="${esc(dateStr)}">${isFiltered ? "取消当日筛选" : "筛选当日样本"}</button>
+      </div>
+    </div>`;
+  }
+
+  /* Card 1 front graphic: 14-day luminous inflow area sparkline */
+  function frontSparkAreaSVG(days) {
+    const tail = (days || []).slice(-14);
+    if (tail.length < 2) return "";
+    const W = 98;
+    const H = 34;
+    const padX = 3;
+    const padY = 4;
+    const vals = tail.map((d) => Number(d.poolAdded || 0));
+    const maxV = Math.max(1, ...vals);
+    const pts = vals.map((v, i) => [
+      padX + (i / (vals.length - 1)) * (W - padX * 2),
+      H - padY - (v / maxV) * (H - padY * 2),
+    ]);
+    const line = pts.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`).join("");
+    const area = `${line}L${pts[pts.length - 1][0].toFixed(1)},${(H - padY).toFixed(1)}L${pts[0][0].toFixed(1)},${(H - padY).toFixed(1)}Z`;
+    const last = pts[pts.length - 1];
+    return `<svg class="bn-fviz bn-fviz-spark" viewBox="0 0 ${W} ${H}" aria-hidden="true">
+      <path class="bn-fv-area" d="${area}"/>
+      <path class="bn-fv-line" d="${line}"/>
+      <circle class="bn-fv-dot" cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="2.6"/>
+    </svg>`;
+  }
+
+  /* Card 2 front graphic: 10×3 proportional composition dot matrix */
+  function frontDotMatrixHTML(segments) {
+    const total = segments.reduce((acc, s) => acc + Math.max(0, Number(s.value) || 0), 0);
+    if (total <= 0) return "";
+    const CELLS = 30;
+    const colors = [];
+    let assigned = 0;
+    segments.forEach((s, idx) => {
+      const val = Math.max(0, Number(s.value) || 0);
+      if (val <= 0) return;
+      const count = idx === segments.length - 1
+        ? Math.max(0, CELLS - assigned)
+        : Math.max(1, Math.round((val / total) * CELLS));
+      for (let k = 0; k < count && colors.length < CELLS; k += 1) colors.push(s.color);
+      assigned = colors.length;
+    });
+    while (colors.length < CELLS) colors.push(segments[0]?.color || "var(--accent)");
+    return `<div class="bn-fviz bn-fviz-dots" aria-hidden="true">${colors.map((c) => `<i style="background:${c}"></i>`).join("")}</div>`;
+  }
+
+  /* Card 3 front graphic: 14-day mini column rhythm bars */
+  function frontMiniBarsSVG(days) {
+    const tail = (days || []).slice(-14);
+    if (!tail.length) return "";
+    const W = 98;
+    const H = 34;
+    const vals = tail.map((d) => Number(d.poolAdded || 0));
+    const maxV = Math.max(1, ...vals);
+    const gap = 2.5;
+    const bw = Math.max(3, (W - gap * (vals.length - 1)) / vals.length);
+    const bars = vals.map((v, i) => {
+      const h = Math.max(3, (v / maxV) * (H - 4));
+      const x = i * (bw + gap);
+      const y = H - h;
+      const isLast = i === vals.length - 1;
+      return `<rect class="bn-fv-bar${isLast ? " is-last" : ""}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="1.6"/>`;
+    }).join("");
+    return `<svg class="bn-fviz bn-fviz-bars" viewBox="0 0 ${W} ${H}" aria-hidden="true">${bars}</svg>`;
+  }
+
+  function stageDonutSVG(id, segments, defaultCenter, defaultSub = "", focusIdx = -1) {
+    const R = 31;
+    const C = 2 * Math.PI * R;
+    const total = segments.reduce((acc, s) => acc + Math.max(0, Number(s.value) || 0), 0);
+    let offset = 0;
+    const hasFocus = focusIdx >= 0 && focusIdx < segments.length;
+    const arcs = total > 0
+      ? segments.map((s, idx) => {
+        const val = Math.max(0, Number(s.value) || 0);
+        if (val <= 0) return "";
+        const len = (val / total) * C;
+        const dash = `${Math.max(1.2, len - 1.8).toFixed(2)} ${(C - Math.max(1.2, len - 1.8)).toFixed(2)}`;
+        const isSel = hasFocus && idx === focusIdx;
+        const cls = `bn-farc${isSel ? " is-active" : hasFocus ? " is-dim" : ""}`;
+        const seg = `<circle class="${cls}" cx="40" cy="40" r="${R}" stroke="${s.color}" style="--c:${s.color}" stroke-dasharray="${dash}" stroke-dashoffset="${(-offset).toFixed(2)}" data-bn-fseg="${esc(`${id}:${idx}`)}"/>`;
+        offset += len;
+        return seg;
+      }).join("")
+      : "";
+    const sel = hasFocus ? segments[focusIdx] : null;
+    const selPct = sel && total > 0 ? `${Math.round((Math.max(0, sel.value) / total) * 100)}%` : defaultCenter;
+    const subLabel = sel ? (sel.label || "") : defaultSub;
+    return `<div class="bn-fring${hasFocus ? " has-focus" : ""}">
+      <svg viewBox="0 0 80 80" role="img" aria-label="占比圆环">
+        <circle class="bn-fring-track" cx="40" cy="40" r="${R}"/>
+        ${arcs}
+      </svg>
+      <div class="bn-fring-center${sel ? " is-focus" : ""}"${sel ? ` style="--c:${sel.color}"` : ""}>
+        <b class="num">${esc(selPct)}</b>
+        ${subLabel ? `<span>${esc(subLabel)}</span>` : ""}
+      </div>
+    </div>`;
+  }
+
+  function stageBackBodyHTML({ id, ringCenter, ringSub = "", segments, rows }) {
+    const focusIdx = S.stageFocus.has(id) ? S.stageFocus.get(id) : -1;
+    const total = segments.reduce((acc, s) => acc + Math.max(0, Number(s.value) || 0), 0);
+    const hasFocus = focusIdx >= 0 && focusIdx < segments.length;
+    return `${stageDonutSVG(id, segments, ringCenter, ringSub, focusIdx)}
+      <div class="bn-fback-rows num${hasFocus ? " has-focus" : ""}">
+        ${rows.map((r) => {
+          const isSlice = Number.isInteger(r.segIdx) && r.segIdx >= 0 && r.segIdx < segments.length;
+          const shareNum = isSlice && total > 0 ? (Math.max(0, Number(segments[r.segIdx].value) || 0) / total) * 100 : 0;
+          const shareStr = isSlice && total > 0 ? `${shareNum.toFixed(1).replace(/\.0$/, "")}%` : "";
+          const isSel = isSlice && hasFocus && r.segIdx === focusIdx;
+          if (isSlice) {
+            return `<button type="button" class="bn-fback-row is-pickable${isSel ? " is-active" : ""}" data-bn-fseg="${esc(`${id}:${r.segIdx}`)}" aria-pressed="${isSel}" style="--c:${r.color};--w:${Math.min(100, shareNum).toFixed(1)}%">
+              <span class="bn-fback-k"><i></i>${esc(r.label)}</span>
+              <span class="bn-fback-pct">${esc(shareStr)}</span>
+              <b>${esc(r.val)}</b>
+            </button>`;
+          }
+          return `<div class="bn-fback-row" style="--c:${r.color}">
+            <span class="bn-fback-k"><i></i>${esc(r.label)}</span>
+            <span class="bn-fback-pct"></span>
+            <b>${esc(r.val)}</b>
+          </div>`;
+        }).join("")}
+      </div>`;
+  }
+
+  function flipStageHTML(spec) {
+    const { id, title, pill = "", value, focus = false, footer = "", viz = "" } = spec;
+    const flipped = S.flippedStages.has(id);
+    return `<div class="bn-fcard${focus ? " is-focus" : ""}${flipped ? " is-flipped" : ""}" data-bn-stage-flip="${esc(id)}" role="button" tabindex="0" aria-pressed="${flipped}">
+      <div class="bn-fface bn-ffront">
+        <div class="bn-fstage-top">
+          <span class="bn-fstage-k">${esc(title)}</span>
+          ${pill}
+        </div>
+        <div class="bn-ffront-main">
+          <div class="bn-fstage-v num">${esc(value)}</div>
+          ${viz}
+        </div>
+        ${footer}
+      </div>
+      <div class="bn-fface bn-fback">
+        <div class="bn-fstage-top">
+          <span class="bn-fstage-k">${esc(title)}</span>
+          <button type="button" class="bn-fback-close" data-bn-stage-close="${esc(id)}" aria-label="返回">${BN_CLOSE_X}</button>
+        </div>
+        <div class="bn-fback-body" data-bn-fback-body="${esc(id)}">${stageBackBodyHTML(spec)}</div>
+      </div>
+    </div>`;
+  }
+
+  function buildHeroStageSpecs(md, tierData, daily) {
     const keys = S.isLong ? md.longKeys : md.stdKeys;
     const pool = manifest.pool || {};
     const actualN = Number(tierData.actual || 0);
     const poolBase = S.isLong ? md.long_pool : md.base_pool;
     const tierPct = poolBase ? pct(actualN, poolBase, 1) : "—";
-    const midLen = Number(md.pool_stats?.tokens?.p50 || 0);
+    const rawPoolTotal = Number(pool.cases || pool.cases_raw || sum(modelOrder.map((id) => models[id].pool_size)));
+    const usableTotal = Number(pool.usable_cases || pool.cases_dedup || sum(modelOrder.map((id) => models[id].pool_size)));
+    const dupDrop = Number(pool.dup_collapsed || 0);
+    const emptyDrop = Number(pool.empty_question || 0);
+    const otherDrop = Math.max(0, rawPoolTotal - usableTotal - dupDrop - emptyDrop);
+    const keepPct = rawPoolTotal ? `${Math.round((usableTotal / rawPoolTotal) * 100)}%` : "—";
+    const refreshNew = Number(pool.refresh?.new_cases || 0);
+    const latestPoolAdd = daily.latestDay?.poolAdded || 0;
+    const liveBadge = refreshNew > 0 ? `+${fmt(refreshNew)}` : (latestPoolAdd > 0 ? `+${fmt(latestPoolAdd)}` : "");
+
+    const goldN = Number(tierData.severity_actual?.GOLD || 0);
+    const probN = Math.max(0, actualN - goldN);
+    const probPct = actualN ? `${Math.round((probN / actualN) * 100)}%` : "—";
+    const basePct = md.pool_size ? `${Math.round((md.base_pool / md.pool_size) * 100)}%` : "—";
+    const modelPalette = ["var(--accent)", "var(--loc-ulq)", "var(--loc-vir)", "var(--sev-2)"];
+    const activeModelPct = usableTotal ? `${Math.round((md.pool_size / usableTotal) * 100)}%` : "—";
+
+    const nestFooter = `<div class="bn-nest">
+      ${keys.map((k) => {
+        const kn = Number(k);
+        const cur = Number(S.tier);
+        const on = kn === cur;
+        const inside = kn < cur;
+        const sub = S.isLong ? `长 ${kn}` : fmt(kn);
+        return `<button type="button" class="bn-nest-btn ${on ? "is-on" : inside ? "is-in" : ""}" data-nest="${kn}">${sub}${inside ? '<span class="bn-nest-sub">⊂</span>' : ""}</button>`;
+      }).join("")}
+    </div>`;
+
+    const modelSegments = modelOrder.map((id, idx) => ({
+      label: models[id].label,
+      value: models[id].pool_size,
+      color: modelPalette[idx % modelPalette.length],
+    }));
+
+    return [
+      {
+        id: "raw",
+        title: "动态主池",
+        pill: liveBadge ? `<span class="bn-delta-pill is-live num">${esc(liveBadge)}</span>` : "",
+        value: fmt(rawPoolTotal),
+        viz: frontSparkAreaSVG(daily.days),
+        ringCenter: keepPct,
+        ringSub: "可采样",
+        segments: [
+          { label: "可采样", value: usableTotal, color: "var(--loc-ulq)" },
+          { label: "去重", value: dupDrop, color: "var(--muted)" },
+          { label: "空句", value: emptyDrop + otherDrop, color: "var(--sev-2)" },
+        ],
+        rows: [
+          { segIdx: 0, label: "可采样", val: fmt(usableTotal), color: "var(--loc-ulq)" },
+          { segIdx: 1, label: "去重", val: `−${fmt(dupDrop)}`, color: "var(--muted)" },
+          ...(emptyDrop > 0 ? [{ segIdx: 2, label: "空句", val: `−${fmt(emptyDrop)}`, color: "var(--sev-2)" }] : []),
+        ],
+      },
+      {
+        id: "usable",
+        title: "可采样候选池",
+        pill: rawPoolTotal ? `<span class="bn-delta-pill num">${keepPct}</span>` : "",
+        value: fmt(usableTotal),
+        viz: frontDotMatrixHTML(modelSegments),
+        ringCenter: activeModelPct,
+        ringSub: md.label,
+        segments: modelSegments,
+        rows: modelOrder.map((id, idx) => ({
+          segIdx: idx,
+          label: models[id].label,
+          val: fmt(models[id].pool_size),
+          color: modelPalette[idx % modelPalette.length],
+        })),
+      },
+      {
+        id: "model",
+        title: `${md.label} 候选池`,
+        pill: daily.last7Pool > 0 ? `<span class="bn-delta-pill num">7日 +${compact(daily.last7Pool)}</span>` : "",
+        value: fmt(md.pool_size),
+        viz: frontMiniBarsSVG(daily.days),
+        ringCenter: basePct,
+        ringSub: "常规",
+        segments: [
+          { label: "常规", value: md.base_pool, color: "var(--accent)" },
+          { label: "长对话", value: md.long_pool, color: "var(--loc-vir)" },
+        ],
+        rows: [
+          { segIdx: 0, label: "常规", val: fmt(md.base_pool), color: "var(--accent)" },
+          { segIdx: 1, label: "长对话", val: fmt(md.long_pool), color: "var(--loc-vir)" },
+          ...(daily.last7Pool > 0 ? [{ label: "近 7 日", val: `+${fmt(daily.last7Pool)}`, color: "var(--loc-ulq)" }] : []),
+        ],
+      },
+      {
+        id: "tier",
+        title: S.isLong ? `长对话 ${S.tier} 条档` : `${fmt(Number(S.tier))} 条基准档`,
+        pill: `<span class="bn-delta-pill is-accent num">${tierPct}</span>`,
+        value: fmt(actualN),
+        focus: true,
+        footer: nestFooter,
+        ringCenter: probPct,
+        ringSub: "问题",
+        segments: [
+          { label: "问题", value: probN, color: "var(--sev-1)" },
+          { label: "goldencase", value: goldN, color: "var(--loc-ulq)" },
+        ],
+        rows: [
+          { segIdx: 0, label: "问题", val: fmt(probN), color: "var(--sev-1)" },
+          { segIdx: 1, label: "goldencase", val: fmt(goldN), color: "var(--loc-ulq)" },
+          ...(tierData.shortfall > 0
+            ? [{ label: "缺口", val: fmt(tierData.shortfall), color: "var(--sev-2)" }]
+            : [{ label: "占候选池", val: tierPct, color: "var(--accent)" }]),
+        ],
+      },
+    ];
+  }
+
+  /* ---- Render sub-sections ---- */
+  function renderHeroHTML(md, tierData) {
+    const keys = S.isLong ? md.longKeys : md.stdKeys;
+    const daily = buildBenchDailyModel(md, tierData);
+    const isBenchMode = S.calMode === "bench";
+    const tierLabel = tierTagLabel(Number(S.tier), S.isLong);
+    const modalDate = S.calModalDate && daily.byDate.has(S.calModalDate) ? S.calModalDate : "";
+    const stageSpecs = buildHeroStageSpecs(md, tierData, daily);
 
     return `<section class="card bn-hero" style="--span:12">
       <div class="bn-topbar">
@@ -762,53 +1348,15 @@ export async function render(root, ctx) {
         </div>
       </div>
 
-      <div class="bn-funnel">
-        <div class="bn-fstage">
-          <span class="bn-fstage-k">全量评测记录</span>
-          <div class="bn-fstage-v">${fmt(pool.cases_raw || md.pool_size)}</div>
-          <div class="bn-fstage-sub">
-            <span><em>去重合并</em> −${compact(pool.dup_collapsed || 0)}</span>
-            ${pool.empty_question ? `<span><em>过滤空句</em> −${fmt(pool.empty_question)}</span>` : ""}
-          </div>
+      <div class="bn-hero-grid">
+        <div class="bn-hero-left">
+          <div class="bn-funnel-grid">${stageSpecs.map((sp) => flipStageHTML(sp)).join("")}</div>
+          ${renderGrowthChartHTML(daily, isBenchMode, tierLabel)}
         </div>
-        <div class="bn-fsep" aria-hidden="true">›</div>
-        <div class="bn-fstage">
-          <span class="bn-fstage-k">去重后候选总池</span>
-          <div class="bn-fstage-v">${fmt(pool.cases_dedup || sum(modelOrder.map((id) => models[id].pool_size)))}</div>
-          <div class="bn-fstage-sub">
-            ${modelOrder.map((id) => `<span><em>${esc(models[id].label)}</em> ${compact(models[id].pool_size)}</span>`).join("")}
-          </div>
-        </div>
-        <div class="bn-fsep" aria-hidden="true">›</div>
-        <div class="bn-fstage">
-          <span class="bn-fstage-k">${esc(md.label)} 候选池</span>
-          <div class="bn-fstage-v">${fmt(md.pool_size)}</div>
-          <div class="bn-fstage-sub">
-            <span><em>常规</em> ${compact(md.base_pool)}</span>
-            <span><em>长对话</em> ${fmt(md.long_pool)}</span>
-            ${midLen > 0 ? `<span><em>中位长</em> ${compact(midLen)}</span>` : ""}
-          </div>
-        </div>
-        <div class="bn-fsep" aria-hidden="true">›</div>
-        <div class="bn-fstage is-focus">
-          <span class="bn-fstage-k">${S.isLong ? `长对话 ${S.tier} 条档` : `${fmt(Number(S.tier))} 条基准档`}</span>
-          <div class="bn-fstage-v">${fmt(actualN)}</div>
-          <div class="bn-fstage-sub">
-            <span><em>问题样本</em> ${fmt(Math.max(0, actualN - Number(tierData.severity_actual?.GOLD || 0)))}</span>
-            <span><em>goldencase</em> ${fmt(Number(tierData.severity_actual?.GOLD || 0))}</span>
-            ${tierData.shortfall > 0 ? `<span><em>缺口</em> ${fmt(tierData.shortfall)}</span>` : ""}
-          </div>
-          <div class="bn-nest">
-            ${keys.map((k) => {
-              const kn = Number(k);
-              const cur = Number(S.tier);
-              const on = kn === cur;
-              const inside = kn < cur;
-              const sub = S.isLong ? `长 ${kn}` : fmt(kn);
-              return `<button type="button" class="bn-nest-btn ${on ? "is-on" : inside ? "is-in" : ""}" data-nest="${kn}">${sub}${inside ? '<span class="bn-nest-sub">⊂</span>' : ""}</button>`;
-            }).join("")}
-            <span class="bn-nest-sub" style="margin-left:auto">占候选池 ${tierPct}</span>
-          </div>
+
+        <div class="bn-cal-stage${modalDate ? " is-flipped" : ""}" id="bnCalStage">
+          <div class="bn-cal-face bn-cal-front" id="bnCalFront">${renderCalFrontHTML(daily, isBenchMode, tierLabel)}</div>
+          <div class="bn-cal-face bn-cal-back" id="bnCalBack">${modalDate ? renderCalBackHTML(daily, modalDate, isBenchMode, tierLabel) : ""}</div>
         </div>
       </div>
     </section>`;
@@ -1307,7 +1855,7 @@ export async function render(root, ctx) {
                 <span class="bn-cell-meta">${turnTxt} · ${st.tool_count || 0} 工具</span>
                 <span class="bn-cell-meta bn-lscale"><b>${st.total_tokens ? compact(st.total_tokens) : "—"}</b><em>${st.latency || 0}s</em></span>
                 <span class="bn-tier-col">
-                  <span class="bn-tier-tag">${tTag} #${c.bench?.rank ?? "—"}</span>
+                  <span class="bn-tier-tag">${tTag}</span>
                   ${c.slug ? '<span class="bn-loc-dot" title="已入库可跳转"></span>' : ""}
                 </span>
               </button>`;
@@ -1432,26 +1980,70 @@ export async function render(root, ctx) {
     return `<div class="bn-msg-body">${foldLong(renderContent(content, t === "user_question" ? "text" : "md"), content, 1200)}</div>`;
   }
 
+  let sheetReqId = 0;
+
   async function paintSheet() {
     if (!sheetBackdrop) return;
+    let sheetEl = $("#bn-sheet", sheetBackdrop);
+    if (!sheetEl) {
+      sheetBackdrop.innerHTML = `<aside class="bn-sheet" id="bn-sheet" role="dialog" aria-label="样本执行现场"></aside>`;
+      sheetEl = $("#bn-sheet", sheetBackdrop);
+    }
     if (!S.trace) {
+      sheetReqId += 1;
       sheetBackdrop.classList.remove("is-open");
       sheetBackdrop.setAttribute("aria-hidden", "true");
       return;
     }
-    sheetBackdrop.classList.add("is-open");
-    sheetBackdrop.setAttribute("aria-hidden", "false");
 
+    const reqId = ++sheetReqId;
+    const wasOpen = sheetBackdrop.classList.contains("is-open");
     const idx = lastFiltered.findIndex((x) => x.trace_id === S.trace);
     const summaryCase = idx >= 0 ? lastFiltered[idx] : null;
     const prevCase = idx > 0 ? lastFiltered[idx - 1] : null;
     const nextCase = idx >= 0 && idx < lastFiltered.length - 1 ? lastFiltered[idx + 1] : null;
 
+    const cacheKey = `${S.model}|${S.trace}`;
+    const isCached = S.caseCache.has(cacheKey);
+    if (!isCached) {
+      const sc = summaryCase || {};
+      const sb = sc.bench || {};
+      const sTone = sevTone(sc.severity || "GOLD");
+      sheetEl.innerHTML = `<div class="bn-sh-head">
+          <div class="bn-sh-id">
+            ${sc.severity ? `<span class="bn-sev-tag" style="--c:${sTone}">${esc(sevLabel(sc.severity))}</span>` : ""}
+            <span class="bn-badge is-accent">${esc(modelLabel(sc.model || S.model))}</span>
+            <span class="bn-tier-tag">${tierTagLabel(sb.long_tier || sb.min_tier || sb.tier || S.tier, !!sb.long_tier)}</span>
+          </div>
+          <div class="bn-sh-acts">
+            <button type="button" class="bn-btn bn-btn-icon" id="bn-sh-close" title="关闭">✕</button>
+          </div>
+        </div>
+        <div class="bn-sh-scroll">
+          ${sc.question ? `<div class="bn-sh-qbox"><div class="bn-sh-q is-clamped">${esc(sc.question)}</div></div>` : ""}
+          <div class="bn-sh-skel"><span class="skel skel-title"></span><span class="skel skel-line"></span><span class="skel skel-line"></span></div>
+        </div>`;
+      const quickClose = $("#bn-sh-close", sheetEl);
+      if (quickClose) quickClose.onclick = () => openTrace("");
+    }
+
+    if (!wasOpen) {
+      sheetBackdrop.setAttribute("aria-hidden", "false");
+      if (typeof requestAnimationFrame === "function") {
+        void sheetEl.offsetWidth;
+        requestAnimationFrame(() => {
+          if (reqId === sheetReqId && S.trace) sheetBackdrop.classList.add("is-open");
+        });
+      } else {
+        sheetBackdrop.classList.add("is-open");
+      }
+    }
+
     const full = await loadFullCase(S.model, S.trace, summaryCase);
-    if (!S.trace) return;
+    if (reqId !== sheetReqId || !S.trace) return;
     if (!full) {
-      sheetBackdrop.innerHTML = `<div class="bn-sheet"><div class="bn-sh-head"><div class="bn-sh-id"><code>${esc(S.trace)}</code></div><div class="bn-sh-acts"><button type="button" class="bn-btn" id="bn-sh-close">关闭 ✕</button></div></div><div class="bn-sh-scroll"><div class="bn-empty">未找到对应样本记录</div></div></div>`;
-      $("#bn-sh-close", sheetBackdrop).onclick = () => openTrace("");
+      sheetEl.innerHTML = `<div class="bn-sh-head"><div class="bn-sh-id"><code>${esc(S.trace)}</code></div><div class="bn-sh-acts"><button type="button" class="bn-btn" id="bn-sh-close">关闭 ✕</button></div></div><div class="bn-sh-scroll"><div class="bn-empty">未找到对应样本记录</div></div>`;
+      $("#bn-sh-close", sheetEl).onclick = () => openTrace("");
       return;
     }
 
@@ -1475,12 +2067,11 @@ export async function render(root, ctx) {
     const sampleProbs = full._sample?.attribution?.problems || [];
     const sampleEv = full._sample?.evidence || [];
 
-    sheetBackdrop.innerHTML = `<aside class="bn-sheet" role="dialog" aria-label="样本执行现场">
-      <div class="bn-sh-head">
+    sheetEl.innerHTML = `<div class="bn-sh-head">
         <div class="bn-sh-id">
           <span class="bn-sev-tag" style="--c:${c}">${esc(sevLabel(full.severity))}</span>
           <span class="bn-badge is-accent">${esc(modelLabel(full.model || S.model))}</span>
-          <span class="bn-tier-tag">${tierTagLabel(b.long_tier || b.min_tier || b.tier || S.tier, !!b.long_tier)} #${b.rank ?? "—"}</span>
+          <span class="bn-tier-tag">${tierTagLabel(b.long_tier || b.min_tier || b.tier || S.tier, !!b.long_tier)}</span>
         </div>
         <div class="bn-sh-acts">
           <button type="button" class="bn-btn bn-btn-icon" id="bn-sh-prev" ${prevCase ? "" : "disabled"} title="上一条">↑</button>
@@ -1501,8 +2092,8 @@ export async function render(root, ctx) {
             ${S.showFullQ && full.question_full && full.question_full !== full.question ? `<pre>${esc(full.question_full)}</pre>` : ""}
           </div>` : ""}
           <div class="bn-sh-kvgrid">
-            <span class="bn-sh-kv"><span>轨迹编号</span><code>${esc(full.trace_id)}</code></span>
-            ${full.session_id ? `<span class="bn-sh-kv"><span>会话编号</span><code>${esc(full.session_id)}</code></span>` : ""}
+            <span class="bn-sh-kv"><span>traceid</span><code>${esc(full.trace_id)}</code></span>
+            ${full.session_id ? `<span class="bn-sh-kv"><span>session id</span><code>${esc(full.session_id)}</code></span>` : ""}
             <span class="bn-sh-kv"><span>时间</span><b>${esc(full.request_time || full.day || "—")}</b></span>
             <span class="bn-sh-kv"><span>对话形态</span><b>${full.turn === "multi" ? `多轮 第 ${full.turn_index || full.session_round}/${full.session_round} 轮` : "单轮"}</b></span>
             <span class="bn-sh-kv"><span>文本长度</span><b>${st.total_tokens ? `${fmt(st.total_tokens)} (${fmt(st.input_tokens || 0)} + ${fmt(mt.output_tokens || Math.max(0, (st.total_tokens || 0) - (st.input_tokens || 0)))})` : "未记录"}</b></span>
@@ -1591,10 +2182,9 @@ export async function render(root, ctx) {
             </div>
           </div>
         </div>
-      </div>
-    </aside>`;
+      </div>`;
 
-    $("#bn-sh-close", sheetBackdrop).onclick = () => openTrace("");
+    $("#bn-sh-close", sheetEl).onclick = () => openTrace("");
     $("#bn-sh-prev", sheetBackdrop).onclick = () => prevCase && openTrace(prevCase.trace_id);
     $("#bn-sh-next", sheetBackdrop).onclick = () => nextCase && openTrace(nextCase.trace_id);
     const qf = $("#bn-sh-qfull", sheetBackdrop);
@@ -1713,7 +2303,7 @@ export async function render(root, ctx) {
         </section>
         ${renderCasesHTML(allCases, filtered, tierData)}
       </div>
-      <div class="bn-backdrop" id="bn-backdrop" aria-hidden="true"></div>`;
+      <div class="bn-backdrop" id="bn-backdrop" aria-hidden="true"><aside class="bn-sheet" id="bn-sheet" role="dialog" aria-label="样本执行现场"></aside></div>`;
 
       sheetBackdrop = $("#bn-backdrop", root);
       sheetBackdrop.addEventListener("click", (e) => {
@@ -1730,7 +2320,7 @@ export async function render(root, ctx) {
     }
 
     wireCases(filtered);
-    if (didRebuild) bindTips(root, (el) => el.dataset.tip || "");
+    if (didRebuild) bindTips(root, (el) => el.dataset.tipHtml || el.dataset.tip || "");
     if (S.trace) paintSheet();
   }
 
@@ -1739,6 +2329,8 @@ export async function render(root, ctx) {
     if (segM) {
       const ctl = segmented(segM, (v) => {
         S.model = v;
+        S.calMonth = "";
+        S.calModalDate = "";
         S.page = 1;
         S.sunburstState = { focus: "b", open: null };
         repaint();
@@ -1773,6 +2365,135 @@ export async function render(root, ctx) {
         repaint();
       });
       ctl.set(S.mxMode, { silent: true });
+    }
+
+    const heroEl = $(".bn-hero", root);
+    if (heroEl) {
+      const toggleStageFlip = (card) => {
+        const sid = card?.dataset?.bnStageFlip;
+        if (!sid) return;
+        const next = !S.flippedStages.has(sid);
+        if (next) S.flippedStages.add(sid);
+        else S.flippedStages.delete(sid);
+        card.classList.toggle("is-flipped", next);
+        card.setAttribute("aria-pressed", String(next));
+      };
+      heroEl.addEventListener("keydown", (e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        const card = e.target.closest("[data-bn-stage-flip]");
+        if (card && !e.target.closest("[data-nest]")) {
+          e.preventDefault();
+          toggleStageFlip(card);
+        }
+      });
+      heroEl.addEventListener("click", (e) => {
+        const segEl = e.target.closest("[data-bn-fseg]");
+        if (segEl) {
+          const [sid, rawIdx] = String(segEl.dataset.bnFseg || "").split(":");
+          const idx = Number(rawIdx);
+          if (sid && Number.isInteger(idx)) {
+            if (S.stageFocus.get(sid) === idx) S.stageFocus.delete(sid);
+            else S.stageFocus.set(sid, idx);
+            const md = currentModel();
+            const daily = buildBenchDailyModel(md, tierData);
+            const spec = buildHeroStageSpecs(md, tierData, daily).find((sp) => sp.id === sid);
+            const body = heroEl.querySelector(`[data-bn-fback-body="${CSS.escape(sid)}"]`);
+            if (spec && body) body.innerHTML = stageBackBodyHTML(spec);
+          }
+          return;
+        }
+        const closeStageBtn = e.target.closest("[data-bn-stage-close]");
+        if (closeStageBtn) {
+          const card = closeStageBtn.closest("[data-bn-stage-flip]");
+          if (card) {
+            S.stageFocus.delete(card.dataset.bnStageFlip);
+            toggleStageFlip(card);
+          }
+          return;
+        }
+        const stageCard = e.target.closest("[data-bn-stage-flip]");
+        if (stageCard && !e.target.closest("[data-nest]")) {
+          if (!stageCard.classList.contains("is-flipped")) {
+            toggleStageFlip(stageCard);
+          } else if (!e.target.closest(".bn-fback-body")) {
+            S.stageFocus.delete(stageCard.dataset.bnStageFlip);
+            toggleStageFlip(stageCard);
+          }
+          return;
+        }
+        const md = currentModel();
+        const daily = buildBenchDailyModel(md, tierData);
+        const isBenchMode = S.calMode === "bench";
+        const tierLabel = tierTagLabel(Number(S.tier), S.isLong);
+        const stage = $("#bnCalStage", heroEl);
+        const front = $("#bnCalFront", heroEl);
+        const back = $("#bnCalBack", heroEl);
+
+        const refreshHeroCal = () => {
+          if (front) front.innerHTML = renderCalFrontHTML(daily, S.calMode === "bench", tierLabel);
+          if (back) back.innerHTML = S.calModalDate ? renderCalBackHTML(daily, S.calModalDate, S.calMode === "bench", tierLabel) : "";
+          stage?.classList?.toggle("is-flipped", Boolean(S.calModalDate));
+          const oldGrowth = $(".bn-growth-card", heroEl);
+          if (oldGrowth) {
+            const tmp = document.createElement("div");
+            tmp.innerHTML = renderGrowthChartHTML(daily, S.calMode === "bench", tierLabel);
+            oldGrowth.replaceWith(tmp.firstElementChild);
+          }
+        };
+
+        const closeBtn = e.target.closest("[data-bn-cal-close]");
+        if (closeBtn) {
+          S.calModalDate = "";
+          stage?.classList?.remove("is-flipped");
+          return;
+        }
+        const modeBtn = e.target.closest("[data-bn-cal-mode]");
+        if (modeBtn) {
+          const nextMode = modeBtn.dataset.bnCalMode === "bench" ? "bench" : "pool";
+          if (nextMode !== S.calMode) {
+            S.calMode = nextMode;
+            refreshHeroCal();
+          }
+          return;
+        }
+        const monthBtn = e.target.closest("[data-bn-cal-month]");
+        if (monthBtn && !monthBtn.disabled) {
+          S.calMonth = monthBtn.dataset.bnCalMonth || "";
+          if (front) front.innerHTML = renderCalFrontHTML(daily, isBenchMode, tierLabel);
+          return;
+        }
+        const stepBtn = e.target.closest("[data-bn-cal-step]");
+        if (stepBtn && !stepBtn.disabled && S.calModalDate) {
+          const step = Number(stepBtn.dataset.bnCalStep) || 0;
+          const idx = daily.days.findIndex((d) => d.date === S.calModalDate);
+          const nextRec = daily.days[idx + step];
+          if (nextRec) {
+            S.calModalDate = nextRec.date;
+            S.calMonth = nextRec.date.slice(0, 7);
+            refreshHeroCal();
+          }
+          return;
+        }
+        const filterBtn = e.target.closest("[data-bn-day-filter]");
+        if (filterBtn) {
+          const day = filterBtn.dataset.bnDayFilter || "";
+          if (day) {
+            toggleFilter("day", day);
+            $(".bn-cases-card", root)?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+          }
+          return;
+        }
+        const dayEl = e.target.closest("[data-bn-day]");
+        if (dayEl) {
+          const dateStr = dayEl.dataset.bnDay || "";
+          if (dateStr && daily.byDate.has(dateStr)) {
+            S.calModalDate = dateStr;
+            S.calMonth = dateStr.slice(0, 7);
+            if (back) back.innerHTML = renderCalBackHTML(daily, dateStr, isBenchMode, tierLabel);
+            stage?.classList?.add("is-flipped");
+          }
+        }
+      });
     }
 
     $$("[data-nest]", root).forEach((b) => b.addEventListener("click", () => {

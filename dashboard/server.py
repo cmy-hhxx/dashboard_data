@@ -442,6 +442,21 @@ class Handler(SimpleHTTPRequestHandler):
             if elapsed >= 2.0:
                 sys.stderr.write(f"[slow] {elapsed:.1f}s {getattr(self, 'command', '?')} {self.path}\n")
 
+    def _proxy_bench_upstream(self):
+        upstream = (os.environ.get("EVAL_BENCH_UPSTREAM") or "").strip().rstrip("/")
+        if not upstream:
+            return False
+        try:
+            import urllib.request
+            with urllib.request.urlopen(f"{upstream}{self.path}", timeout=6) as resp:
+                raw = resp.read()
+                ctype = resp.headers.get("Content-Type") or "application/json; charset=utf-8"
+                self._cache_policy = "no-cache"
+                self._send_body(resp.status, raw, ctype)
+                return True
+        except Exception:
+            return False
+
     def _serve_bench(self, path_only):
         """Serve Bench payloads: schema:2 dynamic bench views/fields or schema:1 golden/bad slices."""
         match = BENCH_RE.match(path_only)
@@ -450,6 +465,8 @@ class Handler(SimpleHTTPRequestHandler):
         product = match.group(1)
         payload = bench_payload(product)
         if not payload:
+            if self._proxy_bench_upstream():
+                return True
             self._send_body(404, b'{"error":"bench unavailable"}', "application/json")
             return True
         query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
@@ -532,6 +549,8 @@ class Handler(SimpleHTTPRequestHandler):
         idx = bench_index(product)
         row = idx["by_key"].get((model, trace_id)) if idx else None
         if row is None:
+            if self._proxy_bench_upstream():
+                return True
             self._send_body(404, b'{"error":"bench case not found"}', "application/json")
             return True
         import bench_dynamic

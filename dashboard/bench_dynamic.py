@@ -19,7 +19,7 @@ except ImportError:  # pragma: no cover - stdlib fallback
 
 DYNAMIC_DIR = "3_dynamic_bench"
 DYNAMIC_SCHEMA = 2
-_CACHE_VER = 3
+_CACHE_VER = 4
 DIMS = (
     "severity",
     "stage",
@@ -37,6 +37,7 @@ MECH_IDS = ("M1", "M2", "M3", "M4", "M5", "M6", "M7")
 STAGE_ORDER = ("S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11", "S12")
 
 _TID_PREFIX_RE = re.compile(rb'^\{\s*"trace_id"\s*:\s*"([^"]+)"')
+_BATCH_DAY_RE = re.compile(rb'"batch_id"\s*:\s*"(\d{4}-\d{2}-\d{2})"')
 _DAY_PREFIX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
 _ROUND_RE = re.compile(r"^\d+$")
 
@@ -140,8 +141,14 @@ def dynamic_bench_root(datasets: Path, product: str) -> Path | None:
 
 def _signature_files(root: Path, manifest: dict) -> list[Path]:
     files = [root / "manifest.json"]
+    pool_mf = root / "pool" / "manifest.json"
+    if pool_mf.is_file():
+        files.append(pool_mf)
     model_names = list((manifest.get("models") or {}).keys()) or (manifest.get("params") or {}).get("models") or []
     for m in model_names:
+        pool_jl = root / "pool" / f"{m}.jsonl"
+        if pool_jl.is_file():
+            files.append(pool_jl)
         mdir = root / m
         if not mdir.is_dir():
             continue
@@ -572,8 +579,36 @@ def _derive_long_tier_stats(cases: list[dict], req_n: int, pool_size: int, pool_
     }
 
 
+def _scan_pool_daily(path: Path) -> list[dict]:
+    """Count daily batch_id arrivals in pool/<model>.jsonl without full JSON decode."""
+    if not path.is_file():
+        return []
+    counts: Counter[str] = Counter()
+    with path.open("rb") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            m = _BATCH_DAY_RE.search(line)
+            if m:
+                counts[m.group(1).decode("ascii", "ignore")] += 1
+    return [{"key": day, "count": int(counts[day])} for day in sorted(counts)]
+
+
 def _scan_dynamic_bench(root: Path) -> tuple[dict, dict[str, list[dict]]]:
     manifest = _scrub_obj(json.loads((root / "manifest.json").read_text(encoding="utf-8")))
+    pool_mf_path = root / "pool" / "manifest.json"
+    if pool_mf_path.is_file():
+        try:
+            pool_mf = _scrub_obj(json.loads(pool_mf_path.read_text(encoding="utf-8")))
+            live_pool = pool_mf.get("pool") if isinstance(pool_mf, dict) else None
+            if isinstance(live_pool, dict):
+                merged_pool = dict(manifest.get("pool") or {})
+                for k in ("cases", "cases_by_model", "last_refresh", "refresh"):
+                    if k in live_pool and live_pool[k] is not None:
+                        merged_pool[k] = live_pool[k]
+                manifest["pool"] = merged_pool
+        except (OSError, ValueError):
+            pass
     params = manifest.get("params") or {}
     model_names = list((manifest.get("models") or {}).keys()) or list(params.get("models") or [])
 
@@ -687,6 +722,7 @@ def _scan_dynamic_bench(root: Path) -> tuple[dict, dict[str, list[dict]]]:
             "pool_size": pool_size,
             "base_pool": base_pool,
             "long_pool": long_pool,
+            "pool_daily": _scan_pool_daily(root / "pool" / f"{m}.jsonl"),
             "pool_stats": {
                 "pool_size": int(pool_stats.get("pool_size") or base_pool),
                 "base_pool": base_pool,
