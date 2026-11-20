@@ -2,7 +2,7 @@
 import { $, esc, fmt, compact, pct, segmented, showTip, hideTip, bindTips, getJSON } from "./core.js";
 import { fxDiagramHTML, mountFxDiagram } from "./system.js";
 
-const POLL_MS = 15000;
+const POLL_MS = 30000;
 const DATE_PAGE_SIZE = 12;
 const SVG_NS = "http://www.w3.org/2000/svg";
 const CHART_PAD = { L: 48, R: 24, T: 18, B: 32 };
@@ -64,9 +64,8 @@ export function spawnDanmu(root, targetOrId, text, { tone = "attr", micro = fals
   }
   const host = el.parentElement;
   host.classList?.add("sp-danmu-host");
-  const sel = micro ? ".sp-danmu.is-micro" : ".sp-danmu.is-burst";
-  const existing = host.querySelectorAll ? host.querySelectorAll(sel) : [];
-  if (existing.length >= (micro ? 2 : 3)) existing[0].remove();
+  const existing = host.querySelectorAll ? host.querySelectorAll(".sp-danmu") : [];
+  if (existing.length >= 2) existing[0].remove();
   const badge = document.createElement("span");
   badge.className = `sp-danmu is-${tone} ${micro ? "is-micro" : "is-burst"}`;
   badge.setAttribute("aria-hidden", "true");
@@ -75,7 +74,7 @@ export function spawnDanmu(root, targetOrId, text, { tone = "attr", micro = fals
   setTimeout(() => {
     badge.remove();
     el.classList?.remove("is-bumped");
-  }, micro ? 1150 : 1850);
+  }, micro ? 1600 : 2250);
   return badge;
 }
 
@@ -152,16 +151,15 @@ export function deriveEvalStatus(data) {
   if (ctrl.paused) {
     return { key: "paused", label: "中断中", cls: "is-bad", running: false, detail: "调度暂停" };
   }
-  const hasActivity = activeWriters > 0 || runningJobs > 0 || freshLock || partsRate > 0 || rpm > 0.5
-    || freshPart || gwFresh || (attrRate > 0 && partAge == null) || (compactRate > 0 && partAge == null);
-  if (hasActivity) {
+  const hasThroughput = activeWriters > 0 || partsRate >= 0.05 || attrRate >= 0.05 || compactRate >= 0.05 || rpm > 0.5;
+  if (hasThroughput) {
     const workers = data.gateways?.active_replicas || activeWriters || runningJobs;
     return { key: "running", label: "进行中", cls: "is-ok is-live", running: true, detail: workers ? `${workers} 实例` : "" };
   }
   if (inputTraces > 0 && remainingTraces <= 0 && clusterPending <= 0) {
     return { key: "done", label: "已完成", cls: "is-ok", running: false, detail: "" };
   }
-  return { key: "stalled", label: "中断中", cls: "is-warn", running: false, detail: "" };
+  return { key: "stalled", label: "中断中", cls: "is-warn", running: false, detail: runningJobs > 0 || freshLock || gwFresh ? "速率为 0" : "" };
 }
 
 function ctxTax(c) {
@@ -180,7 +178,7 @@ export function shellHTML(tax = null, pd = null) {
         <h2>评测总览</h2>
         <div class="sp-head-pills">
           <span class="sp-conn" id="spEvalState"><i></i><span id="spEvalStateText">读取中</span></span>
-          <button type="button" class="sp-conn is-quiet is-refresh" id="spConn" title="点击立即刷新实时数据"><i></i><span id="spConnText">15s 实时</span></button>
+          <button type="button" class="sp-conn is-quiet is-refresh" id="spConn" title="点击立即刷新实时数据"><svg class="sp-conn-ico" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M13.2 8a5.2 5.2 0 1 1-1.4-3.55M13.2 2.8v2.6h-2.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg><span id="spConnText">30s 实时</span></button>
         </div>
       </header>
       <div class="sp-ov-wrap">
@@ -274,7 +272,7 @@ export function shellHTML(tax = null, pd = null) {
           <g class="sp-axis" id="spAxis"></g>
           <g id="spPointLayer"></g>
         </svg>
-        <div class="sp-chart-empty" id="spChartEmpty" hidden>正在采集实时数据，约 15–30 秒后绘出趋势…</div>
+        <div class="sp-chart-empty" id="spChartEmpty" hidden>正在采集实时数据，约 30 秒后绘出趋势…</div>
       </div>
     </article>
 
@@ -934,15 +932,16 @@ function handleChartLeave(root) {
   hideTip();
 }
 
-/* 当流水线粒子落地到「待聚类」或「聚类树」时，联动递增顶部总览与目录卡片数字 */
+/* 当流水线批次粒子落地到「待聚类」或「聚类树」时，同步递增顶部总览数字并在仅有的两处总览指标弹出 +n 弹幕 */
 function handleLiveTick(root, evt) {
   if (!root || !S.data || !S.liveRunning || !evt) return;
   const inTr = Number(S.data.input_traces) || 0;
-  const d = Math.max(1, Number(evt.delta) || 1);
+  const d = Math.max(0, Math.round(Number(evt.delta) || 0));
+  if (d <= 0) return;
   if (evt.kind === "attr") {
     S.simAttrCarry += d;
     S.simPendingCarry += d;
-    S.shownAttrTraces += d;
+    S.shownAttrTraces = Math.min(inTr || Infinity, S.shownAttrTraces + d);
     S.shownPendingTraces = evt.pending != null
       ? Math.max(S.shownPendingTraces + d, Number(evt.pending) || 0)
       : (S.shownPendingTraces + d);
@@ -955,7 +954,7 @@ function handleLiveTick(root, evt) {
       : "—");
     setRing($("#spRingAttr", root), RING_OUT_C, attrRatio);
     setText(root, "spRingPct", inTr ? `${(attrRatio * 100).toFixed(1)}%` : "—");
-    spawnDanmu(root, "spAttrTraces", `+${num(d)}`, { tone: "attr", micro: true });
+    spawnDanmu(root, "spAttrTraces", `+${num(d)}`, { tone: "attr" });
     const activeCard = $(".sp-ring-card.is-active-model [data-sp-mattr]", root) || $("[data-sp-mattr]", root);
     if (activeCard) {
       const cur = Number(String(activeCard.textContent || "").replace(/,/g, "")) || 0;
@@ -963,7 +962,11 @@ function handleLiveTick(root, evt) {
     }
   } else if (evt.kind === "cluster") {
     S.simClusterCarry += d;
-    S.shownClusterTraces += d;
+    S.simPendingCarry = Math.max(0, S.simPendingCarry - d);
+    S.shownClusterTraces = Math.min(S.shownAttrTraces, S.shownClusterTraces + d);
+    S.shownPendingTraces = evt.pending != null
+      ? Math.max(0, Number(evt.pending) || 0)
+      : Math.max(0, S.shownAttrTraces - S.shownClusterTraces);
     const attrRatio = inTr > 0 ? Math.min(1, S.shownAttrTraces / inTr) : 0;
     const clInRatio = inTr > 0 ? Math.min(attrRatio, S.shownClusterTraces / inTr) : 0;
     setText(root, "spClusterTraces", num(S.shownClusterTraces));
@@ -972,7 +975,7 @@ function handleLiveTick(root, evt) {
       : "—");
     setRing($("#spRingCl", root), RING_IN_C, clInRatio);
     setText(root, "spRingClPct", inTr ? `聚类 ${(clInRatio * 100).toFixed(1)}%` : "聚类 —");
-    spawnDanmu(root, "spClusterTraces", `+${num(d)}`, { tone: "cl", micro: true });
+    spawnDanmu(root, "spClusterTraces", `+${num(d)}`, { tone: "cl" });
     const activeCl = $(".sp-ring-card.is-active-model [data-sp-mcl]", root) || $("[data-sp-mcl]", root);
     if (activeCl) {
       const cur = Number(String(activeCl.textContent || "").replace(/,/g, "")) || 0;
@@ -1059,21 +1062,21 @@ export function applyData(root, data) {
   const r = data.rates || {};
   const attrRate = r.attr == null || (Number(r.attr) === 0 && Number(r.parts_attr) > 0) ? r.parts_attr : r.attr;
   const compactRate = r.compact == null || (Number(r.compact) === 0 && Number(r.parts_compact) > 0) ? r.parts_compact : r.compact;
+  const liveRate = (Number(r.parts_attr) || 0) + (Number(r.parts_compact) || 0) || (Number(attrRate) || 0) + (Number(compactRate) || 0);
 
   const hasPrev = S.prevInputTraces != null;
-  if (isBrowser() && hasPrev && ev.running) {
-    // 评测进行中刷新时：若磁盘快照已推进则自然吸收；若仍在落盘周期内，同步在途增量批次，保证刷新后可见真实增长与弹幕
+  if (isBrowser() && hasPrev && ev.running && liveRate >= 0.05) {
+    // 仅在真实速率 > 0 且进行中刷新时：若磁盘快照已推进则自然吸收；若仍在落盘窗口内，按实际速率推进一批 +n
     if (rawAttrTr > S.shownAttrTraces) {
       S.simAttrCarry = 0;
     } else {
-      const waveAttr = Math.max(1, Math.round(((Number(r.parts_attr) || Number(attrRate) || 6) / 60) * 12));
+      const waveAttr = Math.max(2, Math.round((liveRate / 60) * 18));
       S.simAttrCarry = Math.max(0, S.shownAttrTraces - rawAttrTr) + waveAttr;
-      S.simPendingCarry += waveAttr;
     }
     if (rawClTr > S.shownClusterTraces) {
       S.simClusterCarry = 0;
-    } else {
-      const waveCl = Math.max(1, Math.round(((Number(r.parts_attr) || Number(attrRate) || 6) / 60) * 7));
+    } else if (rawPendingTr + S.simAttrCarry > 0) {
+      const waveCl = Math.max(2, Math.round((liveRate / 60) * 12));
       S.simClusterCarry = Math.max(0, S.shownClusterTraces - rawClTr) + waveCl;
     }
   } else {
@@ -1086,22 +1089,18 @@ export function applyData(root, data) {
   const inSess = rawInSess;
   const attrTr = Math.min(inTr || Infinity, rawAttrTr + S.simAttrCarry);
   const clTr = Math.min(attrTr, rawClTr + S.simClusterCarry);
-  const pendingTr = rawPendingTr + S.simPendingCarry;
+  const pendingTr = hasPrev && isBrowser() && ev.running && liveRate >= 0.05
+    ? Math.max(0, attrTr - clTr)
+    : rawPendingTr;
   const remTr = Math.max(0, rawRemTr - S.simAttrCarry);
   const attrRatio = inTr > 0 ? Math.min(1, attrTr / inTr) : 0;
   const clInRatio = inTr > 0 ? Math.min(attrRatio, clTr / inTr) : 0;
 
-  const deltaIn = hasPrev ? Math.max(0, inTr - S.prevInputTraces) : 0;
-  const deltaSess = hasPrev ? Math.max(0, inSess - S.prevInputSessions) : 0;
   const deltaAttr = hasPrev ? Math.max(0, attrTr - S.prevAttrTraces) : 0;
   const deltaCluster = hasPrev ? Math.max(0, clTr - S.prevClusterTraces) : 0;
-  const deltaPending = hasPrev ? Math.max(0, pendingTr - S.prevPendingTraces) : 0;
   const numAttrRate = Number(attrRate) || 0;
   const numCompRate = Number(compactRate) || 0;
   const numGwRpm = Number(data.gateways?.realtime_rpm);
-  const deltaAttrRate = hasPrev && S.prevAttrRate != null && numAttrRate > S.prevAttrRate + 0.05 ? numAttrRate - S.prevAttrRate : 0;
-  const deltaCompRate = hasPrev && S.prevCompactRate != null && numCompRate > S.prevCompactRate + 0.05 ? numCompRate - S.prevCompactRate : 0;
-  const deltaGwRpm = hasPrev && S.prevGwRpm != null && Number.isFinite(numGwRpm) && numGwRpm > S.prevGwRpm + 0.4 ? numGwRpm - S.prevGwRpm : 0;
 
   S.prevInputTraces = inTr;
   S.prevInputSessions = inSess;
@@ -1143,16 +1142,15 @@ export function applyData(root, data) {
   const conn = $("#spConn", root);
   if (conn) {
     conn.className = `sp-conn is-quiet is-refresh ${data.ok ? "is-ok" : "is-bad"}${deltaAttr + deltaCluster > 0 ? " is-synced" : ""}`;
-    setText(root, "spConnText", data.ok ? `15s 刷新 · ${clock(data.updated_at)}` : "连接异常 · 点击重试");
+    setText(root, "spConnText", data.ok ? `30s 刷新 · ${clock(data.updated_at)}` : "连接异常 · 点击重试");
   }
 
-  const liveRate = (Number(r.parts_attr) || 0) + (Number(r.parts_compact) || 0) || Number(attrRate) || 0;
   S.fx?.setLiveProgress({
     ratio: hasCluster ? clInRatio : attrRatio,
     pending: pendingTr,
     attrTraces: attrTr,
     clusterTraces: clTr,
-    running: ev.running,
+    running: ev.running && liveRate >= 0.05,
     rate: liveRate,
     deltaAttr,
     deltaCluster,
@@ -1163,40 +1161,9 @@ export function applyData(root, data) {
   renderGateways(root, data.gateways);
   setHTML(root, "spModels", modelRowsHTML(data, { attrCarry: S.simAttrCarry, clCarry: S.simClusterCarry }));
 
-  // 刷新后若数据出现增长，在对应数字上弹出「+ xxx」增长弹幕
-  if (deltaIn > 0) spawnDanmu(root, "spInputTraces", `+${num(deltaIn)}`, { tone: "ink" });
-  if (deltaSess > 0) spawnDanmu(root, "spInputSessions", `+${num(deltaSess)}`, { tone: "ink" });
+  // 克制弹幕：仅在核心两处总览数字（已完成评测、已聚类）+ 流水线待聚类池出现真实增长时弹出 +n
   if (deltaAttr > 0) spawnDanmu(root, "spAttrTraces", `+${num(deltaAttr)}`, { tone: "attr" });
   if (deltaCluster > 0) spawnDanmu(root, "spClusterTraces", `+${num(deltaCluster)}`, { tone: "cl" });
-  if (deltaPending > 0) spawnDanmu(root, "spClusterPct", `+${num(deltaPending)}`, { tone: "attr" });
-  if (deltaAttrRate > 0) spawnDanmu(root, "spAttrRate", `+${fmt(deltaAttrRate, 1)}`, { tone: "attr" });
-  if (deltaCompRate > 0) spawnDanmu(root, "spCompactRate", `+${fmt(deltaCompRate, 1)}`, { tone: "comp" });
-  if (deltaGwRpm > 0) spawnDanmu(root, "spGwRpm", `+${fmt(deltaGwRpm, 1)}`, { tone: "attr" });
-
-  const clMap = new Map((data.cluster?.models || []).map((c) => [c.name, Number(c.traces) || 0]));
-  let carryChecked = false;
-  for (const m of data.models || []) {
-    const mIn = Number(m.input_traces) || 0;
-    const rawMAttr = Number(m.attr_traces) || 0;
-    const isAct = !carryChecked && (rawMAttr < mIn || m === data.models[0]);
-    if (isAct && (S.simAttrCarry > 0 || S.simClusterCarry > 0)) carryChecked = true;
-    const mAttr = isAct ? Math.min(mIn || Infinity, rawMAttr + S.simAttrCarry) : rawMAttr;
-    const mCl = isAct && clMap.has(m.name) ? Math.min(mAttr, (clMap.get(m.name) || 0) + S.simClusterCarry) : (clMap.get(m.name) || 0);
-    const prevM = S.prevModels.get(m.name);
-    if (prevM) {
-      const dmAttr = Math.max(0, mAttr - prevM.attr);
-      const dmCl = Math.max(0, mCl - prevM.cl);
-      if (dmAttr > 0) {
-        const el = $(`[data-sp-mattr="${m.name}"]`, root);
-        if (el) spawnDanmu(root, el, `+${num(dmAttr)}`, { tone: "attr" });
-      }
-      if (dmCl > 0) {
-        const el = $(`[data-sp-mcl="${m.name}"]`, root);
-        if (el) spawnDanmu(root, el, `+${num(dmCl)}`, { tone: "cl" });
-      }
-    }
-    S.prevModels.set(m.name, { attr: mAttr, cl: mCl });
-  }
 
   if (S.selectedModel) {
     const model = (data.models || []).find((m) => m.name === S.selectedModel);
@@ -1321,16 +1288,19 @@ function wireControls(root) {
 function tickHeartbeat() {
   if (!S.root || !S.data || document.hidden || document.documentElement.dataset.view !== "speed") return;
   if (S.inflight) {
-    setText(S.root, "spConnText", "同步中…");
+    setText(S.root, "spConnText", "正在刷新…");
     return;
   }
   if (S.data.ok) {
     const elapsed = Math.max(0, Date.now() - (S.lastPollAt || Date.now()));
     const remSec = Math.max(1, Math.ceil((POLL_MS - elapsed) / 1000));
-    if (elapsed < 2400 && S.lastSyncDelta > 0) {
-      setText(S.root, "spConnText", `已同步 +${num(S.lastSyncDelta)} · ${remSec}s 后刷新`);
+    const conn = $("#spConn", S.root);
+    if (elapsed < 2800 && (S.lastManualSync || S.lastSyncDelta > 0)) {
+      conn?.classList?.add("is-synced");
+      const msg = S.lastSyncDelta > 0 ? `已刷新 +${num(S.lastSyncDelta)}` : "已刷新 · 已是最新";
+      setText(S.root, "spConnText", `${msg} · ${remSec}s`);
     } else {
-      const conn = $("#spConn", S.root);
+      S.lastManualSync = false;
       conn?.classList?.remove("is-synced");
       setText(S.root, "spConnText", `${remSec}s 后刷新 · ${clock(S.data.updated_at)}`);
     }
@@ -1371,28 +1341,58 @@ function tickHeartbeat() {
 async function fetchSpeed({ force = false } = {}) {
   if (S.inflight || (!force && (document.hidden || document.documentElement.dataset.view !== "speed"))) return;
   S.inflight = true;
-  if (S.root && S.data) setText(S.root, "spConnText", "同步中…");
+  const startedAt = Date.now();
+  const conn = S.root ? $("#spConn", S.root) : null;
+  if (conn) {
+    conn.classList?.remove("is-synced");
+    conn.classList?.add("is-spinning");
+    if (S.data) setText(S.root, "spConnText", "正在刷新…");
+  }
   try {
     // 评测速度只有 AIME（弗吉尼亚）接入：其它节点不转发、不借用别人的数据，直接显示暂无。
     const sep = S.sourceUrl.includes("?") ? "&" : "?";
     const data = await getJSON(`${S.sourceUrl}${sep}_=${Date.now()}`, { retries: 1 });
+    if (force && isBrowser()) {
+      const waitMs = Math.max(0, 460 - (Date.now() - startedAt));
+      if (waitMs > 0) await new Promise((res) => setTimeout(res, waitMs));
+    }
     if (data && data.available === false) {
       S.unavailable = true;
       if (S.root) showEmpty(S.root);
       return;
     }
     S.unavailable = false;
-    if (S.root && data) applyData(S.root, data);
+    S.lastManualSync = Boolean(force);
+    if (S.root && data) {
+      applyData(S.root, data);
+      if (force) {
+        const cEl = $("#spConn", S.root);
+        cEl?.classList?.add("is-synced");
+        const msg = S.lastSyncDelta > 0 ? `已刷新 +${num(S.lastSyncDelta)}` : "已刷新 · 已是最新";
+        setText(S.root, "spConnText", `${msg} · ${Math.round(POLL_MS / 1000)}s`);
+        const ovCard = $(".sp-ov-card", S.root);
+        if (ovCard?.classList) {
+          ovCard.classList.remove("is-refreshed");
+          void ovCard.offsetWidth;
+          ovCard.classList.add("is-refreshed");
+        }
+        if (S.timer) {
+          clearInterval(S.timer);
+          S.timer = setInterval(fetchSpeed, POLL_MS);
+        }
+      }
+    }
   } catch (err) {
     if (S.root) {
-      const conn = $("#spConn", S.root);
-      if (conn) {
-        conn.className = "sp-conn is-quiet is-refresh is-bad";
+      const cEl = $("#spConn", S.root);
+      if (cEl) {
+        cEl.className = "sp-conn is-quiet is-refresh is-bad";
         setText(S.root, "spConnText", S.data ? "暂未连上 · 点击重试" : "读取失败，自动重试中");
       }
     }
   } finally {
     S.inflight = false;
+    if (S.root) $("#spConn", S.root)?.classList?.remove("is-spinning");
   }
 }
 

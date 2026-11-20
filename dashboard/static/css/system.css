@@ -196,22 +196,22 @@
 .fx-pool-danmu {
   position: absolute; left: 50%; top: 38px; z-index: 4;
   transform: translate(-50%, 0); padding: 1px 7px; border-radius: 999px;
-  background: color-mix(in oklab, var(--accent) 18%, var(--card)); color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 16%, var(--card)); color: var(--accent);
   font: var(--w-title) 11px/1.3 var(--mono); font-variant-numeric: tabular-nums;
   white-space: nowrap; pointer-events: none;
-  box-shadow: 0 2px 8px color-mix(in oklab, var(--accent) 22%, transparent);
-  animation: fx-pool-danmu-float 1100ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  box-shadow: 0 2px 8px color-mix(in oklab, var(--accent) 20%, transparent),
+              inset 0 0 0 1px color-mix(in oklab, var(--accent) 28%, transparent);
+  animation: fx-pool-danmu-float 1900ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 .fx-pool-danmu.is-burst {
-  font-size: 12px; padding: 2px 8px;
-  background: var(--accent); color: var(--card);
-  animation-duration: 1650ms;
+  font-size: 11.5px; padding: 2px 8px;
+  animation-duration: 2350ms;
 }
 @keyframes fx-pool-danmu-float {
-  0% { opacity: 0; transform: translate(-50%, 10px) scale(0.82); }
-  18% { opacity: 1; transform: translate(-50%, 0) scale(1.06); }
-  72% { opacity: 0.96; transform: translate(-50%, -14px) scale(1); }
-  100% { opacity: 0; transform: translate(-50%, -22px) scale(0.94); }
+  0% { opacity: 0; transform: translate(-50%, 6px) scale(0.9); }
+  20% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  76% { opacity: 0.92; transform: translate(-50%, -12px) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -19px) scale(0.96); }
 }
 .fx-live-danmu {
   fill: var(--loc-ulq); font: var(--w-title) 11.5px/1 var(--mono);
@@ -277,6 +277,9 @@
 .fx-tn.is-leaf.is-hbar.is-sel .fx-leaf-bar { fill: var(--accent); }
 .fx-tn.is-leaf.is-hbar:hover .fx-tn-lnum,
 .fx-tn.is-leaf.is-hbar.is-hl .fx-tn-lnum { fill: var(--ink); font-weight: var(--w-medium); }
+.fx-tn.is-leaf.is-hbar.is-hit .fx-leaf-bar { fill: var(--loc-ulq); }
+.fx-tree [data-num] { transition: fill 220ms cubic-bezier(0.22, 1, 0.36, 1); }
+.fx-tree [data-num].is-tick { fill: var(--loc-ulq); font-weight: var(--w-title); }
 
 /* Vertical tank bottom-up sinusoidal surface waves (86px horizontal period) */
 .fx-tn.is-vroot .fx-wave-back.is-vwave { animation: fx-vwave-left 3.8s linear infinite; }
