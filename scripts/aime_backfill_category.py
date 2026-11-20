@@ -100,11 +100,17 @@ def load_index(base: Path) -> dict:
         if not m:
             continue
         date = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
-        st = path.stat()
-        fingerprint.update(f"{date}:{st.st_size}:{st.st_mtime_ns}\n".encode())
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
+            raw = path.read_bytes()
+        except OSError as exc:
+            print(f"[warn] 读不到 {path}：{exc}", file=sys.stderr)
+            continue
+        # 指纹按内容算，不按 mtime：上游回填会整文件重写（内容可能一模一样），
+        # 按 mtime 记指纹会把没变的文件也判成失效，白扫 16 GB。
+        fingerprint.update(f"{date}:{len(raw)}:{hashlib.md5(raw).hexdigest()}\n".encode())
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
             print(f"[warn] 跳过损坏的 {path}：{exc}", file=sys.stderr)
             continue
         if not isinstance(data, dict):
@@ -275,7 +281,7 @@ def process_file(path: Path, index: dict, key: bytes, dry_run: bool) -> dict:
     st0 = os.stat(path)
     tmp = path.with_suffix(path.suffix + ".catfill.tmp")
     stat = {"path": str(path), "lines": 0, "changed": 0, "already": 0,
-            "no_trace": 0, "no_index": 0, "no_meta": 0, "bad": 0,
+            "no_trace": 0, "no_index": 0, "no_meta": 0, "bad": 0, "conflict": 0,
             "bytes0": st0.st_size, "bytes1": st0.st_size}
     t0 = time.time()
     src = open(path, "rb")
@@ -287,13 +293,30 @@ def process_file(path: Path, index: dict, key: bytes, dry_run: bool) -> dict:
                     out.write(line)
                 continue
             stat["lines"] += 1
+            # 认哪个 trace_id：
+            #   输入侧取**最后一个**——2026-11-09 之前的旧行 meta.trace_id 存的是 thread_xxx（session id），
+            #   真正的 trace_id 是行尾顶层那个字段；新行两者相同。
+            #   归因侧取**第一个**——它在 session_meta.trace_id，后面 turns 里的可能属于别的 trace。
             m = TID.findall(line[:65536]) or TID.findall(line[-4096:]) or TID.findall(line)
             if not m:
                 stat["no_trace"] += 1
                 if out:
                     out.write(line)
                 continue
-            pair = index.get(m[0].decode("ascii", "ignore"))
+            tid = m[0] if key == b"session_meta" else m[-1]
+            if key == b"session_meta":
+                # 会话级归因：旧行的 session_meta.trace_id 是 thread_xxx，真正的 trace 在 turns 里。
+                # 取这一行所有 trace_id 的分类，一致才填；不一致就留空（不猜）。
+                pairs = {index[t.decode("ascii", "ignore")] for t in set(m)
+                         if t.decode("ascii", "ignore") in index}
+                if len(pairs) > 1:
+                    stat["conflict"] += 1
+                    if out:
+                        out.write(line)
+                    continue
+                pair = pairs.pop() if pairs else None
+            else:
+                pair = index.get(tid.decode("ascii", "ignore"))
             if pair is None or not (pair[0] or pair[1]):
                 stat["no_index"] += 1
                 if out:
@@ -447,9 +470,10 @@ def main() -> int:
             except OSError:
                 pass
         results.append(st)
-        print("%-12s %-64s 行 %5d | 填 %5d | 已是 %5d | 查无 %5d | 无meta %3d | 坏 %2d | %5.1fs%s"
+        print("%-12s %-64s 行 %5d | 填 %5d | 已是 %5d | 查无 %5d | 无meta %3d | 冲突 %3d | 坏 %2d | %5.1fs%s"
               % (kind, path.name, st["lines"], st["changed"], st["already"],
-                 st["no_index"] + st["no_trace"], st["no_meta"], st["bad"], st["seconds"],
+                 st["no_index"] + st["no_trace"], st["no_meta"], st["conflict"], st["bad"],
+                 st["seconds"],
                  "" if st.get("written") else "（未落盘）"), flush=True)
 
     if not args.dry_run:
@@ -464,6 +488,7 @@ def main() -> int:
         "no_trace": sum(r["no_trace"] for r in results),
         "no_index": sum(r["no_index"] for r in results),
         "no_meta": sum(r["no_meta"] for r in results),
+        "conflict": sum(r["conflict"] for r in results),
         "bad": sum(r["bad"] for r in results),
         "written": sum(1 for r in results if r.get("written")),
         "seconds": round(time.time() - t0, 1),
@@ -486,9 +511,10 @@ def main() -> int:
     print()
     print("分类源    %d 天 / %d 条 trace（跨日期冲突 %d）"
           % (len(idx["per_date"]), len(index), idx["conflicts"]))
-    print("本次      文件 %d（跳过未变 %d）| 行 %d | 新填 %d | 已是 %d | 查无分类 %d | 无 meta %d | 校验失败 %d"
+    print("本次      文件 %d（跳过未变 %d）| 行 %d | 新填 %d | 已是 %d | 查无分类 %d | 无 meta %d | 分类冲突 %d | 校验失败 %d"
           % (totals["files"], skipped, totals["lines"], totals["filled"], totals["already"],
-             totals["no_index"] + totals["no_trace"], totals["no_meta"], totals["bad"]))
+             totals["no_index"] + totals["no_trace"], totals["no_meta"], totals["conflict"],
+             totals["bad"]))
     print("落盘      %d 个文件（%s）" % (totals["written"], "dry-run" if args.dry_run else "原子替换"))
     thin = [d for d, n in idx["per_date"].items() if n <= 10]
     if thin:

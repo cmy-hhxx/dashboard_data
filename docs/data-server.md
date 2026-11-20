@@ -82,6 +82,40 @@ trace 的全局下标（换算见 handoff.md「容易踩的坑」）。
 
 配对规则：输入与归因按 `(session_id, request_time)` 配对，key 不匹配时按 `trace_id` 回退；不补造缺失内容。
 
+### 补 task_category / subtask_category（`scripts/aime_backfill_category.py`）
+
+上游采集器按天把上线埋点回填到 `0_litefusion_data/online_data/<Y>/<M>/<D>/category_meta.json`
+（`{trace_id: {task_category, subtask_category, user_id, run_started_at, ...}}`），**没有**日期就没有该文件
+（说明那天还没回填）。评测流水线不会把这些字段带进输入/归因，所以由脚本补：
+
+```bash
+python3 scripts/aime_backfill_category.py              # 笔记本上跑，自动 ssh 到弗吉尼亚
+python3 scripts/aime_backfill_category.py --local      # 服务器上跑
+python3 scripts/aime_backfill_category.py --dry-run    # 只统计，不落盘
+python3 scripts/aime_backfill_category.py --force      # 忽略「文件和分类源都没变」的跳过缓存
+```
+
+服务器副本 `/mnt/aime_eval_ssd/code/3_scripts/backfill_category.py`；跳过缓存落在
+`code/3_scripts/cache/aime_backfill_category/`（`state.json` 记 size/mtime + 分类源**内容哈希**指纹，
+删掉即全量重扫）。上游采集器会整文件重写这些 meta（内容可能一模一样，例如 2026-11-20 10:31~10:35
+一次性重写了 02~16 号），所以指纹按内容算：没变就 0.5 s 跳过，真变了才重扫 16 GB（约 2~4 分钟）。
+
+口径（都踩过坑，别改）：
+
+- **索引取所有日期的并集**，不是只取同一天：输入文件会被跨天合并重写（11-12/11-13 合并过），
+  归因按「评测日」归档而不是 trace 日归档。并集比同日高 13~40 个百分点，跨日期 0 冲突。
+- **输入侧认顶层 `trace_id`（行尾那个）**：2026-11-09 之前的旧行里 `meta.trace_id` 写的是 `thread_xxx`（session id），
+  拿它去查一定查不到。
+- **归因按会话判定**：取该行所有 `turns[].meta.trace_id` 的分类，**一致才填**，不一致留空（不猜）。
+  旧归因的 `session_meta.trace_id` 同样是 `thread_xxx`。
+- 查不到埋点的记录保持 `null`；只写目标对象里的两个字段，其余字节不动（临时文件 + fsync + `os.replace`），
+  每条改完的行走一遍 `json.loads` 校验。
+- 写完要把 `1_slim_publish/state/state.sqlite3` 的 `target_files` 里该文件的 `(size, mtime, offset)`
+  同步成新值（offset = 新 size）：它按 offset==size 记账，不同步的话下一轮会把文件中段当成「新增尾巴」重扫。
+- 分类体系漂移：2026-11-04 及之前是旧短标签（`事件解读` / `诊断分析类` / `交易建议` …），
+  2026-11-08 起是新长标签（`投资标的研究与分析` / `市场、宏观与行业研究` …），看板场景会同时出现两套。
+- 重写会让 `build.py` 按 `(size, mtime_ns)` 重扫这些文件，一次全量重建约 10 分钟（16 GB）。
+
 ## 4. A/B 轮次 `ab_test/<n>_version<MMDD>_test/`
 
 ```text
