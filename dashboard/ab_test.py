@@ -41,7 +41,7 @@ GPT_QUESTIONS_REL = f"{GPT_DIR}/questions.jsonl"
 GPT_RAW_REL = f"{GPT_DIR}/raw"
 # Bump when the payload's meaning changes (model scoping, leaf/matrix assembly, verify shape) so
 # an unchanged dataset still rebuilds its abtests-*.json instead of serving a stale payload.
-AB_PAYLOAD_VERSION = 9
+AB_PAYLOAD_VERSION = 10
 ROUND_RE = re.compile(r"^(\d+)_version(?P<version>[0-9A-Za-z.]+?)(?:_test)?$")
 # 重测归因的 session_meta.case_id 结尾是 ``_eq_00013``：只有它的 eq 能生成改版后详情。
 ATTRIBUTION_EQ_RE = re.compile(r"_eq_(\d+)$")
@@ -352,9 +352,9 @@ def node_order(nid: str):
 
 
 def scene_pair(detail, row):
-    """The same scene the main matrix uses once build.py has voted on it."""
+    """The same scene the main matrix uses: task only, never skill instrumentation."""
     task = row.get("sc") or (detail.get("meta") or {}).get("task")
-    task = task or (detail.get("meta") or {}).get("skill") or NO_SCENE
+    task = task or NO_SCENE
     sub = (detail.get("meta") or {}).get("subtask") or ""
     return task, sub
 
@@ -562,7 +562,7 @@ def _sample_index(samples):
     for slug, detail, row, _facts in samples or []:
         detail = detail or {}
         meta = detail.get("meta") or {}
-        task = (meta.get("task") or meta.get("skill") or "").strip()
+        task = (meta.get("task") or "").strip()
         sub = (meta.get("subtask") or "").strip()
         model = str(row.get("m") or "")
         sid = str(row.get("sid") or (detail.get("ids") or {}).get("session") or "")
