@@ -1260,11 +1260,30 @@ def _update_input_cache(old: dict[str, dict], meta: dict[str, dict],
     return new, ids_out
 
 
+def _output_attr_ids() -> dict[tuple[str, str], set[str]]:
+    """该 (model, date) 已评测的 trace 键，取自 attribution 输出文件本身。
+
+    2026-11-06 起 fast 模型不再落 ``.keys`` 侧车（只有 ``.meta``），只读 .keys 会让
+    这些天整段变成「待评测」。输出文件里的 ``turns[].meta.trace_id`` 与旧 .keys
+    内容逐条一致（2026-11-20 实测 expert 11-19 / 11-05、fast 11-05 完全相同）。
+    """
+    out: dict[tuple[str, str], set[str]] = {}
+    for rec in _STATE["output_files"].values():
+        if rec.get("kind") != "attr":
+            continue
+        key = (str(rec.get("model")), str(rec.get("date")))
+        bucket = out.setdefault(key, set())
+        bucket.update("T:" + str(t) for t in (rec.get("trace_ids") or []))
+    return out
+
+
 def _apply_eval_ids_locked(input_ids: dict[str, list[str]],
                            eval_ids: dict[tuple[str, str], set[str]]) -> None:
+    out_ids = _output_attr_ids()
     for path, rec in _STATE["input_files"].items():
         keys = set(input_ids.get(path) or [])
-        ev = eval_ids.get((str(rec.get("model")), str(rec.get("date"))), set())
+        bucket = (str(rec.get("model")), str(rec.get("date")))
+        ev = eval_ids.get(bucket, set()) | out_ids.get(bucket, set())
         rec["evaluated"] = len(keys & ev) if keys else 0
         rec["pending"] = len(keys - ev) if keys else 0
 
@@ -1859,35 +1878,27 @@ def payload() -> dict:
         inp = inp_models.get(name, {})
         out = out_models.get(name, {})
         ks = key_stats.get(name, {})
-        use_keys = bool(ks)
         kdates = ks.get("dates", {})
         ids = inp.get("dates", {})
         adates = out.get("attr_dates", {})
         cdates = out.get("compact_dates", {})
         ads = out.get("attr_date_sessions", {})
-        if use_keys:
-            completed = int(ks.get("attr_rows", 0))
-            completed_sessions = int(ks.get("attr_sessions", 0))
-        else:
-            completed = int(out.get("attr", 0))
-            completed_sessions = int(out.get("attr_sessions", 0))
+        # .keys 只是历史侧车；输出文件才是评测结果本体。两者都存在时数值一致，
+        # 缺 .keys 的日期（2026-11-06 起的 fast）用输出文件补齐。
+        completed = max(int(ks.get("attr_rows", 0)), int(out.get("attr", 0)))
+        completed_sessions = max(int(ks.get("attr_sessions", 0)), int(out.get("attr_sessions", 0)))
         dates = []
         for date in sorted(set(ids) | set(adates) | set(cdates) | set(kdates), reverse=True):
             irow = ids.get(date, {})
             iv = int(irow.get("input", 0))
             isess = int(irow.get("sessions", 0))
             itr = int(irow.get("traces", 0))
-            if use_keys:
-                kd = kdates.get(date, {})
-                av = int(kd.get("attr", 0))
-                asess = int(kd.get("attr_sessions", 0))
-                cv = int(kd.get("compact", 0))
-            else:
-                av = int(adates.get(date, 0))
-                asess = int(ads.get(date, 0))
-                cv = int(cdates.get(date, 0))
+            kd = kdates.get(date, {})
+            av = max(int(kd.get("attr", 0)), int(adates.get(date, 0)))
+            asess = max(int(kd.get("attr_sessions", 0)), int(ads.get(date, 0)))
+            cv = max(int(kd.get("compact", 0)), int(cdates.get(date, 0)))
             if irow and "evaluated" in irow:
-                # 输入 trace 集合 ∩ 该日 .keys；pending 是集合差，不是「输入行数 - 输出行数」。
+                # 输入 trace 集合 ∩ 该日已评测集合（.keys ∪ 输出文件）；pending 是集合差。
                 atr = int(irow.get("evaluated", 0))
                 rem = int(irow.get("pending", max(0, itr - atr)))
             elif irow:
@@ -1918,7 +1929,7 @@ def payload() -> dict:
             "attr_sessions": completed_sessions,
             "attr_traces": matched_traces,
             "output_traces": completed,
-            "compact": int(ks.get("compact_rows", completed)) if use_keys else int(out.get("compact", completed)),
+            "compact": max(int(ks.get("compact_rows", 0)), int(out.get("compact", 0))) or completed,
             "items": int(out.get("items", 0)),
             "remaining": pending_traces,
             "dates": dates,

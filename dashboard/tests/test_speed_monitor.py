@@ -125,6 +125,35 @@ class InputRewriteTests(unittest.TestCase):
             self.assertEqual(data["attr_traces"], 1)
             self.assertEqual(data["remaining_traces"], 2)
 
+    def test_outputs_count_when_keys_sidecar_missing(self):
+        """2026-11-06 起的 fast 只有 .meta、没有 .keys；输出文件必须照常算已评测。"""
+        with tempfile.TemporaryDirectory() as folder:
+            in_root, out_root = self._setup(Path(folder))
+            (in_root / "2026-11-18.jsonl").write_text(
+                self._row("s1", "t1") + self._row("s2", "t2") + self._row("s3", "t3"),
+                encoding="utf-8",
+            )
+            (out_root / "aime_fast").mkdir(parents=True)
+            att = out_root / "aime_fast/aime_fast_attribution-2026-11-18.jsonl"
+            att.write_text(
+                json.dumps({"session_meta": {"session_id": "s1"},
+                            "turns": [{"meta": {"session_id": "s1", "trace_id": "t1"}, "problem": [{}]}]}) + "\n"
+                + json.dumps({"session_meta": {"session_id": "s2"},
+                              "turns": [{"meta": {"session_id": "s2", "trace_id": "t2"}, "problem": []}]}) + "\n",
+                encoding="utf-8",
+            )
+            speed_monitor.collect_outputs()
+            speed_monitor.refresh_inputs()
+            data = speed_monitor.payload()
+            self.assertEqual(data["input_traces"], 3)
+            self.assertEqual(data["attr_traces"], 2)
+            self.assertEqual(data["remaining_traces"], 1)
+            model = next(m for m in data["models"] if m["name"] == "aime_fast")
+            self.assertEqual(model["attr"], 2)
+            day = next(d for d in model["dates"] if d["date"] == "2026-11-18")
+            self.assertEqual(day["attr"], 2)
+            self.assertEqual(day["remaining_traces"], 1)
+
 
 class _MockGateway(BaseHTTPRequestHandler):
     def do_GET(self):
