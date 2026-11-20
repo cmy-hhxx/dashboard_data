@@ -2606,21 +2606,26 @@ const sevIdx = (w) => {
 /* The Traces behind an opened card, worst first, beside its star map: a severity (or result) dot, the
    question and its problem count (or verdict). The head is the slice's size and its severity split. */
 const LEDGER_MAX = 120;
+const RECALL_CAP = 2000;
 const predDot = (it) => (it.r === "correct" ? "var(--accent)" : it.r === "wrong" ? "var(--sev-1)" : it.r === "mixed" ? "var(--sev-3)" : it.r === "pending" ? "var(--muted)" : "var(--faint)");
-function ledger(groups, pred, unit = null, rows = null, { count = true, strip = true, size = LEDGER_MAX, page = 0, sum = true } = {}) {
+function ledger(groups, pred, unit = null, rows = null, { count = true, strip = true, size = LEDGER_MAX, page = 0, sum = true, total = null, rawParts = null } = {}) {
   const all = groups.flatMap((g) => g.items);
   const ordered = pred ? all : [...all].sort((a, b) => a.w - b.w || b.n - a.n || (b.d || "").localeCompare(a.d || ""));
   const pages = Math.max(1, Math.ceil(ordered.length / size));
   const at = Math.max(0, Math.min(pages - 1, page));
   // The summary always speaks about everything found; the list is one page of it.
   const items = rows ?? ordered.slice(at * size, (at + 1) * size);
-  const parts = pred
-    ? ["correct", "wrong", "mixed", "pending", "undetermined"].map((r) => ({ n: all.filter((it) => (r === "undetermined" ? !["correct", "wrong", "mixed", "pending"].includes(it.r) : it.r === r)).length, c: predDot({ r }) }))
-    : WORST.map((_, i) => ({ n: all.filter((it) => it.w === i).length, c: sevColor(i) }));
+  const parts = Array.isArray(rawParts) && !pred
+    ? WORST.map((_, i) => ({ n: Number(rawParts[i]) || 0, c: sevColor(i) }))
+    : pred
+      ? ["correct", "wrong", "mixed", "pending", "undetermined"].map((r) => ({ n: all.filter((it) => (r === "undetermined" ? !["correct", "wrong", "mixed", "pending"].includes(it.r) : it.r === r)).length, c: predDot({ r }) }))
+      : WORST.map((_, i) => ({ n: all.filter((it) => it.w === i).length, c: sevColor(i) }));
   const rowHTML = (it, k) =>
     `<button type="button" class="gl-r${pred && !it.s ? " is-inert" : ""}" data-i="${k}" style="--i:${Math.min(k, 14)};--c:${pred ? predDot(it) : sevColor(it.w)}" title="${esc(it.q || "（无提问）")}"><i></i><span>${esc(it.q || "（无提问）")}</span>${count ? `<b class="num">${pred ? esc(RESULT[it.r] || "") : it.n ? fmt(it.n) : "—"}</b>` : ""}</button>`;
   const rowsHtml = items.slice(0, size).map(rowHTML);
-  const sumHtml = `<div class="gl-sum"><b class="num">${fmt(all.length)}</b><small>${unit || (pred ? "道预测题" : "条 Trace")}</small>${strip ? `<span class="gl-strip" aria-hidden="true">${parts
+  const capped = total != null && total > all.length;
+  const countLabel = capped ? `${fmt(all.length)} / ${fmt(total)}` : fmt(all.length);
+  const sumHtml = `<div class="gl-sum"><b class="num">${countLabel}</b><small>${unit || (pred ? "道预测题" : "条 Trace")}</small>${strip ? `<span class="gl-strip" aria-hidden="true">${parts
     .filter((x) => x.n)
     .map((x) => `<i style="flex:${x.n} 1 0;background:${x.c}"></i>`)
     .join("")}</span>` : ""}</div>`;
@@ -2825,35 +2830,90 @@ function trendSampleDrawer(plot, load, repaint, interaction = {}) {
 }
 
 /* One chunk of candidates per scan: details arrive in waves, and the first chunk is small enough
-   that the drawer has rows to paint well before a whole page of candidates has been read. */
+   that the drawer has rows to paint well before a whole page of candidates has been read.
+   Candidates are paged from the server's bounded recall slice (<= 2,000) so clicking a candle
+   never pulls the tens-of-MB full samples index into the browser. */
 async function loadTrendSamplePage(trend, spec, pick) {
   const product = ctx.product;
-  const index = await ctx.loadIndex(product);
   const series = pick.series;
-  const candidates = trendSampleCandidates(index.products?.[product]?.rows || [], {
-    date: pick.date, node: spec.node, models: series.models, uts: series.uts,
-    scenes: !spec.scenes || spec.scenes.size === trend.scenes.length ? null : [...spec.scenes].map((i) => trend.scenes[i]),
-  });
-  // A session whose worst problem is milder than every selected level cannot match this line;
-  // skipping it up-front avoids most of the detail requests for P0–P4 lines.
+  const scenesList = !spec.scenes || spec.scenes.size === trend.scenes.length
+    ? null
+    : [...spec.scenes].map((i) => trend.scenes[i]);
   const mildest = series.levelAll ? -1 : Math.max(...series.levelIdxs);
-  const pool = mildest < 0 ? candidates : candidates.filter((row) => {
-    const worst = WORST.indexOf(row.w);
-    return worst < 0 || worst <= mildest;
-  });
+  const SLICE_PAGE = 48;
+  const baseQuery = {
+    mode: "trend",
+    date: pick.date,
+    node: spec.node || "",
+    models: (series.models || []).join(","),
+    uts: (series.uts || []).join(","),
+    scenes: scenesList ? JSON.stringify(scenesList) : "",
+    mildest: mildest >= 0 ? String(mildest) : "",
+    cap: RECALL_CAP,
+  };
+
+  let pool = [];
+  let total = 0;
+  let candidateCount = 0;
+  let serverPaged = false;
+  let serverHasMore = false;
+  let serverOffset = 0;
+
+  if (typeof ctx.recallSlice === "function") {
+    const first = await ctx.recallSlice(product, { ...baseQuery, offset: 0, limit: SLICE_PAGE });
+    if (first && Array.isArray(first.rows)) {
+      serverPaged = true;
+      pool = first.rows.slice();
+      total = Number(first.recalled ?? first.rows.length);
+      candidateCount = Number(first.candidates ?? first.rows.length);
+      serverHasMore = Boolean(first.has_more);
+      serverOffset = first.rows.length;
+    }
+  }
+  if (!serverPaged) {
+    const index = await ctx.loadIndex(product);
+    const candidates = trendSampleCandidates(index.products?.[product]?.rows || [], {
+      date: pick.date, node: spec.node, models: series.models, uts: series.uts, scenes: scenesList,
+    });
+    candidateCount = candidates.length;
+    const matched = mildest < 0 ? candidates : candidates.filter((row) => {
+      const worst = WORST.indexOf(row.w);
+      return worst < 0 || worst <= mildest;
+    });
+    pool = matched.slice(0, RECALL_CAP);
+    total = pool.length;
+  }
+
   const state = { items: [], scanned: 0, done: false };
-  const total = pool.length;
   const CHUNK = 12;
   const CONCURRENCY = 8;
   const snapshot = () => ({
     items: state.items.slice(), unit: "条 Trace",
     // No candidate at all is not the same as candidates that miss the cluster/levels: say which
     // one happened instead of blaming the index for every empty drawer.
-    emptyText: candidates.length ? "候选样本没有命中该簇的问题" : "",
-    done: state.done, canScan: !state.done && state.scanned < total && state.items.length < LEDGER_MAX,
+    emptyText: candidateCount ? "候选样本没有命中该簇的问题" : "",
+    done: state.done,
+    canScan: !state.done && (state.scanned < pool.length || serverHasMore) && state.items.length < LEDGER_MAX,
   });
+  const ensureCandidates = async () => {
+    if (!serverPaged || !serverHasMore || state.scanned < pool.length) return;
+    const next = await ctx.recallSlice(product, { ...baseQuery, offset: serverOffset, limit: SLICE_PAGE });
+    if (next && Array.isArray(next.rows) && next.rows.length) {
+      pool.push(...next.rows);
+      serverOffset += next.rows.length;
+      serverHasMore = Boolean(next.has_more);
+      total = Math.max(total, pool.length);
+    } else {
+      serverHasMore = false;
+    }
+  };
   const scanMore = async () => {
-    if (state.done || state.scanned >= total || state.items.length >= LEDGER_MAX) {
+    if (state.done || state.items.length >= LEDGER_MAX) {
+      state.done = true;
+      return snapshot();
+    }
+    await ensureCandidates();
+    if (state.scanned >= pool.length) {
       state.done = true;
       return snapshot();
     }
@@ -2869,7 +2929,7 @@ async function loadTrendSamplePage(trend, spec, pick) {
       results.forEach((result) => { if (result.status === "fulfilled" && result.value) state.items.push(result.value); });
       if (state.items.length >= LEDGER_MAX) break;
     }
-    if (state.scanned >= total || state.items.length >= LEDGER_MAX) state.done = true;
+    if ((state.scanned >= pool.length && !serverHasMore) || state.items.length >= LEDGER_MAX) state.done = true;
     return snapshot();
   };
   await scanMore();
@@ -2878,9 +2938,18 @@ async function loadTrendSamplePage(trend, spec, pick) {
 
 async function loadTraceSamplePage(trend, pick) {
   const product = ctx.product;
-  const refs = traceSampleRefs(trend, pick.date, pick.series.level);
-  const index = await ctx.loadIndex(product);
-  const bySlug = new Map((index.products?.[product]?.rows || []).map((row) => [row.s, row]));
+  const refs = traceSampleRefs(trend, pick.date, pick.series.level).slice(0, RECALL_CAP);
+  const slugs = [...new Set(refs.map(([, slug]) => slug).filter(Boolean))];
+  let rows = null;
+  if (slugs.length && typeof ctx.recallLookup === "function") {
+    const looked = await ctx.recallLookup(product, { slugs, cap: RECALL_CAP });
+    if (looked && Array.isArray(looked.rows)) rows = looked.rows;
+  }
+  if (!rows) {
+    const index = await ctx.loadIndex(product);
+    rows = index.products?.[product]?.rows || [];
+  }
+  const bySlug = new Map(rows.map((row) => [row.s, row]));
   const items = refs.map(([, slug, turn, level, trace]) => {
     const row = bySlug.get(slug);
     return row ? { ...caseItem(row), w: level, trace, turn, n: 0, q: `${row.q || "（无提问）"} · 第 ${turn + 1} 轮` } : null;
@@ -2891,9 +2960,18 @@ async function loadTraceSamplePage(trend, pick) {
 async function loadABTrendSamplePage(spec, pick) {
   const { round, sides } = pick.series.samples[pick.index];
   if (!round.sample_refs) return { items: [], emptyText: "当前快照缺少 A/B 样本关联" };
-  const refs = abTrendSampleRefs(round, sides, spec.row, spec.node);
-  const index = await ctx.loadIndex(ctx.product);
-  const rows = index.products?.[ctx.product]?.rows || [];
+  const refs = abTrendSampleRefs(round, sides, spec.row, spec.node).slice(0, RECALL_CAP);
+  const slugs = [...new Set(refs.map((ref) => ref.slug).filter(Boolean))];
+  const tids = [...new Set(refs.filter((ref) => !ref.slug && ref.side === "before" && ref.trace).map((ref) => ref.trace))];
+  let rows = null;
+  if ((slugs.length || tids.length) && typeof ctx.recallLookup === "function") {
+    const looked = await ctx.recallLookup(ctx.product, { slugs, tids, cap: RECALL_CAP });
+    if (looked && Array.isArray(looked.rows)) rows = looked.rows;
+  }
+  if (!rows) {
+    const index = await ctx.loadIndex(ctx.product);
+    rows = index.products?.[ctx.product]?.rows || [];
+  }
   const { items } = resolveABSamples(refs, rows, spec.node);
   return {
     items: items.map(({ row, trace, n, ref }) => ({ ...caseItem(row), trace, n, ref, pair: ref.pair || ref.trace, round: spec.round?.id })), unit: "个样本",
@@ -3136,33 +3214,69 @@ function pushPull(bento, p, tax, u) {
         if (!by.has(key)) by.set(key, { key, name: key, items: [] });
         by.get(key).items.push({ ...it, inert: !it.s, n: 0 });
       });
-      return [...by.values()];
+      return { groups: [...by.values()], total: null, rawParts: null };
     }
+
+    if (typeof ctx.recallSlice === "function") {
+      const query = { mode: "galaxy", card: spec.card, unified: p.unified ? "1" : "0", cap: RECALL_CAP };
+      if (spec.card === "vol") {
+        if (spec.model) query.model = spec.model;
+        if (spec.task) query.task = spec.task;
+        if (spec.others) query.others = JSON.stringify(spec.others);
+      } else if (spec.card === "eval") {
+        query.d0 = spec.d0 || "";
+        query.d1 = spec.d1 || "";
+        query.model = spec.model || "all";
+      } else if (spec.card === "attr") {
+        if (spec.role) query.role = spec.role;
+        else if (spec.version) query.version = spec.version;
+      } else if (spec.card === "clu") {
+        query.prefix = spec.prefix || "";
+        if (spec.kids?.length) query.kids = JSON.stringify(spec.kids.map((c) => c.key));
+      }
+      const sliced = await ctx.recallSlice(ctx.product, query);
+      if (sliced && Array.isArray(sliced.groups)) {
+        const roleLabel = (id) => (p.roles.find((x) => x.id === id) || { label: id }).label;
+        const kidNames = spec.card === "clu" ? new Map((spec.kids || []).map((c) => [c.key, c.name])) : null;
+        const nameOf = (gkey) => {
+          if (spec.card === "eval") return versionName(gkey);
+          if (spec.card === "attr") return spec.role ? versionName(gkey) : roleLabel(gkey);
+          if (spec.card === "clu") return kidNames.get(gkey) || (gkey === "~" ? "其他" : patName(tax, gkey));
+          return gkey;
+        };
+        return {
+          groups: sliced.groups.map((g) => ({ key: g.key, name: nameOf(g.key), items: g.items || [] })),
+          total: Number(sliced.total) || null,
+          rawParts: Array.isArray(sliced.parts) ? sliced.parts : null,
+        };
+      }
+    }
+
     const all = await rows();
+    let groups = [];
     if (spec.card === "vol") {
       const picked = all.filter((r) => (!spec.model || r.m === spec.model) &&
         (spec.task ? (r.task || "未接入分类体系") === spec.task : spec.others ? !spec.others.includes(r.task || "未接入分类体系") : true));
-      return groupCases(picked, spec.task || spec.others ? sceneKey : (r) => r.task || r.sc || "未接入分类体系");
-    }
-    if (spec.card === "eval") {
+      groups = groupCases(picked, spec.task || spec.others ? sceneKey : (r) => r.task || r.sc || "未接入分类体系");
+    } else if (spec.card === "eval") {
       const picked = all.filter((r) => r.d >= spec.d0 && r.d <= spec.d1 && (spec.model === "all" || r.m === spec.model));
-      return groupCases(picked, (r) => versionKey(r.sp, r.m), versionName);
-    }
-    if (spec.card === "attr") {
-      if (spec.role) return groupCases(all.filter((r) => (r.r || []).includes(spec.role)), (r) => versionKey(r.sp, r.m), versionName);
-      const role = (id) => (p.roles.find((x) => x.id === id) || { label: id }).label;
-      return groupCases(all.filter((r) => versionKey(r.sp, r.m) === spec.version && (r.r || []).length), (r) => r.r[0], role);
-    }
-    if (spec.card === "clu") {
+      groups = groupCases(picked, (r) => versionKey(r.sp, r.m), versionName);
+    } else if (spec.card === "attr") {
+      if (spec.role) groups = groupCases(all.filter((r) => (r.r || []).includes(spec.role)), (r) => versionKey(r.sp, r.m), versionName);
+      else {
+        const role = (id) => (p.roles.find((x) => x.id === id) || { label: id }).label;
+        groups = groupCases(all.filter((r) => versionKey(r.sp, r.m) === spec.version && (r.r || []).length), (r) => r.r[0], role);
+      }
+    } else if (spec.card === "clu") {
       const hit = (r) => (r.pt || []).some((x) => x === spec.prefix || x.startsWith(`${spec.prefix}.`));
       const kidOf = (r) => {
         const k = spec.kids.find((c) => (r.pt || []).some((x) => x === c.key || x.startsWith(`${c.key}.`)));
         return k ? k.key : spec.kids.length ? "~" : spec.prefix;
       };
       const names = new Map(spec.kids.map((c) => [c.key, c.name]));
-      return groupCases(all.filter(hit), kidOf, (k) => names.get(k) || (k === "~" ? "其他" : patName(tax, k)));
+      groups = groupCases(all.filter(hit), kidOf, (k) => names.get(k) || (k === "~" ? "其他" : patName(tax, k)));
     }
-    return [];
+    return { groups, total: null, rawParts: null };
   }
 
   const caseTip = (it) => `<div class="t-head">${esc(it.q || "（无提问）")}</div>
@@ -3179,8 +3293,13 @@ function pushPull(bento, p, tax, u) {
     maps[k] = null;
     gx.innerHTML = `<div class="gx-wait" aria-hidden="true"></div>`;
     let groups = [];
+    let total = null;
+    let rawParts = null;
     try {
-      groups = await groupsFor(spec);
+      const res = await groupsFor(spec);
+      groups = res.groups || [];
+      total = res.total;
+      rawParts = res.rawParts;
     } catch (err) {
       console.error(err);
     }
@@ -3190,8 +3309,7 @@ function pushPull(bento, p, tax, u) {
       return;
     }
     const pred = spec.card === "pred";
-    // The star map still reads the whole slice; the Trace list beside it is paged so a 20k-Trace
-    // selection only puts one page of rows in the DOM (and the page is reachable without a cap).
+    // Compute the sorted ledger once; page flips slice in O(1) without re-sorting.
     const GX_PAGE = 40;
     let page = 0;
     const pagerHTML = (n) => (n <= 1 ? "" : `<div class="gx-pager mxt-sample-pager" role="group" aria-label="Trace 分页">
@@ -3199,17 +3317,18 @@ function pushPull(bento, p, tax, u) {
       <span class="mxt-sample-page num">第 <b>${page + 1}</b> / ${n} 页</span>
       <button type="button" data-gxpage="next" aria-label="下一页"${page === n - 1 ? " disabled" : ""}>›</button>
     </div>`);
-    let led = ledger(groups, pred, null, null, { size: GX_PAGE, page });
+    const led = ledger(groups, pred, null, null, { size: GX_PAGE, page: 0, total, rawParts });
+    let pageItems = led.items;
     gx.innerHTML = `<div class="gx-in"><div class="gx-map"></div><div class="gx-side">${led.sumHtml}<div class="gx-list"></div><div class="gx-pager-slot"></div></div></div>`;
     const side = $(".gx-side", gx);
-    let list = $(".gx-list", side);
+    const list = $(".gx-list", side);
     let rowOf = new Map();
     let lit = null;
     const paintPage = (next) => {
-      led = ledger(groups, pred, null, null, { size: GX_PAGE, page: next });
-      page = led.page;
-      list.innerHTML = led.items.map(led.rowHTML).join("");
-      rowOf = new Map(led.items.map((it, i) => [it, i]));
+      page = Math.max(0, Math.min(led.pages - 1, next));
+      pageItems = led.ordered.slice(page * GX_PAGE, (page + 1) * GX_PAGE);
+      list.innerHTML = pageItems.map(led.rowHTML).join("");
+      rowOf = new Map(pageItems.map((it, i) => [it, i]));
       lit = null;
       $(".gx-pager-slot", side).innerHTML = pagerHTML(led.pages);
       list.scrollTop = 0;
@@ -3235,7 +3354,7 @@ function pushPull(bento, p, tax, u) {
     });
     const rowItem = (e) => {
       const r = e.target.closest(".gl-r");
-      return r ? led.items[Number(r.dataset.i)] : null;
+      return r ? pageItems[Number(r.dataset.i)] : null;
     };
     side.addEventListener("pointermove", (e) => {
       const it = rowItem(e);

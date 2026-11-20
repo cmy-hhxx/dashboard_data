@@ -3,11 +3,12 @@ import { $, esc, fmt, pct, segmented, showTip, hideTip, bindTips, getJSON } from
 import { fxDiagramHTML, mountFxDiagram } from "./system.js";
 
 const POLL_MS = 30000;
-const DATE_PAGE_SIZE = 12;
 const SVG_NS = "http://www.w3.org/2000/svg";
 const CHART_PAD = { L: 48, R: 24, T: 18, B: 32 };
 const RING_OUT_C = 2 * Math.PI * 64;
 const RING_IN_C = 2 * Math.PI * 49;
+const DETAIL_OUT_C = 2 * Math.PI * 62;
+const DETAIL_IN_C = 2 * Math.PI * 51;
 const HORIZ_TREE_W = 940;
 const HORIZ_TREE_H = 540;
 
@@ -19,10 +20,11 @@ const S = {
   lastSyncDelta: 0,
   inflight: false,
   liveRunning: false,
-  selectedModel: null,
+  selectedModel: "__all__",
+  selectedMonth: "",
+  selectedDate: "",
   range: 300,
   chartMode: "landing",
-  dateFilter: { year: "all", month: "all", page: 1 },
   chartSamples: [],
   chartPlotStart: 0,
   chartPlotSpan: 300,
@@ -319,69 +321,53 @@ export function shellHTML(tax = null, pd = null) {
       </div>
     </article>
 
-    <article class="card" style="--span:12">
-      <header class="card-head">
+    <article class="card sp-date-card" style="--span:12">
+      <header class="card-head sp-date-card-head">
         <h2>日期分布</h2>
+        <div class="sp-model-pills" id="spModels" role="tablist" aria-label="模型筛选"></div>
         <div class="sp-ring-legend" id="spDateLegend">
-          <span><i class="is-attr"></i>外环 已评测</span>
-          <span><i class="is-cl"></i>内环 已聚类</span>
+          <span><i class="is-in"></i>输入</span>
+          <span><i class="is-comp"></i>已压缩</span>
+          <span><i class="is-attr"></i>已评测</span>
         </div>
       </header>
-      <div id="spModelList">
-        <div class="sp-ring-grid" id="spModels"><div class="empty">读取中…</div></div>
-      </div>
-      <div id="spDateView" hidden>
-        <div class="sp-date-head">
-          <button type="button" class="sp-back" id="spBack">← 全部目录</button>
-          <b class="sp-date-title" id="spDateTitle"></b>
-          <div class="sp-filters">
-            <select class="sp-select" id="spDateYear" aria-label="年份"></select>
-            <select class="sp-select" id="spDateMonth" aria-label="月份"></select>
-          </div>
-          <div class="pager">
-            <span class="pager-info" id="spDatePageInfo"></span>
-            <button type="button" id="spDatePrev">上一页</button>
-            <button type="button" id="spDateNext">下一页</button>
-          </div>
+      <div id="spDateView" class="sp-date-view">
+        <div class="sp-month-bar" id="spMonthBar"></div>
+        <div class="sp-date-stage" id="spDateStage">
+          <div class="sp-bar-panel" id="spDateChart"><div class="empty">读取中…</div></div>
+          <aside class="sp-day-detail" id="spDateDetail" hidden aria-label="当日评测环形图详情"></aside>
         </div>
-        <div class="sp-ring-grid is-dates" id="spDates"></div>
       </div>
     </article>
   </div>`;
 }
 
-const MINI_OUT_C = 2 * Math.PI * 34;
-const MINI_IN_C = 2 * Math.PI * 26.5;
-
-/* 双层同心小圆环：用于目录与日期分布卡片，与顶部评测总览保持一致视觉语言。 */
-function miniRingHTML(outerRatio, innerRatio, { outerCls = "is-attr", innerCls = "is-cl", centerRatio = outerRatio } = {}) {
-  const o = Math.max(0, Math.min(1, Number(outerRatio) || 0));
-  const hasIn = innerRatio != null;
-  const i = hasIn ? Math.max(0, Math.min(1, Number(innerRatio) || 0)) : 0;
-  const c = Math.max(0, Math.min(1, Number(centerRatio) || 0));
-  const oOff = (MINI_OUT_C * (1 - o)).toFixed(2);
-  const iOff = (MINI_IN_C * (1 - i)).toFixed(2);
-  const pctStr = c >= 0.9995 ? "100%" : `${(c * 100).toFixed(c >= 0.1 ? 0 : 1)}%`;
-  return `<div class="sp-mring" aria-hidden="true">
-    <svg viewBox="0 0 80 80">
-      <g transform="rotate(-90 40 40)">
-        <circle class="sp-mring-track" cx="40" cy="40" r="34"/>
-        <circle class="sp-mring-arc ${outerCls}" cx="40" cy="40" r="34" stroke-dasharray="${MINI_OUT_C.toFixed(2)}" stroke-dashoffset="${oOff}"/>
-        ${hasIn ? `<circle class="sp-mring-track" cx="40" cy="40" r="26.5"/><circle class="sp-mring-arc ${innerCls}" cx="40" cy="40" r="26.5" stroke-dasharray="${MINI_IN_C.toFixed(2)}" stroke-dashoffset="${iOff}"/>` : ""}
-      </g>
-    </svg>
-    <b class="num">${pctStr}</b>
-  </div>`;
-}
-
-export function modelRowsHTML(data, { attrCarry = 0, clCarry = 0 } = {}) {
+export function modelRowsHTML(data, { attrCarry = 0, clCarry = 0, selectedModel = "__all__" } = {}) {
   const models = data?.models || [];
-  if (!models.length) return `<div class="empty">等待数据…</div>`;
+  if (!models.length) return "";
   const cl = new Map((data?.cluster?.models || []).map((c) => [c.name, Number(c.traces) || 0]));
   const runningModels = new Set((data?.queue?.locks || []).map((l) => l.model).filter(Boolean));
   const preferredIdx = models.findIndex((m) => runningModels.has(m.name));
+  const activeSel = models.length === 1
+    ? models[0].name
+    : (selectedModel && (selectedModel === "__all__" || models.some((m) => m.name === selectedModel)) ? selectedModel : "__all__");
   let carryAssigned = false;
-  return models.map((m, idx) => {
+
+  const pills = [];
+  if (models.length > 1) {
+    const totIn = models.reduce((s, m) => s + (Number(m.input_traces) || 0), 0);
+    const totAttr = Math.min(totIn || Infinity, models.reduce((s, m) => s + (Number(m.attr_traces) || 0), 0) + attrCarry);
+    const totPct = totIn > 0 ? pct(totAttr, totIn, 0) : "—";
+    const allTip = `<div class="t-head">全部模型</div>
+      <div class="t-row"><span>输入总量</span><b class="num">${num(totIn)} trace</b></div>
+      <div class="t-row"><span>已完成评测</span><b class="num">${num(totAttr)} (${totIn ? pct(totAttr, totIn, 1) : "—"})</b></div>`;
+    pills.push(`<button type="button" class="sp-model-pill${activeSel === "__all__" ? " is-active" : ""}" role="tab" aria-selected="${activeSel === "__all__"}" data-sp-model="__all__" data-tip="1" data-tip-html="${esc(allTip)}">
+      <span>全部模型</span><em class="num">${esc(totPct)}</em>
+    </button>`);
+  }
+
+  for (let idx = 0; idx < models.length; idx++) {
+    const m = models[idx];
     const inTr = Number(m.input_traces) || 0;
     const rawAttr = Number(m.attr_traces) || 0;
     const isPreferred = preferredIdx >= 0 ? idx === preferredIdx : (rawAttr < inTr || idx === 0);
@@ -392,25 +378,21 @@ export function modelRowsHTML(data, { attrCarry = 0, clCarry = 0 } = {}) {
     const hasCl = cl.has(m.name);
     const rawCl = cl.get(m.name) || 0;
     const clTr = isActiveModel && hasCl ? Math.min(attrTr, rawCl + clCarry) : rawCl;
-    const aRatio = inTr ? attrTr / inTr : 0;
-    const cRatio = inTr && hasCl ? Math.min(aRatio, clTr / inTr) : null;
-    const badge = remTr === 0 && inTr > 0
-      ? `<span class="sp-rc-tag is-done">已完成</span>`
-      : `<span class="sp-rc-tag" data-sp-mrem="${esc(m.name)}">待测 ${num(remTr)}</span>`;
-    return `<button type="button" class="sp-ring-card is-model${isPreferred || remTr > 0 ? " is-active-model" : ""}" data-sp-model="${esc(m.name)}">
-      ${miniRingHTML(aRatio, cRatio, { outerCls: "is-attr", innerCls: "is-cl", centerRatio: aRatio })}
-      <div class="sp-rc-body">
-        <div class="sp-rc-head">
-          <b class="sp-rc-name">${esc(m.name)}<span class="sp-rc-arrow" aria-hidden="true">›</span></b>
-          ${badge}
-        </div>
-        <div class="sp-rc-stats">
-          <span>输入 <b class="num">${num(inTr)}</b> trace · <b class="num">${num(m.input_sessions)}</b> sess</span>
-          <span>已测 <b class="num is-attr" data-sp-mattr="${esc(m.name)}">${num(attrTr)}</b>${hasCl ? ` · 已聚类 <b class="num is-cl" data-sp-mcl="${esc(m.name)}">${num(clTr)}</b>` : ""}</span>
-        </div>
-      </div>
-    </button>`;
-  }).join("");
+    const done = remTr === 0 && inTr > 0;
+    const pctText = inTr > 0 ? (done ? "100%" : pct(attrTr, inTr, 0)) : "—";
+    const tip = `<div class="t-head">${esc(m.name)}</div>
+      <div class="t-row"><span>评测输入</span><b class="num">${num(inTr)} trace · ${num(m.input_sessions)} sess</b></div>
+      <div class="t-row"><span>已完成评测</span><b class="num">${num(attrTr)} (${inTr ? pct(attrTr, inTr, 1) : "—"})</b></div>
+      ${hasCl ? `<div class="t-row"><span>已聚类</span><b class="num">${num(clTr)} (${inTr ? pct(clTr, inTr, 1) : "—"})</b></div>` : ""}
+      <div class="t-row"><span>待评测</span><b class="num">${done ? "已完成" : `${num(remTr)} trace`}</b></div>`;
+    const isSel = activeSel === m.name;
+    pills.push(`<button type="button" class="sp-model-pill${isSel ? " is-active" : ""}${done ? " is-done" : ""}${isPreferred || remTr > 0 ? " is-active-model" : ""}" role="tab" aria-selected="${isSel}" data-sp-model="${esc(m.name)}" data-sp-mattr="${attrTr}" data-sp-min="${inTr}" data-sp-mrem="${remTr}" data-sp-mcl="${clTr}" data-tip="1" data-tip-html="${esc(tip)}">
+      <i class="sp-mp-dot" aria-hidden="true"></i>
+      <span>${esc(m.name)}</span>
+      <em class="num" data-sp-mpct="${esc(m.name)}">${esc(pctText)}</em>
+    </button>`);
+  }
+  return pills.join("");
 }
 
 
@@ -427,9 +409,10 @@ function renderGateways(root, gw) {
     : "未配置网关");
 
   setText(root, "spGwRpm", liveRpm == null ? "—" : rate(liveRpm));
+  const estTag = g.rpm_method === "parts_estimate" ? "估算 · " : "";
   setText(root, "spGwRpmSub", limit
-    ? `配额 ${num(limit)} · ${liveRpm == null ? "—" : pct(liveRpm, limit, 1)}`
-    : "配额 —");
+    ? `${estTag}配额 ${num(limit)} · ${liveRpm == null ? "—" : pct(liveRpm, limit, 1)}`
+    : `${estTag}配额 —`);
   const meter = $("#spGwMeter", root);
   const meterFill = $("#spGwMeterFill", root);
   if (meter && meterFill) {
@@ -486,85 +469,300 @@ function renderGateways(root, gw) {
   setHTML(root, "spGateways", rowsHTML);
 }
 
-function fillSelect(select, entries, value) {
-  const sig = entries.map(([k]) => k).join("\u0000");
-  if (select.dataset.signature !== sig) {
-    select.replaceChildren(...entries.map(([k, label]) => {
-      const opt = document.createElement("option");
-      opt.value = k;
-      opt.textContent = label;
-      return opt;
-    }));
-    select.dataset.signature = sig;
-  }
-  select.value = entries.some(([k]) => k === value) ? value : entries[0][0];
-  return select.value;
+function ymLabel(ym) {
+  if (!ym || ym.length < 7) return ym || "—";
+  return `${ym.slice(0, 4)} 年 ${Number(ym.slice(5, 7))} 月`;
 }
 
-function renderDates(root, model) {
-  const dates = (model?.dates || []).slice().sort((a, b) => b.date.localeCompare(a.date));
-  const ySel = $("#spDateYear", root);
-  const mSel = $("#spDateMonth", root);
-  if (!dates.length) {
-    fillSelect(ySel, [["all", "全部年份"]], "all");
-    fillSelect(mSel, [["all", "全部月份"]], "all");
-    setText(root, "spDatePageInfo", "共 0 天");
-    $("#spDatePrev", root).disabled = true;
-    $("#spDateNext", root).disabled = true;
-    setHTML(root, "spDates", `<div class="empty">暂无日期数据</div>`);
-    return;
-  }
-  const years = [...new Set(dates.map((d) => d.date.slice(0, 4)))].sort().reverse();
-  S.dateFilter.year = fillSelect(ySel, [["all", "全部年份"], ...years.map((y) => [y, `${y} 年`])], S.dateFilter.year);
-  const byYear = S.dateFilter.year === "all" ? dates : dates.filter((d) => d.date.startsWith(`${S.dateFilter.year}-`));
-  const months = [...new Set(byYear.map((d) => d.date.slice(5, 7)))].sort();
-  S.dateFilter.month = fillSelect(mSel, [["all", "全部月份"], ...months.map((m) => [m, `${Number(m)} 月`])], S.dateFilter.month);
+function daysInMonth(ym) {
+  const y = Number(ym.slice(0, 4));
+  const m = Number(ym.slice(5, 7));
+  if (!y || !m) return 30;
+  return new Date(Date.UTC(y, m, 0)).getUTCDate();
+}
 
-  const filtered = dates.filter((d) =>
-    (S.dateFilter.year === "all" || d.date.startsWith(`${S.dateFilter.year}-`)) &&
-    (S.dateFilter.month === "all" || d.date.slice(5, 7) === S.dateFilter.month));
-  const pages = Math.max(1, Math.ceil(filtered.length / DATE_PAGE_SIZE));
-  S.dateFilter.page = Math.min(Math.max(1, S.dateFilter.page), pages);
-  const start = (S.dateFilter.page - 1) * DATE_PAGE_SIZE;
-  const pageRows = filtered.slice(start, start + DATE_PAGE_SIZE);
-  setText(root, "spDateTitle", model.name);
-  setText(root, "spDatePageInfo", filtered.length ? `${filtered.length} 天 · ${S.dateFilter.page}/${pages}` : "当前筛选无日期");
-  $("#spDatePrev", root).disabled = S.dateFilter.page <= 1;
-  $("#spDateNext", root).disabled = S.dateFilter.page >= pages;
-
-  if (!pageRows.length) {
-    setHTML(root, "spDates", `<div class="empty">当前筛选暂无日期</div>`);
-    return;
+function niceBarMax(rawMax) {
+  const target = Math.max(1, Number(rawMax) * 1.08);
+  const exp = 10 ** Math.floor(Math.log10(target));
+  for (const m of [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) {
+    const val = Math.round(m * exp);
+    if (val >= target) return val;
   }
-  const html = pageRows.map((d) => {
-    const inTr = Number(d.input_traces) || 0;
-    const attrTr = Number(d.attr_traces) || 0;
-    const compTr = d.compact != null ? Number(d.compact) || 0 : null;
+  return Math.ceil(target);
+}
+
+/* 聚合所选模型（或全部模型）的按日数据，构造月度柱状图序列与点击详情数据。 */
+export function buildMonthlySeries(data, selectedModel = "__all__", preferredMonth = "") {
+  const allModels = data?.models || [];
+  const effectiveModel = allModels.length === 1
+    ? allModels[0].name
+    : (selectedModel && selectedModel !== "__all__" && allModels.some((m) => m.name === selectedModel)
+      ? selectedModel
+      : "__all__");
+  const pickedModels = effectiveModel === "__all__"
+    ? allModels
+    : allModels.filter((m) => m.name === effectiveModel);
+
+  const byDate = new Map();
+  for (const m of pickedModels) {
+    for (const d of m.dates || []) {
+      const ds = String(d.date || "").slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(ds)) continue;
+      let rec = byDate.get(ds);
+      if (!rec) {
+        rec = {
+          date: ds,
+          input_traces: 0,
+          input_sessions: 0,
+          attr_traces: 0,
+          compact: 0,
+          hasCompact: false,
+          remaining_traces: 0,
+          models: [],
+        };
+        byDate.set(ds, rec);
+      }
+      const inTr = Number(d.input_traces) || 0;
+      const inSess = Number(d.input_sessions) || 0;
+      const attrTr = Number(d.attr_traces) || 0;
+      const compTr = d.compact != null ? (Number(d.compact) || 0) : null;
+      const remTr = d.remaining_traces != null ? Math.max(0, Number(d.remaining_traces) || 0) : Math.max(0, inTr - attrTr);
+      rec.input_traces += inTr;
+      rec.input_sessions += inSess;
+      rec.attr_traces += attrTr;
+      if (compTr != null) {
+        rec.compact += compTr;
+        rec.hasCompact = true;
+      }
+      rec.remaining_traces += remTr;
+      rec.models.push({
+        name: m.name,
+        input_traces: inTr,
+        input_sessions: inSess,
+        attr_traces: attrTr,
+        compact: compTr,
+        remaining_traces: remTr,
+      });
+    }
+  }
+
+  const allDates = [...byDate.keys()].sort();
+  const months = [...new Set(allDates.map((d) => d.slice(0, 7)))].sort();
+  const activeMonth = preferredMonth && months.includes(preferredMonth)
+    ? preferredMonth
+    : (months[months.length - 1] || "");
+
+  const days = [];
+  const totals = { input_traces: 0, input_sessions: 0, attr_traces: 0, compact: 0, remaining_traces: 0, activeDays: 0 };
+  let maxVal = 0;
+
+  if (activeMonth) {
+    const dim = daysInMonth(activeMonth);
+    for (let day = 1; day <= dim; day++) {
+      const ds = `${activeMonth}-${String(day).padStart(2, "0")}`;
+      const rec = byDate.get(ds) || null;
+      const topVal = rec ? Math.max(rec.input_traces, rec.attr_traces, rec.hasCompact ? rec.compact : 0) : 0;
+      if (rec) {
+        totals.input_traces += rec.input_traces;
+        totals.input_sessions += rec.input_sessions;
+        totals.attr_traces += rec.attr_traces;
+        totals.compact += rec.hasCompact ? rec.compact : 0;
+        totals.remaining_traces += rec.remaining_traces;
+        if (topVal > 0) totals.activeDays += 1;
+        if (topVal > maxVal) maxVal = topVal;
+      }
+      days.push({ day, date: ds, rec, topVal });
+    }
+  }
+
+  return {
+    model: effectiveModel,
+    months,
+    activeMonth,
+    days,
+    allDates,
+    byDate,
+    maxVal: niceBarMax(maxVal || 1),
+    rawMax: maxVal,
+    totals,
+  };
+}
+
+export function monthBarHTML(series) {
+  const { months, activeMonth, totals } = series;
+  if (!months.length) {
+    return `<div class="sp-mbar-left"><span class="sp-mbar-cur">暂无按日数据</span></div>`;
+  }
+  const idx = months.indexOf(activeMonth);
+  const prevYm = idx > 0 ? months[idx - 1] : "";
+  const nextYm = idx >= 0 && idx < months.length - 1 ? months[idx + 1] : "";
+  const quickMonths = months.slice(-6).map((ym) => {
+    const active = ym === activeMonth;
+    const label = ym.slice(0, 4) === activeMonth.slice(0, 4) ? `${Number(ym.slice(5, 7))}月` : `${ym.slice(2, 4)}/${ym.slice(5, 7)}`;
+    return `<button type="button" class="sp-mchip${active ? " is-active" : ""}" data-sp-month="${esc(ym)}" aria-pressed="${active}">${esc(label)}</button>`;
+  }).join("");
+  const donePct = totals.input_traces > 0 ? pct(totals.attr_traces, totals.input_traces, 1) : "—";
+  return `<div class="sp-mbar-left">
+      <div class="sp-mnav">
+        <button type="button" class="sp-mnav-btn" data-sp-month="${esc(prevYm)}"${prevYm ? "" : " disabled"} aria-label="上个月">‹</button>
+        <b class="sp-mbar-cur num">${esc(ymLabel(activeMonth))}</b>
+        <button type="button" class="sp-mnav-btn" data-sp-month="${esc(nextYm)}"${nextYm ? "" : " disabled"} aria-label="下个月">›</button>
+      </div>
+      ${months.length > 1 ? `<div class="sp-mchips" role="group" aria-label="快速切月">${quickMonths}</div>` : ""}
+    </div>
+    <div class="sp-mbar-stats num">
+      <span>输入 <b>${num(totals.input_traces)}</b></span>
+      <span>已测 <b class="is-attr">${num(totals.attr_traces)}</b><em>${esc(donePct)}</em></span>
+      ${totals.remaining_traces > 0
+        ? `<span>待测 <b>${num(totals.remaining_traces)}</b></span>`
+        : (totals.input_traces > 0 ? `<span class="is-done">本月已完成</span>` : "")}
+    </div>`;
+}
+
+export function dateChartHTML(series, selectedDate = "") {
+  if (!series.activeMonth || !series.days.length) {
+    return `<div class="empty">暂无日期数据</div>`;
+  }
+  const maxY = Math.max(1, series.maxVal);
+  const midY = Math.round(maxY / 2);
+  const cols = series.days.map(({ day, date, rec, topVal }) => {
+    if (!rec || topVal <= 0) {
+      return `<div class="sp-bar-col is-empty" aria-hidden="true">
+        <div class="sp-bar-well"><span class="sp-bar-dot"></span></div>
+        <span class="sp-bar-day num">${day}</span>
+      </div>`;
+    }
+    const inTr = rec.input_traces;
+    const attrTr = rec.attr_traces;
+    const compTr = rec.hasCompact ? rec.compact : null;
     const remTr = Math.max(0, inTr - attrTr);
-    const aRatio = inTr ? attrTr / inTr : 0;
-    const cRatio = inTr && compTr != null ? Math.min(1, Math.max(aRatio, compTr / inTr)) : null;
-    const badge = remTr === 0 && inTr > 0
-      ? `<span class="sp-rc-tag is-done">已完成</span>`
-      : `<span class="sp-rc-tag">待测 ${num(remTr)}</span>`;
-    return `<div class="sp-ring-card is-date">
-      ${miniRingHTML(cRatio != null ? cRatio : aRatio, cRatio != null ? aRatio : null, {
-        outerCls: cRatio != null ? "is-comp" : "is-attr",
-        innerCls: "is-attr",
-        centerRatio: aRatio,
-      })}
-      <div class="sp-rc-body">
-        <div class="sp-rc-head">
-          <b class="sp-rc-name num">${esc(d.date)}</b>
-          ${badge}
-        </div>
-        <div class="sp-rc-stats">
-          <span>输入 <b class="num">${num(inTr)}</b> trace · <b class="num">${num(d.input_sessions)}</b> sess</span>
-          <span>已测 <b class="num is-attr">${num(attrTr)}</b>${compTr != null ? ` · 压缩 <b class="num is-comp">${num(compTr)}</b>` : ""}</span>
+    const totalPct = Math.max(3, Math.min(100, (topVal / maxY) * 100));
+    const attrPct = topVal > 0 ? Math.max(attrTr > 0 ? 4 : 0, Math.min(100, (attrTr / topVal) * 100)) : 0;
+    const compPct = compTr != null && topVal > 0
+      ? Math.max(compTr > 0 ? 4 : 0, Math.min(100, (Math.max(compTr, attrTr) / topVal) * 100))
+      : 0;
+    const done = inTr > 0 && remTr === 0;
+    const isSel = selectedDate === date;
+    const tip = `<div class="t-head">${esc(date)}</div>
+      <div class="t-row"><span>评测输入</span><b class="num">${num(inTr)} trace · ${num(rec.input_sessions)} sess</b></div>
+      <div class="t-row"><span>已完成评测</span><b class="num">${num(attrTr)} (${inTr ? pct(attrTr, inTr, 1) : "—"})</b></div>
+      ${compTr != null ? `<div class="t-row"><span>已完成压缩</span><b class="num">${num(compTr)} (${inTr ? pct(Math.min(inTr, compTr), inTr, 1) : "—"})</b></div>` : ""}
+      <div class="t-row"><span>状态</span><b class="num">${done ? "已完成" : `待测 ${num(remTr)}`}</b></div>`;
+    return `<button type="button" class="sp-bar-col${isSel ? " is-selected" : ""}${done ? " is-done" : ""}" data-sp-day="${esc(date)}" aria-pressed="${isSel}" data-tip="1" data-tip-html="${esc(tip)}">
+      <div class="sp-bar-well">
+        <span class="sp-bar-track" style="height:${totalPct.toFixed(1)}%">
+          ${compTr != null ? `<i class="sp-bar-comp" style="height:${compPct.toFixed(1)}%"></i>` : ""}
+          <i class="sp-bar-attr" style="height:${attrPct.toFixed(1)}%"></i>
+        </span>
+      </div>
+      <span class="sp-bar-day num">${day}</span>
+    </button>`;
+  }).join("");
+
+  return `<div class="sp-mchart" style="--days:${series.days.length}">
+    <div class="sp-mchart-yaxis num" aria-hidden="true">
+      <span>${num(maxY)}</span>
+      <span>${num(midY)}</span>
+      <span>0</span>
+    </div>
+    <div class="sp-mchart-plot">
+      <div class="sp-mchart-grid" aria-hidden="true"><i></i><i></i><i></i></div>
+      <div class="sp-mchart-bars" role="group" aria-label="${esc(ymLabel(series.activeMonth))}每日评测柱状图">${cols}</div>
+    </div>
+  </div>`;
+}
+
+export function dateDetailHTML(rec, modelName = "__all__", prevDate = "", nextDate = "") {
+  if (!rec) return "";
+  const inTr = Number(rec.input_traces) || 0;
+  const inSess = Number(rec.input_sessions) || 0;
+  const attrTr = Number(rec.attr_traces) || 0;
+  const compTr = rec.hasCompact ? Number(rec.compact) || 0 : null;
+  const remTr = Math.max(0, inTr - attrTr);
+  const aRatio = inTr > 0 ? Math.min(1, attrTr / inTr) : 0;
+  const cRatio = inTr > 0 && compTr != null ? Math.min(1, Math.max(aRatio, compTr / inTr)) : null;
+  const outerRatio = cRatio != null ? cRatio : aRatio;
+  const outerCls = cRatio != null ? "is-comp" : "is-attr";
+  const outOff = (DETAIL_OUT_C * (1 - outerRatio)).toFixed(2);
+  const inOff = (DETAIL_IN_C * (1 - aRatio)).toFixed(2);
+  const done = inTr > 0 && remTr === 0;
+  const pctStr = inTr > 0 ? (done ? "100%" : `${(aRatio * 100).toFixed(1)}%`) : "—";
+  const compPctStr = cRatio != null ? `${(cRatio * 100).toFixed(1)}%` : "";
+
+  const modelList = modelName === "__all__" && (rec.models || []).length > 1
+    ? `<div class="sp-dd-models">
+        ${rec.models.map((m) => {
+          const r = m.input_traces > 0 ? Math.min(1, m.attr_traces / m.input_traces) : 0;
+          return `<button type="button" class="sp-dd-mrow" data-sp-model="${esc(m.name)}">
+            <span class="sp-dd-mname">${esc(m.name)}</span>
+            <span class="sp-dd-mbar"><i style="width:${(r * 100).toFixed(1)}%"></i></span>
+            <b class="num">${m.input_traces ? pct(m.attr_traces, m.input_traces, 0) : "—"}</b>
+          </button>`;
+        }).join("")}
+      </div>`
+    : "";
+
+  return `<div class="sp-dd-head">
+      <div class="sp-dd-title">
+        <b class="num">${esc(rec.date)}</b>
+        <span class="sp-rc-tag${done ? " is-done" : ""}">${done ? "已完成" : `待测 ${num(remTr)}`}</span>
+      </div>
+      <div class="sp-dd-actions">
+        <button type="button" class="sp-mnav-btn" data-sp-day="${esc(prevDate)}"${prevDate ? "" : " disabled"} aria-label="前一天">‹</button>
+        <button type="button" class="sp-mnav-btn" data-sp-day="${esc(nextDate)}"${nextDate ? "" : " disabled"} aria-label="后一天">›</button>
+        <button type="button" class="sp-dd-close" id="spDateClose" aria-label="关闭详情">×</button>
+      </div>
+    </div>
+    <div class="sp-dd-ring-wrap">
+      <div class="sp-dd-ring" role="img" aria-label="${esc(rec.date)} 评测完成度环形图">
+        <svg viewBox="0 0 144 144" aria-hidden="true">
+          <g transform="rotate(-90 72 72)">
+            <circle class="sp-dd-track" cx="72" cy="72" r="62"/>
+            <circle class="sp-dd-arc ${outerCls}" cx="72" cy="72" r="62" stroke-dasharray="${DETAIL_OUT_C.toFixed(2)}" stroke-dashoffset="${outOff}"/>
+            ${cRatio != null ? `<circle class="sp-dd-track" cx="72" cy="72" r="51"/><circle class="sp-dd-arc is-attr" cx="72" cy="72" r="51" stroke-dasharray="${DETAIL_IN_C.toFixed(2)}" stroke-dashoffset="${inOff}"/>` : ""}
+          </g>
+        </svg>
+        <div class="sp-dd-center">
+          <b class="num">${esc(pctStr)}</b>
+          <span>已评测</span>
         </div>
       </div>
-    </div>`;
-  }).join("");
-  setHTML(root, "spDates", html);
+      <div class="sp-dd-legend num">
+        ${cRatio != null ? `<span><i class="is-comp"></i>压缩 <b>${esc(compPctStr)}</b></span><span><i class="is-attr"></i>评测 <b>${esc(pctStr)}</b></span>` : `<span><i class="is-attr"></i>已评测占比</span>`}
+      </div>
+    </div>
+    <div class="sp-dd-grid">
+      <div class="sp-dd-kv"><span>评测输入</span><b class="num">${num(inTr)}</b><small class="num">${num(inSess)} sess</small></div>
+      <div class="sp-dd-kv"><span>已完成评测</span><b class="num is-attr">${num(attrTr)}</b><small class="num">${inTr ? pct(attrTr, inTr, 1) : "—"}</small></div>
+      <div class="sp-dd-kv"><span>已完成压缩</span><b class="num is-comp">${compTr != null ? num(compTr) : "—"}</b><small class="num">${cRatio != null ? pct(Math.min(inTr, compTr), inTr, 1) : "—"}</small></div>
+      <div class="sp-dd-kv"><span>待评测</span><b class="num">${num(remTr)}</b><small>${done ? "已全部完成" : "trace"}</small></div>
+    </div>
+    ${modelList}`;
+}
+
+function renderDateBoard(root, data) {
+  const series = buildMonthlySeries(data, S.selectedModel, S.selectedMonth);
+  S.selectedModel = series.model;
+  S.selectedMonth = series.activeMonth;
+  if (S.selectedDate && !series.byDate.has(S.selectedDate)) {
+    S.selectedDate = "";
+  }
+  setHTML(root, "spMonthBar", monthBarHTML(series));
+  setHTML(root, "spDateChart", dateChartHTML(series, S.selectedDate));
+  const stage = $("#spDateStage", root);
+  const detail = $("#spDateDetail", root);
+  if (S.selectedDate && series.byDate.has(S.selectedDate)) {
+    const rec = series.byDate.get(S.selectedDate);
+    const idx = series.allDates.indexOf(S.selectedDate);
+    const prevDate = idx > 0 ? series.allDates[idx - 1] : "";
+    const nextDate = idx >= 0 && idx < series.allDates.length - 1 ? series.allDates[idx + 1] : "";
+    setHTML(root, "spDateDetail", dateDetailHTML(rec, series.model, prevDate, nextDate));
+    if (detail) detail.hidden = false;
+    stage?.classList?.add("has-detail");
+  } else {
+    if (detail) detail.hidden = true;
+    stage?.classList?.remove("has-detail");
+  }
 }
 
 function axisLabel(back, plotSpan) {
@@ -969,17 +1167,14 @@ function handleLiveTick(root, evt) {
     setRing($("#spRingAttr", root), RING_OUT_C, attrRatio);
     setText(root, "spRingPct", inTr ? `${(attrRatio * 100).toFixed(1)}%` : "—");
     spawnDanmu(root, "spAttrTraces", `+${num(allowed)}`, { tone: "attr" });
-    const activeCard = $(".sp-ring-card.is-active-model", root) || $(".sp-ring-card", root);
-    const activeAttr = activeCard && $("[data-sp-mattr]", activeCard);
-    if (activeAttr) {
-      const cur = Number(String(activeAttr.textContent || "").replace(/,/g, "")) || 0;
-      activeAttr.textContent = num(cur + allowed);
-    }
-    const activeRem = activeCard && $("[data-sp-mrem]", activeCard);
-    if (activeRem) {
-      const curRem = Number(String(activeRem.textContent || "").replace(/[^\d]/g, "")) || 0;
-      const nextRem = Math.max(0, curRem - allowed);
-      activeRem.textContent = nextRem > 0 ? `待测 ${num(nextRem)}` : "已完成";
+    const activePill = $(".sp-model-pill.is-active-model", root) || $(".sp-model-pill[data-sp-mattr]", root);
+    if (activePill) {
+      const mIn = Number(activePill.dataset.spMin) || 0;
+      const nextAttr = Math.min(mIn || Infinity, (Number(activePill.dataset.spMattr) || 0) + allowed);
+      activePill.dataset.spMattr = String(nextAttr);
+      activePill.dataset.spMrem = String(Math.max(0, mIn - nextAttr));
+      const pctEl = $("[data-sp-mpct]", activePill);
+      if (pctEl && mIn > 0) pctEl.textContent = nextAttr >= mIn ? "100%" : pct(nextAttr, mIn, 0);
     }
     return allowed;
   }
@@ -999,10 +1194,9 @@ function handleLiveTick(root, evt) {
     setRing($("#spRingCl", root), RING_IN_C, clInRatio);
     setText(root, "spRingClPct", inTr ? `聚类 ${(clInRatio * 100).toFixed(1)}%` : "聚类 —");
     spawnDanmu(root, "spClusterTraces", `+${num(allowed)}`, { tone: "cl" });
-    const activeCl = $(".sp-ring-card.is-active-model [data-sp-mcl]", root) || $("[data-sp-mcl]", root);
-    if (activeCl) {
-      const cur = Number(String(activeCl.textContent || "").replace(/,/g, "")) || 0;
-      activeCl.textContent = num(cur + allowed);
+    const activePill = $(".sp-model-pill.is-active-model", root) || $(".sp-model-pill[data-sp-mcl]", root);
+    if (activePill) {
+      activePill.dataset.spMcl = String((Number(activePill.dataset.spMcl) || 0) + allowed);
     }
     return allowed;
   }
@@ -1185,40 +1379,14 @@ export function applyData(root, data) {
   });
 
   renderGateways(root, data.gateways);
-  setHTML(root, "spModels", modelRowsHTML(data, { attrCarry: S.simAttrCarry, clCarry: S.simClusterCarry }));
+  renderDateBoard(root, data);
+  setHTML(root, "spModels", modelRowsHTML(data, { attrCarry: S.simAttrCarry, clCarry: S.simClusterCarry, selectedModel: S.selectedModel }));
 
   // 克制弹幕：仅在核心两处总览数字（已完成评测、已聚类）+ 流水线待聚类池出现真实增长时弹出 +n
   if (deltaAttr > 0) spawnDanmu(root, "spAttrTraces", `+${num(deltaAttr)}`, { tone: "attr" });
   if (deltaCluster > 0) spawnDanmu(root, "spClusterTraces", `+${num(deltaCluster)}`, { tone: "cl" });
 
-  if (S.selectedModel) {
-    const model = (data.models || []).find((m) => m.name === S.selectedModel);
-    if (model) renderDates(root, model);
-    else closeDates(root);
-  }
   drawChart(root);
-}
-
-function openDates(root, modelName) {
-  const model = (S.data?.models || []).find((m) => m.name === modelName);
-  if (!model) return;
-  S.selectedModel = modelName;
-  S.dateFilter = { year: "all", month: "all", page: 1 };
-  $("#spModelList", root).hidden = true;
-  $("#spDateView", root).hidden = false;
-  setHTML(root, "spDateLegend", `<span><i class="is-comp"></i>外环 已压缩</span><span><i class="is-attr"></i>内环 已评测</span>`);
-  renderDates(root, model);
-  S.fx?.redraw();
-}
-
-function closeDates(root) {
-  S.selectedModel = null;
-  const dv = $("#spDateView", root);
-  const ml = $("#spModelList", root);
-  if (dv) dv.hidden = true;
-  if (ml) ml.hidden = false;
-  setHTML(root, "spDateLegend", `<span><i class="is-attr"></i>外环 已评测</span><span><i class="is-cl"></i>内环 已聚类</span>`);
-  S.fx?.redraw();
 }
 
 function wireControls(root) {
@@ -1261,6 +1429,7 @@ function wireControls(root) {
     root._spClickWired = true;
     if (typeof bindTips === "function") {
       bindTips(root, (el) => {
+        if (el.dataset.tipHtml) return el.dataset.tipHtml;
         if (el.dataset.tip !== "p") return null;
         const p = Number(el.dataset.pending) || 0;
         const a = Number(el.dataset.attr) || 0;
@@ -1277,40 +1446,39 @@ function wireControls(root) {
         return;
       }
       const modelBtn = e.target.closest("[data-sp-model]");
-      if (modelBtn) {
-        openDates(root, modelBtn.dataset.spModel);
+      if (modelBtn && S.data) {
+        S.selectedModel = modelBtn.dataset.spModel || "__all__";
+        renderDateBoard(root, S.data);
+        setHTML(root, "spModels", modelRowsHTML(S.data, { attrCarry: S.simAttrCarry, clCarry: S.simClusterCarry, selectedModel: S.selectedModel }));
         return;
       }
-      if (e.target.closest("#spBack")) {
-        closeDates(root);
+      const monthBtn = e.target.closest("[data-sp-month]");
+      if (monthBtn && !monthBtn.disabled && S.data) {
+        const ym = monthBtn.dataset.spMonth || "";
+        if (ym) {
+          S.selectedMonth = ym;
+          if (S.selectedDate && !S.selectedDate.startsWith(`${ym}-`)) S.selectedDate = "";
+          renderDateBoard(root, S.data);
+        }
         return;
       }
-      if (e.target.closest("#spDatePrev")) {
-        S.dateFilter.page = Math.max(1, S.dateFilter.page - 1);
-        const model = (S.data?.models || []).find((m) => m.name === S.selectedModel);
-        if (model) renderDates(root, model);
+      if (e.target.closest("#spDateClose")) {
+        S.selectedDate = "";
+        if (S.data) renderDateBoard(root, S.data);
         return;
       }
-      if (e.target.closest("#spDateNext")) {
-        S.dateFilter.page += 1;
-        const model = (S.data?.models || []).find((m) => m.name === S.selectedModel);
-        if (model) renderDates(root, model);
+      const dayBtn = e.target.closest("[data-sp-day]");
+      if (dayBtn && !dayBtn.disabled && S.data) {
+        const ds = dayBtn.dataset.spDay || "";
+        if (!ds) return;
+        const inDetail = Boolean(dayBtn.closest("#spDateDetail"));
+        S.selectedDate = (!inDetail && S.selectedDate === ds) ? "" : ds;
+        if (S.selectedDate) S.selectedMonth = S.selectedDate.slice(0, 7);
+        hideTip();
+        renderDateBoard(root, S.data);
       }
     });
   }
-  $("#spDateYear", root)?.addEventListener("change", (e) => {
-    S.dateFilter.year = e.target.value;
-    S.dateFilter.month = "all";
-    S.dateFilter.page = 1;
-    const model = (S.data?.models || []).find((m) => m.name === S.selectedModel);
-    if (model) renderDates(root, model);
-  });
-  $("#spDateMonth", root)?.addEventListener("change", (e) => {
-    S.dateFilter.month = e.target.value;
-    S.dateFilter.page = 1;
-    const model = (S.data?.models || []).find((m) => m.name === S.selectedModel);
-    if (model) renderDates(root, model);
-  });
 }
 
 function tickHeartbeat() {
@@ -1332,37 +1500,6 @@ function tickHeartbeat() {
       conn?.classList?.remove("is-synced");
       setText(S.root, "spConnText", `${remSec}s 后刷新 · ${clock(S.data.updated_at)}`);
     }
-  }
-  if (!S.liveRunning) return;
-  const sec = Math.floor(Date.now() / 1000);
-  const wave = Math.sin(sec * 1.37) * 0.65 + Math.cos(sec * 0.73) * 0.35;
-  const gw = S.data.gateways || {};
-  const baseRpm = Number(gw.realtime_rpm) || 0;
-  if (baseRpm > 0) {
-    const liveRpm = Math.max(0.5, baseRpm + wave * Math.max(0.6, baseRpm * 0.015));
-    setText(S.root, "spGwRpm", rate(liveRpm));
-    if (gw.rpm_limit) {
-      setText(S.root, "spGwRpmSub", `配额 ${num(gw.rpm_limit)} · ${pct(liveRpm, gw.rpm_limit, 1)}`);
-      const fill = $("#spGwMeterFill", S.root);
-      if (fill) fill.style.width = `${Math.max(0, Math.min(100, (liveRpm / gw.rpm_limit) * 100)).toFixed(1)}%`;
-    }
-  }
-  const lead = gw.items?.[0];
-  if (lead?.latency_ms != null && Number(lead.latency_ms) > 0) {
-    const baseLat = Number(lead.latency_ms);
-    const liveLat = Math.max(1, baseLat + Math.cos(sec * 1.91) * Math.max(0.4, baseLat * 0.022));
-    setText(S.root, "spGwLatency", fmt(liveLat, 1));
-  }
-  const r = S.data.rates || {};
-  const basePa = Number(r.parts_attr) || 0;
-  const basePc = Number(r.parts_compact) || 0;
-  if (basePa > 0 || basePc > 0) {
-    const livePa = basePa > 0 ? Math.max(0.1, basePa + Math.sin(sec * 1.13) * Math.max(0.15, basePa * 0.025)) : 0;
-    const livePc = basePc > 0 ? Math.max(0.1, basePc + Math.cos(sec * 1.29) * Math.max(0.12, basePc * 0.025)) : 0;
-    setText(S.root, "spGwPartsAttr", rate(livePa));
-    setText(S.root, "spGwPartsComp", rate(livePc));
-    setText(S.root, "spPartsAttrSub", `在途 ${rate(livePa)} 条/分钟`);
-    setText(S.root, "spPartsCompactSub", `在途 ${rate(livePc)} 条/分钟`);
   }
 }
 

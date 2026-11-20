@@ -7,7 +7,12 @@ const CHEV_LEFT = `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" a
 const CHEV_RIGHT = `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
 const PAGE = 50;
-const S = { product: null, all: [], rows: [], pageRows: [], page: 1, slug: null, refocusList: false, listOff: false };
+const RECALL_CAP = 2000;
+const S = {
+  product: null, all: [], rows: [], pageRows: [], page: 1, slug: null, refocusList: false, listOff: false,
+  serverMode: false, pages: 1, total: 0, matched: 0, recalled: 0, cap: RECALL_CAP, capped: false,
+  facets: null, lastFilterSig: "", reqSeq: 0,
+};
 let ctx;
 let root;
 let labelsP = null;
@@ -169,66 +174,179 @@ async function addForecastSession(slug) {
   S.all.unshift(g);
 }
 
+function filterSig(f) {
+  return [f.q, f.w, f.split, f.model, f.ut, f.date, f.scene, f.sub, f.stage, f.mech, f.pattern, f.sort].join("\u0001");
+}
+
+function buildRecallQuery(f, { page = 1, wanted = "", locate = false, facets = true } = {}) {
+  return {
+    q: f.q, w: f.w, split: f.split, model: f.model, ut: f.ut, date: f.date,
+    scene: f.scene, sub: f.sub, stage: f.stage, mech: f.mech, pattern: f.pattern,
+    sort: f.sort || "sev", page, size: PAGE, cap: RECALL_CAP,
+    case: wanted || "", locate: locate ? "1" : "", facets: facets ? "1" : "0",
+  };
+}
+
+function applyServerPage(res, f) {
+  S.serverMode = true;
+  S.prod = { models: res.models || [], splits: res.splits || [] };
+  S.page = Number(res.page) || 1;
+  S.pages = Math.max(1, Number(res.pages) || 1);
+  S.total = Number(res.total_sessions) || 0;
+  S.matched = Number(res.matched) || 0;
+  S.recalled = Number(res.recalled) || 0;
+  S.cap = Number(res.cap) || RECALL_CAP;
+  S.capped = Boolean(res.capped);
+  if (res.facets) S.facets = res.facets;
+  S.pageRows = Array.isArray(res.rows) ? res.rows : [];
+  S.rows = S.pageRows;
+  S.all = res.target && !S.pageRows.some((x) => x.key === res.target.key)
+    ? [res.target, ...S.pageRows]
+    : S.pageRows;
+  S.lastFilterSig = filterSig(f);
+}
+
+function prefetchNextServerPage(f) {
+  if (!S.serverMode || !ctx?.recallPage || S.page >= S.pages) return;
+  ctx.recallPage(ctx.product, buildRecallQuery(f, { page: S.page + 1, facets: false })).catch(() => {});
+}
+
+async function fetchServerList({ page = S.page, facets = true, scrollTop = false } = {}) {
+  if (!S.serverMode || !ctx?.recallPage) return;
+  const seq = ++S.reqSeq;
+  const f = F();
+  $("#slist", root)?.setAttribute("aria-busy", "true");
+  const res = await ctx.recallPage(ctx.product, buildRecallQuery(f, { page, facets }));
+  if (seq !== S.reqSeq || !root?.isConnected) return;
+  if (!res) {
+    S.serverMode = false;
+    await render(root, ctx);
+    return;
+  }
+  applyServerPage(res, f);
+  if (facets) syncFilters();
+  renderList();
+  markCurrent();
+  if (scrollTop) $("#slist", root).scrollTop = 0;
+  prefetchNextServerPage(f);
+}
+
 export async function render(r, c) {
   ctx = c;
   root = r;
-  const index = await indexFor(c);
-  const prod = index.products[c.product];
-  if (S.product === c.product && S.prod && prod && S.prod !== prod && $(".bench", root)) {
-    // Fresh index from an in-place refresh: regroup, keep the reader's session and filters.
-    S.all = groupSessions(prod.rows);
-    S.prod = prod;
-    labelsP = null; // labels are index-aligned; a rebuilt index needs the new file
-  }
-  // 具体数据 and 预测数据 share this module but not a root: a root that last rendered the other view
-  // is rebuilt, or its detail pane would be driven by the wrong instance.
-  if (S.product !== c.product || !$(".bench", root) || S.root !== root) {
-    S.root = root;
-    S.product = c.product;
-    labelsP = null;
-    S.all = prod ? groupSessions(prod.rows) : [];
-    S.prod = prod;
-    S.slug = null;
-    S.page = 1;
-    skeleton();
-  }
-  if (!prod || !S.all.length) {
-    const other = c.product === "wencai" ? "aime" : "wencai";
-    root.innerHTML = `<div class="bento"><div class="card" style="--span:12"><div class="empty">${c.product === "wencai" ? "问财" : "AIME"} 暂无样本。${
-      index.available?.includes(other) ? `<a class="link" href="?view=samples&product=${other}">查看 ${other === "aime" ? "AIME" : "问财"} 样本</a>` : ""
-    }</div></div></div>`;
-    S.product = null;
-    return;
-  }
-  if (c.forecast) await addForecastSession(params().get("case"));
-  syncFilters();
-  renderList();
-  // lb is the only search field paint does not need, so it ships separately (4.8MB of
-  // the AIME index). Search works without it and gets more accurate when it lands.
-  // 5002 单样本页的索引只含该会话那几行（子集），行号对不上全量 labels，由 entry 传
-  // oneSession 跳过；那边的调用方要标签直接取 /labels-<product>.json 按行号配对。
-  if (!c.oneSession && !prod.head && !c.forecast) {
-    labelsP = labelsP || getJSON(`labels-${c.product}.json`)
-      .then((payload) => {
-        const labels = payload.labels || [];
-        prod.rows.forEach((r, i) => { if (labels[i]) r.lb = labels[i]; });
-        if (S.prod !== prod) return;
-        S.all = groupSessions(prod.rows);
-        renderList();
-      })
-      // A failed fetch must not stick: the next render tries again.
-      .catch(() => { labelsP = null; });
-  }
+  const f = F();
   const focusTrace = params().get("trace") || "";
-  const wanted = params().get("case");
+  const wanted = params().get("case") || "";
+  const canServerRecall = !c.forecast && !c.oneSession && typeof c.recallPage === "function";
+
+  if (canServerRecall) {
+    const fSig = filterSig(f);
+    const sameContext = S.serverMode && S.product === c.product && S.root === root && $(".bench", root) && !c.refresh;
+    const hitInPage = sameContext && S.lastFilterSig === fSig
+      && (!wanted || S.all.some((x) => x.key === wanted || x.rows.some((row) => row.s === wanted)));
+
+    if (!hitInPage) {
+      const seq = ++S.reqSeq;
+      const needLocate = Boolean(wanted) && (!sameContext || S.lastFilterSig !== fSig);
+      const res = await c.recallPage(c.product, buildRecallQuery(f, {
+        page: sameContext && S.lastFilterSig === fSig ? S.page : 1,
+        wanted,
+        locate: needLocate,
+        facets: true,
+      }));
+      if (seq !== S.reqSeq) return { trace: focusTrace || null, traceMiss: detail ? detail.miss : null };
+      if (res) {
+        const needShell = S.product !== c.product || !$(".bench", root) || S.root !== root;
+        applyServerPage(res, f);
+        if (needShell) {
+          S.root = root;
+          S.product = c.product;
+          labelsP = null;
+          S.slug = null;
+          skeleton();
+        }
+        if (!S.total) {
+          const other = c.product === "wencai" ? "aime" : "wencai";
+          root.innerHTML = `<div class="bento"><div class="card" style="--span:12"><div class="empty">${c.product === "wencai" ? "问财" : "AIME"} 暂无样本。${
+            res.available?.includes(other) ? `<a class="link" href="?view=samples&product=${other}">查看 ${other === "aime" ? "AIME" : "问财"} 样本</a>` : ""
+          }</div></div></div>`;
+          S.product = null;
+          return;
+        }
+        syncFilters();
+        renderList();
+        prefetchNextServerPage(f);
+      } else {
+        S.serverMode = false;
+      }
+    }
+  } else {
+    S.serverMode = false;
+  }
+
+  if (!S.serverMode) {
+    const index = await indexFor(c);
+    const prod = index.products[c.product];
+    if (S.product === c.product && S.prod && prod && S.prod !== prod && $(".bench", root)) {
+      // Fresh index from an in-place refresh: regroup, keep the reader's session and filters.
+      S.all = groupSessions(prod.rows);
+      S.prod = prod;
+      labelsP = null; // labels are index-aligned; a rebuilt index needs the new file
+    }
+    // 具体数据 and 预测数据 share this module but not a root: a root that last rendered the other view
+    // is rebuilt, or its detail pane would be driven by the wrong instance.
+    if (S.product !== c.product || !$(".bench", root) || S.root !== root) {
+      S.root = root;
+      S.product = c.product;
+      labelsP = null;
+      S.all = prod ? groupSessions(prod.rows) : [];
+      S.prod = prod;
+      S.slug = null;
+      S.page = 1;
+      skeleton();
+    }
+    if (!prod || !S.all.length) {
+      const other = c.product === "wencai" ? "aime" : "wencai";
+      root.innerHTML = `<div class="bento"><div class="card" style="--span:12"><div class="empty">${c.product === "wencai" ? "问财" : "AIME"} 暂无样本。${
+        index.available?.includes(other) ? `<a class="link" href="?view=samples&product=${other}">查看 ${other === "aime" ? "AIME" : "问财"} 样本</a>` : ""
+      }</div></div></div>`;
+      S.product = null;
+      return;
+    }
+    if (c.forecast) await addForecastSession(wanted);
+    syncFilters();
+    renderList();
+    // lb is the only search field paint does not need, so it ships separately (4.8MB of
+    // the AIME index). Search works without it and gets more accurate when it lands.
+    // 5002 单样本页的索引只含该会话那几行（子集），行号对不上全量 labels，由 entry 传
+    // oneSession 跳过；那边的调用方要标签直接取 /labels-<product>.json 按行号配对。
+    if (!c.oneSession && !prod.head && !c.forecast) {
+      labelsP = labelsP || getJSON(`labels-${c.product}.json`)
+        .then((payload) => {
+          const labels = payload.labels || [];
+          prod.rows.forEach((r, i) => { if (labels[i]) r.lb = labels[i]; });
+          if (S.prod !== prod) return;
+          S.all = groupSessions(prod.rows);
+          renderList();
+        })
+        // A failed fetch must not stick: the next render tries again.
+        .catch(() => { labelsP = null; });
+    }
+  }
+
   let session = wanted
     ? S.all.find((x) => x.key === wanted) || S.all.find((x) => x.rows.some((r) => r.s === wanted))
     : null;
   if (!session) session = S.rows[0] || S.all[0];
+  if (!session) {
+    S.slug = null;
+    markCurrent();
+    return { trace: focusTrace || null, traceMiss: null };
+  }
   const key = session.key;
   const focusSlug = wanted && wanted !== key ? wanted : null;
   if (wanted !== key) c.navigate({ case: key }, { replace: true });
-  revealPage(key);
+  if (!S.serverMode) revealPage(key);
   S.slug = key;
   if (detail) {
     detail.update({ prod: S.prod, sessions: S.all });
@@ -249,7 +367,7 @@ export async function render(r, c) {
     const card = sev && $(`#sattr .pcard[data-sev="${sev}"]`, root);
     if (card) requestAnimationFrame(() => flash(card));
   }
-  upgradeIndex();
+  if (!S.serverMode) upgradeIndex();
   return { trace: focusTrace || null, traceMiss: detail ? detail.miss : null };
 }
 
@@ -339,7 +457,16 @@ function skeleton() {
   const pager = $("#spager", root);
   pager.addEventListener("click", (e) => {
     const b = e.target.closest("button[data-page]");
-    if (!b || whenFull()) return;
+    if (!b) return;
+    if (S.serverMode) {
+      const next = b.dataset.page === "first" ? 1
+        : b.dataset.page === "last" ? S.pages
+        : b.dataset.page === "prev" ? S.page - 1 : S.page + 1;
+      const clamped = Math.max(1, Math.min(S.pages, next));
+      if (clamped !== S.page) fetchServerList({ page: clamped, facets: false, scrollTop: true });
+      return;
+    }
+    if (whenFull()) return;
     const pages = Math.max(1, Math.ceil(S.rows.length / PAGE));
     S.page = b.dataset.page === "first" ? 1
       : b.dataset.page === "last" ? pages
@@ -369,6 +496,10 @@ function skeleton() {
 function setFilter(patch) {
   ctx.navigate(patch, { replace: true });
   S.page = 1;
+  if (S.serverMode) {
+    fetchServerList({ page: 1, facets: true, scrollTop: true });
+    return;
+  }
   if (whenFull()) return;
   syncFilters();
   renderList();
@@ -437,13 +568,19 @@ function syncFilters() {
   const tax = ctx.data.taxonomy;
   const opt = (v, label, on) => `<option value="${esc(v)}"${on ? " selected" : ""}>${esc(label)}</option>`;
   // 场景 › 子场景 in one list: picking a sub-scene also pins its scene.
-  const sceneRows = S.all.filter((r) => listHit(r, f, "scene,sub,stage,mech,pattern"));
   const subsOf = new Map();
-  sceneRows.forEach((r) => {
-    const sc = sceneOf(r);
-    if (!subsOf.has(sc)) subsOf.set(sc, new Set());
-    if (subOf(r)) subsOf.get(sc).add(subOf(r));
-  });
+  if (S.serverMode && S.facets?.scenes) {
+    Object.entries(S.facets.scenes).forEach(([sc, subs]) => {
+      subsOf.set(sc, new Set(Array.isArray(subs) ? subs : []));
+    });
+  } else {
+    const sceneRows = S.all.filter((r) => listHit(r, f, "scene,sub,stage,mech,pattern"));
+    sceneRows.forEach((r) => {
+      const sc = sceneOf(r);
+      if (!subsOf.has(sc)) subsOf.set(sc, new Set());
+      if (subOf(r)) subsOf.get(sc).add(subOf(r));
+    });
+  }
   if (f.scene && !subsOf.has(f.scene)) subsOf.set(f.scene, new Set(f.sub ? [f.sub] : []));
   const sceneValue = f.sub ? `${f.scene}\u0001${f.sub}` : f.scene;
   const sceneOpts = [...subsOf.keys()].sort((a, b) => a.localeCompare(b, "zh")).map((sc) =>
@@ -452,12 +589,18 @@ function syncFilters() {
   let clusterSelect = "";
   if (tax) {
     // 阶段 › 机制 › 模式 in one list, built from the sessions the other filters leave.
-    const pool = S.all.filter((r) => listHit(r, f, "stage,mech,pattern"));
     const stagesOn = new Set(), mechsOn = new Set(), paths = new Set();
-    pool.forEach((r) => {
-      (r.st || []).forEach((x) => stagesOn.add(x));
-      (r.pt || []).forEach((x) => { const [st, me] = x.split("."); if (me) mechsOn.add(`${st}.${me}`); paths.add(x); });
-    });
+    if (S.serverMode && S.facets) {
+      (S.facets.stages || []).forEach((x) => stagesOn.add(x));
+      (S.facets.mechs || []).forEach((x) => mechsOn.add(x));
+      (S.facets.patterns || []).forEach((x) => paths.add(x));
+    } else {
+      const pool = S.all.filter((r) => listHit(r, f, "stage,mech,pattern"));
+      pool.forEach((r) => {
+        (r.st || []).forEach((x) => stagesOn.add(x));
+        (r.pt || []).forEach((x) => { const [st, me] = x.split("."); if (me) mechsOn.add(`${st}.${me}`); paths.add(x); });
+      });
+    }
     const num = (x) => Number(String(x).replace(/\D/g, "")) || 0;
     const byPath = (a, b) => {
       const pa = a.split("."), pb = b.split(".");
@@ -488,60 +631,79 @@ function syncFilters() {
 
 function renderList() {
   const f = F();
-  const needle = f.q.toLowerCase();
-  const hit = (r) =>
-    !needle ||
-    [r.q, r.lb, r.s, r.sid, r.tid, r.case, r.task, r.sub, r.skill].some((x) => x && String(x).toLowerCase().includes(needle)) ||
-    r.rows.some((x) => [x.q, x.sid, x.tid, x.case, x.task, x.sub, x.skill].some((v) => v && String(v).toLowerCase().includes(needle)));
-  S.rows = ctx.forecast
-    ? S.all.filter(
-        (r) =>
-          (!f.res || r.res === f.res) && (!f.model || r.m === f.model) && (!f.cls || r.c === f.cls) &&
-          (!f.typ || r.t === f.typ) && (!f.cause || r.e === f.cause) &&
-          (!needle || [r.q, r.s].some((x) => x && String(x).toLowerCase().includes(needle))),
-      )
-    : S.all.filter(
-        (r) =>
-          listHit(r, f) &&
-          dateHit(r, f) &&
-          hit(r),
-      );
   let questionTotal = 0;
   let answerTotal = 0;
-  if (ctx.forecast) {
-    // One list row per question: its versions' answers are chips inside the row.
-    const order = new Map(S.prod.models.map((m, i) => [m.id, i]));
-    const versions = new Map();
-    S.all.forEach((r) => {
-      const k = r.qi != null ? r.qi : r.s;
-      if (!versions.has(k)) versions.set(k, []);
-      versions.get(k).push(r);
-    });
-    questionTotal = versions.size;
-    const hits = new Set(S.rows.map((r) => r.s));
-    const seen = new Set();
-    const rows = [];
-    S.rows.forEach((r) => {
-      const k = r.qi != null ? r.qi : r.s;
-      if (seen.has(k)) return;
-      seen.add(k);
-      const vs = versions.get(k).slice().sort((a, b) => (order.get(a.m) ?? 99) - (order.get(b.m) ?? 99));
-      answerTotal += vs.filter((x) => hits.has(x.s)).length;
-      rows.push({ ...r, s: (vs.find((x) => hits.has(x.s)) || r).s, slugs: vs.map((x) => x.s), vers: vs.map((x) => ({ ...x, hit: hits.has(x.s) })) });
-    });
-    S.rows = rows;
-  }
-  if (f.sort === "n") S.rows = S.rows.slice().sort((a, b) => b.n - a.n);
-  if (f.sort === "date") S.rows = S.rows.slice().sort((a, b) => (a.d < b.d ? 1 : -1));
-  const pages = Math.max(1, Math.ceil(S.rows.length / PAGE));
-  S.page = Math.max(1, Math.min(pages, S.page));
-  S.pageRows = S.rows.slice((S.page - 1) * PAGE, S.page * PAGE);
+  let pages = 1;
+  let countForPager = 0;
   const label = (id) => (S.prod.models.find((m) => m.id === id) || { label: id }).label;
-  // The head holds only the first page; its counts come from the full index it was cut from.
-  const total = S.prod.head ? S.prod.head.sessions : S.all.length;
-  $("#scount", root).textContent = ctx.forecast
-    ? `${fmt(S.rows.length)} / ${fmt(questionTotal)} 题 · ${fmt(answerTotal)} 份回答`
-    : `${fmt(S.prod.head ? total : S.rows.length)} / ${fmt(total)} 个会话`;
+  const scountEl = $("#scount", root);
+
+  if (S.serverMode) {
+    pages = S.pages;
+    countForPager = S.recalled;
+    if (S.capped) {
+      scountEl.textContent = `前 ${fmt(S.recalled)} / ${fmt(S.matched)} 个会话`;
+      scountEl.title = `单次召回上限 ${fmt(S.cap)} 个会话（总命中 ${fmt(S.matched)} / 全部 ${fmt(S.total)}），可通过筛选缩小范围`;
+    } else {
+      scountEl.textContent = `${fmt(S.matched)} / ${fmt(S.total)} 个会话`;
+      scountEl.removeAttribute("title");
+    }
+  } else {
+    const needle = f.q.toLowerCase();
+    const hit = (r) =>
+      !needle ||
+      [r.q, r.lb, r.s, r.sid, r.tid, r.case, r.task, r.sub, r.skill].some((x) => x && String(x).toLowerCase().includes(needle)) ||
+      r.rows.some((x) => [x.q, x.sid, x.tid, x.case, x.task, x.sub, x.skill].some((v) => v && String(v).toLowerCase().includes(needle)));
+    S.rows = ctx.forecast
+      ? S.all.filter(
+          (r) =>
+            (!f.res || r.res === f.res) && (!f.model || r.m === f.model) && (!f.cls || r.c === f.cls) &&
+            (!f.typ || r.t === f.typ) && (!f.cause || r.e === f.cause) &&
+            (!needle || [r.q, r.s].some((x) => x && String(x).toLowerCase().includes(needle))),
+        )
+      : S.all.filter(
+          (r) =>
+            listHit(r, f) &&
+            dateHit(r, f) &&
+            hit(r),
+        );
+    if (ctx.forecast) {
+      // One list row per question: its versions' answers are chips inside the row.
+      const order = new Map(S.prod.models.map((m, i) => [m.id, i]));
+      const versions = new Map();
+      S.all.forEach((r) => {
+        const k = r.qi != null ? r.qi : r.s;
+        if (!versions.has(k)) versions.set(k, []);
+        versions.get(k).push(r);
+      });
+      questionTotal = versions.size;
+      const hits = new Set(S.rows.map((r) => r.s));
+      const seen = new Set();
+      const rows = [];
+      S.rows.forEach((r) => {
+        const k = r.qi != null ? r.qi : r.s;
+        if (seen.has(k)) return;
+        seen.add(k);
+        const vs = versions.get(k).slice().sort((a, b) => (order.get(a.m) ?? 99) - (order.get(b.m) ?? 99));
+        answerTotal += vs.filter((x) => hits.has(x.s)).length;
+        rows.push({ ...r, s: (vs.find((x) => hits.has(x.s)) || r).s, slugs: vs.map((x) => x.s), vers: vs.map((x) => ({ ...x, hit: hits.has(x.s) })) });
+      });
+      S.rows = rows;
+    }
+    if (f.sort === "n") S.rows = S.rows.slice().sort((a, b) => b.n - a.n);
+    if (f.sort === "date") S.rows = S.rows.slice().sort((a, b) => (a.d < b.d ? 1 : -1));
+    pages = Math.max(1, Math.ceil(S.rows.length / PAGE));
+    S.page = Math.max(1, Math.min(pages, S.page));
+    S.pageRows = S.rows.slice((S.page - 1) * PAGE, S.page * PAGE);
+    // The head holds only the first page; its counts come from the full index it was cut from.
+    const total = S.prod.head ? S.prod.head.sessions : S.all.length;
+    scountEl.textContent = ctx.forecast
+      ? `${fmt(S.rows.length)} / ${fmt(questionTotal)} 题 · ${fmt(answerTotal)} 份回答`
+      : `${fmt(S.prod.head ? total : S.rows.length)} / ${fmt(total)} 个会话`;
+    scountEl.removeAttribute("title");
+    pages = S.prod.head ? Math.max(1, Math.ceil(total / PAGE)) : pages;
+    countForPager = S.prod.head ? total : S.rows.length;
+  }
   $("#slist", root).removeAttribute("aria-busy");
   const resColor = { correct: "var(--accent)", wrong: "var(--sev-1)", pending: "var(--muted)" };
   $("#slist", root).innerHTML = S.pageRows.length
@@ -560,7 +722,7 @@ function renderList() {
         )
         .join("")
     : `<div class="empty">没有符合条件的会话<br><button type="button" class="link" id="sclear">清除筛选</button></div>`;
-  renderPager(S.prod.head ? Math.max(1, Math.ceil(total / PAGE)) : pages, S.prod.head ? total : S.rows.length);
+  renderPager(pages, countForPager);
   const clear = $("#sclear", root);
   clear && clear.addEventListener("click", () => setFilter({ ...NO_FILTER }));
 }

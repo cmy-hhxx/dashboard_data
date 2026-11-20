@@ -4,7 +4,7 @@ import test from "node:test";
 
 globalThis.location = { search: "" };
 globalThis.window = {};
-const { deriveEvalStatus, shellHTML, modelRowsHTML, applyData } = await import("../static/js/speed.js");
+const { deriveEvalStatus, shellHTML, modelRowsHTML, buildMonthlySeries, monthBarHTML, dateChartHTML, dateDetailHTML, applyData } = await import("../static/js/speed.js");
 const speedCss = fs.readFileSync(new URL("../static/css/speed.css", import.meta.url), "utf8");
 const systemCss = fs.readFileSync(new URL("../static/css/system.css", import.meta.url), "utf8");
 const speedJs = fs.readFileSync(new URL("../static/js/speed.js", import.meta.url), "utf8");
@@ -38,7 +38,14 @@ const PAYLOAD = {
   rates: { attr: 20, compact: 25, parts_attr: 18, parts_compact: 22, realtime_rpm: 140, active_writers: 2, newest_part_age_s: 3 },
   cluster: { traces: 600, pending: 150, models: [{ name: "aime_fast", traces: 600, output_traces: 750, pending: 150 }] },
   queue: { running: 1, locks: [{ model: "aime_fast", heartbeat_age_s: 4 }] },
-  models: [{ name: "aime_fast", input_sessions: 400, input_traces: 1000, attr_traces: 750, compact: 900, dates: [] }],
+  models: [{
+    name: "aime_fast", input_sessions: 400, input_traces: 1000, attr_traces: 750, compact: 900,
+    dates: [
+      { date: "2026-10-30", input_sessions: 100, input_traces: 250, attr_traces: 250, compact: 250, remaining_traces: 0 },
+      { date: "2026-11-18", input_sessions: 160, input_traces: 400, attr_traces: 300, compact: 360, remaining_traces: 100 },
+      { date: "2026-11-19", input_sessions: 140, input_traces: 350, attr_traces: 200, compact: 290, remaining_traces: 150 },
+    ],
+  }],
   gateways: {
     count: 1, healthy: 1, realtime_rpm: 140, rpm_limit: 500, active_writers: 2, newest_part_age_s: 3, active_replicas: 2,
     control: { paused: false, model_requests: 17, concurrency: 34, compact_backlog: 0 },
@@ -58,6 +65,7 @@ test("speed UI has no chunk, no funnel progress bar, and no verbose meta clutter
   assert.ok(!html.includes('class="meta'));
   assert.ok(!html.includes(".parts"));
   assert.ok(!speedJs.includes("sp-gw-url"));
+  assert.ok(!speedJs.includes("Math.sin(") && !speedJs.includes("Math.cos("), "gateway RPM/latency/rates must never use synthetic sine-wave jitter");
 });
 
 test("overview card uses concentric ring chart with outer/inner labels and shows input, evaluated and clustered traces", () => {
@@ -130,15 +138,41 @@ test("deriveEvalStatus distinguishes 进行中 / 中断中 / 已完成 / 采集�
   assert.equal(done.label, "已完成");
 });
 
-test("modelRowsHTML renders dual concentric ring cards with trace/session/cluster stats", () => {
+test("modelRowsHTML renders compact model selector pills with live progress stats", () => {
   const html = modelRowsHTML(PAYLOAD);
   assert.ok(html.includes('data-sp-model="aime_fast"'));
-  assert.ok(html.includes("sp-ring-card"));
-  assert.ok(html.includes("sp-mring-arc is-attr"));
-  assert.ok(html.includes("sp-mring-arc is-cl"));
+  assert.ok(html.includes("sp-model-pill"));
+  assert.ok(html.includes("75%"));
   assert.ok(html.includes("1,000"));
   assert.ok(html.includes("600"));
   assert.ok(html.includes("250"));
+});
+
+test("date distribution uses monthly bar chart and click-to-open concentric ring detail", () => {
+  const series = buildMonthlySeries(PAYLOAD, "aime_fast", "");
+  assert.deepEqual(series.months, ["2026-10", "2026-11"]);
+  assert.equal(series.activeMonth, "2026-11");
+  assert.equal(series.days.length, 30);
+  assert.equal(series.totals.input_traces, 750);
+  assert.equal(series.totals.attr_traces, 500);
+
+  const barHead = monthBarHTML(series);
+  assert.ok(barHead.includes("2026 年 11 月"));
+  assert.ok(barHead.includes('data-sp-month="2026-10"'));
+
+  const chart = dateChartHTML(series, "2026-11-18");
+  assert.ok(chart.includes("sp-mchart-bars"));
+  assert.ok(chart.includes('data-sp-day="2026-11-18"'));
+  assert.ok(chart.includes('is-selected'));
+  assert.ok(!chart.includes("sp-ring-card"));
+
+  const detail = dateDetailHTML(series.byDate.get("2026-11-18"), "aime_fast", "2026-10-30", "2026-11-19");
+  assert.ok(detail.includes("2026-11-18"));
+  assert.ok(detail.includes("sp-dd-ring"));
+  assert.ok(detail.includes("sp-dd-arc is-comp"));
+  assert.ok(detail.includes("sp-dd-arc is-attr"));
+  assert.ok(detail.includes("75.0%"));
+  assert.ok(detail.includes("待测 100"));
 });
 
 test("applyData updates concentric rings and KPI counters from real numbers", () => {

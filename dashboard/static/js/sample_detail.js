@@ -559,7 +559,9 @@ function renderIn() {
   // One session can mix models across its traces; the list keeps one row per model, so read
   // the sibling groups sharing this session id, not only the current group's rows.
   const sessionPeers = S.all.filter((x) => x.sid && session.sid && String(x.sid) === String(session.sid));
-  const sessionModels = [...new Set((sessionPeers.length ? sessionPeers : [session]).map((x) => x.m).filter(Boolean))];
+  const sessionModels = Array.isArray(session.pm) && session.pm.length
+    ? session.pm
+    : [...new Set((sessionPeers.length ? sessionPeers : [session]).map((x) => x.m).filter(Boolean))];
   const sessionLabel = sessionModels.length > 1 ? "混合" : modelLabel(sessionModels[0] || D.model);
   const rounds = D.rounds || [];
   const group = (k, cls, vals) => {

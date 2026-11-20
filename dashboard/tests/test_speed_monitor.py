@@ -406,6 +406,60 @@ class SpeedMonitorTests(unittest.TestCase):
             self.assertFalse(speed_monitor._STATE["parts_seeded"])
             self.assertEqual(speed_monitor._STATE["part_files"], {})
 
+    def test_rpm_window_anchoring_no_clamping_and_gateway_allocation(self):
+        now = time.time()
+        scan_t = now - 28.0  # Simulate 28s elapsed since last Ceph scan (still within rpm_window)
+        # 1. No artificial clamping when burst exceeds rpm_limit
+        events = [
+            {"t": scan_t - 150.0, "a": 20, "c": 0, "r": 300},
+            {"t": scan_t - 90.0, "a": 20, "c": 0, "r": 300},
+            {"t": scan_t - 30.0, "a": 20, "c": 0, "r": 450},
+        ]
+        pa, pc, rpm, span = speed_monitor._parts_rates(events, scan_t - 300.0, scan_t, 180, rpm_limit=300)
+        # 1050 requests / 180s * 60 = 350.0 RPM (must NOT be silently clipped to 300)
+        self.assertEqual(rpm, 350.0)
+        self.assertEqual(span, 180)
+        self.assertEqual((pa, pc), (20.0, 0.0))
+
+        # 2. payload() anchors to updated_at so inter-poll wall-clock drift doesn't drop the oldest event
+        speed_monitor.reset_for_test()
+        with speed_monitor._LOCK:
+            speed_monitor._STATE["available"] = True
+            speed_monitor._STATE["mode"] = "local"
+            speed_monitor._STATE["ok"] = True
+            speed_monitor._STATE["updated_at"] = scan_t
+            speed_monitor._STATE["parts_seeded"] = True
+            speed_monitor._STATE["parts_seeded_at"] = scan_t - 300.0
+            speed_monitor._STATE["part_events"] = speed_monitor.collections.deque(events)
+            speed_monitor._STATE["gateways"] = {
+                "gw-a": {"name": "gw-a", "ok": True, "healthy": True, "code": 200, "rpm_limit": 300, "rpm_source": "key"},
+                "gw-b": {"name": "gw-b", "ok": True, "healthy": True, "code": 200, "rpm_limit": 100, "rpm_source": "key"},
+                "gw-dead": {"name": "gw-dead", "ok": False, "healthy": False, "code": 502, "rpm_limit": 200, "rpm_source": "key"},
+            }
+        data = speed_monitor.payload()
+        gw = data["gateways"]
+        # Exact 350.0 preserved despite 28s wall-clock drift; offline gateway excluded from limit & RPM
+        self.assertEqual(gw["realtime_rpm"], 350.0)
+        self.assertEqual(gw["parts_attr_rate"], 20.0)
+        self.assertEqual(gw["rpm_limit"], 400)
+        self.assertEqual(gw["rpm_method"], "parts_estimate")
+        by_name = {it["name"]: it for it in gw["items"]}
+        self.assertEqual(by_name["gw-a"]["rpm"], 262.5)
+        self.assertEqual(by_name["gw-b"]["rpm"], 87.5)
+        self.assertEqual(by_name["gw-dead"]["rpm"], 0.0)
+        self.assertAlmostEqual(sum(it["rpm"] for it in gw["items"]), gw["realtime_rpm"], places=1)
+
+        # 3. Equal split across healthy gateways when rpm_limit is absent (must not over-allocate 100% + 50%)
+        with speed_monitor._LOCK:
+            speed_monitor._STATE["gateways"] = {
+                "gw-1": {"name": "gw-1", "ok": True, "healthy": True, "code": 200, "rpm_limit": None, "rpm_source": "none"},
+                "gw-2": {"name": "gw-2", "ok": True, "healthy": True, "code": 200, "rpm_limit": None, "rpm_source": "none"},
+            }
+        data2 = speed_monitor.payload()
+        by_name2 = {it["name"]: it for it in data2["gateways"]["items"]}
+        self.assertEqual(by_name2["gw-1"]["rpm"], 175.0)
+        self.assertEqual(by_name2["gw-2"]["rpm"], 175.0)
+
 
 if __name__ == "__main__":
     unittest.main()

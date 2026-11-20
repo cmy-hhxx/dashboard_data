@@ -167,6 +167,69 @@ function loadRecallHead(product = state.product) {
 }
 const peekIndex = (product = state.product) => state.indexes[product] || null;
 
+/* Server-side bounded recall (max 2,000 cases + lazy pagination): keeps every recall jump,
+   filter, sunburst galaxy, trend drawer and compare sibling lookup to a few KB instead of
+   pulling the tens-of-MB full samples index into the browser. */
+const recallCache = new Map();
+const RECALL_CACHE_MAX = 64;
+let recallApiBroken = false;
+function clearRecallCache() {
+  recallCache.clear();
+  recallApiBroken = false;
+}
+function cachedRecall(url) {
+  if (recallApiBroken) return Promise.resolve(null);
+  if (recallCache.has(url)) {
+    const p = recallCache.get(url);
+    recallCache.delete(url);
+    recallCache.set(url, p);
+    return p;
+  }
+  const p = getJSON(url, { retries: 0 }).catch((err) => {
+    recallCache.delete(url);
+    if (err && /404|405/.test(String(err.message || err))) recallApiBroken = true;
+    return null;
+  });
+  recallCache.set(url, p);
+  if (recallCache.size > RECALL_CACHE_MAX) {
+    recallCache.delete(recallCache.keys().next().value);
+  }
+  return p;
+}
+function buildQS(params) {
+  const sp = new URLSearchParams();
+  Object.entries(params || {}).forEach(([k, v]) => {
+    if (v != null && v !== "") sp.set(k, String(v));
+  });
+  return sp.toString();
+}
+function recallPage(product = state.product, params = {}) {
+  const qs = buildQS(params);
+  return cachedRecall(`api/recall/${encodeURIComponent(product)}.json${qs ? `?${qs}` : ""}`);
+}
+function recallSlice(product = state.product, params = {}) {
+  const qs = buildQS(params);
+  return cachedRecall(`api/recall_slice/${encodeURIComponent(product)}.json${qs ? `?${qs}` : ""}`);
+}
+async function recallLookup(product = state.product, { slugs = [], tids = [], cap = 2000 } = {}) {
+  if (recallApiBroken) return null;
+  try {
+    const res = await fetch(`api/recall_lookup/${encodeURIComponent(product)}.json`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slugs, tids, cap }),
+    });
+    if (res.status === 404 || res.status === 405) {
+      recallApiBroken = true;
+      return null;
+    }
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
 async function render({ refresh = false } = {}) {
   readURL();
   document.documentElement.dataset.view = state.view;
@@ -189,7 +252,7 @@ async function render({ refresh = false } = {}) {
         console.error(err);
       }
     }
-    await modules[state.view].render(root, { ...state, navigate, loadIndex, peekIndex, loadRecallHead, refresh });
+    await modules[state.view].render(root, { ...state, navigate, loadIndex, peekIndex, loadRecallHead, recallPage, recallSlice, recallLookup, refresh });
   } catch (err) {
     console.error(err);
     root.innerHTML = `<div class="bento"><div class="card" style="--span:12"><div class="empty">页面加载失败：${esc(String(err.message || err))}</div></div></div>`;
@@ -246,6 +309,7 @@ async function poll() {
         state.indexes = {};
         state.indexP = {};
         Object.keys(recallP).forEach((p) => delete recallP[p]);
+        clearRecallCache();
         await render({ refresh: true });
       }
       return;
@@ -256,6 +320,7 @@ async function poll() {
     state.indexes = {};
     state.indexP = {};
     Object.keys(recallP).forEach((p) => delete recallP[p]);
+    clearRecallCache();
     await render({ refresh: true });
     stamp(true);
   } catch (err) {
@@ -342,11 +407,6 @@ async function boot() {
   readURL();
   const dataP = getJSON("data.json").catch(() => ({ products: {}, source: { pairs: 0 } }));
   const moduleP = loaders[state.view]().catch(() => null);
-  if (state.view === "samples") {
-    // The page paints from the small recall head and fetches the full index after the first
-    // session; only without a head (or for a filtered link) does it wait for the full one.
-    loadRecallHead(state.product);
-  }
   state.data = await dataP;
   const asked = new URLSearchParams(location.search).get("product");
   if (!asked) {

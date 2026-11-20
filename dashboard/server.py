@@ -60,10 +60,24 @@ GPT_DETAIL_RE = re.compile(r"^/gpt_samples/([^/]+)/([0-9A-Za-z_-]+)\.json$")
 # /bench/<product>.json: serves schema:1 golden/bad slices or schema:2 dynamic bench views/fields.
 BENCH_RE = re.compile(r"^/bench/([a-z][a-z0-9_]*)\.json$")
 BENCH_CASE_RE = re.compile(r"^/bench_case/([a-z][a-z0-9_]*)/([a-z0-9_]+)/([^/]+)\.json$")
+# /api/recall*: bounded (<= 2000) server-side paginated & sliced sample recall.
+RECALL_RE = re.compile(r"^/api/recall/([a-z][a-z0-9_]*)\.json$")
+RECALL_SLICE_RE = re.compile(r"^/api/recall_slice/([a-z][a-z0-9_]*)\.json$")
+RECALL_LOOKUP_RE = re.compile(r"^/api/recall_lookup/([a-z][a-z0-9_]*)\.json$")
 _BENCH_CACHE = {}
 _BENCH_LOCK = threading.Lock()
 _BENCH_INDEX_CACHE = {}
 _BENCH_INDEX_LOCK = threading.Lock()
+_RECALL_STORE = None
+
+
+def recall_entry(product):
+    """Cached server-side recall index for ``samples-<product>.json`` (+ labels)."""
+    global _RECALL_STORE
+    if _RECALL_STORE is None:
+        import recall_index
+        _RECALL_STORE = recall_index.RecallStore()
+    return _RECALL_STORE.get(STATIC, product)
 
 
 def prewarm_details():
@@ -564,6 +578,77 @@ class Handler(SimpleHTTPRequestHandler):
         self._send_body(200, body, "application/json; charset=utf-8")
         return True
 
+    def _serve_recall(self, path_only):
+        """Serve bounded paginated session recall and sliced galaxy/trend/session queries."""
+        m_list = RECALL_RE.match(path_only)
+        m_slice = None if m_list else RECALL_SLICE_RE.match(path_only)
+        if not m_list and not m_slice:
+            return False
+        product = (m_list or m_slice).group(1)
+        entry = recall_entry(product)
+        if entry is None:
+            self._send_body(404, b'{"error":"recall index unavailable"}', "application/json")
+            return True
+        parsed = urllib.parse.urlparse(self.path)
+        query = {k: vals[0] for k, vals in urllib.parse.parse_qs(parsed.query).items() if vals}
+        if m_list:
+            result = entry.query_sessions(query)
+        else:
+            mode = query.get("mode") or ""
+            if mode == "galaxy":
+                result = entry.query_galaxy(query)
+            elif mode == "trend":
+                result = entry.query_trend(query)
+            elif mode == "session":
+                result = entry.query_session(query)
+            else:
+                self._send_body(400, b'{"error":"unknown recall slice mode"}', "application/json")
+                return True
+        self._cache_policy = "no-cache"
+        qhash = hashlib.sha1(self.path.encode("utf-8")).hexdigest()[:12]
+        etag = f'{entry.etag[:-1]}-{qhash}"'
+        body = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        self._send_body(200, body, "application/json; charset=utf-8", etag=etag)
+        return True
+
+    def do_POST(self):
+        path_only = self.path.split("?", 1)[0]
+        match = RECALL_LOOKUP_RE.match(path_only)
+        if not match:
+            self._send_body(404, b'{"error":"not found"}', "application/json")
+            return
+        if _warming.is_set():
+            self._cache_policy = "no-store"
+            self._send_body(503, b'{"ok":false,"warming":true}', "application/json")
+            return
+        product = match.group(1)
+        entry = recall_entry(product)
+        if entry is None:
+            self._send_body(404, b'{"error":"recall index unavailable"}', "application/json")
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or "0")
+        except ValueError:
+            length = -1
+        if length < 0 or length > 524288:
+            self._send_body(400, b'{"error":"invalid content length"}', "application/json")
+            return
+        raw = self.rfile.read(length) if length else b"{}"
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("not an object")
+        except ValueError:
+            self._send_body(400, b'{"error":"invalid json"}', "application/json")
+            return
+        slugs = payload.get("slugs") if isinstance(payload.get("slugs"), list) else []
+        tids = payload.get("tids") if isinstance(payload.get("tids"), list) else []
+        cap = payload.get("cap")
+        result = entry.lookup(slugs, tids, cap=cap)
+        self._cache_policy = "no-store"
+        body = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        self._send_body(200, body, "application/json; charset=utf-8")
+
     def do_GET(self):
         path_only = self.path.split("?", 1)[0]
         asset = ASSET_RE.match(path_only)
@@ -627,6 +712,8 @@ class Handler(SimpleHTTPRequestHandler):
         if _lister and (path_only == "/inputs.json" or (path_only.startswith("/inputs/") and path_only.endswith(".json"))):
             if self._serve_inputs(path_only):
                 return
+        if self._serve_recall(path_only):
+            return
         if self._serve_bench(path_only) or self._serve_bench_case(path_only):
             return
         if _builder and path_only.startswith("/samples/") and path_only.endswith(".json"):

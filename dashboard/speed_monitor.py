@@ -41,7 +41,7 @@ DEFAULTS = {
     "refresh_seconds": 15,
     "input_refresh_seconds": 60,
     "history_seconds": 172800,
-    "rpm_window_seconds": 120,
+    "rpm_window_seconds": 180,
     "rate_window_seconds": 300,
     "ssh_host": "",
     "ssh_port": None,
@@ -1575,15 +1575,13 @@ def _parts_rates(events: list[dict], seeded_at: float, now: float, window_s: int
         return None, None, None, None
     a_sum = c_sum = r_sum = 0
     for ev in events:
-        if ev["t"] > cutoff:
+        if cutoff < ev["t"] <= now:
             a_sum += int(ev.get("a", 0))
             c_sum += int(ev.get("c", 0))
             r_sum += int(ev.get("r", 0))
     pa = round(max(0.0, a_sum / span * 60.0), 1)
     pc = round(max(0.0, c_sum / span * 60.0), 1)
     rpm = max(0.0, r_sum / span * 60.0)
-    if rpm_limit and rpm_limit > 0:
-        rpm = min(float(rpm_limit), rpm)
     return pa, pc, round(rpm, 1), int(round(span))
 
 
@@ -1705,7 +1703,8 @@ def collect_outputs() -> None:
             _STATE["active_writers"] = int(parts_delta.get("active_writers") or 0)
             _STATE["newest_part_age_s"] = parts_delta.get("newest_age_s")
 
-            rpm_limits = [g["rpm_limit"] for g in gateways.values() if isinstance(g.get("rpm_limit"), int) and g["rpm_limit"] > 0]
+            active_gws = [g for g in gateways.values() if g.get("ok")] or list(gateways.values())
+            rpm_limits = [g["rpm_limit"] for g in active_gws if isinstance(g.get("rpm_limit"), int) and g["rpm_limit"] > 0]
             cap_rpm = sum(rpm_limits) if rpm_limits else (rpm_limit_info.get("rpm") if isinstance(rpm_limit_info.get("rpm"), int) else None)
             pa, pc, live_rpm, _ = _parts_rates(
                 list(_STATE["part_events"]), _STATE["parts_seeded_at"], now, int(cfg["rpm_window_seconds"]), cap_rpm,
@@ -1951,27 +1950,31 @@ def payload() -> dict:
     k_rate, _ = _window_rate(history, "k", int(_CONFIG["rate_window_seconds"]))
 
     now = time.time()
-    rpm_limits = [g["rpm_limit"] for g in gateway_rows.values() if isinstance(g.get("rpm_limit"), int) and g["rpm_limit"] > 0]
+    rpm_win = int(_CONFIG["rpm_window_seconds"])
+    # Anchor the .parts rate window to the actual scan timestamp while polls are fresh so
+    # inter-poll wall-clock drift (15-38s) never slices events off the left edge and undercounts RPM.
+    updated_ts = float(meta["updated_at"] or 0)
+    parts_ref_t = updated_ts if (updated_ts > 0 and 0 <= now - updated_ts <= rpm_win) else now
+
+    active_gw_rows = [g for g in gateway_rows.values() if g.get("ok")] or list(gateway_rows.values())
+    rpm_limits = [g["rpm_limit"] for g in active_gw_rows if isinstance(g.get("rpm_limit"), int) and g["rpm_limit"] > 0]
     total_rpm_limit = sum(rpm_limits) if rpm_limits else (rpm_limit_info.get("rpm") if isinstance(rpm_limit_info.get("rpm"), int) else None)
-    # "key" only when every gateway with a ceiling got it from /key/info; otherwise the total
+    # "key" only when every active gateway with a ceiling got it from /key/info; otherwise the total
     # leans on the harness cache and the UI says so.
-    rpm_sources = [g.get("rpm_source") for g in gateway_rows.values()
+    rpm_sources = [g.get("rpm_source") for g in active_gw_rows
                    if isinstance(g.get("rpm_limit"), int) and g["rpm_limit"] > 0]
     total_rpm_source = "key" if rpm_sources and all(x == "key" for x in rpm_sources) else (
         "runtime" if total_rpm_limit else "none")
-    parts_attr_rate, parts_compact_rate, _, parts_span = _parts_rates(
-        part_events, meta["parts_seeded_at"], now, int(_CONFIG["rate_window_seconds"]), total_rpm_limit,
+    parts_attr_rate, parts_compact_rate, realtime_rpm, rpm_span = _parts_rates(
+        part_events, meta["parts_seeded_at"], parts_ref_t, rpm_win, total_rpm_limit,
     )
-    _, _, realtime_rpm, rpm_span = _parts_rates(
-        part_events, meta["parts_seeded_at"], now, int(_CONFIG["rpm_window_seconds"]), total_rpm_limit,
-    )
+    parts_span = rpm_span
     # Initial startup grace: if .parts hasn't spanned 15s yet, provide an indicative activity reading
     # only if workers are actively writing and the gateway was active within 30s.
     if realtime_rpm is None and meta["active_writers"] > 0:
         any_fresh = any(g.get("active_ago_s") is not None and g["active_ago_s"] <= 30 for g in gateway_rows.values())
-        if any_fresh and a_rate is not None:
-            est = round(a_rate * 25.0, 1)
-            realtime_rpm = min(float(total_rpm_limit), est) if total_rpm_limit else est
+        if any_fresh and (a_rate is not None or c_rate is not None):
+            realtime_rpm = round((a_rate or 0.0) * 10.0 + (c_rate or 0.0) * 13.0, 1)
 
     eta = None
     if remaining_traces == 0:
@@ -2005,23 +2008,33 @@ def payload() -> dict:
     active_replicas = len({x["owner"] for x in locks if x.get("owner") != ""}) or None
     ctrl_channels = control.get("channels") if isinstance(control.get("channels"), dict) else {}
     gateway_items = []
-    healthy_count = 0
-    total_gw = len(gateway_rows)
-    for name, row in sorted(gateway_rows.items()):
+    sorted_gws = sorted(gateway_rows.items())
+    total_gw = len(sorted_gws)
+    healthy_names = [name for name, row in sorted_gws if row.get("ok")]
+    healthy_count = len(healthy_names)
+    alloc_names = healthy_names if healthy_count > 0 else [name for name, _ in sorted_gws]
+    alloc_set = set(alloc_names)
+    all_have_own_limit = bool(alloc_names) and all(
+        isinstance(gateway_rows[n].get("rpm_limit"), int) and gateway_rows[n]["rpm_limit"] > 0
+        for n in alloc_names
+    )
+    alloc_weight_sum = sum(gateway_rows[n]["rpm_limit"] for n in alloc_names) if all_have_own_limit else len(alloc_names)
+
+    for name, row in sorted_gws:
         ok = bool(row.get("ok"))
-        if ok:
-            healthy_count += 1
         ch_list = row.get("channels") or [name]
         permits = sum(int(ctrl_channels[c]) for c in ch_list if isinstance(ctrl_channels.get(c), int))
         if not permits and isinstance(control.get("modelRequests"), int):
             permits = int(control["modelRequests"])
-        item_rpm_limit = row.get("rpm_limit") or total_rpm_limit
+        own_limit = row.get("rpm_limit") if (isinstance(row.get("rpm_limit"), int) and row.get("rpm_limit") > 0) else None
+        item_rpm_limit = own_limit if own_limit is not None else (total_rpm_limit if len(alloc_names) == 1 and name in alloc_set else None)
         item_rpm = None
         if realtime_rpm is not None and total_gw > 0:
-            if total_rpm_limit and item_rpm_limit:
-                item_rpm = round(realtime_rpm * (item_rpm_limit / total_rpm_limit), 1)
-            else:
-                item_rpm = round(realtime_rpm / max(1, healthy_count or total_gw), 1)
+            if name not in alloc_set:
+                item_rpm = 0.0
+            elif alloc_weight_sum > 0:
+                weight = own_limit if all_have_own_limit else 1
+                item_rpm = round(realtime_rpm * (weight / alloc_weight_sum), 1)
         gateway_items.append({
             "name": name,
             "host": row.get("host") or name,
@@ -2130,6 +2143,8 @@ def payload() -> dict:
             "count": total_gw,
             "healthy": healthy_count,
             "realtime_rpm": realtime_rpm,
+            "rpm_method": "parts_estimate",
+            "rpm_window_seconds": rpm_span,
             "rpm_limit": total_rpm_limit,
             "rpm_source": total_rpm_source,
             "rpm_utilization": rpm_util,
@@ -2150,6 +2165,7 @@ def payload() -> dict:
                 "paused": bool(control.get("paused", False)),
                 "auto_tune_at": rpm_limit_info.get("updated_at"),
                 "rpm_limit": rpm_limit_info.get("rpm"),
+                "target_rpm": rpm_limit_info.get("target_rpm"),
                 "rpm_source": "runtime" if rpm_limit_info.get("rpm") else "none",
                 "permits": rpm_limit_info.get("permits"),
             },

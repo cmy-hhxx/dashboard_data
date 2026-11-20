@@ -721,8 +721,17 @@ async function expandSession(session, ctx, loadDetail, seed) {
     // 一份已经聚合好的多 trace 详情就是整段会话，不需要再找兄弟行。
     const traces = Math.max(detail?.input?.traces?.length || 0, detail?.attribution?.turns?.length || 0);
     if (!sid || traces > 1) return session;
-    const rows = await sampleRows(ctx);
-    const sibs = sessionRows(rows, sid, detail.model || session.m, detail.split || session.sp);
+    const model = detail.model || session.m || "";
+    const split = detail.split || session.sp || "";
+    let sibs = null;
+    if (typeof ctx.recallSlice === "function") {
+      const sliced = await ctx.recallSlice(ctx.product, { mode: "session", sid, m: model, sp: split });
+      if (sliced && Array.isArray(sliced.rows)) sibs = sliced.rows;
+    }
+    if (!sibs) {
+      const rows = await sampleRows(ctx);
+      sibs = sessionRows(rows, sid, model, split);
+    }
     if (sibs.length <= 1) return session;
     return { ...session, sid, rows: sibs.map((row) => ({ s: row.s })) };
   } catch (err) {
