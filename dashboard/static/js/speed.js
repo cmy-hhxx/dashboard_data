@@ -90,6 +90,12 @@ const sitesMap = () => {
 };
 
 const num = (v) => (v == null || !Number.isFinite(Number(v)) ? "—" : fmt(Number(v)));
+const shortNum = (v) => {
+  const n = Number(v) || 0;
+  if (n >= 10000) return `${(n / 1000).toFixed(n >= 100000 ? 0 : 1).replace(/\.0$/, "")}k`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
+  return String(Math.round(n));
+};
 const rate = (v) => (v == null || !Number.isFinite(Number(v)) ? "—" : fmt(Number(v), 1));
 const clock = (iso) => {
   if (!iso) return "—";
@@ -326,9 +332,9 @@ export function shellHTML(tax = null, pd = null) {
         <h2>日期分布</h2>
         <div class="sp-model-pills" id="spModels" role="tablist" aria-label="模型筛选"></div>
         <div class="sp-ring-legend" id="spDateLegend">
-          <span><i class="is-in"></i>输入</span>
-          <span><i class="is-comp"></i>已压缩</span>
+          <span><i class="is-cl"></i>已完成</span>
           <span><i class="is-attr"></i>已评测</span>
+          <span><i class="is-pend"></i>待评测</span>
         </div>
       </header>
       <div id="spDateView" class="sp-date-view">
@@ -558,10 +564,16 @@ export function buildMonthlySeries(data, selectedModel = "__all__", preferredMon
 
   if (activeMonth) {
     const dim = daysInMonth(activeMonth);
-    for (let day = 1; day <= dim; day++) {
+    const monthDates = allDates.filter((d) => d.startsWith(`${activeMonth}-`));
+    const firstActive = monthDates.length ? Number(monthDates[0].slice(8, 10)) : 1;
+    const lastActive = monthDates.length ? Number(monthDates[monthDates.length - 1].slice(8, 10)) : dim;
+    const isLatestMonth = activeMonth === months[months.length - 1];
+    const startDay = firstActive > 5 ? firstActive : 1;
+    const endDay = isLatestMonth ? lastActive : (lastActive < dim - 4 ? lastActive : dim);
+    for (let day = startDay; day <= endDay; day++) {
       const ds = `${activeMonth}-${String(day).padStart(2, "0")}`;
       const rec = byDate.get(ds) || null;
-      const topVal = rec ? Math.max(rec.input_traces, rec.attr_traces, rec.hasCompact ? rec.compact : 0) : 0;
+      const topVal = rec ? Math.max(rec.input_traces, rec.attr_traces) : 0;
       if (rec) {
         totals.input_traces += rec.input_traces;
         totals.input_sessions += rec.input_sessions;
@@ -625,41 +637,43 @@ export function dateChartHTML(series, selectedDate = "") {
   }
   const maxY = Math.max(1, series.maxVal);
   const midY = Math.round(maxY / 2);
+  const dense = series.days.length > 24;
   const cols = series.days.map(({ day, date, rec, topVal }) => {
     if (!rec || topVal <= 0) {
       return `<div class="sp-bar-col is-empty" aria-hidden="true">
         <div class="sp-bar-well"><span class="sp-bar-dot"></span></div>
         <span class="sp-bar-day num">${day}</span>
+        <span class="sp-bar-pct num">—</span>
       </div>`;
     }
     const inTr = rec.input_traces;
     const attrTr = rec.attr_traces;
     const compTr = rec.hasCompact ? rec.compact : null;
     const remTr = Math.max(0, inTr - attrTr);
-    const totalPct = Math.max(3, Math.min(100, (topVal / maxY) * 100));
+    const totalPct = Math.max(5, Math.min(100, (topVal / maxY) * 100));
+    const aRatio = inTr > 0 ? Math.min(1, attrTr / inTr) : 0;
     const attrPct = topVal > 0 ? Math.max(attrTr > 0 ? 4 : 0, Math.min(100, (attrTr / topVal) * 100)) : 0;
-    const compPct = compTr != null && topVal > 0
-      ? Math.max(compTr > 0 ? 4 : 0, Math.min(100, (Math.max(compTr, attrTr) / topVal) * 100))
-      : 0;
     const done = inTr > 0 && remTr === 0;
     const isSel = selectedDate === date;
+    const pctShort = done ? "✓" : (inTr > 0 ? `${Math.round(aRatio * 100)}%` : "—");
     const tip = `<div class="t-head">${esc(date)}</div>
       <div class="t-row"><span>评测输入</span><b class="num">${num(inTr)} trace · ${num(rec.input_sessions)} sess</b></div>
       <div class="t-row"><span>已完成评测</span><b class="num">${num(attrTr)} (${inTr ? pct(attrTr, inTr, 1) : "—"})</b></div>
       ${compTr != null ? `<div class="t-row"><span>已完成压缩</span><b class="num">${num(compTr)} (${inTr ? pct(Math.min(inTr, compTr), inTr, 1) : "—"})</b></div>` : ""}
       <div class="t-row"><span>状态</span><b class="num">${done ? "已完成" : `待测 ${num(remTr)}`}</b></div>`;
-    return `<button type="button" class="sp-bar-col${isSel ? " is-selected" : ""}${done ? " is-done" : ""}" data-sp-day="${esc(date)}" aria-pressed="${isSel}" data-tip="1" data-tip-html="${esc(tip)}">
+    return `<button type="button" class="sp-bar-col${isSel ? " is-selected" : ""}${done ? " is-done" : " is-pending"}" data-sp-day="${esc(date)}" aria-pressed="${isSel}" data-tip="1" data-tip-html="${esc(tip)}">
       <div class="sp-bar-well">
         <span class="sp-bar-track" style="height:${totalPct.toFixed(1)}%">
-          ${compTr != null ? `<i class="sp-bar-comp" style="height:${compPct.toFixed(1)}%"></i>` : ""}
-          <i class="sp-bar-attr" style="height:${attrPct.toFixed(1)}%"></i>
+          <span class="sp-bar-val num">${esc(shortNum(inTr))}</span>
+          <span class="sp-bar-fill"><i class="sp-bar-attr" style="height:${attrPct.toFixed(1)}%"></i></span>
         </span>
       </div>
-      <span class="sp-bar-day num">${day}</span>
+      <span class="sp-bar-day num">${day}日</span>
+      <span class="sp-bar-pct num${done ? " is-done" : (aRatio < 0.8 ? " is-low" : "")}">${esc(pctShort)}</span>
     </button>`;
   }).join("");
 
-  return `<div class="sp-mchart" style="--days:${series.days.length}">
+  return `<div class="sp-mchart${dense ? " is-dense" : ""}" style="--days:${series.days.length}">
     <div class="sp-mchart-yaxis num" aria-hidden="true">
       <span>${num(maxY)}</span>
       <span>${num(midY)}</span>
@@ -760,7 +774,10 @@ function renderDateBoard(root, data) {
     if (detail) detail.hidden = false;
     stage?.classList?.add("has-detail");
   } else {
-    if (detail) detail.hidden = true;
+    if (detail) {
+      detail.hidden = true;
+      setHTML(root, "spDateDetail", "");
+    }
     stage?.classList?.remove("has-detail");
   }
 }
@@ -1464,6 +1481,7 @@ function wireControls(root) {
       }
       if (e.target.closest("#spDateClose")) {
         S.selectedDate = "";
+        hideTip();
         if (S.data) renderDateBoard(root, S.data);
         return;
       }
@@ -1478,6 +1496,14 @@ function wireControls(root) {
         renderDateBoard(root, S.data);
       }
     });
+    if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && S.selectedDate && S.root && document.documentElement?.dataset?.view === "speed") {
+          S.selectedDate = "";
+          if (S.data) renderDateBoard(S.root, S.data);
+        }
+      });
+    }
   }
 }
 

@@ -152,7 +152,8 @@ test("date distribution uses monthly bar chart and click-to-open concentric ring
   const series = buildMonthlySeries(PAYLOAD, "aime_fast", "");
   assert.deepEqual(series.months, ["2026-10", "2026-11"]);
   assert.equal(series.activeMonth, "2026-11");
-  assert.equal(series.days.length, 30);
+  // Trims empty trailing/leading days (PAYLOAD has 11-18 and 11-19 -> 2 focused columns)
+  assert.equal(series.days.length, 2);
   assert.equal(series.totals.input_traces, 750);
   assert.equal(series.totals.attr_traces, 500);
 
@@ -164,7 +165,9 @@ test("date distribution uses monthly bar chart and click-to-open concentric ring
   assert.ok(chart.includes("sp-mchart-bars"));
   assert.ok(chart.includes('data-sp-day="2026-11-18"'));
   assert.ok(chart.includes('is-selected'));
+  assert.ok(chart.includes("sp-bar-val") && chart.includes("sp-bar-pct"));
   assert.ok(!chart.includes("sp-ring-card"));
+  assert.ok(speedCss.includes(".sp-day-detail[hidden] { display: none; }"), "close button requires [hidden] to override display:grid");
 
   const detail = dateDetailHTML(series.byDate.get("2026-11-18"), "aime_fast", "2026-10-30", "2026-11-19");
   assert.ok(detail.includes("2026-11-18"));

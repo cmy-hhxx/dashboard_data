@@ -170,10 +170,10 @@
 }
 .sp-ring-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .sp-ring-legend i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-.sp-ring-legend i.is-in { background: color-mix(in oklab, var(--ink) 16%, transparent); }
 .sp-ring-legend i.is-attr { background: var(--accent); }
 .sp-ring-legend i.is-cl { background: var(--loc-ulq); }
 .sp-ring-legend i.is-comp { background: var(--loc-vir); }
+.sp-ring-legend i.is-pend { background: color-mix(in oklab, var(--sev-2) 68%, transparent); }
 
 .sp-date-view { display: grid; gap: var(--sp-4); }
 .sp-month-bar {
@@ -228,72 +228,98 @@
 .sp-bar-panel > .empty { padding: var(--sp-6) 0; text-align: center; color: var(--muted); font-size: var(--fs-small); }
 
 .sp-mchart {
-  flex: 1 1 auto; min-height: 232px;
+  flex: 1 1 auto; min-height: 256px;
   display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; align-items: stretch;
 }
 .sp-mchart-yaxis {
   display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end;
-  padding: 2px 2px 28px 0; color: var(--faint); font-size: var(--fs-micro); line-height: 1;
+  padding: 20px 2px 46px 0; color: var(--faint); font-size: var(--fs-micro); line-height: 1;
   font-variant-numeric: tabular-nums; user-select: none;
 }
 .sp-mchart-plot { position: relative; min-width: 0; display: flex; flex-direction: column; }
 .sp-mchart-grid {
-  position: absolute; inset: 4px 0 28px; display: flex; flex-direction: column; justify-content: space-between;
+  position: absolute; inset: 22px 0 46px; display: flex; flex-direction: column; justify-content: space-between;
   pointer-events: none;
 }
 .sp-mchart-grid i { display: block; height: 1px; background: color-mix(in oklab, var(--ink) 6%, transparent); }
-.sp-mchart-grid i:last-child { background: color-mix(in oklab, var(--ink) 11%, transparent); }
+.sp-mchart-grid i:last-child { background: color-mix(in oklab, var(--ink) 12%, transparent); }
 
 .sp-mchart-bars {
   position: relative; z-index: 1; flex: 1 1 auto;
-  display: grid; grid-template-columns: repeat(var(--days, 30), minmax(0, 1fr));
-  gap: 3px; align-items: stretch;
+  display: grid; grid-template-columns: repeat(var(--days, 20), minmax(0, 1fr));
+  gap: 4px; align-items: stretch;
 }
+.sp-mchart.is-dense .sp-mchart-bars { gap: 2px; }
 .sp-bar-col {
-  display: flex; flex-direction: column; align-items: center; gap: 8px;
-  padding: 4px 1px 0; border-radius: 8px; background: transparent;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 22px 1px 2px; border-radius: 8px; background: transparent;
   transition: background var(--snap);
 }
 button.sp-bar-col { cursor: pointer; }
 button.sp-bar-col:hover { background: color-mix(in oklab, var(--ink) 4%, transparent); }
 button.sp-bar-col.is-selected {
-  background: linear-gradient(180deg, transparent 10%, color-mix(in oklab, var(--accent) 7%, transparent) 100%);
+  background: linear-gradient(180deg, transparent 8%, color-mix(in oklab, var(--accent) 8%, transparent) 100%);
 }
 .sp-bar-well {
-  width: 100%; flex: 1 1 auto; min-height: 188px; display: flex; align-items: flex-end; justify-content: center;
+  width: 100%; flex: 1 1 auto; min-height: 184px; display: flex; align-items: flex-end; justify-content: center;
   padding: 0 2px;
 }
 .sp-bar-dot {
   width: 3px; height: 3px; border-radius: 999px; margin-bottom: 1px;
-  background: color-mix(in oklab, var(--ink) 15%, transparent);
+  background: color-mix(in oklab, var(--ink) 16%, transparent);
 }
 .sp-bar-track {
-  position: relative; width: 100%; max-width: 18px; min-height: 4px;
-  border-radius: 5px 5px 2px 2px; overflow: hidden;
-  background: color-mix(in oklab, var(--ink) 9%, transparent);
+  position: relative; width: 100%; max-width: 26px; min-height: 5px;
+  border-radius: 6px 6px 2px 2px;
+  background: color-mix(in oklab, var(--sev-2) 24%, transparent);
+  box-shadow: inset 0 1.5px 0 color-mix(in oklab, var(--sev-2) 55%, transparent);
   transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1), filter 180ms;
 }
-button.sp-bar-col:hover .sp-bar-track { transform: scaleY(1.02); transform-origin: bottom; filter: brightness(1.05); }
-.sp-bar-comp, .sp-bar-attr {
-  position: absolute; left: 0; right: 0; bottom: 0; border-radius: 4px 4px 0 0;
+.sp-bar-col.is-done .sp-bar-track {
+  background: transparent;
+  box-shadow: none;
+}
+.sp-bar-fill {
+  position: absolute; inset: 0; border-radius: inherit; overflow: hidden; display: block;
+}
+.sp-bar-val {
+  position: absolute; bottom: calc(100% + 4px); left: 50%; transform: translateX(-50%);
+  font-size: var(--fs-micro); line-height: 1; color: var(--muted); white-space: nowrap;
+  font-variant-numeric: tabular-nums; pointer-events: none;
+  transition: color var(--snap);
+}
+.sp-mchart.is-dense .sp-bar-val { opacity: 0; }
+.sp-mchart.is-dense .sp-bar-col:hover .sp-bar-val,
+.sp-mchart.is-dense .sp-bar-col.is-selected .sp-bar-val { opacity: 1; }
+button.sp-bar-col:hover .sp-bar-val,
+button.sp-bar-col.is-selected .sp-bar-val { color: var(--ink); font-weight: var(--w-medium); }
+button.sp-bar-col:hover .sp-bar-track { transform: scaleY(1.02); transform-origin: bottom; filter: brightness(1.04); }
+.sp-bar-attr {
+  position: absolute; left: 0; right: 0; bottom: 0; border-radius: 5px 5px 0 0;
+  background: var(--accent);
   transition: height 420ms cubic-bezier(0.16, 1, 0.3, 1);
 }
-.sp-bar-comp { background: color-mix(in oklab, var(--loc-vir) 52%, transparent); }
-.sp-bar-attr { background: var(--accent); }
-.sp-bar-col.is-done .sp-bar-attr { background: var(--loc-ulq); }
+.sp-bar-col.is-done .sp-bar-attr { background: var(--loc-ulq); border-radius: 6px 6px 2px 2px; }
 .sp-bar-col.is-selected .sp-bar-track {
-  filter: brightness(1.06);
-  box-shadow: 0 4px 12px -4px color-mix(in oklab, var(--accent) 42%, transparent);
+  filter: brightness(1.05);
+  box-shadow: 0 5px 14px -4px color-mix(in oklab, var(--accent) 44%, transparent);
 }
 .sp-bar-day {
-  min-width: 20px; height: 20px; line-height: 20px; padding: 0 4px; border-radius: 999px;
-  font-size: var(--fs-micro); color: var(--muted); text-align: center;
+  margin-top: 2px; min-width: 24px; height: 20px; line-height: 20px; padding: 0 5px; border-radius: 999px;
+  font-size: var(--fs-micro); color: var(--ink-2); text-align: center; white-space: nowrap;
   font-variant-numeric: tabular-nums; transition: background var(--snap), color var(--snap);
 }
 .sp-bar-col.is-empty .sp-bar-day { color: var(--faint); opacity: 0.55; }
 .sp-bar-col.is-selected .sp-bar-day {
   background: var(--accent); color: #fff; font-weight: var(--w-title);
 }
+.sp-bar-pct {
+  height: 16px; line-height: 16px; font-size: var(--fs-micro); color: var(--accent);
+  font-variant-numeric: tabular-nums; font-weight: var(--w-medium);
+}
+.sp-bar-pct.is-done { color: var(--loc-ulq); }
+.sp-bar-pct.is-low { color: var(--sev-2); }
+.sp-bar-col.is-empty .sp-bar-pct { color: var(--faint); opacity: 0.4; }
 
 /* 右侧当日环形图详情：细线分栏融入同一张画布，零嵌套灰框 */
 .sp-day-detail {
@@ -302,6 +328,7 @@ button.sp-bar-col:hover .sp-bar-track { transform: scaleY(1.02); transform-origi
   border-left: 1px solid color-mix(in oklab, var(--ink) 8%, transparent);
   animation: sp-dd-in 220ms cubic-bezier(0.16, 1, 0.3, 1);
 }
+.sp-day-detail[hidden] { display: none; }
 @keyframes sp-dd-in {
   from { opacity: 0; transform: translateX(8px); }
   to { opacity: 1; transform: none; }
