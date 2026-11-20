@@ -1,4 +1,4 @@
-"""Scenario fallback: AIME must never use skill instrumentation as its scene."""
+"""Scenario is the input task field only: skill instrumentation is never a scene."""
 import sys
 import unittest
 from pathlib import Path
@@ -11,20 +11,17 @@ import build  # noqa: E402
 
 
 class SceneFallbackTests(unittest.TestCase):
-    def test_aime_ignores_skill_names(self):
-        brief = {"meta": {"skill": "aime-finquery,data-visualizer"}, "question": "q1"}
-        self.assertEqual(build.scene_of(brief, {}, "aime"), build.NO_SCENE)
-
-    def test_aime_keeps_task_when_present(self):
+    def test_task_is_the_only_scene_source(self):
         brief = {"meta": {"task": "行情分析", "skill": "aime-finquery"}, "question": "q1"}
-        self.assertEqual(build.scene_of(brief, {}, "aime"), "行情分析")
+        self.assertEqual(build.scene_of(brief), "行情分析")
 
-    def test_wencai_keeps_skill_and_vote_fallback(self):
-        brief = {"meta": {"skill": "stock-analysis"}, "question": "q1"}
-        self.assertEqual(build.scene_of(brief, {}, "wencai"), "stock-analysis")
-        voted = {"meta": {}, "question": "q2"}
-        self.assertEqual(build.scene_of(voted, {"q2": "交易建议"}, "wencai"), "交易建议")
-        self.assertEqual(build.scene_of(voted, {}, "wencai"), build.NO_SCENE)
+    def test_skill_never_becomes_scene(self):
+        for product_skill in ("stock-analysis", "aime-finquery,data-visualizer"):
+            brief = {"meta": {"skill": product_skill}, "question": "q1"}
+            self.assertEqual(build.scene_of(brief), build.NO_SCENE)
+
+    def test_missing_task_falls_to_no_scene(self):
+        self.assertEqual(build.scene_of({"meta": {}, "question": "q2"}), build.NO_SCENE)
 
 
 if __name__ == "__main__":

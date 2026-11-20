@@ -3102,7 +3102,7 @@ function pushPull(bento, p, tax, u) {
     const index = await ctx.loadIndex(ctx.product);
     return ((index.products || {})[ctx.product] || {}).rows || [];
   }
-  const sceneKey = (r) => r.sub || r.sc || r.skill || "未接入分类体系";
+  const sceneKey = (r) => r.sub || r.sc || r.task || "未接入分类体系";
 
   async function groupsFor(spec) {
     if (spec.card === "pred") {
@@ -3134,7 +3134,7 @@ function pushPull(bento, p, tax, u) {
     if (spec.card === "vol") {
       const picked = all.filter((r) => (!spec.model || r.m === spec.model) &&
         (spec.task ? (r.task || "未接入分类体系") === spec.task : spec.others ? !spec.others.includes(r.task || "未接入分类体系") : true));
-      return groupCases(picked, spec.task || spec.others ? sceneKey : (r) => r.task || r.sc || r.skill || "未接入分类体系");
+      return groupCases(picked, spec.task || spec.others ? sceneKey : (r) => r.task || r.sc || "未接入分类体系");
     }
     if (spec.card === "eval") {
       const picked = all.filter((r) => r.d >= spec.d0 && r.d <= spec.d1 && (spec.model === "all" || r.m === spec.model));

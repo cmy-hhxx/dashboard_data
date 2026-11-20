@@ -81,7 +81,7 @@ INPUT_INDEX_VERSION = "2026-11-12.1"
 # Bump when pairing semantics change (cache keys are not otherwise versioned).
 PAIRING_VERSION = "2026-11-19.1"
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-20.1"
+PAYLOAD_VERSION = "2026-11-20.2"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 4
 
@@ -93,7 +93,7 @@ def default_datasets():
     return PRODUCTION_DATASETS if PRODUCTION_DATASETS.is_dir() else REPO / "datasets"
 
 SEVERITIES = ["P0", "P1", "P2", "P3", "P4"]
-# 场景没有接入分类体系（输入 meta 缺 task / skill）：矩阵行、趋势场景和数据量列表都用这一句，
+# 场景没有接入分类体系（输入 meta 缺 task）：矩阵行、趋势场景和数据量列表都用这一句，
 # 和「未聚类」（归因问题没有匹配到模式）不是一回事，别混。
 NO_SCENE = "未接入分类体系"
 WORST_KEYS = SEVERITIES + ["none"]
@@ -666,14 +666,13 @@ def input_payload(metas, store=None, product: str = ""):
     return payload
 
 
-def mark_evaluated(payload, rows, product):
+def mark_evaluated(payload, rows):
     """Evaluated cases behind every 数据量 node, filed the way the dashboard's star map files them
     (model → task → scene), so the ring can tell which branches have nothing to open."""
     seen = Counter()
     for r in rows:
         task = r.get("task") or NO_SCENE
-        # skill 只是问财的场景兜底（AIME 的 skill 是技能埋点，不是场景）。
-        scene = r.get("sub") or r.get("sc") or (r.get("skill") if product == "wencai" else None) or NO_SCENE
+        scene = r.get("sc") or task
         for model in (r["m"], None):
             seen[(model,)] += 1
             seen[(model, task)] += 1
@@ -1900,27 +1899,13 @@ def sev_counter():
     return {s: 0 for s in SEVERITIES}
 
 
-def scene_votes(product, samples):
-    """问财 has no task/subtask in the source; its scene is the skill the A versions
-    routed to, and B versions take the skill recorded for the same question."""
-    if product != "wencai":
-        return {}
-    votes = defaultdict(Counter)
-    for s in samples:
-        if s[1]["meta"].get("skill"):
-            votes[s[1]["question"]][s[1]["meta"]["skill"]] += 1
-    return {q: c.most_common(1)[0][0] for q, c in votes.items()}
+def scene_of(brief):
+    """场景只取输入的业务字段 ``task``（wencai 为 ``task_category``）。
 
-
-def scene_of(brief, scene, product):
-    m = brief["meta"]
-    if m.get("task"):
-        return m["task"]
-    if product == "wencai":  # 问财没有 task，场景取 skill 投票（A/B 版本回填）
-        return m.get("skill") or scene.get(brief["question"]) or NO_SCENE
-    # AIME 的 skill 只是「本条 trace 用了哪些技能」的埋点，不是业务场景；
-    # task 接入前全部归到「未接入分类体系」。
-    return scene.get(brief["question"]) or NO_SCENE
+    ``skill`` / ``skill_names_text`` 是「这条 trace 用了哪些技能」的埋点，不是业务场景；
+    A、B 两个产品都不再用它兜底，缺 task 的 trace 一律落到「未接入分类体系」。
+    """
+    return brief["meta"].get("task") or NO_SCENE
 
 
 def aggregate(product, samples, taxonomy):
@@ -1930,7 +1915,6 @@ def aggregate(product, samples, taxonomy):
     models += sorted({s[2]["m"] for s in samples} - set(models))
     splits = [sp for sp in ("daily", "lost")
               if any((s[2].get("ul") if sp == "lost" else s[2]["sp"] == sp) for s in samples)]
-    scene = scene_votes(product, samples)
 
     severity, worst = sev_counter(), {k: 0 for k in WORST_KEYS}
     evidence_n = located = 0
@@ -2063,7 +2047,7 @@ def aggregate(product, samples, taxonomy):
         if row.get("tr", 1) <= 0:
             continue
         pats = Counter(p["cl"]["path"] for p in detail["attribution"]["problems"] if p["cl"])
-        cross.append([scene_of(detail, scene, product), detail["meta"].get("subtask") or "",
+        cross.append([scene_of(detail), detail["meta"].get("subtask") or "",
                       [[pid, n] for pid, n in pats.most_common()], row.get("tr", 1)])
 
     # Input profile.
@@ -2141,7 +2125,7 @@ def aggregate(product, samples, taxonomy):
     def task_tree(rows):
         tree = defaultdict(Counter)
         for s in rows:
-            tree[scene_of(s[1], scene, product)][s[1]["meta"].get("subtask") or ""] += 1
+            tree[scene_of(s[1])][s[1]["meta"].get("subtask") or ""] += 1
         return [
             {"id": t, "n": sum(c.values()), "sub": [{"id": k or NO_SCENE, "n": v} for k, v in c.most_common()] if any(c) else []}
             for t, c in sorted(tree.items(), key=lambda kv: -sum(kv[1].values()))
@@ -2312,13 +2296,12 @@ def trend_payload(product, samples, releases=(), generated=None):
     exactly (多选 P0+P1+P2 只算同时命中其中任一等级的会话一次). Models keep the same
     order as the aggregate.
     """
-    scene = scene_votes(product, samples)
 
     # One scene lookup per sample: the same pair is used by the denominator pass,
     # the clustered-problem pass and the trace pass.
     prepared = []
     for slug, detail, row, facts in samples:
-        pair = (scene_of(detail, scene, product), detail["meta"].get("subtask") or "")
+        pair = (scene_of(detail), detail["meta"].get("subtask") or "")
         prepared.append((slug, detail, row, facts, pair))
 
     dates, uts, models, scenes, base = set(), set(), set(), set(), Counter()
@@ -3894,17 +3877,11 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
         labels = {}
         for product, rows in samples.items():
             rows_sorted = sorted(rows, key=lambda s: (WORST_KEYS.index(s[2]["w"]), -s[2]["n"], s[2]["d"]))
-            # The matrix files a sample under its voted scene; carry it where the plain
-            # task/skill fallback would disagree, so a matrix cell and its 具体数据 filter agree.
-            scene = scene_votes(product, rows)
+            # 场景 = task；旧缓存行里的 sc 是历史 skill 投票结果，必须清掉。
             for s in rows_sorted:
-                sc = scene_of(s[1], scene, product)
-                if sc != (s[2].get("task") or s[2].get("skill") or NO_SCENE):
-                    s[2]["sc"] = sc
-                else:
-                    s[2].pop("sc", None)
+                s[2].pop("sc", None)
             if "input" in products.get(product, {}):
-                mark_evaluated(products[product]["input"], [s[2] for s in rows_sorted], product)
+                mark_evaluated(products[product]["input"], [s[2] for s in rows_sorted])
             indexes[product] = {
                 "schema": 2, "generated_at": generated, "product": product,
                 "available": available,

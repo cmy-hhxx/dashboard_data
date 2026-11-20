@@ -25,8 +25,8 @@ const F = () => {
 };
 const NO_FILTER = { q: "", w: "", split: "", model: "", ut: "", scene: "", sub: "", stage: "", mech: "", pattern: "", date: "", res: "", cls: "", typ: "", cause: "" };
 const dirty = () => Object.entries(F()).some(([k, v]) => k !== "sort" && v);
-// `sc` is the scene the matrix filed the sample under when it differs from task / skill (问财 B versions).
-const sceneOf = (r) => r.sc || r.task || r.skill || "未接入分类体系";
+// `sc` is a legacy override kept for old payloads; scene is task, never skill.
+const sceneOf = (r) => r.sc || r.task || "未接入分类体系";
 const subOf = (r) => r.sub || "";
 /* One predicate drives both the cascade options and the final list. When an
    upstream option changes, downstream options reset, so option pools omit the
