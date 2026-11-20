@@ -426,8 +426,6 @@ body.is-mx-full { overflow: hidden; }
 .mxd-page-btn svg { width: 14px; height: 14px; display: block; flex: none; }
 .mxd-page-btn:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
 .mxd-page-btn:disabled { opacity: 0.32; cursor: default; }
-.mxd-page-span { display: inline-flex; align-items: center; height: 28px; color: var(--ink-2); font-weight: var(--w-medium); padding: 0 2px; line-height: 1; }
-.mxd-page-idx { display: inline-flex; align-items: center; height: 28px; color: var(--faint); font-size: var(--fs-micro); padding: 0 2px; line-height: 1; }
 .mxd-flip-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0 10px;
   border-radius: var(--r-ctl); background: var(--card); color: var(--accent);
@@ -983,12 +981,7 @@ body.is-mxp-full { overflow: hidden; }
 .mxt-more-pop .mxt-pick-label { min-width: 34px; margin-right: 4px; }
 .mxt-pop-hint { font-size: var(--fs-micro); color: var(--muted); }
 .mxt-bar.is-head .mxt-vol-key { margin-left: 2px; font-size: var(--fs-micro); }
-.mxt-bar-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; min-width: 0; }
-.mxt-bar-top .mxt-tools { flex: none; }
-.mxt-bar-top .mxt-palette { flex: 1 1 auto; min-width: 0; }
 .mxt-bar .mxt-palette:empty { display: none; }
-.mxt-bar-lines { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; min-width: 0; }
-.mxt-bar-lines .mxt-lines { flex: 1 1 auto; }
 .mxt-vol-key { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; color: var(--faint); font-size: var(--fs-meta); white-space: nowrap; }
 .mxt-vol-key i { width: 5px; height: 8px; border-radius: 1px; background: var(--t3); }
 /* 滚轮缩放锁：解锁时滚轮归图表，锁定后滚轮正常滚动页面。 */

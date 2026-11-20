@@ -17,6 +17,7 @@ import { patternName as patName } from "./taxonomy.js";
 let ctx;
 let abDocKey = null;
 let mxDocKey = null;
+let mxMoreCleanup = null;
 let shown = null;
 let lastDetail = null;
 /* View state per product that outlives a redraw: an in-place data refresh (or switching product
@@ -1908,13 +1909,20 @@ function wireMatrixAnalysis(panel, model, state, trend) {
   paint();
   rows.forEach((row) => row.addEventListener("click", () => toggle(row.dataset.level)));
   let lastChartH = 0;
+  let fitRaf = 0;
   const fit = () => {
-    if (!panel.isConnected) return;
+    fitRaf = 0;
+    if (!panel.isConnected) {
+      panel._mxFitObserver?.disconnect();
+      return;
+    }
     const h = analysisChartHeight(panel, chartHost);
-    if (h !== lastChartH) { lastChartH = h; paint(); }
+    if (Math.abs(h - lastChartH) >= 2) { lastChartH = h; paint(); }
   };
   panel._mxFitObserver?.disconnect();
-  const ro = new ResizeObserver(() => requestAnimationFrame(fit));
+  const ro = new ResizeObserver(() => {
+    if (!fitRaf) fitRaf = requestAnimationFrame(fit);
+  });
   ro.observe(panel);
   const issueShell = document.getElementById("mxIssueTrends");
   if (issueShell) ro.observe(issueShell);
@@ -3386,12 +3394,14 @@ function wire(bento, p, tax, u) {
   });
   if (window.ResizeObserver) {
     let fieldW = field.clientWidth;
-    new ResizeObserver(() => {
+    const fieldRo = new ResizeObserver(() => {
+      if (!field.isConnected) { fieldRo.disconnect(); return; }
       if (Math.abs(field.clientWidth - fieldW) < 2) return;
       fieldW = field.clientWidth;
       field._page = u.field.pages = [];
       paintField(field, p, u.field.w);
-    }).observe(field);
+    });
+    fieldRo.observe(field);
   }
   const tabs = $("#predTab", bento);
   if (tabs) {
@@ -3573,10 +3583,12 @@ function wire(bento, p, tax, u) {
     // Column titles are kept on one line by sizing the scroll pane; refit whenever the card resizes.
     fitMatrix(shell.querySelector(".matrix"));
     if (window.ResizeObserver) {
-      new ResizeObserver(() => {
+      const shellRo = new ResizeObserver(() => {
+        if (!shell.isConnected) { shellRo.disconnect(); return; }
         const m = shell.querySelector(".matrix:last-of-type");
         if (m && !shell.classList.contains("is-swapping")) fitMatrix(m);
-      }).observe(shell);
+      });
+      shellRo.observe(shell);
     }
 
     /* ---- 格子的就地趋势：同一个 shell 里把表换成图，返回时按原来的行列路径重画矩阵 ---- */
@@ -3791,13 +3803,9 @@ function wire(bento, p, tax, u) {
     const headMxt = $("#mxHeadMxt", bento);
     const clearHeadMxt = () => {
       if (!headMxt) return;
-      if (headMxt._docClick) {
-        document.removeEventListener("click", headMxt._docClick);
-        headMxt._docClick = null;
-      }
-      if (headMxt._docKey) {
-        document.removeEventListener("keydown", headMxt._docKey);
-        headMxt._docKey = null;
+      if (mxMoreCleanup) {
+        mxMoreCleanup();
+        mxMoreCleanup = null;
       }
       headMxt.innerHTML = "";
       headMxt.hidden = true;
@@ -3875,10 +3883,12 @@ function wire(bento, p, tax, u) {
         const onDocKey = (e) => {
           if (moreOpen && e.key === "Escape") setMoreOpen(false);
         };
-        headMxt._docClick = onDocClick;
-        headMxt._docKey = onDocKey;
         document.addEventListener("click", onDocClick);
         document.addEventListener("keydown", onDocKey);
+        mxMoreCleanup = () => {
+          document.removeEventListener("click", onDocClick);
+          document.removeEventListener("keydown", onDocKey);
+        };
       }
 
       /* Opening the sample drawer splits the frame and narrows the map: that resize is expected

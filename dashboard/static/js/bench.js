@@ -804,7 +804,7 @@ export async function render(root, ctx) {
     }
     S.page = 1;
     S.fieldPages = {};
-    repaint();
+    repaint({ rebuildSummary: k === "l1" || k === "l2" || k === "l3" });
   };
 
   const openTrace = async (traceId) => {
@@ -1726,6 +1726,7 @@ export async function render(root, ctx) {
 
   let fieldGroupsCache = [];
   let fieldResizeObs = null;
+  let mxResizeObs = null;
 
   function paintBenchField(card) {
     const fieldEl = $(".bn-field", card);
@@ -2252,6 +2253,19 @@ export async function render(root, ctx) {
       else if (s) b.classList.toggle("is-hl", S.f.l1 === s);
       else if (m) b.classList.toggle("is-hl", S.f.l2 === m);
     });
+    $$(".bn-cal-cell[data-bn-day]", root).forEach((el) => {
+      const on = Boolean(S.f.day && S.f.day === el.dataset.bnDay);
+      el.classList.toggle("is-active", on);
+      el.setAttribute("aria-pressed", String(on));
+    });
+    $$(".bn-g-bar[data-bn-day]", root).forEach((el) => {
+      el.classList.toggle("is-on", Boolean(S.f.day && S.f.day === el.dataset.bnDay));
+    });
+    $$("[data-bn-day-filter]", root).forEach((el) => {
+      const on = Boolean(S.f.day && S.f.day === el.dataset.bnDayFilter);
+      el.classList.toggle("is-on", on);
+      el.textContent = on ? "取消当日筛选" : "筛选当日样本";
+    });
   }
 
   async function repaint({ rebuildSummary = true } = {}) {
@@ -2547,14 +2561,18 @@ export async function render(root, ctx) {
       repaint();
     }));
 
+    mxResizeObs?.disconnect();
+    mxResizeObs = null;
     const mxPane = $(".bn-matrix .mx-scroll", root);
     if (mxPane) {
       const syncScroll = () => {
+        if (!mxPane.isConnected) { mxResizeObs?.disconnect(); return; }
         mxPane.classList.toggle("is-overflow", mxPane.scrollWidth > mxPane.clientWidth + 1);
         mxPane.classList.toggle("is-at-end", mxPane.scrollLeft + mxPane.clientWidth >= mxPane.scrollWidth - 2);
       };
       mxPane.addEventListener("scroll", syncScroll, { passive: true });
-      new ResizeObserver(syncScroll).observe(mxPane);
+      mxResizeObs = new ResizeObserver(syncScroll);
+      mxResizeObs.observe(mxPane);
       syncScroll();
     }
 
@@ -2616,7 +2634,19 @@ export async function render(root, ctx) {
       paintBenchField(card);
       const fieldEl = $(".bn-field", card);
       if (fieldEl) {
-        fieldResizeObs = new ResizeObserver(() => paintBenchField(card));
+        let lastW = fieldEl.clientWidth;
+        let fieldRaf = 0;
+        fieldResizeObs = new ResizeObserver(() => {
+          if (!fieldEl.isConnected) { fieldResizeObs?.disconnect(); return; }
+          const w = fieldEl.clientWidth;
+          if (Math.abs(w - lastW) < 2) return;
+          lastW = w;
+          if (fieldRaf) return;
+          fieldRaf = requestAnimationFrame(() => {
+            fieldRaf = 0;
+            if (fieldEl.isConnected) paintBenchField(card);
+          });
+        });
         fieldResizeObs.observe(fieldEl);
       }
       card.addEventListener("click", (e) => {
@@ -2714,13 +2744,13 @@ export async function render(root, ctx) {
       if (!key) return;
       S.f[key] = e.target.value;
       if (key === "l1" && !e.target.value) S.f.l3 = "";
-      syncSunburstFromFilter();
+      if (key === "l1" || key === "l2") syncSunburstFromFilter();
       S.page = 1;
       S.fieldPages = {};
-      repaint();
+      repaint({ rebuildSummary: key === "l1" || key === "l2" });
     }));
     const togDup = $("#bn-tog-dup", card);
-    if (togDup) togDup.onclick = () => { S.f.dupOnly = !S.f.dupOnly; S.page = 1; S.fieldPages = {}; repaint(); };
+    if (togDup) togDup.onclick = () => { S.f.dupOnly = !S.f.dupOnly; S.page = 1; S.fieldPages = {}; repaint({ rebuildSummary: false }); };
 
     const sortEl = $("#bn-sort", card);
     if (sortEl) sortEl.onchange = (e) => { S.sort = e.target.value; S.page = 1; S.fieldPages = {}; repaint({ rebuildSummary: false }); };
@@ -2739,10 +2769,10 @@ export async function render(root, ctx) {
       const k = b.dataset.clrk;
       S.f[k] = typeof S.f[k] === "boolean" ? false : "";
       if (k === "l1") S.f.l3 = "";
-      syncSunburstFromFilter();
+      if (k === "l1" || k === "l2" || k === "l3") syncSunburstFromFilter();
       S.page = 1;
       S.fieldPages = {};
-      repaint();
+      repaint({ rebuildSummary: k === "l1" || k === "l2" || k === "l3" });
     }));
     const clrAll = $("#bn-clr-all", card);
     if (clrAll) {
@@ -2791,6 +2821,8 @@ export async function render(root, ctx) {
   root._bnCleanup = () => {
     document.removeEventListener("keydown", onKeyDown);
     root._bnMoreDocCleanup?.();
+    mxResizeObs?.disconnect();
+    mxResizeObs = null;
     fieldResizeObs?.disconnect();
     fieldResizeObs = null;
   };

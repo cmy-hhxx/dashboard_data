@@ -236,10 +236,15 @@ export function segmented(el, onPick) {
     }
     if (btn.dataset.value !== value) set(btn.dataset.value);
   });
-  new ResizeObserver(() => {
+  const ro = new ResizeObserver(() => {
+    if (!el.isConnected) {
+      ro.disconnect();
+      return;
+    }
     const btn = buttons.find((b) => b.dataset.value === value);
     if (btn) place(btn);
-  }).observe(el);
+  });
+  ro.observe(el);
   return { set, get: () => value };
 }
 

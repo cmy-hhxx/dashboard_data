@@ -3,7 +3,7 @@
    全部状态都在 createSampleDetail 的闭包里，所以同一页可以挂多份详情（compare 的左右两栏）。
    samples 用 prefix=""，保持 #shead/#sbody 等原 id；compare 用 "b"/"a" 前缀，避免重复 id。
    面板内容、事件、证据跳转、三列对齐全部沿用 samples.js 原来的实现。 */
-import { $, $$, esc, fmt, compact, SEV, SEV_NAME, sevColor, KIND, getJSON, bindTips, REDUCED } from "./core.js";
+import { $, $$, esc, fmt, compact, SEV, sevColor, KIND, getJSON, bindTips, REDUCED } from "./core.js";
 import { renderContent, segment } from "./render.js";
 import { patternOf } from "./taxonomy.js";
 import { threadFlow } from "./particles.js";

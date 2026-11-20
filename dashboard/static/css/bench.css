@@ -1033,7 +1033,6 @@ button.bn-scell[aria-pressed="true"] { background: var(--accent-soft); }
 .bn-fold-tag { flex: none; padding: 2px 7px; border-radius: 4px; background: var(--well); color: var(--accent); font-size: var(--fs-micro); font-weight: var(--w-medium); white-space: nowrap; }
 .bn-fold-body { margin-top: 8px; max-height: 300px; overflow: auto; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 
-/* Legacy schema:1 fallback layout */
 /* ---- Responsive ---- */
 @media (max-width: 1180px) {
   .bn-quota-card { --span: 12; }

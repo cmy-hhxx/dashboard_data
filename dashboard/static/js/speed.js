@@ -41,7 +41,6 @@ const S = {
   prevModels: new Map(),
   simAttrCarry: 0,
   simClusterCarry: 0,
-  simPendingCarry: 0,
   shownAttrTraces: 0,
   shownClusterTraces: 0,
   shownPendingTraces: 0,
@@ -953,7 +952,6 @@ function handleLiveTick(root, evt) {
     const allowed = Math.max(0, Math.min(d, cap - S.simAttrCarry, remainSpace));
     if (allowed <= 0) return 0;
     S.simAttrCarry += allowed;
-    S.simPendingCarry += allowed;
     S.shownAttrTraces = Math.min(inTr || Infinity, S.shownAttrTraces + allowed);
     S.shownPendingTraces = Math.max(0, S.shownAttrTraces - S.shownClusterTraces);
     const attrRatio = inTr > 0 ? Math.min(1, S.shownAttrTraces / inTr) : 0;
@@ -990,7 +988,6 @@ function handleLiveTick(root, evt) {
     const allowed = Math.max(0, Math.min(d, avail));
     if (allowed <= 0) return 0;
     S.simClusterCarry += allowed;
-    S.simPendingCarry = Math.max(0, S.simPendingCarry - allowed);
     S.shownClusterTraces = Math.min(S.shownAttrTraces, S.shownClusterTraces + allowed);
     S.shownPendingTraces = Math.max(0, S.shownAttrTraces - S.shownClusterTraces);
     const attrRatio = inTr > 0 ? Math.min(1, S.shownAttrTraces / inTr) : 0;
@@ -1052,7 +1049,6 @@ export function applyData(root, data) {
     S.prevModels.clear();
     S.simAttrCarry = 0;
     S.simClusterCarry = 0;
-    S.simPendingCarry = 0;
     const sites = sitesMap();
     const aimeUrl = sites.aime?.url ? `${sites.aime.url.replace(/\/+$/, "")}/?view=speed&product=aime` : "";
     root.innerHTML = `<div class="bento"><article class="card" style="--span:12"><div class="sp-unavail">
@@ -1109,7 +1105,6 @@ export function applyData(root, data) {
   } else {
     S.simAttrCarry = 0;
     S.simClusterCarry = 0;
-    S.simPendingCarry = 0;
   }
 
   const inTr = rawInTr;

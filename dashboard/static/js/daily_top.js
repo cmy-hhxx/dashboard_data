@@ -521,7 +521,7 @@ function dayModalBodyHTML(day, activeSev = "") {
     ${tipDaySevGridHTML(tCounts, pCounts, { interactive: true, activeSev })}`;
 }
 
-/* Non-blocking centered floating detail card anchored in the heatmap stage and linked to the two Top-10 boards below. */
+/* In-place flipped day detail card inside the left calendar column, linked to the two Top-10 boards on the right. */
 export function dayModalHTML(day, activeSev = "") {
   if (!day) return "";
   const ratio = ratioText(day.perTrace);

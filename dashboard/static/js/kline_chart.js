@@ -3,7 +3,7 @@
    （无图例、无坐标轴、无发版线、不响应拖拽缩放）。
    基于 TradingView 的 lightweight-charts（Apache-2.0，vendor 在 static/vendor）；不自绘 Canvas。
    数据口径由调用方给全量 rows；这里只负责聚合和绘制，不做任何筛选。 */
-import { createChart, CandlestickSeries, HistogramSeries, LineSeries, AreaSeries, ColorType } from "../vendor/lightweight-charts.production.js";
+import { createChart, CandlestickSeries, HistogramSeries, AreaSeries, ColorType } from "../vendor/lightweight-charts.production.js";
 import { esc, fmt, hideTip } from "./core.js";
 import { KLINE_PERIODS, PERIOD_NAME, buildCandles } from "./kline_data.js";
 
