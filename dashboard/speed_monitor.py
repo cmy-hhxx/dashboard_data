@@ -14,6 +14,7 @@ from __future__ import annotations
 import collections
 import configparser
 import glob
+import hashlib
 import json
 import os
 import re
@@ -58,6 +59,17 @@ _PERSIST_FILE: Path | None = None
 _MIRROR_AT = 0.0
 _CONFIG: dict = dict(DEFAULTS)
 _CONTROL_SOCKET = Path("/tmp/eval-dash-speed-%C")
+_IDS_DIR: Path | None = None
+_EVAL_IDS_CACHE: dict = {"sig": None, "ids": {}}
+
+# 输入文件的 trace 键提取与 scripts/aime_data_inventory.py 完全一致：
+# 行尾窗口里的最后一个 trace_id；没有就全行取最后一个（不回退到头部 meta.trace_id），
+# 再没有才用 session_id。行尾没写完整的半行留给下一轮。
+HEAD_HASH_BYTES = 4096
+TAIL_WIN = 4096
+HEAD_WIN = 1024
+TID = re.compile(rb'"trace_id"\s*:\s*"([^"]+)"')
+SID = re.compile(rb'"session_id"\s*:\s*"([^"]+)"')
 
 _STATE: dict = {
     "available": False,
@@ -74,6 +86,7 @@ _STATE: dict = {
     "keys_sig": "",
     "input": {},
     "input_files": {},
+    "input_ids": {},
     "output_files": {},
     "lost_user": {
         "input_sessions": 0,
@@ -812,20 +825,42 @@ def _collect_local_input_meta(cfg: dict) -> dict[str, dict]:
                 if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
                     continue
                 try:
-                    size = os.path.getsize(path)
+                    st = os.stat(path)
                 except OSError:
                     continue
-                files[path] = {"source": src, "model": model, "date": date, "size": size}
+                files[path] = {
+                    "source": src, "model": model, "date": date,
+                    "size": st.st_size, "mtime_ns": st.st_mtime_ns,
+                }
     return files
 
 
+def _head_md5(path: str, limit: int) -> str:
+    """只哈希文件前缀 limit 字节，用来判断「只是追加」还是「被回填重写」。"""
+    if limit <= 0:
+        return ""
+    h = hashlib.md5()
+    try:
+        with open(path, "rb") as fh:
+            h.update(fh.read(limit))
+    except OSError:
+        return ""
+    return h.hexdigest()
+
+
 def _count_local_input_files(items: list[tuple[str, int]]) -> dict[str, dict]:
+    """从 offset 起扫描完整行，返回行数、唯一 trace 键和 session。
+
+    ``keys`` 与盘点脚本同名口径：``T:<trace_id>``，没有 trace_id 时回退
+    ``S:<session_id>``，两者都没有记 ``NONE``。``traces`` 就是键的个数。
+    """
     counts: dict[str, dict] = {}
     for path, offset in items:
-        lines = traces = bad = used = 0
+        lines = used = 0
         sessions: set[str] = set()
+        keys: set[str] = set()
         try:
-            # Line-by-line: a cold start walks the whole input tree (55 GB), and slurping
+            # Line-by-line: a cold start walks the whole input tree (61 GB), and slurping
             # each file kept ~1 GB per file resident for no reason.
             with open(path, "rb") as fh:
                 fh.seek(offset)
@@ -834,28 +869,27 @@ def _count_local_input_files(items: list[tuple[str, int]]) -> dict[str, dict]:
                     if not raw or not raw.endswith(b"\n"):
                         break  # a half-written line stays for the next run
                     used += len(raw)
-                    raw = raw.strip()
-                    if not raw:
-                        continue
-                    try:
-                        row = json.loads(raw)
-                    except Exception:
-                        bad += 1
+                    if not raw.strip():
                         continue
                     lines += 1
-                    meta = row.get("meta") or {}
-                    sid = meta.get("session_id")
-                    if sid:
-                        sessions.add(str(sid))
-                    traces += len(row.get("traces") or [])
+                    raw = raw.rstrip(b"\n")
+                    m = TID.findall(raw[-TAIL_WIN:]) or TID.findall(raw)
+                    if m:
+                        keys.add("T:" + m[-1].decode("ascii", "ignore"))
+                    else:
+                        s = SID.search(raw[:HEAD_WIN])
+                        keys.add("S:" + s.group(1).decode("ascii", "ignore") if s else "NONE")
+                    s = SID.search(raw[:HEAD_WIN])
+                    if s:
+                        sessions.add(s.group(1).decode("ascii", "ignore"))
         except OSError:
             continue
         counts[path] = {
             "lines": lines,
             "used": used,
-            "bad": bad,
             "sessions": sorted(sessions),
-            "traces": traces,
+            "keys": sorted(keys),
+            "traces": len(keys),
         }
     return counts
 
@@ -1109,23 +1143,160 @@ print(json.dumps({{'gateways': gws, 'control': control, 'rpm_limit_info': rpm_in
 PY"""
 
 
+def _load_eval_ids(cfg: dict, sig: str) -> dict[tuple[str, str], set[str]]:
+    """读取 .keys，按 (model, date) 建评测过的 trace 键集合（与盘点脚本一致）。"""
+    if _EVAL_IDS_CACHE["sig"] == sig and _EVAL_IDS_CACHE["ids"]:
+        return _EVAL_IDS_CACHE["ids"]
+    ids: dict[tuple[str, str], set[str]] = {}
+    keys_root = os.path.join(cfg["output_root"], ".keys")
+    if os.path.isdir(keys_root):
+        for path in glob.glob(os.path.join(keys_root, "**", "*.keys"), recursive=True):
+            if not os.path.isfile(path):
+                continue
+            rel = os.path.relpath(path, keys_root)
+            parts = rel.split(os.sep)
+            if not parts or not parts[0].startswith("aime_"):
+                continue
+            model = parts[0]
+            if not os.path.basename(path).startswith(model + "_attribution-"):
+                continue
+            m = re.search(r"(\d{4}-\d{2}-\d{2})", rel)
+            if not m:
+                continue
+            bucket = ids.setdefault((model, m.group(1)), set())
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                        except ValueError:
+                            continue
+                        if not isinstance(obj, list) or len(obj) < 2:
+                            continue
+                        if isinstance(obj[0], str):
+                            bucket.add("S:" + obj[0])
+                        val = obj[1]
+                        for tid in (val if isinstance(val, list) else [val]):
+                            if isinstance(tid, str):
+                                bucket.add("T:" + tid)
+            except OSError:
+                continue
+    _EVAL_IDS_CACHE["sig"] = sig
+    _EVAL_IDS_CACHE["ids"] = ids
+    return ids
+
+
+def _input_ids_path(rec: dict) -> Path | None:
+    if _IDS_DIR is None:
+        return None
+    return _IDS_DIR / str(rec["model"]) / (str(rec["date"]) + ".ids")
+
+
+def _read_input_ids(rec: dict) -> list[str] | None:
+    path = _input_ids_path(rec)
+    if path is None or not path.is_file():
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return [line.rstrip("\n") for line in fh if line.strip()]
+    except OSError:
+        return None
+
+
+def _write_input_ids(rec: dict, keys: list[str]) -> None:
+    path = _input_ids_path(rec)
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text("\n".join(keys) + ("\n" if keys else ""), encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        pass
+
+
+def _update_input_cache(old: dict[str, dict], meta: dict[str, dict],
+                        counts: dict[str, dict], old_ids: dict[str, list[str]]) -> tuple[dict[str, dict], dict[str, list[str]]]:
+    """合并本次扫描结果。
+
+    ``offset > 0`` 表示只是在旧内容后追加；否则是整文件重读（新增、被回填重写、
+    或与旧 offset 对不上）。只有追加才把旧的 trace 键并进来，重写必须丢掉旧计数，
+    否则上游清洗一次就会把页面数字叠高（2026-11-20 的 182,292 就是这么来的）。
+    """
+    new: dict[str, dict] = {}
+    ids_out: dict[str, list[str]] = {}
+    for path, rec in meta.items():
+        prev = old.get(path)
+        size = int(rec["size"])
+        old_offset = int(prev.get("offset", 0)) if prev else 0
+        got = counts.get(path)
+        if got is None:
+            if prev:
+                new[path] = prev
+            continue
+        append = bool(prev and int(got.get("offset", 0)) > 0)
+        if append:
+            keys = sorted(set(old_ids.get(path) or []) | set(got.get("keys") or []))
+            lines = int(prev.get("lines", 0)) + int(got.get("lines", 0))
+            sessions = sorted(set(prev.get("sessions") or []) | set(got.get("sessions") or []))
+            offset = min(size, old_offset + int(got.get("used", 0)))
+        else:
+            keys = list(got.get("keys") or [])
+            lines = int(got.get("lines", 0))
+            sessions = list(got.get("sessions") or [])
+            offset = min(size, int(got.get("used", 0)))
+        limit = min(HEAD_HASH_BYTES, offset)
+        ids_out[path] = keys
+        new[path] = {
+            **rec, "size": size, "offset": offset, "lines": lines,
+            "sessions": sessions, "traces": len(keys),
+            "head_limit": limit, "head": _head_md5(path, limit) if limit else "",
+        }
+    return new, ids_out
+
+
+def _apply_eval_ids_locked(input_ids: dict[str, list[str]],
+                           eval_ids: dict[tuple[str, str], set[str]]) -> None:
+    for path, rec in _STATE["input_files"].items():
+        keys = set(input_ids.get(path) or [])
+        ev = eval_ids.get((str(rec.get("model")), str(rec.get("date"))), set())
+        rec["evaluated"] = len(keys & ev) if keys else 0
+        rec["pending"] = len(keys - ev) if keys else 0
+
+
 def _rebuild_input_locked() -> None:
     models: dict[str, dict] = {}
     lost_in_sessions: set[str] = set()
     lost_in_traces = 0
     for rec in _STATE["input_files"].values():
-        row = models.setdefault(rec["model"], {"input": 0, "sessions": set(), "traces": 0, "dates": {}})
+        row = models.setdefault(rec["model"], {
+            "input": 0, "sessions": set(), "traces": 0,
+            "evaluated": 0, "pending": 0, "dates": {},
+        })
         lines = int(rec.get("lines", 0))
+        traces = int(rec.get("traces", 0))
+        evaluated = int(rec.get("evaluated", 0))
+        pending = int(rec.get("pending", 0))
         row["input"] += lines
         row["sessions"].update(rec.get("sessions") or [])
-        row["traces"] += int(rec.get("traces", 0))
-        drow = row["dates"].setdefault(rec["date"], {"input": 0, "sessions": set(), "traces": 0})
+        row["traces"] += traces
+        row["evaluated"] += evaluated
+        row["pending"] += pending
+        drow = row["dates"].setdefault(rec["date"], {
+            "input": 0, "sessions": set(), "traces": 0, "evaluated": 0, "pending": 0,
+        })
         drow["input"] += lines
         drow["sessions"].update(rec.get("sessions") or [])
-        drow["traces"] += int(rec.get("traces", 0))
+        drow["traces"] += traces
+        drow["evaluated"] += evaluated
+        drow["pending"] += pending
         if rec.get("source") == "lost_user":
             lost_in_sessions.update(rec.get("sessions") or [])
-            lost_in_traces += int(rec.get("traces", 0))
+            lost_in_traces += traces
     for row in models.values():
         row["sessions"] = len(row["sessions"])
         for drow in row["dates"].values():
@@ -1191,39 +1362,6 @@ def _trim_history_locked() -> None:
     ev_cutoff = time.time() - 1800.0
     while _STATE["part_events"] and _STATE["part_events"][0]["t"] < ev_cutoff:
         _STATE["part_events"].popleft()
-
-
-def _update_input_cache(old: dict[str, dict], meta: dict[str, dict], counts: dict[str, dict]) -> dict[str, dict]:
-    new: dict[str, dict] = {}
-    for path, rec in meta.items():
-        prev = old.get(path)
-        size = int(rec["size"])
-        old_size = int(prev.get("size", 0)) if prev else 0
-        old_offset = int(prev.get("offset", old_size)) if prev else 0
-        needs = prev is None or size != old_size
-        if needs and path not in counts:
-            if prev:
-                new[path] = prev
-            continue
-        got = counts.get(path)
-        if got:
-            if prev and size >= old_offset and old_offset > 0:
-                lines = int(prev.get("lines", 0)) + int(got.get("lines", 0))
-                sessions = sorted(set(prev.get("sessions") or []) | set(got.get("sessions") or []))
-                traces = int(prev.get("traces", 0)) + int(got.get("traces", 0))
-                offset = min(size, old_offset + int(got.get("used", 0)))
-            else:
-                lines = int(got.get("lines", 0))
-                sessions = got.get("sessions") or []
-                traces = int(got.get("traces", 0))
-                offset = min(size, int(got.get("used", 0)))
-        else:
-            lines = int(prev.get("lines", 0)) if prev else 0
-            sessions = prev.get("sessions") if prev else []
-            traces = int(prev.get("traces", 0)) if prev else 0
-            offset = old_offset
-        new[path] = {**rec, "size": size, "offset": offset, "lines": lines, "sessions": sessions, "traces": traces}
-    return new
 
 
 def _update_output_cache(old: dict[str, dict], meta: dict[str, dict], counts: dict[str, dict]) -> dict[str, dict]:
@@ -1317,6 +1455,7 @@ def _load_stats(source: Path | None = None) -> bool:
         parts_fresh = bool(saved_at and (time.time() - saved_at) <= stale_gap)
         with _LOCK:
             _STATE["input_files"] = payload_data.get("input_files") or {}
+            _STATE["input_ids"] = {}
             _STATE["output_files"] = payload_data.get("output_files") or {}
             _STATE["output_key_stats"] = payload_data.get("output_key_stats") or {}
             _STATE["keys_sig"] = payload_data.get("keys_sig") or ""
@@ -1582,32 +1721,66 @@ def refresh_inputs() -> None:
         meta = _collect_local_input_meta(cfg)
         if not meta:
             raise RuntimeError("没有读到 daily 输入")
+        sig = _keys_signature(cfg)
+        eval_ids = _load_eval_ids(cfg, sig)
         with _LOCK:
             files = dict(_STATE["input_files"])
+            ids = dict(_STATE["input_ids"])
         changed = []
         for path, rec in meta.items():
             prev = files.get(path)
             size = int(rec["size"])
-            if prev is None or int(prev.get("size", 0)) != size:
-                offset = int(prev.get("offset", 0)) if prev and size > int(prev.get("offset", 0)) else 0
-                changed.append((path, offset))
+            mtime_ns = int(rec.get("mtime_ns") or 0)
+            if path not in ids and prev:
+                loaded = _read_input_ids(rec)
+                if loaded is not None:
+                    ids[path] = loaded
+            needs = (
+                prev is None
+                or int(prev.get("size", 0)) != size
+                or int(prev.get("mtime_ns", 0)) != mtime_ns
+                or path not in ids
+            )
+            if not needs:
+                continue
+            offset = 0
+            if prev and path in ids:
+                prev_offset = int(prev.get("offset", 0))
+                # 只有「前缀没变、只是变长」才算追加；回填重写（含同大小重写）必须整读。
+                if (
+                    0 < prev_offset < size
+                    and prev.get("head")
+                    and _head_md5(path, int(prev.get("head_limit") or 0)) == prev.get("head")
+                ):
+                    offset = prev_offset
+            changed.append((path, offset))
         # Newest first, and publish after every file: a cold start (cache lost with /opt)
-        # has to re-read 55 GB, and waiting for the whole batch left the page at all zeros
+        # has to re-read 61 GB, and waiting for the whole batch left the page at all zeros
         # for half an hour.
         changed.sort(key=lambda item: meta[item[0]]["date"], reverse=True)
         for path, offset in changed:
             counts = _count_local_input_files([(path, offset)])
+            for got in counts.values():
+                got["offset"] = offset
             with _LOCK:
-                files = _update_input_cache(files, meta, counts)
+                files, ids_out = _update_input_cache(files, meta, counts, ids)
+                ids.update(ids_out)
                 _STATE["input_files"] = files
+                _STATE["input_ids"] = ids
+                rec = files.get(path)
+                if rec is not None:
+                    _write_input_ids(rec, ids.get(path, []))
+                _apply_eval_ids_locked(ids, eval_ids)
                 _rebuild_input_locked()
                 _STATE["input_error"] = ""
                 _STATE["input_updated_at"] = time.time()
             _save_stats()
-        if not changed:
-            with _LOCK:
-                _STATE["input_error"] = ""
-                _STATE["input_updated_at"] = time.time()
+        with _LOCK:
+            _apply_eval_ids_locked(ids, eval_ids)
+            _rebuild_input_locked()
+            _STATE["input_error"] = ""
+            _STATE["input_updated_at"] = time.time()
+        _save_stats()
     except Exception as exc:  # noqa: BLE001
         with _LOCK:
             _STATE["input_error"] = str(exc)[:240]
@@ -1677,7 +1850,6 @@ def payload() -> dict:
         adates = out.get("attr_dates", {})
         cdates = out.get("compact_dates", {})
         ads = out.get("attr_date_sessions", {})
-        adt = out.get("attr_date_traces", {})
         if use_keys:
             completed = int(ks.get("attr_rows", 0))
             completed_sessions = int(ks.get("attr_sessions", 0))
@@ -1694,24 +1866,34 @@ def payload() -> dict:
                 kd = kdates.get(date, {})
                 av = int(kd.get("attr", 0))
                 asess = int(kd.get("attr_sessions", 0))
-                atr = av
                 cv = int(kd.get("compact", 0))
             else:
                 av = int(adates.get(date, 0))
                 asess = int(ads.get(date, 0))
-                atr = int(adt.get(date, 0))
                 cv = int(cdates.get(date, 0))
+            if irow and "evaluated" in irow:
+                # 输入 trace 集合 ∩ 该日 .keys；pending 是集合差，不是「输入行数 - 输出行数」。
+                atr = int(irow.get("evaluated", 0))
+                rem = int(irow.get("pending", max(0, itr - atr)))
+            elif irow:
+                atr = av
+                rem = max(0, itr - atr)
+            else:
+                atr = 0
+                rem = 0
             dates.append({
                 "date": date, "input": iv, "input_sessions": isess,
                 "input_traces": itr, "attr": av,
                 "attr_sessions": asess, "attr_traces": atr,
                 "compact": cv,
-                "remaining": max(0, itr - atr),
+                "remaining": rem,
                 "remaining_sessions": max(0, isess - asess),
-                "remaining_traces": max(0, itr - atr),
+                "remaining_traces": rem,
             })
         input_sessions = int(inp.get("sessions", 0))
         input_traces = int(inp.get("traces", 0))
+        matched_traces = sum(d["attr_traces"] for d in dates)
+        pending_traces = sum(d["remaining_traces"] for d in dates)
         models.append({
             "name": name,
             "input": int(inp.get("input", 0)),
@@ -1719,10 +1901,11 @@ def payload() -> dict:
             "input_traces": input_traces,
             "attr": completed,
             "attr_sessions": completed_sessions,
-            "attr_traces": completed,
+            "attr_traces": matched_traces,
+            "output_traces": completed,
             "compact": int(ks.get("compact_rows", completed)) if use_keys else int(out.get("compact", completed)),
             "items": int(out.get("items", 0)),
-            "remaining": max(0, input_traces - completed),
+            "remaining": pending_traces,
             "dates": dates,
         })
 
@@ -1733,9 +1916,9 @@ def payload() -> dict:
     attr_sessions = sum(m["attr_sessions"] for m in models)
     attr_traces = sum(m["attr_traces"] for m in models)
     total = input_traces
-    remaining = max(0, input_traces - attr_traces)
     remaining_sessions = max(0, input_sessions - attr_sessions)
-    remaining_traces = max(0, input_traces - attr_traces)
+    remaining_traces = sum(m["remaining"] for m in models)
+    remaining = remaining_traces
 
     a_rate, a_span = _window_rate(history, "a", int(_CONFIG["rate_window_seconds"]))
     c_rate, _ = _window_rate(history, "c", int(_CONFIG["rate_window_seconds"]))
@@ -1848,7 +2031,7 @@ def payload() -> dict:
     rpm_util = round(realtime_rpm / total_rpm_limit, 4) if (realtime_rpm is not None and total_rpm_limit) else None
 
     cluster_models = []
-    output_traces_by_model = {m["name"]: m["attr_traces"] for m in models}
+    output_traces_by_model = {m["name"]: m.get("output_traces", m["attr_traces"]) for m in models}
     for name in sorted(set(cluster_rows) | set(cluster_dist_rows)):
         out_traces = int(output_traces_by_model.get(name, 0))
         dist = cluster_dist_rows.get(name, {})
@@ -1957,7 +2140,7 @@ def payload() -> dict:
 def start(cache_dir: str | Path, overrides: dict | None = None,
           persist_path: str | Path | None = None) -> bool:
     """Configure and launch background speed polling if the AIME pipeline is reachable."""
-    global _STARTED, _CACHE_FILE, _PERSIST_FILE, _CONFIG
+    global _STARTED, _CACHE_FILE, _PERSIST_FILE, _CONFIG, _IDS_DIR
     with _LOCK:
         if _STARTED:
             return _STATE["available"]
@@ -1969,6 +2152,11 @@ def start(cache_dir: str | Path, overrides: dict | None = None,
         _STATE["error"] = "" if available else reason
         _CACHE_FILE = Path(cache_dir) / "speed_stats.json"
         _PERSIST_FILE = Path(persist_path) if persist_path else None
+        # Trace 键索引按文件落盘：容器重建丢掉 /opt 时不必重扫 61 GB 输入。
+        base = _PERSIST_FILE.parent if _PERSIST_FILE else Path(cache_dir)
+        _IDS_DIR = base / "speed_input_ids"
+        _EVAL_IDS_CACHE["sig"] = None
+        _EVAL_IDS_CACHE["ids"] = {}
     if not available:
         return False
     candidates = []
@@ -1999,12 +2187,15 @@ def start(cache_dir: str | Path, overrides: dict | None = None,
 
 def reset_for_test(cache_dir: str | Path | None = None, overrides: dict | None = None) -> None:
     """Reset module state for isolated unit tests."""
-    global _STARTED, _CACHE_FILE, _CONFIG
+    global _STARTED, _CACHE_FILE, _CONFIG, _IDS_DIR
     with _LOCK:
         _STARTED = False
         _CONFIG = load_config(overrides)
         mode, available, reason = detect_mode(_CONFIG)
         _CACHE_FILE = Path(cache_dir) / "speed_stats.json" if cache_dir else None
+        _IDS_DIR = Path(cache_dir) / "speed_input_ids" if cache_dir else None
+        _EVAL_IDS_CACHE["sig"] = None
+        _EVAL_IDS_CACHE["ids"] = {}
         _STATE.update({
             "available": available,
             "mode": mode,
@@ -2020,6 +2211,7 @@ def reset_for_test(cache_dir: str | Path | None = None, overrides: dict | None =
             "keys_sig": "",
             "input": {},
             "input_files": {},
+            "input_ids": {},
             "output_files": {},
             "lost_user": {"input_sessions": 0, "input_traces": 0, "attr_sessions": 0, "attr_traces": 0, "attr_items": 0},
             "gateways": {},

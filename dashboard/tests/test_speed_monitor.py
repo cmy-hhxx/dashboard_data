@@ -32,15 +32,79 @@ class InputCountTests(unittest.TestCase):
             path.write_bytes(complete + b'{"meta": {"session_id": "s3"')
             counts = speed_monitor._count_local_input_files([(str(path), 0)])[str(path)]
             self.assertEqual(counts["lines"], 3)
-            self.assertEqual(counts["traces"], 4)
+            self.assertEqual(counts["traces"], 2)
             self.assertEqual(counts["sessions"], ["s1", "s2"])
+            self.assertEqual(counts["keys"], ["S:s1", "S:s2"])
             self.assertEqual(counts["used"], len(complete))
             # Appending the rest counts only the new part.
             path.write_bytes(complete + b'{"meta": {"session_id": "s3"}, "traces": []}\n')
             more = speed_monitor._count_local_input_files([(str(path), counts["used"])])[str(path)]
             self.assertEqual(more["lines"], 1)
             self.assertEqual(more["sessions"], ["s3"])
+            self.assertEqual(more["keys"], ["S:s3"])
             self.assertEqual(more["used"], len(b'{"meta": {"session_id": "s3"}, "traces": []}\n'))
+
+
+class InputRewriteTests(unittest.TestCase):
+    """A rewritten input file must replace old counts; pending must be a set difference."""
+
+    def tearDown(self):
+        speed_monitor.reset_for_test()
+
+    def _setup(self, folder: Path):
+        in_root = folder / "eval_input/0_daily_eval_input/aime_fast"
+        out_root = folder / "eval_output/0_daily_eval"
+        in_root.mkdir(parents=True)
+        (out_root / ".keys/aime_fast").mkdir(parents=True)
+        speed_monitor.reset_for_test(folder / "cache", {
+            "output_root": str(out_root),
+            "input_root": str(folder / "eval_input/0_daily_eval_input"),
+            "lost_input_root": str(folder / "eval_input/1_lost_user_eval"),
+            "lost_output_root": str(folder / "eval_output/1_lost_user_eval"),
+            "cluster_root": str(folder / "eval_output/cluster"),
+        })
+        return in_root, out_root
+
+    @staticmethod
+    def _row(sid: str, tid: str) -> str:
+        return json.dumps({"meta": {"session_id": sid}, "traces": [{"meta": {"trace_id": tid}}]}) + "\n"
+
+    def test_rewrite_larger_replaces_counts(self):
+        with tempfile.TemporaryDirectory() as folder:
+            in_root, _ = self._setup(Path(folder))
+            path = in_root / "2026-11-18.jsonl"
+            path.write_text(self._row("s1", "t1") + self._row("s2", "t2"), encoding="utf-8")
+            speed_monitor.refresh_inputs()
+            self.assertEqual(speed_monitor._STATE["input"]["aime_fast"]["traces"], 2)
+
+            # Upstream cleaning rewrites the whole file (larger, different content).
+            path.write_text(
+                self._row("s3", "t3") + self._row("s4", "t4") + self._row("s5", "t5"),
+                encoding="utf-8",
+            )
+            speed_monitor.refresh_inputs()
+            row = speed_monitor._STATE["input_files"][str(path)]
+            self.assertEqual(row["lines"], 3)
+            self.assertEqual(row["traces"], 3)
+            self.assertEqual(speed_monitor._STATE["input"]["aime_fast"]["traces"], 3)
+
+    def test_pending_is_input_minus_evaluated(self):
+        with tempfile.TemporaryDirectory() as folder:
+            in_root, out_root = self._setup(Path(folder))
+            (in_root / "2026-11-18.jsonl").write_text(
+                self._row("s1", "t1") + self._row("s2", "t2") + self._row("s3", "t3"),
+                encoding="utf-8",
+            )
+            # t1 evaluated; t9 was evaluated but is no longer in the input (must not inflate).
+            (out_root / ".keys/aime_fast/aime_fast_attribution-2026-11-18.keys").write_text(
+                json.dumps(["s1", ["t1"]]) + "\n" + json.dumps(["s9", ["t9"]]) + "\n",
+                encoding="utf-8",
+            )
+            speed_monitor.refresh_inputs()
+            data = speed_monitor.payload()
+            self.assertEqual(data["input_traces"], 3)
+            self.assertEqual(data["attr_traces"], 1)
+            self.assertEqual(data["remaining_traces"], 2)
 
 
 class _MockGateway(BaseHTTPRequestHandler):
@@ -118,7 +182,8 @@ class SpeedMonitorTests(unittest.TestCase):
 
                 # Input + output + keys
                 (in_root / "2026-11-18.jsonl").write_text(
-                    json.dumps({"meta": {"session_id": "s1"}, "traces": [{"id": "t1"}, {"id": "t2"}]}) + "\n",
+                    json.dumps({"meta": {"session_id": "s1"}, "traces": [{"meta": {"trace_id": "t1"}}]}) + "\n"
+                    + json.dumps({"meta": {"session_id": "s1"}, "traces": [{"meta": {"trace_id": "t2"}}]}) + "\n",
                     encoding="utf-8",
                 )
                 (out_root / "aime_fast/aime_fast_attribution-2026-11-18.jsonl").write_text(
@@ -132,7 +197,7 @@ class SpeedMonitorTests(unittest.TestCase):
                     json.dumps({"session_meta": {"session_id": "s1"}, "turns": [{"components": ["a"]}]}) + "\n",
                     encoding="utf-8",
                 )
-                (out_root / ".keys/aime_fast/attr.keys").write_text(
+                (out_root / ".keys/aime_fast/aime_fast_attribution-2026-11-18.keys").write_text(
                     json.dumps(["s1", ["t1"]]) + "\n", encoding="utf-8",
                 )
                 (chunk_root / "000001.jsonl").write_text("{}\n", encoding="utf-8")
