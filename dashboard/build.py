@@ -81,7 +81,7 @@ INPUT_INDEX_VERSION = "2026-11-12.1"
 # Bump when pairing semantics change (cache keys are not otherwise versioned).
 PAIRING_VERSION = "2026-11-19.1"
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-19.1"
+PAYLOAD_VERSION = "2026-11-20.1"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 4
 
@@ -666,13 +666,14 @@ def input_payload(metas, store=None, product: str = ""):
     return payload
 
 
-def mark_evaluated(payload, rows):
+def mark_evaluated(payload, rows, product):
     """Evaluated cases behind every 数据量 node, filed the way the dashboard's star map files them
     (model → task → scene), so the ring can tell which branches have nothing to open."""
     seen = Counter()
     for r in rows:
         task = r.get("task") or NO_SCENE
-        scene = r.get("sub") or r.get("sc") or r.get("skill") or NO_SCENE
+        # skill 只是问财的场景兜底（AIME 的 skill 是技能埋点，不是场景）。
+        scene = r.get("sub") or r.get("sc") or (r.get("skill") if product == "wencai" else None) or NO_SCENE
         for model in (r["m"], None):
             seen[(model,)] += 1
             seen[(model, task)] += 1
@@ -1911,9 +1912,15 @@ def scene_votes(product, samples):
     return {q: c.most_common(1)[0][0] for q, c in votes.items()}
 
 
-def scene_of(brief, scene):
+def scene_of(brief, scene, product):
     m = brief["meta"]
-    return m.get("task") or m.get("skill") or scene.get(brief["question"]) or NO_SCENE
+    if m.get("task"):
+        return m["task"]
+    if product == "wencai":  # 问财没有 task，场景取 skill 投票（A/B 版本回填）
+        return m.get("skill") or scene.get(brief["question"]) or NO_SCENE
+    # AIME 的 skill 只是「本条 trace 用了哪些技能」的埋点，不是业务场景；
+    # task 接入前全部归到「未接入分类体系」。
+    return scene.get(brief["question"]) or NO_SCENE
 
 
 def aggregate(product, samples, taxonomy):
@@ -2056,7 +2063,7 @@ def aggregate(product, samples, taxonomy):
         if row.get("tr", 1) <= 0:
             continue
         pats = Counter(p["cl"]["path"] for p in detail["attribution"]["problems"] if p["cl"])
-        cross.append([scene_of(detail, scene), detail["meta"].get("subtask") or "",
+        cross.append([scene_of(detail, scene, product), detail["meta"].get("subtask") or "",
                       [[pid, n] for pid, n in pats.most_common()], row.get("tr", 1)])
 
     # Input profile.
@@ -2134,7 +2141,7 @@ def aggregate(product, samples, taxonomy):
     def task_tree(rows):
         tree = defaultdict(Counter)
         for s in rows:
-            tree[scene_of(s[1], scene)][s[1]["meta"].get("subtask") or ""] += 1
+            tree[scene_of(s[1], scene, product)][s[1]["meta"].get("subtask") or ""] += 1
         return [
             {"id": t, "n": sum(c.values()), "sub": [{"id": k or NO_SCENE, "n": v} for k, v in c.most_common()] if any(c) else []}
             for t, c in sorted(tree.items(), key=lambda kv: -sum(kv[1].values()))
@@ -2311,7 +2318,7 @@ def trend_payload(product, samples, releases=(), generated=None):
     # the clustered-problem pass and the trace pass.
     prepared = []
     for slug, detail, row, facts in samples:
-        pair = (scene_of(detail, scene), detail["meta"].get("subtask") or "")
+        pair = (scene_of(detail, scene, product), detail["meta"].get("subtask") or "")
         prepared.append((slug, detail, row, facts, pair))
 
     dates, uts, models, scenes, base = set(), set(), set(), set(), Counter()
@@ -3891,13 +3898,13 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
             # task/skill fallback would disagree, so a matrix cell and its 具体数据 filter agree.
             scene = scene_votes(product, rows)
             for s in rows_sorted:
-                sc = scene_of(s[1], scene)
+                sc = scene_of(s[1], scene, product)
                 if sc != (s[2].get("task") or s[2].get("skill") or NO_SCENE):
                     s[2]["sc"] = sc
                 else:
                     s[2].pop("sc", None)
             if "input" in products.get(product, {}):
-                mark_evaluated(products[product]["input"], [s[2] for s in rows_sorted])
+                mark_evaluated(products[product]["input"], [s[2] for s in rows_sorted], product)
             indexes[product] = {
                 "schema": 2, "generated_at": generated, "product": product,
                 "available": available,
