@@ -656,7 +656,6 @@ export function dailyTopBoardsHTML(day) {
     const shareStr = `${fmt(item.share, 1)}%`;
     return `<button type="button" class="mxd-row is-top" style="--w:${w.toFixed(1)}%" data-daily-code="${esc(item.code)}" data-daily-name="${esc(item.name)}" data-tip="1" data-mxd-tip-kind="top" data-name="${esc(item.name)}" data-stage="${esc(item.stageName)}" data-prev="${esc(fmt(item.prev))}" data-count="${esc(fmt(item.count))}" data-delta="${esc(String(item.delta))}" data-p01="${esc(fmt(item.p01))}" data-share="${esc(shareStr)}" data-sevs="${esc(sevsStr)}" data-prev-sevs="${esc(prevSevsStr)}" data-plain="${esc(item.plain || "")}">
       <span class="mxd-rank num">${String(i + 1).padStart(2, "0")}</span>
-      <span class="mxd-stage">${esc(item.stageName)}</span>
       <span class="mxd-name">${esc(item.name)}</span>
       ${sparkSVG(item.spark, deltaCls === "is-down" ? "is-down" : "is-up")}
       <span class="mxd-pair num"><span class="is-from">${pairNum(item.prev)}</span><i aria-hidden="true">→</i><b class="is-to">${pairNum(item.count)}</b></span>
@@ -672,7 +671,6 @@ export function dailyTopBoardsHTML(day) {
     const dropPctStr = `${fmt(item.dropPct, 0)}%`;
     return `<button type="button" class="mxd-row is-drop" style="--w:${w.toFixed(1)}%" data-daily-code="${esc(item.code)}" data-daily-name="${esc(item.name)}" data-tip="1" data-mxd-tip-kind="drop" data-name="${esc(item.name)}" data-stage="${esc(item.stageName)}" data-prev="${esc(fmt(item.prev))}" data-count="${esc(fmt(item.count))}" data-drop="${esc(fmt(Math.abs(item.delta)))}" data-drop-pct="${esc(dropPctStr)}" data-sevs="${esc(sevsStr)}" data-prev-sevs="${esc(prevSevsStr)}" data-plain="${esc(item.plain || "")}">
       <span class="mxd-rank num">${String(i + 1).padStart(2, "0")}</span>
-      <span class="mxd-stage">${esc(item.stageName)}</span>
       <span class="mxd-name">${esc(item.name)}</span>
       ${sparkSVG(item.spark, "is-down")}
       <span class="mxd-pair num"><span class="is-from">${pairNum(item.prev)}</span><i aria-hidden="true">→</i><b class="is-to">${pairNum(item.count)}</b></span>

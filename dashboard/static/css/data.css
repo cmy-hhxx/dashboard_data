@@ -698,9 +698,9 @@ body.is-mx-full { overflow: hidden; }
 }
 .mxd-row {
   position: relative; overflow: hidden;
-  display: grid; align-items: center; column-gap: 7px; min-width: 0; min-height: 32px;
-  padding: 0 7px; border-radius: 8px; text-align: left; color: var(--ink-2); cursor: pointer;
-  grid-template-columns: 18px 54px minmax(0, 1fr) 44px auto auto;
+  display: grid; align-items: center; column-gap: 8px; min-width: 0; min-height: 32px;
+  padding: 0 8px; border-radius: 8px; text-align: left; color: var(--ink-2); cursor: pointer;
+  grid-template-columns: 18px minmax(0, 1fr) 44px auto auto;
   transition: background var(--snap), color var(--snap), transform var(--spring);
 }
 .mxd-row::before {
@@ -714,11 +714,6 @@ body.is-mx-full { overflow: hidden; }
 .mxd-row:hover::before { opacity: 0.4; }
 .mxd-row:active { transform: scale(0.992); transition-duration: 110ms; }
 .mxd-rank { color: var(--faint); font-size: var(--fs-micro); text-align: center; line-height: 1; }
-.mxd-stage {
-  display: inline-flex; align-items: center; justify-content: center;
-  height: 21px; padding: 0 6px; border-radius: 5px; background: color-mix(in oklab, var(--card) 72%, var(--well-2));
-  color: var(--muted); font-size: var(--fs-micro); line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
 .mxd-name {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   color: var(--ink); font-size: var(--fs-small); font-weight: var(--w-medium); line-height: 1.25;
@@ -757,7 +752,7 @@ body.is-mx-full { overflow: hidden; }
   .mxd-heat { gap: 4px; }
   .mxd-day { min-height: 30px; aspect-ratio: 1 / 0.92; border-radius: 8px; }
   .mxd-board { padding: 8px 8px; }
-  .mxd-row { column-gap: 6px; padding: 0 6px; min-height: 30px; grid-template-columns: 16px 46px minmax(0, 1fr) auto auto; }
+  .mxd-row { column-gap: 6px; padding: 0 6px; min-height: 30px; grid-template-columns: 16px minmax(0, 1fr) auto auto; }
   .mxd-spark { display: none; }
   .mxd-modal.mxd-pop { padding: 10px 10px 12px; gap: 8px; }
   .mxd-modal-body { grid-template-columns: minmax(0, 1fr); gap: 8px; }
