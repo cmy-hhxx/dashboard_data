@@ -30,9 +30,14 @@ import daytime
 import hashlib
 import json_compat as json
 import re
+import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Coverage CSVs carry the full question text plus leaf paths; a single cell can
+# exceed csv's 128 KiB default and used to abort the whole build.
+csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
 
 AB_DIR = "ab_test"
 VERIFY_REL = "06_verify/verify.jsonl"

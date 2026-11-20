@@ -572,3 +572,14 @@ class VerifyAndGptTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ABReadRowsTests(unittest.TestCase):
+    def test_large_csv_cell_is_read(self):
+        """Coverage CSVs carry long leaf paths; csv's 128 KiB default must not abort the build."""
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "coverage.csv"
+            path.write_text("a,b\n" + "x" * 200000 + ",1\n", encoding="utf-8")
+            rows = ab_test.read_rows(path)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["b"], "1")
