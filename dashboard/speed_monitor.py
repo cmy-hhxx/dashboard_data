@@ -831,6 +831,7 @@ def _collect_local_input_meta(cfg: dict) -> dict[str, dict]:
                 files[path] = {
                     "source": src, "model": model, "date": date,
                     "size": st.st_size, "mtime_ns": st.st_mtime_ns,
+                    "ctime_ns": st.st_ctime_ns,
                 }
     return files
 
@@ -1731,14 +1732,27 @@ def refresh_inputs() -> None:
             prev = files.get(path)
             size = int(rec["size"])
             mtime_ns = int(rec.get("mtime_ns") or 0)
+            ctime_ns = int(rec.get("ctime_ns") or 0)
             if path not in ids and prev:
                 loaded = _read_input_ids(rec)
                 if loaded is not None:
                     ids[path] = loaded
+            same_basic = bool(
+                prev
+                and int(prev.get("size", 0)) == size
+                and int(prev.get("mtime_ns", 0)) == mtime_ns
+            )
+            if same_basic and int(prev.get("ctime_ns") or 0) == ctime_ns:
+                continue
+            if same_basic and not prev.get("ctime_ns") and prev.get("head") and path in ids:
+                # 旧缓存没有 ctime：当前计数已是新扫描器产出，补上时间戳即可，不必重扫 61 GB。
+                files[path] = {**prev, "ctime_ns": ctime_ns}
+                continue
             needs = (
                 prev is None
                 or int(prev.get("size", 0)) != size
                 or int(prev.get("mtime_ns", 0)) != mtime_ns
+                or int(prev.get("ctime_ns") or 0) != ctime_ns
                 or path not in ids
             )
             if not needs:
@@ -1776,6 +1790,7 @@ def refresh_inputs() -> None:
                 _STATE["input_updated_at"] = time.time()
             _save_stats()
         with _LOCK:
+            _STATE["input_files"] = files
             _apply_eval_ids_locked(ids, eval_ids)
             _rebuild_input_locked()
             _STATE["input_error"] = ""

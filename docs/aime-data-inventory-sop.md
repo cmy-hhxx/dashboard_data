@@ -121,17 +121,22 @@ trace_id 提取规则：**行尾 4 KB 内最后一个 `"trace_id": "..."`**（�
 每个输入文件一份索引，存在 `<cache-dir>/<model>/<date>.ids` + `<date>.json`：
 
 ```json
-{"v": 4, "size": 23456789, "mtime_ns": 1763..., "head": "<md5>", "head_limit": 4096,
- "lines": 1590, "miss": 0}
+{"v": 5, "size": 23456789, "mtime_ns": 1763..., "ctime_ns": 1763...,
+ "head": "<md5>", "head_limit": 4096, "lines": 1590, "miss": 0}
 ```
 
 刷新时按三路分支：
 
 | 条件 | 动作 |
 |---|---|
-| `size` 与 `mtime_ns` 都没变 | 直接复用，不读文件 |
+| `size`、`mtime_ns`、`ctime_ns` 都没变 | 直接复用，不读文件 |
 | 只变大，且前 `head_limit` 字节 md5 没变 | 只读 `[size, 新 size)` 这段，增量合并 |
-| 变小 / mtime 变了前缀也变了（回填重写） | 该文件全量重扫 |
+| 变小 / ctime 变了 / 前缀变了（回填重写） | 该文件全量重扫 |
+
+`ctime_ns` 是 v5 加的：上游原地清洗会保留 `size` 和 `mtime`（2026-11-20 的 58 行、
+4 个唯一 trace 就是这样被旧缓存漏掉的），但 inode 的 ctime 一定会变。只多比较一个
+已 `stat` 到的字段，**不额外读文件**；日常命中缓存的速度不变。代价是升级到 v5 后
+第一次会全量重建一次。
 
 `head_limit` 存的是「上次写入时的 `min(4096, size)`」。**不能**直接用文件前 1 MB 做
 md5：小文件会被整段覆盖，追加一个字节哈希就变，增量永远命中不了（v2 的 bug，v3 修）。
@@ -187,7 +192,7 @@ EOF'
 | 8 | 看板 `data-aime.json` 滞后 | 与脚本数字差几个 | 看 `generated_at`；对账以本脚本为准 |
 | 9 | 目录别算进去 | 数字虚高 | `eval_output/0_daily_eval-pre-split-*`、`.archive`、`.runs`、`.parts`、`.merge` 都不是业务结果 |
 | 10 | 磁盘接近满 | 写入失败、loop 悄悄死掉 | `df -h /mnt/aime_eval_ssd`；2026-11-16 是 96% |
-| 11 | 原始文件被合并重写 | 旧 offset 之后看起来没变，前缀里的新增会被漏掉 | 流水线按 size/mtime/offset + 头部 md5；头部变了就从头重扫，靠全局索引去重。2026-11-17 的 11-12/11-13 已用 `--full` 重扫 |
+| 11 | 原始文件被合并重写 | 旧 offset 之后看起来没变，前缀里的新增会被漏掉 | 流水线按 size/mtime/ctime/offset + 头部 md5；ctime 或头部变了就从头重扫，靠全局索引去重。2026-11-17 的 11-12/11-13 已用 `--full` 重扫 |
 | 12 | 只按 trace_id 去重会误删 | 287 个 trace_id 出现在不同 session 下 | 去重键必须是 `session_id + trace_id`，已落到 `seen_keys` |
 
 ## 6. 流水线停摆的判断

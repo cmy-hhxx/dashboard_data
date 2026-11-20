@@ -50,7 +50,9 @@ MODELS = ["aime_expert", "aime_fast"]
 #   v2 -> v3  头部哈希改成只哈希固定前缀（小文件整段被哈希，追加后永远命中不了增量）
 #   v3 -> v4  尾部找不到时不再回退到头部 meta.trace_id（会把同会话多条 trace 折叠），
 #             改为全行取最后一次；全库只剩 2026-09 的 26 行旧记录用 session key
-EXTRACTOR_VERSION = 4
+#   v4 -> v5  缓存键加入 ctime_ns：上游原地清洗会保留 size 和 mtime，只有 ctime 能发现；
+#             仍只 stat，不额外读文件
+EXTRACTOR_VERSION = 5
 TAIL_WIN = 4096          # trace_id 在行尾 _source 之前，取尾部窗口
 HEAD_WIN = 1024          # session_id 在行首 meta 里
 SLIM_HEAD_WIN = 8192     # raw 的 meta 在最前面，runtime_mode 在头部
@@ -288,6 +290,7 @@ def input_index(path: str, cache_dir: Path, model: str, date: str,
         limit = min(HEAD_HASH_BYTES, pos)
         new_meta = {
             "v": EXTRACTOR_VERSION, "size": pos, "mtime_ns": st.st_mtime_ns,
+            "ctime_ns": st.st_ctime_ns,
             "head": _head_md5(path, limit), "head_limit": limit,
             "lines": lines, "miss": miss,
         }
@@ -298,7 +301,8 @@ def input_index(path: str, cache_dir: Path, model: str, date: str,
     if rebuild or not meta or meta.get("v") != EXTRACTOR_VERSION or not ids_path.exists():
         return _full()
 
-    if st.st_size == meta["size"] and st.st_mtime_ns == meta["mtime_ns"]:
+    if (st.st_size == meta["size"] and st.st_mtime_ns == meta["mtime_ns"]
+            and st.st_ctime_ns == meta.get("ctime_ns")):
         ids = _read_ids(ids_path)
         return {"ids": ids, "lines": meta["lines"], "miss": meta.get("miss", 0),
                 "rebuilt": False, "appended": 0}
@@ -309,7 +313,7 @@ def input_index(path: str, cache_dir: Path, model: str, date: str,
         ids = _read_ids(ids_path) | new_ids
         _write_ids(ids_path, ids)
         meta.update({
-            "size": end, "mtime_ns": st.st_mtime_ns,
+            "size": end, "mtime_ns": st.st_mtime_ns, "ctime_ns": st.st_ctime_ns,
             "lines": meta["lines"] + new_lines, "miss": meta.get("miss", 0) + new_miss,
         })
         meta_path.write_text(json.dumps(meta))

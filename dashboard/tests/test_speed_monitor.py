@@ -1,6 +1,7 @@
 """Speed monitor & live gateway telemetry tests."""
 import http.client
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -87,6 +88,24 @@ class InputRewriteTests(unittest.TestCase):
             self.assertEqual(row["lines"], 3)
             self.assertEqual(row["traces"], 3)
             self.assertEqual(speed_monitor._STATE["input"]["aime_fast"]["traces"], 3)
+
+    def test_same_size_rewrite_with_preserved_mtime_is_detected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            in_root, _ = self._setup(Path(folder))
+            path = in_root / "2026-11-18.jsonl"
+            path.write_text(self._row("s1", "t1") + self._row("s2", "t2"), encoding="utf-8")
+            speed_monitor.refresh_inputs()
+            st = path.stat()
+
+            # Same byte size, same mtime (upstream cleaning preserves it), new trace ids.
+            path.write_text(self._row("s1", "t9") + self._row("s2", "t8"), encoding="utf-8")
+            os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+            self.assertEqual(path.stat().st_size, st.st_size)
+            self.assertEqual(path.stat().st_mtime_ns, st.st_mtime_ns)
+
+            speed_monitor.refresh_inputs()
+            keys = speed_monitor._STATE["input_ids"][str(path)]
+            self.assertEqual(keys, ["T:t8", "T:t9"])
 
     def test_pending_is_input_minus_evaluated(self):
         with tempfile.TemporaryDirectory() as folder:
