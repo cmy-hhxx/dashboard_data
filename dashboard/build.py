@@ -79,7 +79,9 @@ PRODUCTION_DATASETS = Path("/mnt/fin_bench/code_and_clean_data/datasets")
 # 仍然有效；input_payload() 聚合时按目录模型重映射，所以不必为改口径重扫 74 GB 输入。
 INPUT_INDEX_VERSION = "2026-11-12.1"
 # Bump when pairing semantics change (cache keys are not otherwise versioned).
-PAIRING_VERSION = "2026-11-19.1"
+# 2026-11-21.1: file indexes from before the boundary check held offsets of in-place
+# rewrites, so every pair cache is recomputed once with the repaired indexes.
+PAIRING_VERSION = "2026-11-21.1"
 # Bump when the aggregate payload shape changes (details can stay cached).
 PAYLOAD_VERSION = "2026-11-20.2"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
@@ -506,17 +508,21 @@ def scan_inputs(datasets: Path, top: Path, product: str, store: bs.BuildStore, j
         except OSError:
             continue
         indexed_keys = indexed.get(rel)
+        cached = store.file_meta(rel)
+        # Reuse needs an index whose offsets were checked against these bytes (``tail``);
+        # a row written before that check may describe an earlier in-place rewrite.
+        trusted = bool(cached and cached["size"] == stat.st_size
+                       and cached["mtime_ns"] == stat.st_mtime_ns and cached.get("tail")
+                       and (indexed_keys or not cached.get("lines")))
         side = sidecar_files.get(rel)
-        if (side and side.get("size") == stat.st_size and side.get("mtime_ns") == stat.st_mtime_ns
+        if (trusted and side and side.get("size") == stat.st_size
+                and side.get("mtime_ns") == stat.st_mtime_ns
                 and (indexed_keys or not side.get("lines")) and lost_fresh(side)
                 and prefix_ok(side, path)):
             metas.append(side)
             from_sidecar += 1
             continue
-        cached = store.file_meta(rel)
-        if (cached and cached["size"] == stat.st_size and cached["mtime_ns"] == stat.st_mtime_ns
-                and (indexed_keys or not cached.get("lines")) and lost_fresh(cached)
-                and prefix_ok(cached, path)):
+        if trusted and lost_fresh(cached) and prefix_ok(cached, path):
             metas.append(cached)
             continue
         prev = store.get_file(rel) if cached else None

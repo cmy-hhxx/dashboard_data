@@ -115,6 +115,9 @@ python3 scripts/aime_backfill_category.py --force      # 忽略「文件和分�
 - 分类体系漂移：2026-11-04 及之前是旧短标签（`事件解读` / `诊断分析类` / `交易建议` …），
   2026-11-08 起是新长标签（`投资标的研究与分析` / `市场、宏观与行业研究` …），看板场景会同时出现两套。
 - 重写会让 `build.py` 按 `(size, mtime_ns)` 重扫这些文件，一次全量重建约 10 分钟（16 GB）。
+  原地重写不会被误判成「追加」：索引另存 `files.tail`（旧 committed 前 64 KB 的哈希）
+  判断追加还是重写，见 `docs/build-performance.md` §3.1；错位索引导致的
+  `samples/<slug>.json` 404 会在下一轮构建自动修好。
 
 ## 4. A/B 轮次 `ab_test/<n>_version<MMDD>_test/`
 

@@ -55,6 +55,20 @@ def prefix_hash(path: Path, size: int = 65536) -> str:
         return hashlib.sha1(fh.read(size)).hexdigest()
 
 
+# The bytes that end at the previously committed offset.  ``prefix_hash`` alone cannot
+# tell a true append from an in-place rewrite that kept the head (a backfill rewriting
+# meta fields does exactly that): both grow the file with an identical first 64 KB.
+# Offsets are only reusable when this boundary still matches.
+BOUNDARY_BYTES = 65536
+
+
+def boundary_hash(path: Path, end: int) -> str:
+    start = max(0, end - BOUNDARY_BYTES)
+    with open(path, "rb", buffering=0) as fh:
+        fh.seek(start)
+        return hashlib.sha1(fh.read(end - start)).hexdigest()
+
+
 def key_from_meta(meta: dict) -> str:
     sid = meta.get("session_id") or meta.get("thread_id") or meta.get("trace_id")
     rt = str(meta.get("request_time") or "").replace("T", " ")[:19]
@@ -206,12 +220,19 @@ def scan_file(root: Path | str, rel: str, kind: str = "input", prev: dict | None
     lost_ids = frozenset(lost_ids or ())
     lost_ok = (not (need_stats and kind == "input")
                or (prev and (prev.get("stats") or {}).get("_lost_sig") == lost_sig))
-    if prev and lost_ok and st.st_size == prev.get("size") and st.st_mtime_ns == prev.get("mtime_ns"):
+    if prev and lost_ok and st.st_size == prev.get("size") and st.st_mtime_ns == prev.get("mtime_ns") \
+            and prev.get("tail"):
         return prev
     ph = prefix_hash(path)
     output = kind != "input"
-    tail = bool(prev and lost_ok and prev.get("ends_nl") and st.st_size > int(prev.get("committed") or 0)
+    # Tail mode appends to the stored offsets, so it is only safe when the bytes just
+    # before the old committed offset are untouched.  Rows indexed before ``tail``
+    # existed are re-read once instead of being trusted.
+    tail = bool(prev and lost_ok and prev.get("ends_nl")
+                and st.st_size > int(prev.get("committed") or 0)
                 and ph == prev.get("prefix")
+                and prev.get("tail")
+                and prev["tail"] == boundary_hash(path, int(prev.get("committed") or 0))
                 # Rows indexed before digests existed are rescanned once to backfill them.
                 and (not output or len(prev.get("digests") or b"") == 32 * int(prev.get("lines") or 0)))
     if tail:
@@ -287,6 +308,7 @@ def scan_file(root: Path | str, rel: str, kind: str = "input", prev: dict | None
 
     return {
         "path": rel, "size": st.st_size, "mtime_ns": st.st_mtime_ns, "prefix": ph,
+        "tail": boundary_hash(path, pos),
         "lines": len(offsets) - 1, "committed": pos, "ends_nl": ends_nl,
         "offsets": offsets, "keys": keys, "tids": tids, "hashes": hashes,
         "digests": bytes(digests) if output else None,
@@ -355,6 +377,9 @@ class BuildStore:
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(files)")}
         if "digests" not in columns:
             self.db.execute("ALTER TABLE files ADD COLUMN digests BLOB")
+        if "tail" not in columns:
+            # Boundary hash of the committed bytes; NULL = indexed before it existed.
+            self.db.execute("ALTER TABLE files ADD COLUMN tail TEXT")
         row = self.db.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
         if row and int(row[0]) != SCHEMA_VERSION:
             # A format change invalidates byte offsets and cached payloads.
@@ -383,13 +408,14 @@ class BuildStore:
 
     def file_meta(self, rel: str) -> dict | None:
         row = self.db.execute(
-            "SELECT path,size,mtime_ns,prefix,lines,committed,ends_nl,stats,product,model,split "
-            "FROM files WHERE path=?", (rel,)).fetchone()
+            "SELECT path,size,mtime_ns,prefix,lines,committed,ends_nl,stats,product,model,split,"
+            "tail FROM files WHERE path=?", (rel,)).fetchone()
         if not row:
             return None
         return {"path": row[0], "size": row[1], "mtime_ns": row[2], "prefix": row[3],
                 "lines": row[4], "committed": row[5], "ends_nl": bool(row[6]),
-                "stats": json.loads(row[7]), "product": row[8], "model": row[9], "split": row[10]}
+                "stats": json.loads(row[7]), "product": row[8], "model": row[9], "split": row[10],
+                "tail": row[11]}
 
     def file_keys(self, paths) -> dict[str, list[str]]:
         """Line join keys (``session_id\\x1frequest_time``) for a batch of indexed files.
@@ -426,7 +452,7 @@ class BuildStore:
     def get_file(self, rel: str) -> dict | None:
         row = self.db.execute(
             "SELECT path,size,mtime_ns,prefix,lines,committed,ends_nl,offsets,keys,tids,hashes,"
-            "stats,product,model,split,digests FROM files WHERE path=?", (rel,)).fetchone()
+            "stats,product,model,split,digests,tail FROM files WHERE path=?", (rel,)).fetchone()
         if not row:
             return None
         return {
@@ -435,14 +461,14 @@ class BuildStore:
             "offsets": list(array("q", row[7])), "keys": json.loads(row[8]),
             "tids": json.loads(row[9]), "hashes": list(array("Q", row[10])),
             "stats": json.loads(row[11]), "product": row[12], "model": row[13], "split": row[14],
-            "digests": row[15],
+            "digests": row[15], "tail": row[16],
         }
 
     def put_file(self, data: dict) -> None:
         self.db.execute(
             "INSERT OR REPLACE INTO files(path,size,mtime_ns,prefix,lines,committed,ends_nl,"
-            "offsets,keys,tids,hashes,stats,product,model,split,scanned_at,digests) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "offsets,keys,tids,hashes,stats,product,model,split,scanned_at,digests,tail) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 data["path"], data["size"], data["mtime_ns"], data["prefix"], data["lines"],
                 data["committed"], int(bool(data["ends_nl"])),
@@ -452,7 +478,7 @@ class BuildStore:
                 array("Q", data["hashes"]).tobytes(),
                 json.dumps(data["stats"], ensure_ascii=False),
                 data.get("product", ""), data.get("model", ""), data.get("split", ""),
-                data.get("scanned_at", time.time()), data.get("digests"),
+                data.get("scanned_at", time.time()), data.get("digests"), data.get("tail"),
             ),
         )
 
@@ -473,8 +499,13 @@ class BuildStore:
         return start, end
 
     def has_file_stat(self, rel: str, st: os.stat_result) -> bool:
-        row = self.db.execute("SELECT size,mtime_ns FROM files WHERE path=?", (rel,)).fetchone()
-        return bool(row and row[0] == st.st_size and row[1] == st.st_mtime_ns)
+        """True when the index for ``rel`` describes exactly these bytes.
+
+        A row without ``tail`` was written before the boundary check existed and may
+        hold offsets from an in-place rewrite, so it never counts as current.
+        """
+        row = self.db.execute("SELECT size,mtime_ns,tail FROM files WHERE path=?", (rel,)).fetchone()
+        return bool(row and row[0] == st.st_size and row[1] == st.st_mtime_ns and row[2])
 
     # ---- pairs
 

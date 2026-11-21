@@ -42,6 +42,12 @@
 输入文件只按 `(size, mtime_ns)` 失效；追加写从最后一个完整换行继续，不重扫全文。
 输入行数、task/subtask、tool_calls、tokens、流失标记在同一次扫描里完成。
 
+「追加」不是只看 `prefix_hash` + 文件变长：原地重写（例如
+`scripts/aime_backfill_category.py` 给每行的 `meta` 补字段）会保留开头 64 KB、把整份文件变长，
+按旧判据会当成追加续扫，offsets 从旧 EOF 起就整体错位，详情读到的行从中间开始 → `samples/<slug>.json` 404。
+所以索引里另存 `files.tail`（旧 committed 之前 64 KB 的哈希），只有它仍匹配才走追加；
+没有 `tail` 的旧行（升级前写的）不算「当前」，第一次遇到时整份重扫一次补齐。
+
 ### 3.2 配对加速
 
 - `choose_input` 直接使用索引里的 `trace_ids` 计覆盖度，不再读输入行；
