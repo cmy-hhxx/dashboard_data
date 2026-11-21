@@ -38,9 +38,9 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .keys span { display: inline-flex; align-items: center; gap: 6px; }
 .keys b { color: var(--ink-2); font-weight: var(--w-medium); }
 .sankey { display: block; width: 100%; height: auto; overflow: visible; font-variant-numeric: tabular-nums; }
-.sk-f { transition: opacity var(--snap); }
+.sk-f { transition: opacity 160ms var(--ss-ui); }
 .sankey.hl .sk-f:not(.on) { opacity: 0.14; }
-.sk-node rect { transition: opacity var(--snap); transform-box: fill-box; transform-origin: center; animation: sk-node 520ms cubic-bezier(0.3, 1.4, 0.5, 1) both; }
+.sk-node rect { transition: opacity 160ms var(--ss-ui); transform-box: fill-box; transform-origin: center; animation: sk-node 440ms var(--ss-arrive) both; }
 .sk-node[data-r] rect { fill: var(--t1); }
 .sk-node.is-top[data-r] rect { fill: var(--ink-2); }
 .sk-col-head { font-size: var(--fs-micro); fill: var(--faint); font-weight: var(--w-medium); dominant-baseline: middle; }
@@ -63,8 +63,8 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .sk-p { fill: var(--faint); font-size: var(--fs-meta); }
 .sk-node.is-top .sk-t { fill: var(--ink); font-weight: var(--w-medium); }
 .sk-node.is-top .sk-n { fill: var(--ink-2); }
-/* Flows sweep in from the version column; node bars settle with a small bounce. */
-.sk-reveal { transform-box: fill-box; transform-origin: left; animation: sk-reveal 900ms cubic-bezier(0.16, 1, 0.3, 1) 80ms both; }
+/* Flows sweep in cleanly from the version column along a calm deceleration curve. */
+.sk-reveal { transform-box: fill-box; transform-origin: left; animation: sk-reveal 780ms var(--ss-travel) 80ms both; }
 @keyframes sk-reveal { from { transform: scaleX(0); } }
 @keyframes sk-node { from { transform: scaleY(0.2); opacity: 0; } }
 .status { font-size: var(--fs-small); color: var(--muted); }
@@ -114,9 +114,10 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .ev-all-btn {
   height: 26px; padding: 0 10px; border-radius: var(--r-knob);
   font-size: var(--fs-meta); font-weight: var(--w-medium); color: var(--muted); white-space: nowrap;
-  transition: background var(--snap), color var(--snap), box-shadow var(--snap);
+  transition: background var(--snap), color var(--snap), box-shadow var(--snap), transform var(--snap);
 }
 .ev-all-btn:hover:not(:disabled) { color: var(--ink-2); }
+.ev-all-btn:active:not(:disabled) { transform: scale(0.96); }
 .ev-all-btn[aria-pressed="true"] {
   background: var(--card); color: var(--ink);
   box-shadow: 0 1px 2px color-mix(in oklab, var(--ink) 7%, transparent);
@@ -159,7 +160,25 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 }
 .ev-month-row .evbar { max-width: 34px; }
 .evbar.is-zero { height: 2px; min-height: 2px; background: color-mix(in oklab, var(--ink) 8%, transparent); border-radius: 2px; }
-.evbar i { display: block; width: 100%; min-height: 0; background: var(--accent); opacity: 0.88; border-radius: 2px 2px 0 0; }
+.evbar i {
+  display: block; width: 100%; min-height: 0; background: var(--accent); opacity: 0.88; border-radius: 2px 2px 0 0;
+  transform-origin: bottom; animation: ss-bar-up 440ms var(--ss-arrive) both;
+  transition: opacity var(--snap);
+}
+.evday:nth-child(2) .evbar i { animation-delay: 14ms; }
+.evday:nth-child(3) .evbar i { animation-delay: 28ms; }
+.evday:nth-child(4) .evbar i { animation-delay: 42ms; }
+.evday:nth-child(5) .evbar i { animation-delay: 56ms; }
+.evday:nth-child(6) .evbar i { animation-delay: 70ms; }
+.evday:nth-child(7) .evbar i { animation-delay: 84ms; }
+.evday:nth-child(8) .evbar i { animation-delay: 98ms; }
+.evday:nth-child(9) .evbar i { animation-delay: 112ms; }
+.evday:nth-child(10) .evbar i { animation-delay: 126ms; }
+.evday:nth-child(11) .evbar i { animation-delay: 140ms; }
+.evday:nth-child(12) .evbar i { animation-delay: 154ms; }
+.evday:nth-child(13) .evbar i { animation-delay: 168ms; }
+.evday:nth-child(14) .evbar i { animation-delay: 182ms; }
+.evday:nth-child(15) .evbar i { animation-delay: 196ms; }
 .evday.is-live:hover .evbar i, .evday.is-on .evbar i { opacity: 1; }
 .evday-num { font-size: var(--fs-micro); line-height: 1.1; font-weight: var(--w-medium); color: var(--muted); flex: 0 0 auto; }
 .evday.is-live .evday-num { color: var(--ink-2); }
@@ -293,6 +312,8 @@ body.is-mx-full { overflow: hidden; }
 .mx-back:hover { background: var(--hover); color: var(--ink); }
 .mx-back:active { transform: scale(0.985); transition-duration: 120ms; }
 .mx-back[hidden] { display: none; }
+.mx-back:not([hidden]) { animation: ss-mxback-in 220ms var(--ss-arrive) both; }
+@keyframes ss-mxback-in { from { opacity: 0.01; transform: translateX(-6px); } to { opacity: 1; transform: none; } }
 
 /* ------------------------------------------------------------------ 聚类矩阵 (neutral heat)
    Three panes share one row grid: the scene labels, a horizontally scrollable pane of columns,

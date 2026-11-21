@@ -47,7 +47,7 @@
   padding: 13px 15px; border-radius: var(--r-well); background: var(--well); overflow: hidden;
   border: 1px solid color-mix(in oklab, var(--ink) 6%, transparent);
   min-width: 0; backface-visibility: hidden; -webkit-backface-visibility: hidden;
-  transition: transform 420ms cubic-bezier(0.16, 1, 0.3, 1), opacity 220ms ease, background var(--snap), box-shadow var(--snap);
+  transition: transform 480ms var(--ss-travel), opacity 220ms ease, background var(--snap), box-shadow var(--snap);
 }
 .bn-fcard.is-focus .bn-ffront { background: color-mix(in oklab, var(--accent) 8%, var(--well)); }
 .bn-fcard:hover .bn-ffront { background: var(--hover); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ink) 8%, transparent); }
@@ -73,7 +73,7 @@
 .bn-ffront-main { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; min-width: 0; }
 .bn-fviz { flex: none; transition: transform var(--snap), opacity var(--snap); opacity: 0.92; }
 .bn-fcard:hover .bn-fviz { opacity: 1; transform: translateY(-1px); }
-.bn-fviz-spark { width: 112px; height: 40px; display: block; overflow: visible; }
+.bn-fviz-spark { width: 112px; height: 40px; display: block; overflow: visible; animation: ss-clip-x 600ms var(--ss-travel) backwards; }
 .bn-fv-area { fill: color-mix(in oklab, var(--loc-ulq) 14%, transparent); }
 .bn-fv-line {
   fill: none; stroke: var(--loc-ulq); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
@@ -82,15 +82,19 @@
 .bn-fv-dot {
   fill: var(--loc-ulq); stroke: var(--well); stroke-width: 1.4;
   filter: drop-shadow(0 0 3px color-mix(in oklab, var(--loc-ulq) 55%, transparent));
+  animation: bn-dot-in 240ms var(--ss-arrive) 420ms backwards;
 }
 .bn-fviz-dots {
   display: grid; grid-template-columns: repeat(10, 7px); grid-template-rows: repeat(3, 7px); gap: 3px;
   padding-bottom: 3px;
 }
-.bn-fviz-dots i { display: block; width: 7px; height: 7px; border-radius: 2px; opacity: 0.88; }
+.bn-fviz-dots i { display: block; width: 7px; height: 7px; border-radius: 2px; opacity: 0.88; animation: bn-wdot-in 260ms var(--ss-arrive) backwards; }
 .bn-fviz-bars { width: 112px; height: 40px; display: block; overflow: visible; }
-.bn-fv-bar { fill: color-mix(in oklab, var(--accent) 34%, var(--well-2)); }
-.bn-fv-bar.is-last { fill: var(--accent); }
+.bn-fv-bar {
+  fill: color-mix(in oklab, var(--accent) 34%, var(--well-2));
+  transform-box: fill-box; transform-origin: bottom; animation: ss-bar-up 420ms var(--ss-arrive) backwards;
+}
+.bn-fv-bar.is-last { fill: var(--accent); animation-delay: 140ms; }
 .bn-fviz-kv { display: grid; gap: 3px; justify-items: end; font-size: var(--fs-meta); color: var(--muted); }
 .bn-fviz-kv > span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .bn-fviz-kv i { width: 6px; height: 6px; border-radius: 50%; background: var(--c); flex: none; }
@@ -192,9 +196,10 @@
 }
 .bn-g-range b { color: var(--ink); font-weight: var(--w-title); }
 .bn-growth-plot { min-width: 0; min-height: 82px; display: flex; align-items: flex-end; }
-.bn-growth-plot svg { width: 100%; height: 84px; display: block; overflow: visible; }
+.bn-growth-plot svg { width: 100%; height: 84px; display: block; overflow: visible; animation: ss-clip-x 680ms var(--ss-travel) 80ms backwards; }
 .bn-g-bar {
   fill: color-mix(in oklab, var(--accent) 26%, var(--well-2)); cursor: pointer;
+  transform-box: fill-box; transform-origin: bottom; animation: ss-bar-up 440ms var(--ss-arrive) backwards;
   transition: fill var(--snap), opacity var(--snap);
 }
 .bn-g-bar:hover, .bn-g-bar.is-on { fill: var(--accent); }
@@ -213,6 +218,9 @@
   filter: drop-shadow(0 0 4px color-mix(in oklab, var(--loc-ulq) 55%, transparent));
 }
 @keyframes bn-pulse-halo { 0%, 100% { opacity: 0.45; } 50% { opacity: 0.95; } }
+@keyframes bn-dot-in { from { opacity: 0; scale: 0.45; } }
+@keyframes bn-ring-draw { from { stroke-dasharray: 0 100; } }
+@keyframes bn-wdot-in { from { opacity: 0; scale: 0.55; } }
 
 /* Right Column: Apple-Calendar Dynamic Inflow Card ⇄ 3D Flip Day Detail */
 .bn-cal-stage {
@@ -387,7 +395,8 @@
 .bn-ring-arc {
   transform: rotate(-90deg); transform-origin: center; stroke-linecap: butt;
   outline: none;
-  transition: stroke-width 200ms cubic-bezier(0.16, 1, 0.3, 1), opacity 200ms cubic-bezier(0.16, 1, 0.3, 1), filter 200ms;
+  animation: bn-ring-draw 560ms var(--ss-arrive) calc(var(--ri, 0) * 55ms) backwards;
+  transition: stroke-width 200ms var(--ss-arrive), opacity 200ms var(--ss-ui), filter 200ms;
 }
 .bn-ring-arc[role="button"] { cursor: pointer; }
 .bn-ring-arc:focus, .bn-ring-arc:focus-visible { outline: none; }
@@ -416,9 +425,10 @@
   display: grid; gap: 2px; padding: 7px 9px; border-radius: var(--r-chip);
   background: transparent; border: 1px solid color-mix(in oklab, var(--ink) 6%, transparent);
   text-align: left; cursor: pointer; min-width: 0;
-  transition: background var(--snap), border-color var(--snap), opacity var(--snap);
+  transition: background var(--snap), border-color var(--snap), opacity var(--snap), transform var(--snap);
 }
 .bn-qitem:hover { background: color-mix(in oklab, var(--well) 70%, transparent); }
+.bn-qitem:active { transform: scale(0.985); }
 .bn-qitem[aria-pressed="true"] {
   background: color-mix(in oklab, var(--c, var(--accent)) 8%, transparent);
   border-color: var(--c, var(--accent));
@@ -463,9 +473,11 @@
 .bn-wdot {
   aspect-ratio: 1; width: 100%; border-radius: 3px; background: var(--c);
   padding: 0; border: 0; cursor: pointer;
+  animation: bn-wdot-in 280ms var(--ss-arrive) calc(var(--wi, 0) * 6ms) backwards;
   transition: opacity var(--snap), transform var(--snap);
 }
 .bn-wdot:hover { transform: scale(1.14); }
+.bn-wdot:active { transform: scale(0.92); }
 .bn-turn-waffle.has-focus .bn-wdot:not([aria-pressed="true"]) { opacity: 0.2; }
 .bn-turn-list { display: grid; gap: 4px; font-variant-numeric: tabular-nums; }
 .bn-turn-list.has-focus .bn-turn-row:not([aria-pressed="true"]) { opacity: 0.46; }
@@ -475,9 +487,10 @@
   border-radius: var(--r-chip); background: transparent;
   border: 1px solid color-mix(in oklab, var(--ink) 6%, transparent);
   font-size: var(--fs-meta); color: var(--ink-2); text-align: left; cursor: pointer;
-  transition: background var(--snap), border-color var(--snap), opacity var(--snap);
+  transition: background var(--snap), border-color var(--snap), opacity var(--snap), transform var(--snap);
 }
 .bn-turn-row:hover { background: color-mix(in oklab, var(--well) 70%, transparent); }
+.bn-turn-row:active { transform: scale(0.985); }
 .bn-turn-row[aria-pressed="true"] {
   background: color-mix(in oklab, var(--c) 9%, transparent);
   border-color: var(--c); color: var(--ink); font-weight: var(--w-medium);
@@ -495,9 +508,10 @@
   border-radius: var(--r-chip); background: transparent;
   border: 1px solid transparent; text-align: left; cursor: pointer;
   font-size: var(--fs-meta); color: var(--ink-2);
-  transition: background var(--snap), border-color var(--snap), opacity var(--snap);
+  transition: background var(--snap), border-color var(--snap), opacity var(--snap), transform var(--snap);
 }
 .bn-mrow:hover { background: color-mix(in oklab, var(--well) 70%, transparent); }
+.bn-mrow:active { transform: scale(0.985); }
 .bn-mrow[aria-pressed="true"] {
   background: color-mix(in oklab, var(--c) 9%, transparent);
   border-color: var(--c); color: var(--ink);
@@ -571,9 +585,10 @@
   display: grid; grid-template-columns: 96px minmax(0, 1fr) 48px 54px 42px 46px;
   align-items: center; gap: 8px; min-height: 36px; padding: 4px 8px;
   border-radius: var(--r-chip); cursor: pointer; text-align: left;
-  transition: background var(--snap), box-shadow var(--snap);
+  transition: background var(--snap), box-shadow var(--snap), opacity var(--snap), transform var(--snap);
 }
 .bn-dbell-row:hover { background: color-mix(in oklab, var(--well) 70%, transparent); }
+.bn-dbell-row:active { transform: scale(0.99); }
 .bn-dbell-row[aria-pressed="true"] {
   background: color-mix(in oklab, var(--c, var(--accent)) 9%, transparent);
   box-shadow: inset 0 0 0 1px var(--c, var(--accent));
@@ -589,9 +604,12 @@
   background: linear-gradient(90deg, color-mix(in oklab, var(--ink) 7%, transparent) 1px, transparent 1px) 0 0 / 50% 100%,
     linear-gradient(color-mix(in oklab, var(--ink) 7%, transparent) 0 0) 0 50% / 100% 1px no-repeat;
 }
+@keyframes bn-beam-in { from { scale: 0 1; } }
+@keyframes bn-dbar-y { from { scale: 1 0; } }
 .bn-dbell-beam {
-  position: absolute; top: 50%; height: 2.5px; transform: translateY(-50%);
+  position: absolute; top: 50%; height: 2.5px; transform: translateY(-50%); transform-origin: left;
   background: color-mix(in oklab, var(--c) 70%, transparent); border-radius: 2px;
+  animation: bn-beam-in 380ms var(--ss-arrive) 60ms backwards;
 }
 .bn-dbell-pdot {
   position: absolute; top: 50%; width: 8px; height: 8px; transform: translate(-50%, -50%);
@@ -600,6 +618,7 @@
 .bn-dbell-bdot {
   position: absolute; top: 50%; width: 10px; height: 10px; transform: translate(-50%, -50%);
   border-radius: 50%; background: var(--c); box-shadow: 0 0 0 2px var(--card);
+  animation: bn-dot-in 240ms var(--ss-arrive) 180ms backwards;
 }
 .bn-dbell-val { text-align: right; font-size: var(--fs-meta); font-weight: var(--w-medium); color: var(--ink); }
 .bn-dbell-lift { text-align: right; font-size: var(--fs-micro); color: var(--muted); }
@@ -611,6 +630,7 @@
 .bn-rcum-stage { position: relative; padding-top: 4px; }
 .bn-rcum-svg {
   position: absolute; left: 0; right: 0; top: 22px; height: 112px; width: 100%; pointer-events: none;
+  animation: ss-clip-x 600ms var(--ss-travel) 100ms backwards;
 }
 .bn-rcum-line { fill: none; stroke: var(--loc-ulq); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
 .bn-rcum-cols { position: relative; z-index: 1; display: grid; gap: 8px; align-items: end; }
@@ -658,8 +678,12 @@
 }
 .bn-vcol-b, .bn-vcol-p {
   width: 12px; min-height: 3px; border-radius: 3px 3px 1px 1px;
-  transition: height 320ms var(--ease-out);
+  transform-origin: bottom; animation: ss-bar-up 420ms var(--ss-arrive) backwards;
+  transition: height 320ms var(--ss-arrive);
 }
+.bn-vcol:nth-child(2) :is(.bn-vcol-b, .bn-vcol-p) { animation-delay: 45ms; }
+.bn-vcol:nth-child(3) :is(.bn-vcol-b, .bn-vcol-p) { animation-delay: 90ms; }
+.bn-vcol:nth-child(4) :is(.bn-vcol-b, .bn-vcol-p) { animation-delay: 135ms; }
 .bn-vcol-p { background: var(--t3); opacity: 0.65; }
 .bn-vcol-dp { font-size: 10px; padding: 1px 5px; border-radius: 4px; background: color-mix(in oklab, var(--ink) 5%, transparent); color: var(--ink-2); }
 .bn-vcol-dp.is-warn { background: color-mix(in oklab, var(--sev-1) 14%, transparent); color: var(--sev-1); font-weight: var(--w-medium); }
@@ -691,6 +715,7 @@
 .bn-day-svg {
   position: absolute; left: 36px; right: 6px; top: 8px; bottom: 4px;
   width: calc(100% - 42px); height: calc(100% - 12px); pointer-events: none;
+  animation: ss-clip-x 660ms var(--ss-travel) backwards;
 }
 .bn-day-grid { stroke: color-mix(in oklab, var(--ink) 6%, transparent); stroke-width: 1; stroke-dasharray: 2 3; }
 .bn-day-area { fill: color-mix(in oklab, var(--ink) 7%, transparent); }
@@ -704,7 +729,9 @@
 .bn-day-col[aria-pressed="true"] { background: color-mix(in oklab, var(--accent) 12%, transparent); }
 .bn-day-b {
   width: 6px; max-width: 100%; min-height: 2px; border-radius: 2px 2px 0 0;
-  background: var(--accent); opacity: 0.9; transition: height 340ms var(--ease-out);
+  background: var(--accent); opacity: 0.9; transform-origin: bottom;
+  animation: ss-bar-up 420ms var(--ss-arrive) backwards;
+  transition: height 340ms var(--ss-arrive);
 }
 .bn-day-col.is-warn .bn-day-b { background: var(--sev-1); }
 .bn-day-ticks {
@@ -730,12 +757,17 @@
 .bn-day-dcol { position: relative; height: 100%; cursor: pointer; border-radius: 4px; }
 .bn-day-dcol:hover { background: color-mix(in oklab, var(--well) 65%, transparent); }
 .bn-day-dcol[aria-pressed="true"] { background: color-mix(in oklab, var(--accent) 12%, transparent); }
-.bn-day-dbar { position: absolute; left: 50%; width: 6px; transform: translateX(-50%); border-radius: 2px; background: var(--loc-ulq); }
+.bn-day-dbar {
+  position: absolute; left: 50%; width: 6px; transform: translateX(-50%); border-radius: 2px; background: var(--loc-ulq);
+  transform-origin: bottom; animation: bn-dbar-y 380ms var(--ss-arrive) 120ms backwards;
+}
+.bn-day-dbar[style*="top:50%"] { transform-origin: top; }
 .bn-day-dbar.is-warn { background: var(--sev-1); }
 
 .bn-dist-stage {
   min-height: 336px; display: flex; flex-direction: column; justify-content: center;
 }
+.bn-dist-stage > * { animation: ss-fade-rise 260ms var(--ss-arrive) backwards; }
 .bn-dist-stage.is-scroll { justify-content: flex-start; }
 
 /* Dual comparison + zero-centered diverging bias rows for high-cardinality dims (stage, pattern) */
@@ -766,9 +798,12 @@
 }
 .bn-hs-bars { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; min-width: 0; }
 .bn-hs-pair { display: grid; gap: 3px; min-width: 0; }
-.bn-hs-b, .bn-hs-p { display: block; height: 5px; border-radius: 99px; transition: width 320ms var(--ease-out); }
+.bn-hs-b, .bn-hs-p {
+  display: block; height: 5px; border-radius: 99px; transform-origin: left;
+  animation: grow-x 380ms var(--ss-arrive) backwards; transition: width 320ms var(--ss-arrive);
+}
 .bn-hs-b { background: var(--accent); min-width: 2px; }
-.bn-hs-p { background: var(--t3); opacity: 0.72; min-width: 2px; }
+.bn-hs-p { background: var(--t3); opacity: 0.72; min-width: 2px; animation-delay: 50ms; }
 .bn-hs-pct { display: inline-flex; gap: 5px; font-size: var(--fs-micro); white-space: nowrap; }
 .bn-hs-pct b { color: var(--ink); font-weight: var(--w-medium); }
 .bn-hs-pct small { color: var(--muted); }
@@ -778,7 +813,11 @@
   background: color-mix(in oklab, var(--ink) 6%, transparent); overflow: hidden;
 }
 .bn-hs-zero { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--t3); }
-.bn-hs-dfill { position: absolute; top: 2px; bottom: 2px; border-radius: 2px; background: var(--accent); }
+.bn-hs-dfill {
+  position: absolute; top: 2px; bottom: 2px; border-radius: 2px; background: var(--accent);
+  transform-origin: left; animation: grow-x 380ms var(--ss-arrive) 80ms backwards;
+}
+.bn-hs-dfill[style*="right:50%"] { transform-origin: right; }
 .bn-hs-dfill.is-warn { background: var(--sev-1); }
 .bn-hs-dfill.is-ok, .bn-hs-dfill.is-pos { background: var(--loc-ulq); }
 .bn-hs-dfill.is-neg { background: var(--sev-2); }

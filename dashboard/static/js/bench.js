@@ -237,7 +237,7 @@ function svgDonutHTML(items, { size = 148, rOut = 64, rIn = 40, centerVal = "", 
   const gap = nonZero.length > 1 ? 0.9 : 0;
   let offset = 0;
   const arcs = nonZero
-    .map((x) => {
+    .map((x, ai) => {
       const share = (Number(x.value) / total) * 100;
       const dash = nonZero.length > 1 ? Math.max(0.8, share - gap) : 100;
       const at = offset;
@@ -246,7 +246,7 @@ function svgDonutHTML(items, { size = 148, rOut = 64, rIn = 40, centerVal = "", 
       const interactiveAttrs = x.attr
         ? `${x.attr} tabindex="0" role="button" aria-pressed="${Boolean(x.active)}" data-ring-val="${esc(x.centerVal ?? "")}" data-ring-sub="${esc(x.centerSub ?? "")}" data-ring-color="${esc(x.color)}"`
         : "";
-      return `<circle class="${cls}" cx="${cx}" cy="${cy}" r="${r.toFixed(2)}" pathLength="100" style="--c:${x.color};stroke:${x.color};stroke-dasharray:${dash.toFixed(2)} ${(100 - dash).toFixed(2)};stroke-dashoffset:${(-at).toFixed(2)}" ${interactiveAttrs} data-tip="${esc(x.tip || "")}"/>`;
+      return `<circle class="${cls}" cx="${cx}" cy="${cy}" r="${r.toFixed(2)}" pathLength="100" style="--c:${x.color};--ri:${ai};stroke:${x.color};stroke-dasharray:${dash.toFixed(2)} ${(100 - dash).toFixed(2)};stroke-dashoffset:${(-at).toFixed(2)}" ${interactiveAttrs} data-tip="${esc(x.tip || "")}"/>`;
     })
     .join("");
 
@@ -1589,7 +1589,7 @@ export async function render(root, ctx) {
         const tKey = isSingle ? "single" : "multi";
         const c = isSingle ? "var(--accent)" : "var(--loc-ulq)";
         const tip = isSingle ? singleTip : multiTip;
-        return `<button type="button" class="bn-wdot" data-fturn="${tKey}" aria-pressed="${S.f.turn === tKey}" data-tip="${esc(tip)}" style="--c:${c}" aria-label="${isSingle ? "单轮" : "多轮"}"></button>`;
+        return `<button type="button" class="bn-wdot" data-fturn="${tKey}" aria-pressed="${S.f.turn === tKey}" data-tip="${esc(tip)}" style="--c:${c};--wi:${idx}" aria-label="${isSingle ? "单轮" : "多轮"}"></button>`;
       }).join("")}
     </div>`;
 

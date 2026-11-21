@@ -286,9 +286,22 @@ html[data-view="samples"] main, html[data-view="forecast"] main { max-width: non
 .view { display: none; }
 /* A view settles into place instead of fading up from the page background, so switching pages
    (e.g. from the cluster matrix into 具体数据) never flashes pale. */
-.view.is-active { display: block; animation: view-in 320ms cubic-bezier(0.16, 1, 0.3, 1); }
-@keyframes view-in { from { transform: translateY(6px); } }
+.view.is-active { display: block; animation: view-in 260ms var(--ss-arrive); }
+@keyframes view-in { from { opacity: 0.01; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+@keyframes ss-card-in {
+  0% { opacity: 0.01; transform: translateY(10px); }
+  38% { opacity: 1; }
+  100% { opacity: 1; transform: none; }
+}
+.view.is-active:not(.is-refresh) .bento > .card {
+  animation: ss-card-in 460ms var(--ss-arrive) both;
+}
+.view.is-active:not(.is-refresh) .bento > .card:nth-child(2) { animation-delay: 50ms; }
+.view.is-active:not(.is-refresh) .bento > .card:nth-child(3) { animation-delay: 100ms; }
+.view.is-active:not(.is-refresh) .bento > .card:nth-child(4) { animation-delay: 150ms; }
+.view.is-active:not(.is-refresh) .bento > .card:nth-child(5) { animation-delay: 200ms; }
+.view.is-active:not(.is-refresh) .bento > .card:nth-child(n+6) { animation-delay: 250ms; }
 
 /* ------------------------------------------------------------------ bento */
 .bento { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: var(--gap); }
@@ -344,7 +357,7 @@ html[data-view="samples"] main, html[data-view="forecast"] main { max-width: non
 }
 .tip {
   position: fixed; z-index: var(--z-tip); pointer-events: none; width: max-content; max-width: calc(100vw - 16px);
-  opacity: 0; transform: translateY(3px); transition: opacity var(--snap), transform var(--snap);
+  opacity: 0; transform: translateY(4px) scale(0.985); transition: opacity 140ms var(--ss-ui), transform 180ms var(--ss-arrive);
 }
 .tip.is-on { opacity: 1; transform: none; }
 .t-head, .kl-tip-head {

@@ -1132,9 +1132,9 @@ export async function render(root, ctx) {
         const out = fromEl.animate(
           [
             { transform: "perspective(2000px) rotateY(0deg) scale(1)", opacity: 1 },
-            { transform: `perspective(2000px) rotateY(${-8 * sign}deg) scale(0.985)`, opacity: 0 },
+            { transform: `perspective(2000px) rotateY(${-6 * sign}deg) scale(0.988)`, opacity: 0 },
           ],
-          { duration: 150, easing: "cubic-bezier(0.4, 0, 1, 1)", fill: "forwards" },
+          { duration: 180, easing: "cubic-bezier(0.45, 0, 0.1, 1)", fill: "forwards" },
         );
         await out.finished.catch(() => {});
         out.cancel();
@@ -1144,10 +1144,10 @@ export async function render(root, ctx) {
         if (nextFace === "ab") root._cmpAbApi?.fit?.();
         const enter = toEl.animate(
           [
-            { transform: `perspective(2000px) rotateY(${8 * sign}deg) scale(0.985)`, opacity: 0 },
+            { transform: `perspective(2000px) rotateY(${6 * sign}deg) scale(0.988)`, opacity: 0 },
             { transform: "perspective(2000px) rotateY(0deg) scale(1)", opacity: 1 },
           ],
-          { duration: 280, easing: "cubic-bezier(0.22, 1, 0.36, 1)", fill: "forwards" },
+          { duration: 320, easing: "cubic-bezier(0.25, 0.8, 0.25, 1)", fill: "forwards" },
         );
         await enter.finished.catch(() => {});
         enter.cancel();

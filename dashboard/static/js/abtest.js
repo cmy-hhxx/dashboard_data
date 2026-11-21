@@ -733,17 +733,26 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
   function rankPanel(title, rows, tone, max, total, rnd) {
     const body = rows.length
       ? rows.map((row) => {
-          const yFrom = (17 - (Math.min(max, Math.max(0, row.before)) / max) * 14).toFixed(1);
-          const yTo = (17 - (Math.min(max, Math.max(0, row.after)) / max) * 14).toFixed(1);
-          return `<div class="ab-rankrow ${tone}" title="${esc(`${row.leaf.name || row.leaf.id} · 前 ${fmt(row.before)} → 后 ${fmt(row.after)} · 线上 ${row.online == null ? DASH : fmt(row.online)}`)}">
+          const scaleRef = Math.max(1, Math.sqrt(Math.max(row.before, row.after, 1) * max));
+          const yFor = (v) => (20.5 - Math.min(1, Math.max(0, v / scaleRef)) * 17).toFixed(1);
+          const yFrom = yFor(row.before);
+          const yTo = yFor(row.after);
+          const curveD = `M4,${yFrom} C19,${yFrom} 29,${yTo} 44,${yTo}`;
+          const areaD = `${curveD} L44,23 L4,23 Z`;
+          return `<div class="ab-rankrow ${tone}" title="${esc(`${row.leaf.name || row.leaf.id} · 前 ${fmt(row.before)} → 后 ${fmt(row.after)} · 净 ${signed(row.d)} · 线上 ${row.online == null ? DASH : fmt(row.online)}`)}">
           <span class="ab-rankname">${esc(row.leaf.name || row.leaf.id)}</span>
-          <svg class="ab-slope" viewBox="0 0 64 20" aria-hidden="true">
-            <path class="ab-slope-area" d="M4,${yFrom} L60,${yTo} L60,19 L4,19 Z"/>
-            <line class="ab-slope-line" x1="4" y1="${yFrom}" x2="60" y2="${yTo}"/>
+          <svg class="ab-slope" viewBox="0 0 48 24" aria-hidden="true">
+            <path class="ab-slope-area" d="${areaD}"/>
+            <path class="ab-slope-line" d="${curveD}"/>
             <circle class="ab-slope-from" cx="4" cy="${yFrom}" r="2.2"/>
-            <circle class="ab-slope-to" cx="60" cy="${yTo}" r="3"/>
+            <circle class="ab-slope-to" cx="44" cy="${yTo}" r="3"/>
           </svg>
-          <b class="num">${fmt(row.before)} → ${fmt(row.after)}</b>
+          <span class="ab-rnums num">
+            <span class="ab-rfrom">${fmt(row.before)}</span>
+            <span class="ab-rarr" aria-hidden="true">→</span>
+            <span class="ab-rto">${fmt(row.after)}</span>
+          </span>
+          <b class="ab-rdelta num">${signed(row.d)}</b>
         </div>`;
         }).join("")
       : `<p class="ab-rankempty">${sideReady(rnd, "after") || sideReady(rnd, "online") ? "暂无变化" : "改版后暂无结果"}</p>`;
