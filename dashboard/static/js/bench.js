@@ -3,7 +3,7 @@ import {
   runCounters, bindTips, segmented, getJSON, announce, copyText, flashCopy,
 } from "./core.js";
 import { sunburst } from "./sunburst.js";
-import { renderContent } from "./render.js";
+import { createSampleDetail, detailPaneHTML } from "./sample_detail.js";
 
 const SEVS_ALL = ["GOLD", "P0", "P1", "P2", "P3", "P4"];
 const SEV_RANK = Object.fromEntries(["P0", "P1", "P2", "P3", "P4", "GOLD", "none"].map((k, i) => [k, i]));
@@ -31,13 +31,6 @@ const MECH_SHORT = {
   M1: "未执行", M2: "目标错配", M3: "执行失败", M4: "结果失效",
   M5: "加工计算", M6: "无据断言", M7: "交付不符",
 };
-const KIND_LABEL = {
-  user_question: "用户提问",
-  llm_turn: "模型思考与调度",
-  tool_call: "工具调用",
-  tool_result: "工具返回",
-  final_answer: "最终回答",
-};
 const PATH_SRC_LABEL = {
   join: "聚类对齐",
   component: "组件映射",
@@ -61,7 +54,6 @@ const ROUND_LABELS = {
   "4-10": "4–10 轮",
   "11+": "11 轮以上",
 };
-const POOL_ROLE_LABEL = { user: "用户", assistant: "助手", tool: "工具", system: "系统" };
 const MECH_ORDER = ["M1", "M2", "M3", "M4", "M5", "M6", "M7"];
 const MECH_PALETTE = [
   "var(--sev-1)", "var(--sev-2)", "var(--accent)",
@@ -858,8 +850,6 @@ export async function render(root, ctx) {
     caseCache: new Map(),
     tierCasesCache: new Map(),
     sunburstState: { focus: "b", open: null },
-    stepFilter: "all",
-    showFullQ: false,
     calMonth: "",
     calMode: "pool",
     calModalDate: "",
@@ -908,6 +898,7 @@ export async function render(root, ctx) {
   let focusSearchAfterRender = false;
   let searchPos = null;
   let sheetBackdrop = null;
+  let sheetDetail = null;
 
   function syncSunburstFromFilter() {
     if (S.f.l3 && S.f.l1 && S.f.l2 && S.f.l1 !== "NA" && S.f.l2 !== "NA") {
@@ -937,8 +928,6 @@ export async function render(root, ctx) {
 
   const openTrace = async (traceId) => {
     S.trace = traceId;
-    S.stepFilter = "all";
-    S.showFullQ = false;
     syncUrl({ trace: traceId || null });
     await paintSheet();
     $$(".bn-lrow[aria-current], .bn-ftile[aria-current]", root).forEach((el) => el.removeAttribute("aria-current"));
@@ -2338,61 +2327,104 @@ export async function render(root, ctx) {
     </section>`;
   }
 
-  /* ---- Slide-over Trace Scene Workbench ---- */
-  function foldLong(html, rawText, threshold = 900) {
-    const s = String(rawText || "");
-    if (s.length <= threshold) return html;
-    const prev = s.replace(/\s+/g, " ").trim().slice(0, 140);
-    return `<details class="bn-fold">
-      <summary>
-        <span class="bn-fold-prev">${esc(prev)}${s.length > 140 ? "…" : ""}</span>
-        <span class="bn-fold-tag">展开 ${compact(s.length)} 字</span>
-      </summary>
-      <div class="bn-fold-body">${html}</div>
-    </details>`;
-  }
+  /* ---- Slide-over Sample Workbench ---- */
+  function benchCaseToSampleDetail(full) {
+    const st = full.stats || {};
+    const mt = full.meta || {};
+    const rawMsgs = Array.isArray(full.messages) ? full.messages : [];
+    const messages = [];
+    const toDur = (m) => (m?.dur != null ? m.dur : m?.latency != null ? Math.round(Number(m.latency) * 1000) : undefined);
 
-  function renderStepBody(m) {
-    const t = m.type;
-    if (t === "llm_turn" && Array.isArray(m.output)) {
-      return m.output.map((o) => {
-        const parts = [];
-        if (o.reasoning_content) {
-          parts.push(`<details class="bn-think"><summary>思考过程 (${fmt(String(o.reasoning_content).length)} 字)</summary><div class="bn-fold-body">${renderContent(String(o.reasoning_content), "text")}</div></details>`);
-        }
-        if (o.content) {
-          const raw = String(o.content);
-          parts.push(`<div class="bn-msg-body">${foldLong(renderContent(raw, "md"), raw, 1800)}</div>`);
-        }
-        (o.tool_calls || []).forEach((tc) => {
-          const fn = tc?.function || {};
-          const callStr = `${fn.name || "tool"}(${typeof fn.arguments === "string" ? fn.arguments : JSON.stringify(fn.arguments || {})})`;
-          parts.push(`<div class="bn-msg-body">${foldLong(`<pre>${esc(callStr)}</pre>`, callStr, 700)}</div>`);
+    rawMsgs.forEach((m) => {
+      if (!m) return;
+      const t = m.type;
+      const dur = toDur(m);
+      if (Array.isArray(m.blocks)) {
+        const k = m.k || (t === "user_question" ? "user" : t === "final_answer" ? "answer" : t === "tool_call" ? "call" : t === "tool_result" ? "result" : "think");
+        messages.push({ k, name: m.name || "", dur, blocks: m.blocks, ev: m.ev || [] });
+        return;
+      }
+      if (t === "llm_turn" && Array.isArray(m.output)) {
+        const blocks = [];
+        m.output.forEach((o) => {
+          if (!o) return;
+          if (o.reasoning_content) blocks.push({ l: "think", f: "text", x: [String(o.reasoning_content)] });
+          if (o.content) blocks.push({ f: "md", x: [String(o.content)] });
+          (o.tool_calls || []).forEach((tc) => {
+            const fn = tc?.function || {};
+            const args = typeof fn.arguments === "string" ? fn.arguments : JSON.stringify(fn.arguments || {}, null, 2);
+            blocks.push({ l: `call:${fn.name || "tool"}`, f: "json", x: [args] });
+          });
         });
-        return parts.join("");
-      }).join("");
+        if (blocks.length) messages.push({ k: "think", name: m.name || "", dur, blocks, ev: [] });
+        return;
+      }
+      if (t === "tool_call") {
+        const txt = typeof m.input === "string" ? m.input : JSON.stringify(m.input || {}, null, 2);
+        messages.push({ k: "call", name: m.name || "", dur, blocks: [{ f: "json", x: [txt] }], ev: [] });
+        return;
+      }
+      if (t === "tool_result") {
+        const rawOut = m.output ?? m.content ?? "";
+        const txt = typeof rawOut === "string" ? rawOut : JSON.stringify(rawOut, null, 2);
+        const f = txt.trim().startsWith("{") || txt.trim().startsWith("[") ? "json" : "md";
+        messages.push({ k: "result", name: m.name || "", dur, blocks: [{ f, x: [txt] }], ev: [] });
+        return;
+      }
+      const k = t === "user_question" ? "user" : t === "final_answer" ? "answer" : (m.k || "other");
+      const content = typeof m.content === "string" ? m.content : JSON.stringify(m.content || "", null, 2);
+      if (content || k === "user") {
+        messages.push({ k, name: m.name || "", dur, blocks: [{ f: k === "user" ? "text" : "md", x: [content] }], ev: [] });
+      }
+    });
+
+    if (!messages.some((m) => m.k === "user") && (full.question_full || full.question)) {
+      messages.unshift({ k: "user", blocks: [{ f: "text", x: [String(full.question_full || full.question)] }], ev: [] });
     }
-    if (t === "tool_call") {
-      const txt = typeof m.input === "string" ? m.input : JSON.stringify(m.input || {}, null, 2);
-      return `<div class="bn-msg-body">${foldLong(`<pre>${esc(txt)}</pre>`, txt, 700)}</div>`;
-    }
-    if (t === "tool_result") {
-      const rawOut = m.output ?? m.content ?? "";
-      const txt = typeof rawOut === "string" ? rawOut : JSON.stringify(rawOut, null, 2);
-      const mode = txt.trim().startsWith("{") || txt.trim().startsWith("[") ? "json" : "md";
-      return `<div class="bn-msg-body">${foldLong(renderContent(txt, mode), txt, 800)}</div>`;
-    }
-    if (t === "final_answer") {
-      return `<div class="bn-msg-body is-final">${renderContent(String(m.content || ""), "md")}</div>`;
-    }
-    if (Array.isArray(m.blocks)) {
-      return m.blocks.map((b) => {
-        const raw = (b.x || []).join("");
-        return `<div class="bn-msg-body">${foldLong(renderContent(raw, b.f || "text"), raw, 1200)}</div>`;
-      }).join("");
-    }
-    const content = typeof m.content === "string" ? m.content : JSON.stringify(m.content || "", null, 2);
-    return `<div class="bn-msg-body">${foldLong(renderContent(content, t === "user_question" ? "text" : "md"), content, 1200)}</div>`;
+
+    const totalTok = st.total_tokens || 0;
+    const inTok = st.input_tokens || totalTok || 0;
+    const outTok = mt.output_tokens != null ? mt.output_tokens : Math.max(0, totalTok - inTok);
+    const problems = (full.problems || []).map((p, i) => ({
+      id: i,
+      sev: p.severity || full.severity || "P2",
+      label: p.label || "",
+      fam: p.component_role || "",
+      comp: p.component || "",
+      cl: (p.path || p.l3) ? { path: String(p.path || p.l3) } : null,
+      ev: [],
+    }));
+
+    return {
+      product: data.product,
+      model: full.model || S.model,
+      date: full.day || "",
+      question: full.question_full || full.question || "",
+      ids: { session: full.session_id || "", trace: full.trace_id || "" },
+      meta: {
+        app: mt.app || "",
+        comefrom: mt.comefrom || "",
+        task: mt.task || "",
+        subtask: mt.subtask || "",
+        skill: mt.skill || "",
+        mode: mt.mode || "",
+        tokens_in: inTok,
+        tokens_out: outTok,
+        finish_ms: mt.finish_ms != null ? mt.finish_ms : Math.round((st.latency || 0) * 1000),
+      },
+      input: {
+        traces: [{ trace_id: full.trace_id || "", meta: { trace_id: full.trace_id || "" }, messages }],
+        missing: !messages.length,
+      },
+      attribution: {
+        summary: "",
+        turns: [{ trace_id: full.trace_id || "", problems: problems.map((p) => p.id), summary: "" }],
+        problems,
+        session_problems: [],
+      },
+      compact: { turns: [] },
+      evidence: [],
+    };
   }
 
   let sheetReqId = 0;
@@ -2404,8 +2436,14 @@ export async function render(root, ctx) {
       sheetBackdrop.innerHTML = `<aside class="bn-sheet" id="bn-sheet" role="dialog" aria-label="样本执行现场"></aside>`;
       sheetEl = $("#bn-sheet", sheetBackdrop);
     }
+    const disposeSheet = () => {
+      if (!sheetDetail) return;
+      sheetDetail.destroy?.();
+      sheetDetail = null;
+    };
     if (!S.trace) {
       sheetReqId += 1;
+      disposeSheet();
       sheetBackdrop.classList.remove("is-open");
       sheetBackdrop.setAttribute("aria-hidden", "true");
       return;
@@ -2421,6 +2459,7 @@ export async function render(root, ctx) {
     const cacheKey = `${S.model}|${S.trace}`;
     const isCached = S.caseCache.has(cacheKey);
     if (!isCached) {
+      disposeSheet();
       const sc = summaryCase || {};
       const sb = sc.bench || {};
       const sTone = sevTone(sc.severity || "GOLD");
@@ -2434,9 +2473,15 @@ export async function render(root, ctx) {
             <button type="button" class="bn-btn bn-btn-icon" id="bn-sh-close" title="关闭">✕</button>
           </div>
         </div>
-        <div class="bn-sh-scroll">
-          ${sc.question ? `<div class="bn-sh-qbox"><div class="bn-sh-q is-clamped">${esc(sc.question)}</div></div>` : ""}
-          <div class="bn-sh-skel"><span class="skel skel-title"></span><span class="skel skel-line"></span><span class="skel skel-line"></span></div>
+        <div class="bench bn-sheet-bench">
+          <div class="pane bn-sheet-pane">
+            <div class="pane-scroll">
+              <div class="sample-head">
+                ${sc.question ? `<div class="headline"><h2>${esc(sc.question)}</h2></div>` : ""}
+                <div class="bn-sh-skel"><span class="skel skel-title"></span><span class="skel skel-line"></span><span class="skel skel-line"></span></div>
+              </div>
+            </div>
+          </div>
         </div>`;
       const quickClose = $("#bn-sh-close", sheetEl);
       if (quickClose) quickClose.onclick = () => openTrace("");
@@ -2456,31 +2501,16 @@ export async function render(root, ctx) {
 
     const full = await loadFullCase(S.model, S.trace, summaryCase);
     if (reqId !== sheetReqId || !S.trace) return;
+    disposeSheet();
     if (!full) {
-      sheetEl.innerHTML = `<div class="bn-sh-head"><div class="bn-sh-id"><code>${esc(S.trace)}</code></div><div class="bn-sh-acts"><button type="button" class="bn-btn" id="bn-sh-close">关闭 ✕</button></div></div><div class="bn-sh-scroll"><div class="bn-empty">未找到对应样本记录</div></div>`;
+      sheetEl.innerHTML = `<div class="bn-sh-head"><div class="bn-sh-id"><code>${esc(S.trace)}</code></div><div class="bn-sh-acts"><button type="button" class="bn-btn" id="bn-sh-close">关闭 ✕</button></div></div><div class="bn-empty">未找到对应样本记录</div>`;
       $("#bn-sh-close", sheetEl).onclick = () => openTrace("");
       return;
     }
 
-    const st = full.stats || {};
-    const mt = full.meta || {};
     const b = full.bench || {};
     const c = sevTone(full.severity || "GOLD");
     const sampleHref = resolveSampleHref(data.product, full);
-    const msgs = full.messages || [];
-    const poolMsgs = full.message_pool || [];
-    const ansIdx = msgs.findLastIndex ? msgs.findLastIndex((m) => m.type === "final_answer") : -1;
-
-    const shownMsgs = msgs.map((m, i) => ({ m, i })).filter(({ m }) => {
-      if (S.stepFilter === "llm") return m.type === "llm_turn";
-      if (S.stepFilter === "tool") return m.type === "tool_call" || m.type === "tool_result";
-      if (S.stepFilter === "ans") return m.type === "final_answer";
-      return true;
-    });
-
-    const probs = full.problems || [];
-    const sampleProbs = full._sample?.attribution?.problems || [];
-    const sampleEv = full._sample?.evidence || [];
 
     sheetEl.innerHTML = `<div class="bn-sh-head">
         <div class="bn-sh-id">
@@ -2498,141 +2528,19 @@ export async function render(root, ctx) {
           <button type="button" class="bn-btn bn-btn-icon" id="bn-sh-close" title="关闭">✕</button>
         </div>
       </div>
-
-      <div class="bn-sh-scroll">
-        <div class="bn-sh-qbox">
-          <div class="bn-sh-q ${!S.showFullQ && String(full.question || "").length > 220 ? "is-clamped" : ""}">${esc(full.question)}</div>
-          ${(String(full.question || "").length > 220 || (full.question_full && full.question_full !== full.question)) ? `<div class="bn-sh-qfull">
-            <button type="button" class="bn-btn" id="bn-sh-qfull">${S.showFullQ ? "收起完整输入" : "展开完整输入"}</button>
-            ${S.showFullQ && full.question_full && full.question_full !== full.question ? `<pre>${esc(full.question_full)}</pre>` : ""}
-          </div>` : ""}
-          <div class="bn-sh-kvgrid">
-            <span class="bn-sh-kv"><span>traceid</span><code>${esc(full.trace_id)}</code></span>
-            ${full.session_id ? `<span class="bn-sh-kv"><span>session id</span><code>${esc(full.session_id)}</code></span>` : ""}
-            <span class="bn-sh-kv"><span>时间</span><b>${esc(full.request_time || full.day || "—")}</b></span>
-            <span class="bn-sh-kv"><span>对话形态</span><b>${full.turn === "multi" ? `多轮 第 ${full.turn_index || full.session_round}/${full.session_round} 轮` : "单轮"}</b></span>
-            <span class="bn-sh-kv"><span>文本长度</span><b>${st.total_tokens ? `${fmt(st.total_tokens)} (${fmt(st.input_tokens || 0)} + ${fmt(mt.output_tokens || Math.max(0, (st.total_tokens || 0) - (st.input_tokens || 0)))})` : "未记录"}</b></span>
-            <span class="bn-sh-kv"><span>耗时</span><b>${st.latency || 0}s</b></span>
-            <span class="bn-sh-kv"><span>工具调用</span><b>${st.tool_count || 0} 次</b></span>
-            ${mt.comefrom ? `<span class="bn-sh-kv"><span>产品入口</span><b>${esc(mt.comefrom)}</b></span>` : ""}
-            ${(st.dup_question || 1) >= 2 ? `<span class="bn-sh-kv"><span>同问复现</span><b>×${st.dup_question}</b></span>` : ""}
-          </div>
-        </div>
-
-        <div class="bn-sh-cols">
-          <div class="bn-sh-rail">
-            ${probs.length ? probs.map((p, pi) => {
-              const pc = sevTone(p.severity || full.severity);
-              const sp = sampleProbs[pi] || null;
-              const pCode = p.path || p.l3 || "";
-              const pPathName = [
-                stageLabel(p.l1, stageNames),
-                mechLabel(p.l2, mechNames),
-                patternDisplayName(pCode, "", patNames, stageNames, mechNames),
-              ].filter((x, idx2, arr) => x && arr.indexOf(x) === idx2).join(" › ");
-              return `<div class="bn-prob-card" style="--c:${pc}">
-                <div class="bn-prob-top">
-                  <span class="bn-sev-tag" style="--c:${pc}">${esc(sevLabel(p.severity || full.severity))}</span>
-                  ${pi === 0 ? `<span class="bn-mtag is-path">主问题</span>` : ""}
-                  ${p.path_source ? `<span class="bn-mtag">${esc(PATH_SRC_LABEL[p.path_source] || p.path_source)}</span>` : ""}
-                </div>
-                <div class="bn-prob-lbl">${esc(p.label)}</div>
-                ${pPathName ? `<div class="bn-prob-path" title="${esc(pCode)}">${esc(pPathName)}</div>` : ""}
-                <div class="bn-prob-comp">
-                  ${p.component ? `<span class="bn-mtag">${esc(p.component)}</span>` : ""}
-                  ${p.component_role ? `<span class="bn-mtag">${esc(p.component_role)}</span>` : ""}
-                </div>
-                ${sp?.why ? `<div class="bn-pool-msg" style="margin-top:4px">${esc(sp.why)}</div>` : ""}
-                ${(sp?.ev || []).length ? `<div class="bn-prob-comp">${sp.ev.map((eid) => {
-                  const ev = sampleEv[eid];
-                  return ev?.m != null ? `<button type="button" class="bn-step-pill" data-jumpm="${ev.m}">定位第 ${ev.m + 1} 步</button>` : "";
-                }).join("")}</div>` : ""}
-              </div>`;
-            }).join("") : `<div class="bn-prob-card" style="--c:var(--loc-ulq)">
-              <div class="bn-prob-top"><span class="bn-sev-tag" style="--c:var(--loc-ulq)">goldencase</span></div>
-              <div class="bn-prob-lbl">无问题记录</div>
-            </div>`}
-
-            ${(mt.tool_names || []).length ? `<div class="bn-subwell">
-              <div class="bn-subhead"><strong>涉及工具</strong><span>${mt.tool_names.length}</span></div>
-              <div class="bn-prob-comp">${mt.tool_names.map((t) => `<span class="bn-mtag">${esc(t)}</span>`).join("")}</div>
-            </div>` : ""}
-          </div>
-
-          <div class="bn-sh-main">
-            ${poolMsgs.length ? `<details class="bn-pool-acc">
-              <summary><span>历史多轮对话上下文</span><span class="bn-mtag">${poolMsgs.length} 条记录</span></summary>
-              <div class="bn-pool-list">
-                ${poolMsgs.map((pm) => {
-                  const ptxt = typeof pm.content === "string" ? pm.content : JSON.stringify(pm.content || "");
-                  return `<div class="bn-pool-msg"><span class="bn-pool-role">${esc(POOL_ROLE_LABEL[pm.role] || pm.role || "消息")}</span>${foldLong(`<span>${esc(ptxt)}</span>`, ptxt, 260)}</div>`;
-                }).join("")}
-              </div>
-            </details>` : ""}
-
-            <div class="bn-stepbar">
-              <div class="bn-stepbar-tabs">
-                ${[
-                  ["all", `全部 (${msgs.length})`],
-                  ["llm", "思考与调度"],
-                  ["tool", "工具交互"],
-                  ["ans", "最终回答"],
-                ].map(([k, l]) => `<button type="button" class="bn-step-pill" data-stpf="${k}" aria-pressed="${S.stepFilter === k}">${l}</button>`).join("")}
-              </div>
-              ${ansIdx >= 0 ? `<button type="button" class="bn-step-pill" id="bn-jump-ans">定位最终回答 ↓</button>` : ""}
-            </div>
-
-            <div class="bn-timeline">
-              ${shownMsgs.map(({ m, i }) => {
-                const isAns = m.type === "final_answer";
-                const isUsr = m.type === "user_question";
-                return `<div class="bn-msg ${isAns ? "is-answer" : isUsr ? "is-user" : ""}" id="bn-step-${i}">
-                  <div class="bn-msg-head">
-                    <span class="bn-msg-kind">#${i + 1} · ${esc(KIND_LABEL[m.type] || m.type || "消息")}${m.name ? ` · ${esc(m.name)}` : ""}</span>
-                    <span>${m.latency != null ? `${m.latency}s` : m.dur != null ? `${(m.dur / 1000).toFixed(2)}s` : ""}</span>
-                  </div>
-                  ${renderStepBody(m)}
-                </div>`;
-              }).join("") || '<div class="bn-empty">当前筛选无步骤内容</div>'}
-            </div>
-          </div>
-        </div>
+      <div class="bench bn-sheet-bench">
+        <div class="pane bn-sheet-pane">${detailPaneHTML("bns-", true)}</div>
       </div>`;
 
     $("#bn-sh-close", sheetEl).onclick = () => openTrace("");
     $("#bn-sh-prev", sheetBackdrop).onclick = () => prevCase && openTrace(prevCase.trace_id);
     $("#bn-sh-next", sheetBackdrop).onclick = () => nextCase && openTrace(nextCase.trace_id);
-    const qf = $("#bn-sh-qfull", sheetBackdrop);
-    if (qf) qf.onclick = () => { S.showFullQ = !S.showFullQ; paintSheet(); };
 
     const cpBtn = $("#bn-sh-copyurl", sheetBackdrop);
     cpBtn.onclick = async () => {
       const ok = await copyText(location.href);
       flashCopy(cpBtn, ok, "复制现场链接");
     };
-    const ja = $("#bn-jump-ans", sheetBackdrop);
-    if (ja) {
-      ja.onclick = () => {
-        const el = $(`#bn-step-${ansIdx}`, sheetBackdrop);
-        if (el) {
-          el.scrollIntoView({ behavior: "smooth", block: "start" });
-          el.classList.add("is-hl");
-          setTimeout(() => el.classList.remove("is-hl"), 1200);
-        }
-      };
-    }
-    $$("[data-stpf]", sheetBackdrop).forEach((btn) => btn.addEventListener("click", () => {
-      S.stepFilter = btn.dataset.stpf;
-      paintSheet();
-    }));
-    $$("[data-jumpm]", sheetBackdrop).forEach((btn) => btn.addEventListener("click", () => {
-      const el = $(`#bn-step-${btn.dataset.jumpm}`, sheetBackdrop);
-      if (el) {
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
-        el.classList.add("is-hl");
-        setTimeout(() => el.classList.remove("is-hl"), 1200);
-      }
-    }));
     const sj = $('[data-samplejump="1"]', sheetBackdrop);
     if (sj) {
       sj.addEventListener("click", (e) => {
@@ -2646,6 +2554,49 @@ export async function render(root, ctx) {
           bm: null, bl: null, bt: null, bd: null, bv: null,
         });
       });
+    }
+
+    const detailObj = full._sample || benchCaseToSampleDetail(full);
+    const slug = full.slug || full.trace_id;
+    const sessionObj = {
+      key: slug,
+      sid: full.session_id || detailObj.ids?.session || "",
+      s: slug,
+      m: full.model || S.model,
+      w: full.severity || "none",
+      q: full.question || "",
+      d: full.day || "",
+      rows: [{ s: slug }],
+    };
+    const sheetCtx = {
+      ...ctx,
+      data: ctx.data || { taxonomy },
+      navigate: (patch, opts) => {
+        if (patch && Object.keys(patch).every((k) => k === "trace")) return;
+        openTrace("");
+        ctx.navigate?.(patch, opts);
+      },
+    };
+    const baseProd = ctx.data?.products?.[data.product];
+    const sheetProd = baseProd && Array.isArray(baseProd.models)
+      ? baseProd
+      : { ...(baseProd || {}), models: modelOrder.map((id) => ({ id, label: models[id]?.label || id })) };
+    sheetDetail = createSampleDetail($(".bn-sheet-pane", sheetEl), sheetCtx, {
+      prefix: "bns-",
+      product: data.product,
+      prod: sheetProd,
+      sessions: [sessionObj],
+      seedDetails: { [slug]: detailObj },
+      loadDetail: async () => detailObj,
+      roundQuestion: true,
+    });
+    await sheetDetail.load(sessionObj, {
+      focusSlug: slug,
+      focusTrace: full.trace_id,
+      sev: full.severity,
+    });
+    if (reqId !== sheetReqId || !S.trace) {
+      disposeSheet();
     }
   }
 
@@ -3365,6 +3316,8 @@ export async function render(root, ctx) {
   root._bnCleanup = () => {
     document.removeEventListener("keydown", onKeyDown);
     root._bnMoreDocCleanup?.();
+    sheetDetail?.destroy?.();
+    sheetDetail = null;
     mxResizeObs?.disconnect();
     mxResizeObs = null;
     fieldResizeObs?.disconnect();
