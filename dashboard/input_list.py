@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import re
 import threading
@@ -24,6 +25,9 @@ from keylocks import KeyedLocks
 import build_store as bs
 
 LIST_VERSION = 5
+SLICE_CAP = 500
+SLICE_SCAN_BUDGET = 2500
+SLICE_MAX_FILES = 12
 Q_LIMIT = 200
 # 每行只读开头这几 KB：question / session_id / n_traces 都在 meta 里靠前。
 # AIME 单日输入文件 1.6 GB，整文件读一遍要两分钟；按行读前缀是十几 MB、一秒级。
@@ -39,8 +43,30 @@ RQT_RE = re.compile(rb'"request_time"\s*:\s*"([^"]*)"')
 NTR_RE = re.compile(rb'"n_traces"\s*:\s*(\d+)')
 TID_RE = re.compile(rb'"trace_id"\s*:\s*"([^"]*)"')
 SKILL_RE = re.compile(rb'"skill_name"\s*:\s*"((?:[^"\\]|\\.)*)"')
-TASK_RE = re.compile(rb'"task"\s*:\s*"((?:[^"\\]|\\.)*)"')
+TASK_RE = re.compile(rb'"task(?:_category)?"\s*:\s*"((?:[^"\\]|\\.)*)"')
+SUBTASK_RE = re.compile(rb'"subtask(?:_category)?"\s*:\s*"((?:[^"\\]|\\.)*)"')
+DAY_NAME_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
+DAY_COMPACT_RE = re.compile(r"(?<!\d)(\d{4})(\d{2})(\d{2})(?!\d)")
+CACHE_NAME_RE = re.compile(r"^(?P<prod>[a-z][a-z0-9_]*)-(?P<sp>daily|lost)-(?P<m>.+)-(?P<day>\d{4}-\d{2}-\d{2})\.json$")
 CHUNK = 400
+
+
+def _match_model_family(actual: str | None, query: str | None) -> bool:
+    qm = str(query or "").strip().lower()
+    if not qm or qm == "all":
+        return True
+    am = str(actual or "").strip().lower()
+    return am == qm or am.startswith(qm)
+
+
+def _day_from_filename(name: str) -> str:
+    m = DAY_NAME_RE.search(name)
+    if m:
+        return m.group(1)
+    m2 = DAY_COMPACT_RE.search(name)
+    if m2:
+        return f"{m2.group(1)}-{m2.group(2)}-{m2.group(3)}"
+    return ""
 
 
 class InputLister:
@@ -202,8 +228,9 @@ class InputLister:
 
     def _files_for(self, product: str, day: str, model: str, split: str):
         out = []
+        compact_day = day.replace("-", "")
         for path in self._all_files(product):
-            if day not in path.name:
+            if day not in path.name and (not compact_day or compact_day not in path.name):
                 continue
             rel = path.relative_to(self.datasets).as_posix()
             if bs.split_from_rel(rel) != split:
@@ -250,6 +277,7 @@ class InputLister:
                     out[slug] = {
                         "q": row.get("q") or "", "sid": row.get("sid") or "", "tr": row.get("tr") or 1,
                         "tid": row.get("tid") or "", "cat": row.get("skill") or row.get("task") or "",
+                        "task": row.get("task") or "未接入分类体系", "sub": row.get("sub") or "",
                     }
         except (OSError, ValueError, KeyError):
             out = {}
@@ -504,6 +532,333 @@ class InputLister:
         except OSError:
             return out
         return out
+
+    @staticmethod
+    def _extract_task(raw: bytes) -> tuple[str, str]:
+        tm = TASK_RE.search(raw)
+        task = _json_str(tm.group(1)) if tm else ""
+        sm = SUBTASK_RE.search(raw)
+        sub = _json_str(sm.group(1)) if sm else ""
+        return task or "未接入分类体系", sub
+
+    def slice_inputs(
+        self,
+        product: str,
+        model: str = "",
+        task: str = "",
+        others: set[str] | None = None,
+        cap: int = SLICE_CAP,
+    ) -> dict:
+        """Bounded (<= 500) recent input sample slice for 数据量 drilldown without full scan."""
+        cap = max(1, min(SLICE_CAP, int(cap or SLICE_CAP)))
+        others_set = set(others or ())
+        files = self._all_files(product)
+        paired = self._paired_map(product)
+        index_rows = self._index_rows(product)
+        store = self._open()
+
+        # Group files by (day, split, model) ordered newest-day first, matching `_files_for` ordering within each group.
+        grouped_files: dict[tuple[str, str, str], list[tuple[str, Path]]] = {}
+        for path in files:
+            rel = path.relative_to(self.datasets).as_posix()
+            rm = self._model_of(rel)
+            if not _match_model_family(rm, model):
+                continue
+            sp = bs.split_from_rel(rel)
+            day = _day_from_filename(path.name)
+            grouped_files.setdefault((day, sp, rm), []).append((rel, path))
+
+        ordered_groups = sorted(grouped_files.items(), key=lambda kv: (kv[0][0], kv[0][1], kv[0][2]), reverse=True)
+
+        total_known = 0
+        for (_, _, _), flist in ordered_groups:
+            for rel, _ in flist:
+                idx = store.get_file(rel) or {}
+                offsets = idx.get("offsets") or []
+                if len(offsets) > 1:
+                    total_known += len(offsets) - 1
+
+        collected: list[dict] = []
+        scanned_budget = 0
+        hit_cap_or_budget = False
+
+        def match_task(rtask: str) -> bool:
+            tname = rtask or "未接入分类体系"
+            if task:
+                return tname == task
+            if others_set:
+                return tname not in others_set
+            return True
+
+        def build_group_name(rtask: str, rsub: str) -> str:
+            if task or others_set:
+                return rsub or rtask or "未接入分类体系"
+            return rtask or "未接入分类体系"
+
+        if ordered_groups:
+            # Spread initial samples across up to 6 recent day/model groups, then top up from remaining groups.
+            active_groups = ordered_groups[:SLICE_MAX_FILES]
+            target_per_group = max(20, math.ceil(cap / max(1, min(len(active_groups), 6))))
+
+            for gi, ((day, sp, rm), flist) in enumerate(active_groups):
+                if len(collected) >= cap or scanned_budget >= SLICE_SCAN_BUDGET:
+                    hit_cap_or_budget = True
+                    break
+                want = cap - len(collected)
+                if gi < len(active_groups) - 1 and not task and not others_set:
+                    want = min(want, target_per_group)
+
+                # Prefer already-cached daily listing on disk if valid.
+                cache_path = self.cache / f"{product}-{sp}-{rm}-{day}.json"
+                sig = self._sig(flist)
+                used_cache = False
+                if sig is not None and cache_path.is_file():
+                    try:
+                        cached = json.loads(cache_path.read_text(encoding="utf-8"))
+                        if cached.get("version") == LIST_VERSION and cached.get("sig") == sig:
+                            c_rows = cached.get("rows") or []
+                            step = max(1, len(c_rows) // max(1, want))
+                            for row in c_rows[::step]:
+                                slug = row.get("s") or ""
+                                idx_hit = index_rows.get(slug) if slug else None
+                                rtask = (idx_hit or {}).get("task") or row.get("cat") or "未接入分类体系"
+                                rsub = (idx_hit or {}).get("sub") or ""
+                                scanned_budget += 1
+                                if not match_task(rtask):
+                                    if scanned_budget >= SLICE_SCAN_BUDGET:
+                                        break
+                                    continue
+                                collected.append({
+                                    "q": (row.get("q") or "")[:Q_LIMIT],
+                                    "m": rm,
+                                    "sp": sp,
+                                    "d": day or str(row.get("rq") or "")[:10],
+                                    "r": row.get("r") or "",
+                                    "tr": int(row.get("tr") or 1),
+                                    "ev": 1 if row.get("ev") else 0,
+                                    "s": slug,
+                                    "cat": rtask,
+                                    "_grp": build_group_name(rtask, rsub),
+                                })
+                                if len(collected) >= cap or len([x for x in collected if x.get("d") == day and x.get("m") == rm and x.get("sp") == sp]) >= want:
+                                    break
+                            used_cache = True
+                    except (OSError, ValueError):
+                        used_cache = False
+                if used_cache:
+                    continue
+
+                taken_in_group = 0
+                for fi, (rel, path) in enumerate(flist):
+                    if len(collected) >= cap or taken_in_group >= want or scanned_budget >= SLICE_SCAN_BUDGET:
+                        break
+                    idx = store.get_file(rel) or {}
+                    offsets = idx.get("offsets") or []
+                    hashes = idx.get("hashes") or []
+                    tids = idx.get("tids") or []
+                    lines = len(offsets) - 1
+                    if lines >= 1:
+                        need_here = min(lines, want - taken_in_group)
+                        sample_budget = need_here if (not task and not others_set) else min(lines, max(need_here * 4, 200))
+                        step = max(1, lines // max(1, sample_budget))
+                        sample_nums = list(range(1, lines + 1, step))
+                        fd = None
+                        try:
+                            for number in sample_nums:
+                                if len(collected) >= cap or taken_in_group >= want or scanned_budget >= SLICE_SCAN_BUDGET:
+                                    hit_cap_or_budget = True
+                                    break
+                                scanned_budget += 1
+                                ih = f"{hashes[number - 1]:016x}" if number - 1 < len(hashes) else None
+                                slug = paired.get(ih) if ih else None
+                                if slug and slug in index_rows:
+                                    hit = index_rows[slug]
+                                    rtask = hit.get("task") or hit.get("cat") or "未接入分类体系"
+                                    rsub = hit.get("sub") or ""
+                                    if not match_task(rtask):
+                                        continue
+                                    collected.append({
+                                        "q": (hit["q"] or "")[:Q_LIMIT],
+                                        "m": rm,
+                                        "sp": sp,
+                                        "d": day,
+                                        "r": f"{fi}:{number}",
+                                        "tr": int(hit["tr"] or 1),
+                                        "ev": 1,
+                                        "s": slug,
+                                        "cat": rtask,
+                                        "_grp": build_group_name(rtask, rsub),
+                                    })
+                                    taken_in_group += 1
+                                    continue
+                                if fd is None:
+                                    try:
+                                        fd = os.open(path, os.O_RDONLY)
+                                    except OSError:
+                                        break
+                                start, end = offsets[number - 1], offsets[number]
+                                raw = os.pread(fd, min(end - start, PREFIX), start)
+                                fields = self._fields(raw)
+                                if not fields[0] and end - start > PREFIX:
+                                    raw = os.pread(fd, end - start, start)
+                                    fields = self._fields(raw)
+                                rtask, rsub = self._extract_task(raw)
+                                if not match_task(rtask):
+                                    continue
+                                row_obj = self._row(fi, number, slug, fields, tids)
+                                collected.append({
+                                    "q": row_obj["q"],
+                                    "m": rm,
+                                    "sp": sp,
+                                    "d": day or str(row_obj.get("rq") or "")[:10],
+                                    "r": row_obj["r"],
+                                    "tr": int(row_obj["tr"] or 1),
+                                    "ev": 1 if slug else 0,
+                                    "s": slug or "",
+                                    "cat": rtask,
+                                    "_grp": build_group_name(rtask, rsub),
+                                })
+                                taken_in_group += 1
+                        finally:
+                            if fd is not None:
+                                os.close(fd)
+                    else:
+                        # Unindexed file fallback: bounded sequential prefix read.
+                        try:
+                            with open(path, "rb", buffering=1 << 20) as fh:
+                                for number, raw in enumerate(fh, 1):
+                                    if len(collected) >= cap or taken_in_group >= want or scanned_budget >= SLICE_SCAN_BUDGET:
+                                        hit_cap_or_budget = True
+                                        break
+                                    body = raw.rstrip(b"\r\n")
+                                    if not body.strip():
+                                        continue
+                                    scanned_budget += 1
+                                    ih = f"{bs.line_hash(body):016x}"
+                                    slug = paired.get(ih)
+                                    if slug and slug in index_rows:
+                                        hit = index_rows[slug]
+                                        rtask = hit.get("task") or hit.get("cat") or "未接入分类体系"
+                                        rsub = hit.get("sub") or ""
+                                        if not match_task(rtask):
+                                            continue
+                                        collected.append({
+                                            "q": (hit["q"] or "")[:Q_LIMIT],
+                                            "m": rm,
+                                            "sp": sp,
+                                            "d": day,
+                                            "r": f"{fi}:{number}",
+                                            "tr": int(hit["tr"] or 1),
+                                            "ev": 1,
+                                            "s": slug,
+                                            "cat": rtask,
+                                            "_grp": build_group_name(rtask, rsub),
+                                        })
+                                        taken_in_group += 1
+                                        continue
+                                    fields = self._fields(body)
+                                    rtask, rsub = self._extract_task(body)
+                                    if not match_task(rtask):
+                                        continue
+                                    row_obj = self._row(fi, number, slug, fields, [[]])
+                                    collected.append({
+                                        "q": row_obj["q"],
+                                        "m": rm,
+                                        "sp": sp,
+                                        "d": day or str(row_obj.get("rq") or "")[:10],
+                                        "r": row_obj["r"],
+                                        "tr": int(row_obj["tr"] or 1),
+                                        "ev": 1 if slug else 0,
+                                        "s": slug or "",
+                                        "cat": rtask,
+                                        "_grp": build_group_name(rtask, rsub),
+                                    })
+                                    taken_in_group += 1
+                        except OSError:
+                            continue
+
+        elif self.cache.is_dir():
+            # Fallback when dataset raw files are absent locally, using cached daily input listings.
+            cache_candidates = []
+            for p in self.cache.glob(f"{product}-*.json"):
+                m = CACHE_NAME_RE.match(p.name)
+                if not m:
+                    continue
+                if not _match_model_family(m.group("m"), model):
+                    continue
+                cache_candidates.append((m.group("day"), m.group("sp"), m.group("m"), p))
+            cache_candidates.sort(reverse=True)
+            for day, sp, rm, p in cache_candidates[:SLICE_MAX_FILES]:
+                if len(collected) >= cap:
+                    hit_cap_or_budget = True
+                    break
+                try:
+                    cached = json.loads(p.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                for row in cached.get("rows") or []:
+                    if len(collected) >= cap:
+                        hit_cap_or_budget = True
+                        break
+                    slug = row.get("s") or ""
+                    idx_hit = index_rows.get(slug) if slug else None
+                    rtask = (idx_hit or {}).get("task") or row.get("cat") or "未接入分类体系"
+                    rsub = (idx_hit or {}).get("sub") or ""
+                    if not match_task(rtask):
+                        continue
+                    collected.append({
+                        "q": (row.get("q") or "")[:Q_LIMIT],
+                        "m": rm,
+                        "sp": sp,
+                        "d": day or str(row.get("rq") or "")[:10],
+                        "r": row.get("r") or "",
+                        "tr": int(row.get("tr") or 1),
+                        "ev": 1 if row.get("ev") else 0,
+                        "s": slug,
+                        "cat": rtask,
+                        "_grp": build_group_name(rtask, rsub),
+                    })
+
+        # Group by task/subtask; if everything sits in one bucket (e.g. 未接入分类体系),
+        # group by date or model so the star map separates naturally into clusters.
+        grp_keys = {it["_grp"] for it in collected}
+        if len(grp_keys) <= 1 and len(collected) > 1:
+            dates_seen = {it["d"] for it in collected if it.get("d")}
+            if len(dates_seen) > 1:
+                for it in collected:
+                    it["_grp"] = it["d"] or "未知日期"
+            else:
+                models_seen = {it["m"] for it in collected if it.get("m")}
+                if len(models_seen) > 1:
+                    for it in collected:
+                        it["_grp"] = it["m"] or "未知模型"
+
+        grouped_out: dict[str, list[dict]] = {}
+        ev_done = 0
+        ev_pending = 0
+        for it in collected:
+            gkey = it.pop("_grp", None) or "未接入分类体系"
+            if it.get("ev"):
+                ev_done += 1
+            else:
+                ev_pending += 1
+            grouped_out.setdefault(gkey, []).append(it)
+
+        groups = [
+            {"key": k, "name": k, "total": len(items), "items": items}
+            for k, items in sorted(grouped_out.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+        ]
+        reported_total = max(len(collected), total_known) if total_known > 0 else len(collected)
+        return {
+            "product": product,
+            "source": "inputs",
+            "total": reported_total,
+            "recalled": len(collected),
+            "cap": cap,
+            "capped": reported_total > len(collected) or hit_cap_or_budget,
+            "eval_counts": [ev_done, ev_pending],
+            "groups": groups,
+        }
 
     # ---------------------------------------------------------------- one record
     def detail(self, product: str, day: str, model: str, split: str, ref: str):

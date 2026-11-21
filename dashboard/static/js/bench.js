@@ -63,6 +63,10 @@ const ROUND_LABELS = {
 };
 const POOL_ROLE_LABEL = { user: "用户", assistant: "助手", tool: "工具", system: "系统" };
 const MECH_ORDER = ["M1", "M2", "M3", "M4", "M5", "M6", "M7"];
+const MECH_PALETTE = [
+  "var(--sev-1)", "var(--sev-2)", "var(--accent)",
+  "var(--loc-vir)", "var(--loc-ulq)", "var(--sev-3)", "var(--muted)",
+];
 
 const EMPTY_FILTER = () => ({
   sev: "", l1: "", l2: "", l3: "", turn: "", tok: "", rnd: "",
@@ -129,6 +133,130 @@ export function bucketLabel(dim, row, maps = {}) {
   if (dim === "round") return ROUND_LABELS[k] || raw || k;
   if (dim === "pattern_source") return PATH_SRC_LABEL[k] || raw || k;
   return raw || k;
+}
+
+const EXPORT_ROLE_MAP = { user: "user", human: "user", assistant: "assistant", ai: "assistant" };
+
+function extractExportMsgText(val) {
+  if (typeof val === "string") return val.trim();
+  if (Array.isArray(val)) {
+    return val
+      .map((item) => (typeof item === "string" ? item.trim() : extractExportMsgText(item?.text ?? item?.content ?? item?.value)))
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+  if (val && typeof val === "object") {
+    return extractExportMsgText(val.text ?? val.content ?? val.user_question ?? "");
+  }
+  return "";
+}
+
+/** Build a clean 11-field flat Bench export record matching backend `format_export_case`. */
+export function formatClientExportCase(c, maps = {}) {
+  const src = c && typeof c === "object" ? c : {};
+  const rawPool = Array.isArray(src.message_pool)
+    ? src.message_pool
+    : Array.isArray(src.history)
+      ? src.history
+      : Array.isArray(src.conversation)
+        ? src.conversation
+        : null;
+  const turns = [];
+  if (rawPool) {
+    rawPool.forEach((m) => {
+      if (!m || typeof m !== "object") return;
+      const role = EXPORT_ROLE_MAP[String(m.role || "").trim().toLowerCase()];
+      if (!role) return;
+      const content = extractExportMsgText(m.content != null ? m.content : m.text);
+      if (content) turns.push({ role, content });
+    });
+  }
+  const curQ = String(src.question_full || src.question || "").trim();
+  if (curQ) {
+    const userSet = new Set(turns.filter((t) => t.role === "user").map((t) => t.content));
+    const lastRole = turns.length ? turns[turns.length - 1].role : "";
+    if (!turns.length || (lastRole !== "user" && !userSet.has(curQ))) {
+      turns.push({ role: "user", content: curQ });
+    }
+  }
+  const userTurns = turns.filter((t) => t.role === "user").length;
+  const turnType = String(src.turn || "").toLowerCase() === "multi" || userTurns > 1 ? "multi" : "single";
+  let turnCount = userTurns > 0 ? userTurns : turns.length ? 1 : 0;
+  if (turnType === "multi" && turnCount <= 1 && !rawPool) {
+    turnCount = Math.max(1, Number(src.session_round || src.turn_index || 1));
+  }
+  const pr = src.primary && typeof src.primary === "object" ? src.primary : {};
+  const l1 = pr.l1 && pr.l1 !== "NA" ? String(pr.l1) : "";
+  const l2 = pr.l2 && pr.l2 !== "NA" ? String(pr.l2) : "";
+  const l3 = (pr.l3 || pr.path) && (pr.l3 || pr.path) !== "NA" ? String(pr.l3 || pr.path) : "";
+  const sev = String(src.severity || "GOLD") || "GOLD";
+  const stage = l1 ? stageLabel(l1, maps.stageNames) || l1 : "";
+  const mechanism = l2 ? mechLabel(l2, maps.mechNames) || l2 : "";
+  let problem = String(pr.label || "").trim();
+  if (!problem && l3) {
+    problem = patternDisplayName(l3, "", maps.patNames, maps.stageNames, maps.mechNames) || l3;
+  }
+  if (!problem && sev === "GOLD") problem = "goldencase";
+
+  return {
+    case_id: String(src.trace_id || ""),
+    session_id: String(src.session_id || ""),
+    turn_type: turnType,
+    turn_count: turnCount,
+    turns,
+    model: String(src.model || ""),
+    date: String(src.day || ""),
+    severity: sev,
+    stage,
+    mechanism,
+    problem,
+  };
+}
+
+function svgDonutHTML(items, { size = 148, rOut = 64, rIn = 40, centerVal = "", centerSub = "", defaultVal = centerVal, defaultSub = centerSub } = {}) {
+  const total = sum(items.map((x) => Math.max(0, Number(x.value || 0))));
+  const cx = size / 2;
+  const cy = size / 2;
+  const r = (rOut + rIn) / 2;
+  const ringW = Math.max(4, rOut - rIn);
+  const activeItem = items.find((x) => x.active && Number(x.value || 0) > 0) || null;
+  const showVal = activeItem?.centerVal ?? centerVal;
+  const showSub = activeItem?.centerSub ?? centerSub;
+  const midCls = `bn-pie-mid${activeItem ? " is-focus" : ""}`;
+  const midStyle = activeItem?.color ? ` style="--c:${activeItem.color}"` : "";
+
+  if (total <= 0) {
+    return `<div class="bn-pie-box" style="width:${size}px;height:${size}px;--ring-w:${ringW}">
+      <svg viewBox="0 0 ${size} ${size}" aria-hidden="true"><circle class="bn-ring-track" cx="${cx}" cy="${cy}" r="${r.toFixed(2)}"/></svg>
+      <div class="${midCls}" data-default-val="${esc(defaultVal)}" data-default-sub="${esc(defaultSub)}"><b class="num">${esc(showVal)}</b><span>${esc(showSub)}</span></div>
+    </div>`;
+  }
+
+  const nonZero = items.filter((x) => Number(x.value || 0) > 0);
+  const gap = nonZero.length > 1 ? 0.9 : 0;
+  let offset = 0;
+  const arcs = nonZero
+    .map((x) => {
+      const share = (Number(x.value) / total) * 100;
+      const dash = nonZero.length > 1 ? Math.max(0.8, share - gap) : 100;
+      const at = offset;
+      offset += share;
+      const cls = `bn-ring-arc${x.active ? " is-active" : activeItem ? " is-dim" : ""}`;
+      const interactiveAttrs = x.attr
+        ? `${x.attr} tabindex="0" role="button" aria-pressed="${Boolean(x.active)}" data-ring-val="${esc(x.centerVal ?? "")}" data-ring-sub="${esc(x.centerSub ?? "")}" data-ring-color="${esc(x.color)}"`
+        : "";
+      return `<circle class="${cls}" cx="${cx}" cy="${cy}" r="${r.toFixed(2)}" pathLength="100" style="--c:${x.color};stroke:${x.color};stroke-dasharray:${dash.toFixed(2)} ${(100 - dash).toFixed(2)};stroke-dashoffset:${(-at).toFixed(2)}" ${interactiveAttrs} data-tip="${esc(x.tip || "")}"/>`;
+    })
+    .join("");
+
+  return `<div class="bn-pie-box" style="width:${size}px;height:${size}px;--ring-w:${ringW}">
+    <svg viewBox="0 0 ${size} ${size}" role="img" aria-label="${esc(defaultSub || "占比环形图")}">
+      <circle class="bn-ring-track" cx="${cx}" cy="${cy}" r="${r.toFixed(2)}"/>
+      ${arcs}
+    </svg>
+    <div class="${midCls}"${midStyle} data-default-val="${esc(defaultVal)}" data-default-sub="${esc(defaultSub)}"><b class="num">${esc(showVal)}</b><span>${esc(showSub)}</span></div>
+  </div>`;
 }
 
 function sortedTiers(obj) {
@@ -1178,8 +1306,11 @@ export async function render(root, ctx) {
   }
 
   function flipStageHTML(spec) {
-    const { id, title, pill = "", value, focus = false, footer = "", viz = "" } = spec;
+    const { id, title, pill = "", value, focus = false, footer = "", frontStats = [], viz = "" } = spec;
     const flipped = S.flippedStages.has(id);
+    const statsFooter = !footer && frontStats.length
+      ? `<div class="bn-fstats num">${frontStats.map((r) => `<span class="bn-fstat" style="--c:${r.color}"><i></i><span>${esc(r.label)}</span><b>${esc(r.val)}</b></span>`).join("")}</div>`
+      : "";
     return `<div class="bn-fcard${focus ? " is-focus" : ""}${flipped ? " is-flipped" : ""}" data-bn-stage-flip="${esc(id)}" role="button" tabindex="0" aria-pressed="${flipped}">
       <div class="bn-fface bn-ffront">
         <div class="bn-fstage-top">
@@ -1190,7 +1321,7 @@ export async function render(root, ctx) {
           <div class="bn-fstage-v num">${esc(value)}</div>
           ${viz}
         </div>
-        ${footer}
+        ${footer || statsFooter}
       </div>
       <div class="bn-fface bn-fback">
         <div class="bn-fstage-top">
@@ -1249,6 +1380,11 @@ export async function render(root, ctx) {
         pill: liveBadge ? `<span class="bn-delta-pill is-live num">${esc(liveBadge)}</span>` : "",
         value: fmt(rawPoolTotal),
         viz: frontSparkAreaSVG(daily.days),
+        frontStats: [
+          { label: "可采样", val: compact(usableTotal), color: "var(--loc-ulq)" },
+          { label: "去重", val: `−${compact(dupDrop)}`, color: "var(--muted)" },
+          ...(emptyDrop > 0 ? [{ label: "空句", val: `−${compact(emptyDrop)}`, color: "var(--sev-2)" }] : []),
+        ],
         ringCenter: keepPct,
         ringSub: "可采样",
         segments: [
@@ -1268,6 +1404,11 @@ export async function render(root, ctx) {
         pill: rawPoolTotal ? `<span class="bn-delta-pill num">${keepPct}</span>` : "",
         value: fmt(usableTotal),
         viz: frontDotMatrixHTML(modelSegments),
+        frontStats: modelOrder.slice(0, 3).map((id, idx) => ({
+          label: models[id].label,
+          val: compact(models[id].pool_size),
+          color: modelPalette[idx % modelPalette.length],
+        })),
         ringCenter: activeModelPct,
         ringSub: md.label,
         segments: modelSegments,
@@ -1284,6 +1425,10 @@ export async function render(root, ctx) {
         pill: daily.last7Pool > 0 ? `<span class="bn-delta-pill num">7日 +${compact(daily.last7Pool)}</span>` : "",
         value: fmt(md.pool_size),
         viz: frontMiniBarsSVG(daily.days),
+        frontStats: [
+          { label: "常规", val: compact(md.base_pool), color: "var(--accent)" },
+          { label: "长对话", val: compact(md.long_pool), color: "var(--loc-vir)" },
+        ],
         ringCenter: basePct,
         ringSub: "常规",
         segments: [
@@ -1302,6 +1447,10 @@ export async function render(root, ctx) {
         pill: `<span class="bn-delta-pill is-accent num">${tierPct}</span>`,
         value: fmt(actualN),
         focus: true,
+        viz: `<div class="bn-fviz bn-fviz-kv num">
+          <span style="--c:var(--sev-1)"><i></i><span>问题</span><b>${fmt(probN)}</b></span>
+          <span style="--c:var(--loc-ulq)"><i></i><span>goldencase</span><b>${fmt(goldN)}</b></span>
+        </div>`,
         footer: nestFooter,
         ringCenter: probPct,
         ringSub: "问题",
@@ -1364,48 +1513,56 @@ export async function render(root, ctx) {
 
   function renderQuotaHTML(md, tierData) {
     const actualN = Number(tierData.actual || 1);
+    const reqN = Number(tierData.requested || actualN || 1);
     const pBySev = md.pool_stats?.by_severity || {};
     const sevPoolSum = sum(SEVS_ALL.map((s) => Number(pBySev[s] || 0)));
     const poolDistSize = Number(md.pool_stats?.pool_size || sevPoolSum || md.base_pool || md.pool_size || 1);
     const sActual = tierData.severity_actual || {};
     const sTarget = tierData.severity_target || {};
+    const poolLbl = S.isLong ? "常规候选池" : "候选池";
 
-    const maxScale = Math.max(
-      ...SEVS_ALL.map((s) => Math.max(
-        actualN ? (Number(sActual[s] || 0) / actualN) * 100 : 0,
-        Number(tierData.requested || actualN) ? (Number(sTarget[s] || 0) / Number(tierData.requested || actualN)) * 100 : 0,
-        poolDistSize ? (Number(pBySev[s] || 0) / poolDistSize) * 100 : 0,
-      )),
-      30,
-    );
-
-    const rows = SEVS_ALL.map((sev) => {
+    const sevEntries = SEVS_ALL.map((sev) => {
       const cnt = Number(sActual[sev] || 0);
       const tgtCnt = Number(sTarget[sev] || 0);
       const bPct = actualN ? (cnt / actualN) * 100 : 0;
-      const tPct = Number(tierData.requested || actualN) ? (tgtCnt / Number(tierData.requested || actualN)) * 100 : 0;
+      const tPct = reqN ? (tgtCnt / reqN) * 100 : 0;
       const pPct = poolDistSize ? (Number(pBySev[sev] || 0) / poolDistSize) * 100 : 0;
-      const toW = (p) => Math.min(100, Math.max(0, (p / maxScale) * 100)).toFixed(1);
       const c = sevTone(sev);
       const tStr = `${tPct.toFixed(1).replace(/\.0$/, "")}%`;
       const tgtText = sev === "P0" && tPct >= (params.p0_cap * 100 - 0.5) ? `≤${tStr}` : tStr;
-      const pressed = S.f.sev === sev;
       const lbl = sevLabel(sev);
-      const poolLbl = S.isLong ? "常规候选池" : "候选池";
+      const pressed = S.f.sev === sev;
       const tip = `${lbl} · 已选 ${fmt(cnt)} 条 (${bPct.toFixed(1)}%) · 目标 ${tgtText} · ${poolLbl} ${pPct.toFixed(1)}%`;
+      return { sev, cnt, bPct, tPct, pPct, c, tgtText, lbl, pressed, tip };
+    });
 
-      return `<button type="button" class="bn-qrow" data-fsev="${sev}" aria-pressed="${pressed}" data-tip="${esc(tip)}" style="--c:${c}">
-        <span class="bn-qsev"><i></i>${lbl}</span>
-        <div class="bn-qtrack">
-          <div class="bn-qfill" style="width:${toW(bPct)}%"></div>
-          ${tPct > 0 ? `<div class="bn-qtarget" style="left:${toW(tPct)}%"></div>` : ""}
-          ${pPct > 0 ? `<div class="bn-qpool" style="left:${toW(pPct)}%"></div>` : ""}
-        </div>
-        <span class="bn-qnum">${bPct.toFixed(1)}%<small>${fmt(cnt)}</small></span>
-        <span class="bn-qtgt">${tgtText}</span>
-        <span class="bn-qp">${pPct.toFixed(1)}%</span>
-      </button>`;
-    }).join("");
+    const sevDonut = svgDonutHTML(
+      sevEntries.map((x) => ({
+        value: x.cnt,
+        color: x.c,
+        active: x.pressed,
+        attr: `data-fsev="${x.sev}"`,
+        centerVal: `${x.bPct.toFixed(1)}%`,
+        centerSub: `${x.lbl} · ${fmt(x.cnt)}`,
+        tip: x.tip,
+      })),
+      {
+        size: 144,
+        rOut: 62,
+        rIn: 44,
+        centerVal: fmt(actualN),
+        centerSub: "已选等级",
+        defaultVal: fmt(actualN),
+        defaultSub: "已选等级",
+      },
+    );
+
+    const legendGrid = `<div class="bn-qpie-leg${S.f.sev ? " has-focus" : ""}">${sevEntries.map((x) => `
+      <button type="button" class="bn-qitem" data-fsev="${x.sev}" aria-pressed="${x.pressed}" data-tip="${esc(x.tip)}" style="--c:${x.c}">
+        <span class="bn-qsev"><i></i>${x.lbl}</span>
+        <span class="bn-qitem-val num"><b>${x.bPct.toFixed(1)}%</b><small>${fmt(x.cnt)}</small></span>
+        <span class="bn-qitem-sub num">标 ${x.tgtText} · ${esc(poolLbl)} ${x.pPct.toFixed(1)}%</span>
+      </button>`).join("")}</div>`;
 
     const ta = tierData.turn_actual || {};
     const singleN = Number(ta.single || 0);
@@ -1417,54 +1574,87 @@ export async function render(root, ctx) {
     const poolTurn = md.pool_stats?.by_turn || {};
     const pTurnTot = (poolTurn.single || 0) + (poolTurn.multi || 0);
     const pSinglePct = pTurnTot ? ((poolTurn.single || 0) / pTurnTot) * 100 : 0;
+    const pMultiPct = pTurnTot ? ((poolTurn.multi || 0) / pTurnTot) * 100 : 0;
+
+    const waffleN = 50;
+    let singleDots = Math.round((sPct / 100) * waffleN);
+    if (singleN > 0 && singleDots === 0) singleDots = 1;
+    if (multiN > 0 && singleDots === waffleN) singleDots = waffleN - 1;
+    singleDots = Math.max(0, Math.min(waffleN, singleDots));
+    const singleTip = `单轮对话 · ${fmt(singleN)} 条 (${sPct.toFixed(1)}%) · 池 ${pSinglePct.toFixed(0)}%`;
+    const multiTip = `多轮对话 · ${fmt(multiN)} 条 (${mPct.toFixed(1)}%) · 池 ${pMultiPct.toFixed(0)}%`;
+    const turnWaffle = `<div class="bn-turn-waffle${S.f.turn ? " has-focus" : ""}" role="group" aria-label="单多轮占比点阵">
+      ${Array.from({ length: waffleN }, (_, idx) => {
+        const isSingle = idx < singleDots;
+        const tKey = isSingle ? "single" : "multi";
+        const c = isSingle ? "var(--accent)" : "var(--loc-ulq)";
+        const tip = isSingle ? singleTip : multiTip;
+        return `<button type="button" class="bn-wdot" data-fturn="${tKey}" aria-pressed="${S.f.turn === tKey}" data-tip="${esc(tip)}" style="--c:${c}" aria-label="${isSingle ? "单轮" : "多轮"}"></button>`;
+      }).join("")}
+    </div>`;
 
     const mActual = tierData.mechanism_actual || {};
     const probTot = Number(tierData.crosstab?.totals?.bench_total ?? Math.max(0, actualN - Number(sActual.GOLD || 0)));
-    const mMax = Math.max(1, ...MECH_ORDER.map((m) => Number(mActual[m] || 0)));
+    const mSum = Math.max(1, sum(MECH_ORDER.map((m) => Number(mActual[m] || 0))));
+    const mechItems = MECH_ORDER.map((m, i) => {
+      const n = Number(mActual[m] || 0);
+      const share = (n / mSum) * 100;
+      const fullLbl = mechLabel(m, mechNames);
+      const shortLbl = mechLabel(m, mechNames, true).slice(0, 4);
+      const c = MECH_PALETTE[i % MECH_PALETTE.length];
+      return { m, n, share, fullLbl, shortLbl, c, idx: i };
+    }).sort((a, b) => (b.n - a.n) || (a.idx - b.idx));
+    const maxMechShare = Math.max(1, ...mechItems.map((x) => x.share));
 
     return `<section class="card bn-quota-card">
       <div class="card-head">
         <h2>配比结构</h2>
-        <div class="bn-qlegend">
-          <span class="bn-ql-item"><i class="bn-ql-bar"></i>已选</span>
-          <span class="bn-ql-item"><i class="bn-ql-tick"></i>目标</span>
-          <span class="bn-ql-item"><i class="bn-ql-dot"></i>候选池</span>
-        </div>
+        <span class="bn-count-pill">已选 ${fmt(actualN)} 条</span>
       </div>
-      <div class="bn-qlist">${rows}</div>
+
+      <div class="bn-qpie-wrap">
+        ${sevDonut}
+        ${legendGrid}
+      </div>
+
       <div class="bn-subquota">
         <div class="bn-subwell">
           <div class="bn-subhead">
             <strong>单 / 多轮</strong>
-            <span>目标 ${tTgtSingle.toFixed(0)}:${(100 - tTgtSingle).toFixed(0)}${pSinglePct ? ` · 池 ${pSinglePct.toFixed(0)}%` : ""}</span>
+            <span>目标 ${tTgtSingle.toFixed(0)}:${(100 - tTgtSingle).toFixed(0)}</span>
           </div>
-          <div class="bn-turnbar">
-            <div class="bn-turn-seg" style="width:${sPct.toFixed(1)}%" data-fturn="single" aria-pressed="${S.f.turn === "single"}" data-tip="单轮对话 · ${fmt(singleN)} 条 (${sPct.toFixed(1)}%)"></div>
-            <div class="bn-turn-seg" style="width:${mPct.toFixed(1)}%" data-fturn="multi" aria-pressed="${S.f.turn === "multi"}" data-tip="多轮对话 · ${fmt(multiN)} 条 (${mPct.toFixed(1)}%)"></div>
-            <div class="bn-qtarget" style="left:${tTgtSingle.toFixed(1)}%"></div>
-            ${pSinglePct ? `<div class="bn-qpool" style="left:${pSinglePct.toFixed(1)}%"></div>` : ""}
-          </div>
-          <div class="bn-turn-labels">
-            <button type="button" data-fturn="single" aria-pressed="${S.f.turn === "single"}" style="--c:var(--accent)"><i></i>单轮 ${sPct.toFixed(0)}% (${fmt(singleN)})</button>
-            <button type="button" data-fturn="multi" aria-pressed="${S.f.turn === "multi"}" style="--c:var(--loc-ulq)"><i></i>多轮 ${mPct.toFixed(0)}% (${fmt(multiN)})</button>
+          <div class="bn-turn-col">
+            ${turnWaffle}
+            <div class="bn-turn-list${S.f.turn ? " has-focus" : ""}">
+              <button type="button" class="bn-turn-row" data-fturn="single" aria-pressed="${S.f.turn === "single"}" data-tip="${esc(`单轮 · 池 ${pSinglePct.toFixed(0)}%`)}" style="--c:var(--accent)">
+                <i></i>
+                <span class="bn-tname">单轮</span>
+                <b class="bn-tpct num">${sPct.toFixed(0)}%</b>
+                <small class="bn-tcnt num">${fmt(singleN)}</small>
+              </button>
+              <button type="button" class="bn-turn-row" data-fturn="multi" aria-pressed="${S.f.turn === "multi"}" data-tip="${esc(`多轮 · 池 ${pMultiPct.toFixed(0)}%`)}" style="--c:var(--loc-ulq)">
+                <i></i>
+                <span class="bn-tname">多轮</span>
+                <b class="bn-tpct num">${mPct.toFixed(0)}%</b>
+                <small class="bn-tcnt num">${fmt(multiN)}</small>
+              </button>
+            </div>
           </div>
         </div>
 
         <div class="bn-subwell">
           <div class="bn-subhead">
             <strong>问题机制分布</strong>
-            <span>问题 ${fmt(probTot)} 条 · ${MECH_ORDER.filter((m) => (mActual[m] || 0) > 0).length} / 7 类</span>
+            <span>${fmt(probTot)} 条 · ${mechItems.filter((x) => x.n > 0).length} / 7 类</span>
           </div>
-          <div class="bn-mechbars">
-            ${MECH_ORDER.map((m) => {
-              const n = Number(mActual[m] || 0);
-              const h = n ? Math.max(14, Math.round((n / mMax) * 100)) : 8;
-              const fullLbl = mechLabel(m, mechNames);
-              const shortLbl = mechLabel(m, mechNames, true).slice(0, 4);
-              return `<button type="button" class="bn-mbar ${n ? "" : "is-zero"}" data-fmech="${m}" aria-pressed="${S.f.l2 === m}" data-tip="${esc(fullLbl)} · ${fmt(n)} 条">
-                <span class="bn-mbar-n">${fmt(n)}</span>
-                <span class="bn-mbar-col" style="height:${h}%"></span>
-                <span class="bn-mbar-k">${esc(shortLbl)}</span>
+          <div class="bn-mech-rank${S.f.l2 ? " has-focus" : ""}">
+            ${mechItems.map((x) => {
+              const dotPx = x.n > 0 ? 5 + (x.share / maxMechShare) * 6 : 4;
+              return `<button type="button" class="bn-mrow${x.n ? "" : " is-zero"}" data-fmech="${x.m}" aria-pressed="${S.f.l2 === x.m}" data-tip="${esc(x.fullLbl)} · ${fmt(x.n)} 条 (${x.share.toFixed(1)}%)" style="--c:${x.c};--s:${dotPx.toFixed(1)}px">
+                <span class="bn-mdot" aria-hidden="true"><i></i></span>
+                <span class="bn-mname">${esc(x.shortLbl)}</span>
+                <b class="bn-mpct num">${x.share >= 1 || x.n === 0 ? `${x.share.toFixed(0)}%` : "<1%"}</b>
+                <small class="bn-mcnt num">${fmt(x.n)}</small>
               </button>`;
             }).join("")}
           </div>
@@ -1490,6 +1680,18 @@ export async function render(root, ctx) {
       pattern: "l3", turn_type: "turn", pattern_source: "psrc", severity: "sev",
     }[S.dim];
 
+    const byCnt = [...rows].sort((a, b) => (b.count || 0) - (a.count || 0));
+    const topRow = byCnt[0] || null;
+    const byBias = [...rows].sort((a, b) => Math.abs(Number(b.delta_pp || 0)) - Math.abs(Number(a.delta_pp || 0)));
+    const biasRow = byBias[0] || null;
+    const coveredN = rows.filter((r) => (r.count || 0) > 0).length;
+
+    const insightsHTML = rows.length ? `<div class="bn-dist-insights">
+      <div class="bn-di-item"><span>维度覆盖</span><b class="num">${coveredN} / ${rows.length} 项</b></div>
+      <div class="bn-di-item"><span>主导分布</span><b class="num">${topRow ? `${esc(bucketLabel(S.dim, topRow, maps))} · ${(Number(topRow.share_in_bench || 0) * 100).toFixed(1)}%` : "—"}</b></div>
+      <div class="bn-di-item"><span>${isAudit ? `最大偏差 ±${tol}%` : "最大偏移"}</span><b class="num ${isAudit && biasRow && Math.abs(Number(biasRow.delta_pp || 0)) > tol ? "is-warn" : ""}">${biasRow ? `${esc(bucketLabel(S.dim, biasRow, maps))} ${Number(biasRow.delta_pp || 0) > 0 ? "+" : ""}${Number(biasRow.delta_pp || 0).toFixed(1)}%` : "—"}</b></div>
+    </div>` : "";
+
     let bodyHTML = "";
     if (S.dim === "day" && rows.length) {
       const sorted = [...rows].sort((a, b) => String(a.key).localeCompare(String(b.key)));
@@ -1499,26 +1701,40 @@ export async function render(root, ctx) {
       const tolBot = 50 + (tol / maxAbs) * 46;
       const colsCss = `grid-template-columns: repeat(${sorted.length}, minmax(0, 1fr))`;
 
+      // Smooth SVG baseline area + stroke for candidate pool across days
+      const aw = 600;
+      const ah = 100;
+      const nDays = sorted.length;
+      const pts = sorted.map((r, idx) => {
+        const x = nDays === 1 ? aw / 2 : ((idx + 0.5) / nDays) * aw;
+        const y = ah - Math.max(2, (Number(r.share_in_pool || 0) / maxShare) * (ah - 6));
+        return [Number(x.toFixed(1)), Number(y.toFixed(1))];
+      });
+      const linePath = pts.map(([x, y], i) => `${i ? "L" : "M"}${x},${y}`).join(" ");
+      const areaPath = pts.length ? `${linePath} L${pts[pts.length - 1][0]},${ah} L${pts[0][0]},${ah} Z` : "";
+
       bodyHTML = `<div class="bn-daychart">
         <div class="bn-dleg">
           <span class="bn-ql-item"><i class="bn-dleg-dot" style="background:var(--accent)"></i>已选占比</span>
-          <span class="bn-ql-item"><i class="bn-dleg-dot" style="background:var(--t3)"></i>候选池</span>
+          <span class="bn-ql-item"><i class="bn-dleg-area"></i>候选池曲线</span>
           <span class="bn-ql-item"><i class="bn-dleg-line"></i>±${tol}% 参考线</span>
         </div>
         <div class="bn-day-bars" style="${colsCss}">
           <span class="bn-day-axis is-top">${(maxShare * 100).toFixed(0)}%</span>
+          <span class="bn-day-axis is-mid">${(maxShare * 50).toFixed(0)}%</span>
           <span class="bn-day-axis is-bot">0%</span>
+          <svg class="bn-day-svg" viewBox="0 0 ${aw} ${ah}" preserveAspectRatio="none" aria-hidden="true">
+            <line x1="0" y1="${ah / 2}" x2="${aw}" y2="${ah / 2}" class="bn-day-grid"/>
+            ${areaPath ? `<path d="${areaPath}" class="bn-day-area"/>` : ""}
+            ${linePath ? `<path d="${linePath}" class="bn-day-pline"/>` : ""}
+          </svg>
           ${sorted.map((r) => {
             const hb = Math.max(3, (Number(r.share_in_bench || 0) / maxShare) * 100);
-            const hp = Math.max(3, (Number(r.share_in_pool || 0) / maxShare) * 100);
             const warn = Math.abs(Number(r.delta_pp || 0)) > tol;
             const dStr = String(r.key);
             const tip = `${dStr} · 已选 ${fmt(r.count)} 条 (${(r.share_in_bench * 100).toFixed(1)}%) · 候选池 ${(r.share_in_pool * 100).toFixed(1)}% · 差值 ${r.delta_pp > 0 ? "+" : ""}${r.delta_pp.toFixed(1)}%`;
             return `<button type="button" class="bn-day-col ${warn ? "is-warn" : ""}" data-dimk="day" data-dimv="${esc(dStr)}" aria-pressed="${S.f.day === dStr}" data-tip="${esc(tip)}">
-              <div class="bn-day-pair">
-                <span class="bn-day-b" style="height:${hb.toFixed(1)}%"></span>
-                <span class="bn-day-p" style="height:${hp.toFixed(1)}%"></span>
-              </div>
+              <span class="bn-day-b" style="height:${hb.toFixed(1)}%"></span>
             </button>`;
           }).join("")}
         </div>
@@ -1553,37 +1769,231 @@ export async function render(root, ctx) {
           }).join("")}
         </div>
       </div>`;
+    } else if ((S.dim === "severity" || S.dim === "mechanism") && rows.length) {
+      const displayRows = S.dim === "severity"
+        ? SEVS_ALL.map((s) => rows.find((r) => r.key === s)).filter(Boolean)
+        : MECH_ORDER.map((m) => rows.find((r) => r.key === m)).filter(Boolean).concat(
+            rows.filter((r) => !MECH_ORDER.includes(r.key)),
+          );
+      const maxS = Math.max(0.12, ...displayRows.flatMap((r) => [Number(r.share_in_bench || 0), Number(r.share_in_pool || 0)])) * 1.08;
+      const midPct = ((maxS * 50)).toFixed(0);
+      const maxPct = ((maxS * 100)).toFixed(0);
+      const mechColorMap = Object.fromEntries(MECH_ORDER.map((m, i) => [m, MECH_PALETTE[i % MECH_PALETTE.length]]));
+
+      bodyHTML = `<div class="bn-dbell-wrap">
+        <div class="bn-dleg">
+          <span class="bn-ql-item"><i class="bn-dleg-dot is-ring"></i>候选池</span>
+          <span class="bn-ql-item"><i class="bn-dleg-dot is-solid"></i>已选</span>
+        </div>
+        <div class="bn-dbell-axis-row">
+          <span></span>
+          <div class="bn-dbell-scale num"><span>0%</span><span>${midPct}%</span><span>${maxPct}%</span></div>
+          <span class="bn-dbell-hcol">已选</span>
+          <span class="bn-dbell-hcol">偏差</span>
+          <span class="bn-dbell-hcol">倍率</span>
+          <span class="bn-dbell-hcol">条数</span>
+        </div>
+        <div class="bn-dbell-list">
+          ${displayRows.map((r) => {
+            const sb = Number(r.share_in_bench || 0);
+            const sp = Number(r.share_in_pool || 0);
+            const dp = Number(r.delta_pp || 0);
+            const lift = sp > 0.0005 ? sb / sp : null;
+            const posB = Math.min(97, Math.max(2, (sb / maxS) * 100));
+            const posP = Math.min(97, Math.max(2, (sp / maxS) * 100));
+            const segLeft = Math.min(posB, posP);
+            const segWidth = Math.max(1, Math.abs(posB - posP));
+            const tone = S.dim === "severity" ? sevTone(r.key) : (mechColorMap[r.key] || "var(--accent)");
+            const warn = isAudit && Math.abs(dp) > tol;
+            const pressed = filterKeyForDim && S.f[filterKeyForDim] === r.key;
+            const bLabel = bucketLabel(S.dim, r, maps);
+            const liftText = lift == null ? "—" : lift >= 10 ? `${lift.toFixed(0)}×` : `${lift.toFixed(1)}×`;
+            const tip = `${bLabel} · 已选 ${(sb * 100).toFixed(1)}% (${fmt(r.count)} 条) · 候选池 ${(sp * 100).toFixed(1)}% · ${liftText}`;
+            return `<button type="button" class="bn-dbell-row" data-dimk="${filterKeyForDim || ""}" data-dimv="${esc(r.key)}" aria-pressed="${pressed}" data-tip="${esc(tip)}" style="--c:${tone}">
+              <span class="bn-dbell-lbl"><i></i>${esc(bLabel)}</span>
+              <span class="bn-dbell-track">
+                <i class="bn-dbell-g"></i>
+                <i class="bn-dbell-beam" style="left:${segLeft.toFixed(2)}%;width:${segWidth.toFixed(2)}%"></i>
+                <i class="bn-dbell-pdot" style="left:${posP.toFixed(2)}%"></i>
+                <i class="bn-dbell-bdot" style="left:${posB.toFixed(2)}%"></i>
+              </span>
+              <b class="bn-dbell-val num">${(sb * 100).toFixed(1)}%</b>
+              <span class="bn-db-pp ${warn ? "is-warn" : dp >= 0 ? "is-pos" : ""} num">${dp > 0 ? "+" : ""}${dp.toFixed(1)}%</span>
+              <span class="bn-dbell-lift ${lift != null && lift >= 1.5 ? "is-up" : ""} num">${liftText}</span>
+              <span class="bn-dbell-cnt num">${fmt(r.count)}</span>
+            </button>`;
+          }).join("")}
+        </div>
+      </div>`;
+    } else if (S.dim === "round" && rows.length) {
+      const roundOrder = ["1", "2-3", "4-10", "11+"];
+      const displayRows = roundOrder
+        .map((k) => rows.find((r) => String(r.key) === k))
+        .filter(Boolean)
+        .concat(rows.filter((r) => !roundOrder.includes(String(r.key))));
+      const maxS = Math.max(0.1, ...displayRows.flatMap((r) => [Number(r.share_in_bench || 0), Number(r.share_in_pool || 0)]));
+      let accB = 0;
+      const cumRows = displayRows.map((r) => {
+        accB = Math.min(1, accB + Number(r.share_in_bench || 0));
+        return { r, cumB: accB };
+      });
+      const nCols = cumRows.length;
+      const cw = 400;
+      const ch = 120;
+      const cPts = cumRows.map((x, idx) => {
+        const px = ((idx + 0.5) / nCols) * cw;
+        const py = ch - 12 - x.cumB * (ch - 26);
+        return { x: px, y: py, cum: x.cumB * 100 };
+      });
+      const polyPts = cPts.map((pt) => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(" ");
+
+      bodyHTML = `<div class="bn-rcum-wrap">
+        <div class="bn-dleg">
+          <span class="bn-ql-item"><i class="bn-dleg-dot" style="background:var(--accent)"></i>已选</span>
+          <span class="bn-ql-item"><i class="bn-dleg-dot" style="background:var(--t3)"></i>候选池</span>
+          <span class="bn-ql-item"><i class="bn-dleg-cline"></i>累计占比</span>
+        </div>
+        <div class="bn-rcum-stage">
+          <svg class="bn-rcum-svg" viewBox="0 0 ${cw} ${ch}" preserveAspectRatio="none" aria-hidden="true">
+            <line x1="0" y1="${ch - 12}" x2="${cw}" y2="${ch - 12}" class="bn-day-grid"/>
+            <line x1="0" y1="${ch / 2 - 4}" x2="${cw}" y2="${ch / 2 - 4}" class="bn-day-grid"/>
+            ${polyPts ? `<polyline points="${polyPts}" class="bn-rcum-line"/>` : ""}
+          </svg>
+          <div class="bn-rcum-cols" style="grid-template-columns:repeat(${nCols}, minmax(0, 1fr))">
+            ${cumRows.map(({ r, cumB }) => {
+              const sb = Number(r.share_in_bench || 0);
+              const sp = Number(r.share_in_pool || 0);
+              const dp = Number(r.delta_pp || 0);
+              const hb = Math.max(4, (sb / maxS) * 100);
+              const hp = Math.max(4, (sp / maxS) * 100);
+              const warn = Math.abs(dp) > tol;
+              const pressed = S.f.rnd === r.key;
+              const bLabel = bucketLabel("round", r, maps);
+              const tip = `${bLabel} · 已选 ${(sb * 100).toFixed(1)}% · 候选池 ${(sp * 100).toFixed(1)}% · 累计 ${(cumB * 100).toFixed(1)}%`;
+              return `<button type="button" class="bn-vcol ${warn ? "is-warn" : ""}" data-dimk="rnd" data-dimv="${esc(r.key)}" aria-pressed="${pressed}" data-tip="${esc(tip)}">
+                <span class="bn-vcol-cum num">${(cumB * 100).toFixed(0)}%</span>
+                <div class="bn-vcol-bars">
+                  <span class="bn-vcol-b" style="height:${hb.toFixed(1)}%;background:${warn ? "var(--sev-1)" : "var(--accent)"}"></span>
+                  <span class="bn-vcol-p" style="height:${hp.toFixed(1)}%"></span>
+                </div>
+                <span class="bn-vcol-dp ${warn ? "is-warn" : "is-ok"} num">${dp > 0 ? "+" : ""}${dp.toFixed(1)}%</span>
+                <span class="bn-vcol-lbl">${esc(bLabel)}</span>
+                <span class="bn-vcol-cnt num">${fmt(r.count)} (${(sb * 100).toFixed(1)}%)</span>
+              </button>`;
+            }).join("")}
+          </div>
+        </div>
+      </div>`;
+    } else if (S.dim === "turn_type" && rows.length) {
+      const sRow = rows.find((r) => r.key === "single") || rows[0];
+      const mRow = rows.find((r) => r.key === "multi") || rows[1] || { key: "multi", count: 0, share_in_bench: 0, share_in_pool: 0, delta_pp: 0 };
+      const sbS = Number(sRow?.share_in_bench || 0) * 100;
+      const sbM = Number(mRow?.share_in_bench || 0) * 100;
+      const spS = Number(sRow?.share_in_pool || 0) * 100;
+      const spM = Number(mRow?.share_in_pool || 0) * 100;
+
+      const benchRing = svgDonutHTML(
+        [
+          { value: sbS, color: "var(--accent)", active: S.f.turn === "single", attr: 'data-dimk="turn" data-dimv="single"', tip: `已选单轮 · ${sbS.toFixed(1)}%` },
+          { value: sbM, color: "var(--loc-ulq)", active: S.f.turn === "multi", attr: 'data-dimk="turn" data-dimv="multi"', tip: `已选多轮 · ${sbM.toFixed(1)}%` },
+        ],
+        { size: 112, rOut: 48, rIn: 31, centerVal: `${(S.f.turn === "multi" ? sbM : sbS).toFixed(0)}%`, centerSub: "已选" },
+      );
+      const poolRing = svgDonutHTML(
+        [
+          { value: spS, color: "var(--accent)", active: S.f.turn === "single", attr: 'data-dimk="turn" data-dimv="single"', tip: `候选池单轮 · ${spS.toFixed(1)}%` },
+          { value: spM, color: "var(--loc-ulq)", active: S.f.turn === "multi", attr: 'data-dimk="turn" data-dimv="multi"', tip: `候选池多轮 · ${spM.toFixed(1)}%` },
+        ],
+        { size: 112, rOut: 48, rIn: 31, centerVal: `${(S.f.turn === "multi" ? spM : spS).toFixed(0)}%`, centerSub: "候选池" },
+      );
+      const tItems = [
+        { key: "single", lbl: "单轮对话", c: "var(--accent)", row: sRow, b: sbS, p: spS },
+        { key: "multi", lbl: "多轮对话", c: "var(--loc-ulq)", row: mRow, b: sbM, p: spM },
+      ];
+      bodyHTML = `<div class="bn-tcmp-wrap">
+        <div class="bn-tcmp-rings">
+          ${benchRing}
+          <span class="bn-tcmp-vs">vs</span>
+          ${poolRing}
+        </div>
+        <div class="bn-tcmp-rows">
+          ${tItems.map((it) => {
+            const dp = Number(it.row?.delta_pp || 0);
+            const cnt = Number(it.row?.count || 0);
+            const pressed = S.f.turn === it.key;
+            return `<button type="button" class="bn-tcmp-row" data-dimk="turn" data-dimv="${it.key}" aria-pressed="${pressed}" style="--c:${it.c}">
+              <span class="bn-tcmp-lbl"><i></i>${it.lbl}</span>
+              <span class="bn-tcmp-vals num"><b>${it.b.toFixed(1)}%</b><small>池 ${it.p.toFixed(1)}%</small></span>
+              <span class="bn-db-pp ${dp >= 0 ? "is-pos" : ""} num">${dp > 0 ? "+" : ""}${dp.toFixed(1)}%</span>
+              <span class="bn-dbell-cnt num">${fmt(cnt)} 条</span>
+            </button>`;
+          }).join("")}
+        </div>
+      </div>`;
+    } else if (rows.length && rows.length <= 8) {
+      const maxS = Math.max(0.05, ...byCnt.flatMap((r) => [Number(r.share_in_bench || 0), Number(r.share_in_pool || 0)]));
+      bodyHTML = `<div class="bn-vcols-wrap">
+        <div class="bn-dleg">
+          <span class="bn-ql-item"><i class="bn-dleg-dot" style="background:var(--accent)"></i>已选占比</span>
+          <span class="bn-ql-item"><i class="bn-dleg-dot" style="background:var(--t3)"></i>候选池占比</span>
+        </div>
+        <div class="bn-vcols" style="grid-template-columns:repeat(${byCnt.length}, minmax(0, 1fr))">
+          ${byCnt.map((r) => {
+            const sb = Number(r.share_in_bench || 0);
+            const sp = Number(r.share_in_pool || 0);
+            const dp = Number(r.delta_pp || 0);
+            const hb = Math.max(4, (sb / maxS) * 100);
+            const hp = Math.max(4, (sp / maxS) * 100);
+            const pressed = filterKeyForDim && S.f[filterKeyForDim] === r.key;
+            const bLabel = bucketLabel(S.dim, r, maps);
+            const tip = `${bLabel} · 已选 ${fmt(r.count)} 条 (${(sb * 100).toFixed(1)}%) · 候选池 ${(sp * 100).toFixed(1)}% · 差值 ${dp > 0 ? "+" : ""}${dp.toFixed(1)}%`;
+            return `<button type="button" class="bn-vcol" data-dimk="${filterKeyForDim || ""}" data-dimv="${esc(r.key)}" aria-pressed="${pressed}" data-tip="${esc(tip)}">
+              <span class="bn-vcol-top num">${(sb * 100).toFixed(1)}%</span>
+              <div class="bn-vcol-bars">
+                <span class="bn-vcol-b" style="height:${hb.toFixed(1)}%;background:var(--accent)"></span>
+                <span class="bn-vcol-p" style="height:${hp.toFixed(1)}%"></span>
+              </div>
+              <span class="bn-vcol-dp num">${dp > 0 ? "+" : ""}${dp.toFixed(1)}%</span>
+              <span class="bn-vcol-lbl" title="${esc(bLabel)}">${esc(bLabel)}</span>
+              <span class="bn-vcol-cnt num">${fmt(r.count)}</span>
+            </button>`;
+          }).join("")}
+        </div>
+      </div>`;
     } else if (rows.length) {
-      const displayRows = [...rows].sort((a, b) => (b.count || 0) - (a.count || 0)).slice(0, 30);
+      const displayRows = byCnt.slice(0, 30);
       const maxS = Math.max(0.05, ...displayRows.flatMap((r) => [Number(r.share_in_bench || 0), Number(r.share_in_pool || 0)]));
-      bodyHTML = `<div class="bn-db-head">
-        <span>分布项${isTaxDim ? " · 问题样本" : ""}</span><span>已选 ● 与候选池 ○</span><span>条数</span><span>已选</span><span>候选池</span><span>差值</span>
+      const maxAbsBias = Math.max(tol, 5, ...displayRows.map((r) => Math.abs(Number(r.delta_pp || 0))));
+      bodyHTML = `<div class="bn-hs-head">
+        <span>分布项</span><span>已选 / 候选池占比</span><span>偏差幅度</span><span style="text-align:right">条数</span>
       </div>
       <div class="bn-dist-body">
         ${displayRows.map((r) => {
           const sb = Number(r.share_in_bench || 0);
           const sp = Number(r.share_in_pool || 0);
           const dp = Number(r.delta_pp || 0);
-          const leftPct = Math.min(98, (Math.min(sb, sp) / maxS) * 92 + 4);
-          const rightPct = Math.min(98, (Math.max(sb, sp) / maxS) * 92 + 4);
-          const bPos = Math.min(98, (sb / maxS) * 92 + 4);
-          const pPos = Math.min(98, (sp / maxS) * 92 + 4);
-          const cls = isAudit ? (Math.abs(dp) > tol ? "is-warn" : "is-ok") : "";
+          const wBench = Math.min(100, (sb / maxS) * 100);
+          const wPool = Math.min(100, (sp / maxS) * 100);
+          const mag = Math.min(48, Math.max(3, (Math.abs(dp) / maxAbsBias) * 48));
+          const biasStyle = dp >= 0 ? `left:50%;width:${mag.toFixed(1)}%` : `right:50%;width:${mag.toFixed(1)}%`;
+          const cls = isAudit ? (Math.abs(dp) > tol ? "is-warn" : "is-ok") : dp >= 0 ? "is-pos" : "is-neg";
           const pressed = filterKeyForDim && S.f[filterKeyForDim] === r.key;
           const bLabel = bucketLabel(S.dim, r, maps);
           const tip = `${bLabel} · 已选 ${fmt(r.count)} 条 (${(sb * 100).toFixed(1)}%) · 候选池 ${(sp * 100).toFixed(1)}% · 差值 ${dp > 0 ? "+" : ""}${dp.toFixed(1)}%`;
-          return `<button type="button" class="bn-db-row" data-dimk="${filterKeyForDim || ""}" data-dimv="${esc(r.key)}" aria-pressed="${pressed}" data-tip="${esc(tip)}">
-            <span class="bn-db-lbl">${esc(bLabel)}</span>
-            <div class="bn-db-track">
-              <div class="bn-db-rail"></div>
-              <div class="bn-db-span ${cls}" style="left:${leftPct.toFixed(1)}%;width:${Math.max(0, rightPct - leftPct).toFixed(1)}%"></div>
-              <div class="bn-db-pool" style="left:${pPos.toFixed(1)}%"></div>
-              <div class="bn-db-bench ${cls}" style="left:${bPos.toFixed(1)}%"></div>
+          return `<button type="button" class="bn-hs-row" data-dimk="${filterKeyForDim || ""}" data-dimv="${esc(r.key)}" aria-pressed="${pressed}" data-tip="${esc(tip)}">
+            <span class="bn-hs-lbl" title="${esc(bLabel)}">${esc(bLabel)}</span>
+            <div class="bn-hs-bars">
+              <div class="bn-hs-pair">
+                <span class="bn-hs-b" style="width:${wBench.toFixed(1)}%"></span>
+                <span class="bn-hs-p" style="width:${wPool.toFixed(1)}%"></span>
+              </div>
+              <span class="bn-hs-pct num"><b>${(sb * 100).toFixed(1)}%</b><small>${(sp * 100).toFixed(1)}%</small></span>
             </div>
-            <span class="bn-db-cnt">${fmt(r.count)}</span>
-            <span class="bn-db-bench-n">${(sb * 100).toFixed(1)}%</span>
-            <span class="bn-db-pool-n">${(sp * 100).toFixed(1)}%</span>
-            <span class="bn-db-pp ${cls}">${dp > 0 ? "+" : ""}${dp.toFixed(1)}%</span>
+            <div class="bn-hs-bias">
+              <div class="bn-hs-div"><span class="bn-hs-zero"></span><span class="bn-hs-dfill ${cls}" style="${biasStyle}"></span></div>
+              <span class="bn-db-pp ${cls} num">${dp > 0 ? "+" : ""}${dp.toFixed(1)}%</span>
+            </div>
+            <span class="bn-db-cnt num">${fmt(r.count)}</span>
           </button>`;
         }).join("")}
       </div>`;
@@ -1606,6 +2016,8 @@ export async function render(root, ctx) {
     const p50Show = extra.known_tokens_p50 > 0 ? extra.known_tokens_p50 : (toks.p50 || 0);
     const p90Show = extra.known_tokens_p90 > 0 ? extra.known_tokens_p90 : (toks.p90 || 0);
 
+    const bodyStageHTML = `<div class="bn-dist-stage${bodyHTML.includes("bn-dist-body") ? " is-scroll" : ""}">${bodyHTML}</div>`;
+
     return `<section class="card bn-dist-card">
       <div class="card-head">
         <h2>数据分布与偏差</h2>
@@ -1615,7 +2027,8 @@ export async function render(root, ctx) {
         <span class="bn-dim-sep" aria-hidden="true"></span>
         ${designMeta.map(pillBtn).join("")}
       </div>
-      ${bodyHTML}
+      ${insightsHTML}
+      ${bodyStageHTML}
       <div class="bn-scale-strip">
         <div class="bn-scell"><span>已知长度中位</span><b>${p50Show ? compact(p50Show) : "—"}</b></div>
         <div class="bn-scell"><span>已知长度 P90</span><b>${p90Show ? compact(p90Show) : "—"}</b></div>
@@ -1912,6 +2325,7 @@ export async function render(root, ctx) {
             <option value="probs" ${S.sort === "probs" ? "selected" : ""}>问题数</option>
             <option value="day" ${S.sort === "day" ? "selected" : ""}>时间倒序</option>
           </select>
+          <button type="button" class="bn-btn" id="bn-export-jsonl" title="导出当前筛选问句为 JSONL（一行一 Case，支持单轮/多轮）">导出 JSONL</button>
         </div>
       </div>
 
@@ -2235,10 +2649,48 @@ export async function render(root, ctx) {
     }
   }
 
+  function syncRingBox(box, attr, activeVal) {
+    if (!box) return;
+    const arcs = $$(".bn-ring-arc", box);
+    let activeArc = null;
+    arcs.forEach((arc) => {
+      const match = Boolean(activeVal && arc.getAttribute(attr) === activeVal);
+      if (match) activeArc = arc;
+      arc.classList.toggle("is-active", match);
+      arc.classList.toggle("is-dim", Boolean(activeVal && !match));
+      arc.setAttribute("aria-pressed", String(match));
+    });
+    const mid = $(".bn-pie-mid", box);
+    if (!mid) return;
+    const bEl = $("b", mid);
+    const sEl = $("span", mid);
+    if (activeArc && activeArc.dataset.ringVal) {
+      mid.classList.add("is-focus");
+      if (activeArc.dataset.ringColor) mid.style.setProperty("--c", activeArc.dataset.ringColor);
+      if (bEl) bEl.textContent = activeArc.dataset.ringVal;
+      if (sEl && activeArc.dataset.ringSub) sEl.textContent = activeArc.dataset.ringSub;
+    } else {
+      mid.classList.remove("is-focus");
+      mid.style.removeProperty("--c");
+      if (bEl && mid.dataset.defaultVal != null) bEl.textContent = mid.dataset.defaultVal;
+      if (sEl && mid.dataset.defaultSub != null) sEl.textContent = mid.dataset.defaultSub;
+    }
+  }
+
   function syncHighlights() {
     $$(".bn-quota-card [data-fsev]", root).forEach((b) => b.setAttribute("aria-pressed", String(S.f.sev === b.dataset.fsev)));
     $$(".bn-quota-card [data-fturn]", root).forEach((b) => b.setAttribute("aria-pressed", String(S.f.turn === b.dataset.fturn)));
     $$(".bn-quota-card [data-fmech]", root).forEach((b) => b.setAttribute("aria-pressed", String(S.f.l2 === b.dataset.fmech)));
+    $(".bn-qpie-leg", root)?.classList.toggle("has-focus", Boolean(S.f.sev));
+    $(".bn-turn-waffle", root)?.classList.toggle("has-focus", Boolean(S.f.turn));
+    $(".bn-turn-list", root)?.classList.toggle("has-focus", Boolean(S.f.turn));
+    $(".bn-mech-rank", root)?.classList.toggle("has-focus", Boolean(S.f.l2));
+    $(".bn-dbell-list", root)?.classList.toggle("has-focus", Boolean((S.dim === "severity" && S.f.sev) || (S.dim === "mechanism" && S.f.l2)));
+    $(".bn-tcmp-rows", root)?.classList.toggle("has-focus", Boolean(S.dim === "turn_type" && S.f.turn));
+    syncRingBox($(".bn-qpie-wrap .bn-pie-box", root), "data-fsev", S.f.sev);
+    $$(".bn-dist-card .bn-pie-box", root).forEach((box) => {
+      if ($(".bn-ring-arc[data-dimk='turn']", box)) syncRingBox(box, "data-dimv", S.f.turn);
+    });
     $$(".bn-sb-card [data-fpat]", root).forEach((b) => b.setAttribute("aria-pressed", String(S.f.l3 === b.dataset.fpat)));
     const dupBtn = $("#bn-dup-btn", root);
     if (dupBtn) dupBtn.setAttribute("aria-pressed", String(S.f.dupOnly));
@@ -2517,9 +2969,55 @@ export async function render(root, ctx) {
       repaint();
     }));
 
-    $$(".bn-quota-card [data-fsev]", root).forEach((b) => b.addEventListener("click", () => toggleFilter("sev", b.dataset.fsev)));
-    $$(".bn-quota-card [data-fturn]", root).forEach((b) => b.addEventListener("click", () => toggleFilter("turn", b.dataset.fturn)));
-    $$(".bn-quota-card [data-fmech]", root).forEach((b) => b.addEventListener("click", () => toggleFilter("l2", b.dataset.fmech)));
+    const bindKeyToggle = (el, fn) => {
+      el.addEventListener("click", fn);
+      if (el.tagName !== "BUTTON" && el.tagName !== "A") {
+        el.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            fn();
+          }
+        });
+      }
+    };
+    const wireDistCard = (td) => {
+      $$(".bn-dist-card [data-dimpick]", root).forEach((b) => b.addEventListener("click", () => {
+        const nextDim = b.dataset.dimpick;
+        if (nextDim && nextDim !== S.dim) {
+          S.dim = nextDim;
+          refreshDistCard(td);
+        }
+      }));
+      $$(".bn-dist-card [data-dimk]", root).forEach((b) => bindKeyToggle(b, () => {
+        const k = b.dataset.dimk;
+        const v = b.dataset.dimv;
+        if (k) toggleFilter(k, v);
+      }));
+      const dupBtn = $("#bn-dup-btn", root);
+      if (dupBtn) dupBtn.onclick = () => toggleFilter("dupOnly", true);
+    };
+    const refreshDistCard = (td) => {
+      const curDist = $(".bn-dist-card", root);
+      if (!curDist) return;
+      const wrap = document.createElement("div");
+      wrap.innerHTML = renderDistHTML(td);
+      const nextDist = wrap.firstElementChild;
+      if (!nextDist) return;
+      curDist.replaceWith(nextDist);
+      wireDistCard(td);
+      syncHighlights();
+      syncUrl({ bm: S.model, bl: S.isLong ? "1" : null, bt: S.tier, bd: S.dim, bv: S.view === "field" ? "field" : null, trace: S.trace || null });
+    };
+    const linkQuotaDim = (filterKey, val, targetDim) => {
+      toggleFilter(filterKey, val);
+      if (S.f[filterKey] && targetDim && S.dim !== targetDim) {
+        S.dim = targetDim;
+        refreshDistCard(tierData);
+      }
+    };
+    $$(".bn-quota-card [data-fsev]", root).forEach((b) => bindKeyToggle(b, () => linkQuotaDim("sev", b.dataset.fsev, "severity")));
+    $$(".bn-quota-card [data-fturn]", root).forEach((b) => bindKeyToggle(b, () => linkQuotaDim("turn", b.dataset.fturn, "turn_type")));
+    $$(".bn-quota-card [data-fmech]", root).forEach((b) => bindKeyToggle(b, () => linkQuotaDim("l2", b.dataset.fmech, "mechanism")));
     $$(".bn-sb-card [data-fpat]", root).forEach((b) => b.addEventListener("click", () => {
       const code = b.dataset.fpat;
       const same = S.f.l3 === code;
@@ -2532,14 +3030,7 @@ export async function render(root, ctx) {
       S.fieldPages = {};
       repaint();
     }));
-    $$(".bn-dist-card [data-dimpick]", root).forEach((b) => b.addEventListener("click", () => { S.dim = b.dataset.dimpick; repaint(); }));
-    $$(".bn-dist-card [data-dimk]", root).forEach((b) => b.addEventListener("click", () => {
-      const k = b.dataset.dimk;
-      const v = b.dataset.dimv;
-      if (k) toggleFilter(k, v);
-    }));
-    const dupTop = $("#bn-dup-btn", root);
-    if (dupTop) dupTop.onclick = () => toggleFilter("dupOnly", true);
+    wireDistCard(tierData);
 
     $$(".bn-matrix [data-mxs], .bn-matrix [data-mxm]", root).forEach((btn) => btn.addEventListener("click", () => {
       const s = btn.dataset.mxs || "";
@@ -2754,6 +3245,59 @@ export async function render(root, ctx) {
 
     const sortEl = $("#bn-sort", card);
     if (sortEl) sortEl.onchange = (e) => { S.sort = e.target.value; S.page = 1; S.fieldPages = {}; repaint({ rebuildSummary: false }); };
+    const exportBtn = $("#bn-export-jsonl", card);
+    if (exportBtn) {
+      exportBtn.onclick = async () => {
+        if (exportBtn.disabled) return;
+        const origText = exportBtn.textContent;
+        exportBtn.disabled = true;
+        exportBtn.textContent = "导出中…";
+        try {
+          const qp = new URLSearchParams();
+          if (S.model) qp.set("model", S.model);
+          if (S.tier) qp.set("tier", S.tier);
+          if (S.isLong) qp.set("long", "1");
+          if (S.f.sev) qp.set("sev", S.f.sev);
+          if (S.f.l1) qp.set("l1", S.f.l1);
+          if (S.f.l2) qp.set("l2", S.f.l2);
+          if (S.f.l3) qp.set("l3", S.f.l3);
+          if (S.f.turn) qp.set("turn", S.f.turn);
+          if (S.f.tok) qp.set("tok", S.f.tok);
+          if (S.f.rnd) qp.set("rnd", S.f.rnd);
+          if (S.f.day) qp.set("day", S.f.day);
+          if (S.f.psrc) qp.set("psrc", S.f.psrc);
+          if (S.f.dupOnly) qp.set("dup", "1");
+          if (S.f.longOnly) qp.set("longOnly", "1");
+          if (S.f.q) qp.set("q", S.f.q);
+          if (S.sort) qp.set("sort", S.sort);
+
+          let text = "";
+          const url = `bench_export/${encodeURIComponent(data.product)}.jsonl?${qp.toString()}`;
+          try {
+            const res = await fetch(url);
+            if (res.ok) text = await res.text();
+          } catch {
+            text = "";
+          }
+          if (!text) {
+            text = filtered.map((c) => JSON.stringify(formatClientExportCase(c, maps))).join("\n") + (filtered.length ? "\n" : "");
+          }
+          const blob = new Blob([text], { type: "application/x-ndjson;charset=utf-8" });
+          const blobUrl = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = blobUrl;
+          a.download = `bench-${data.product}-${S.model}-${S.isLong ? "long" : "std"}-${S.tier}.jsonl`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 2500);
+          announce(`已导出 ${fmt(filtered.length)} 条测试集 JSONL`);
+        } finally {
+          exportBtn.disabled = false;
+          exportBtn.textContent = origText;
+        }
+      };
+    }
     const grpEl = $("#bn-groupby", card);
     if (grpEl) grpEl.onchange = (e) => { S.groupBy = e.target.value; S.fieldPages = {}; repaint({ rebuildSummary: false }); };
     const psEl = $("#bn-pagesize", card);

@@ -5,17 +5,16 @@ import { renderContent } from "./render.js";
 import { sunburst } from "./sunburst.js";
 import { sunburstTween } from "./motion.js";
 import { galaxy } from "./galaxy.js";
-import { mountAB } from "./abtest.js";
+import { LEDGER_MAX, RECALL_CAP, RESULT, sevIdx, caseItem, groupCases, ledger, trendSampleDrawer, loadTrendSamplePage, loadTraceSamplePage, mountSampleTrend } from "./sample_drawer.js";
 import { mountDailyTop, resolveDailyTip } from "./daily_top.js";
 import { mountProblemTrends } from "./problem_trends.js";
 import { traceSeverityModel, traceShares } from "./trace_analysis.js";
 import { createKlineChart, createTrendChart, KLINE_PERIODS } from "./kline_chart.js";
 import { buildIntradayCandles } from "./kline_data.js";
-import { trendSampleFrame, abTrendSampleRefs, resolveABSamples, trendSampleCandidates, trendSampleProblems, traceSampleRefs } from "./trend_samples.js";
+import { trendSampleFrame } from "./trend_samples.js";
 import { patternName as patName } from "./taxonomy.js";
 
 let ctx;
-let abDocKey = null;
 let mxDocKey = null;
 let mxMoreCleanup = null;
 let shown = null;
@@ -34,8 +33,6 @@ const ui = (product) =>
     },
   });
 const SPLIT_SHORT = { daily: "日常", lost: "流失" };
-// A 数据量 branch with inputs but no evaluated Trace: the ring keeps it shut and says where to look.
-const NO_CASE = "暂无已评测 Trace";
 const dot = (c) => `<i style="--c:${c}"></i>`;
 
 export async function render(root, c) {
@@ -72,7 +69,7 @@ export async function render(root, c) {
   const u = ui(c.product);
   if (c.refresh) root.classList.add("is-refresh");
   // 数据页顺序：规模/质量读数 → 聚类矩阵 → 三个分析体系 → 会话场（最重、放最后）。
-  root.innerHTML = `<div class="bento">${volumeCard(p)}${evalCard(p)}${matrixCard(p, tax)}${attrCard(p)}${clusterCard(p, tax)}${predictCard(p)}${fieldCard(p, u)}</div>`;
+  root.innerHTML = `<div class="bento">${volumeCard(p)}${evalCard(p)}${matrixCard(p, tax)}${attrCard(p, tax)}${clusterCard(p, tax)}${predictCard(p)}${fieldCard(p, u)}</div>`;
   wire($(".bento", root), p, tax, u);
   if (c.refresh) requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove("is-refresh")));
   else runCounters(root);
@@ -171,13 +168,6 @@ function openForecast(slug) {
 }
 function openSamples(patch) {
   ctx.navigate({ ...SAMPLE_RESET, view: "samples", product: ctx.product, ...patch });
-}
-/* A/B sample entries land on the version-compare page instead: the same question before and
-   after the release, side by side. `pair` selects the question, `online` opens a live sample on
-   its own (no same-question twin). */
-const COMPARE_RESET = { ...SAMPLE_RESET, pair: null, online: null, round: null };
-function openCompare(patch) {
-  ctx.navigate({ ...COMPARE_RESET, view: "compare", product: ctx.product, ...patch });
 }
 
 /* One tile per evaluation record. Each model/split group has its own pager. Pages
@@ -346,15 +336,12 @@ function volMiniSegs(p) {
   return tasks.slice(0, 6).map((t, i) => ({ name: t.task, n: t.n || 0, c: shade(i, Math.max(tasks.length, 1)) }));
 }
 
-/* ---------------------------------------------------------------- 评测量: inputs vs completed per day */
+/* ---------------------------------------------------------------- 评测量: monthly calendar bar chart */
 const dayCount = (d) => Object.entries(d).reduce((n, [k, v]) => (k === "d" ? n : n + (v || 0)), 0);
 const DAY_MS = 86400000;
 const dayMs = (d) => Date.parse(`${d}T00:00:00Z`);
 const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
-const EV_PER_ROW = 15;
-const RANGE_LABEL = { 7: "近 7 天", 30: "近 30 天", all: "全部" };
-// year: 「全部」柱状图超过 12 个月时切到年份，点某一年再下钻成该年的月份。
-const EV = { range: "all", model: "all", year: null };
+const EV = { month: null, model: "all" };
 // 模型分段只保留这几个已知家族：变体（b_expert_only_*、b_expert_search_test_v2）按前缀归入
 // 对应家族，归不进去的模型不占用分段，也不进入任何单模型口径（全部里仍然算）。
 const EV_FAMILIES = [
@@ -380,7 +367,6 @@ function familyInput(input, family) {
 
 function evalRows(p) {
   if (Array.isArray(p.daily) && p.daily.length) return p.daily;
-  // Fallback for a payload built before daily input counts existed.
   return (p.dates || []).map((d) => {
     const n = dayCount(d);
     return { d: d.d, m: "all", sp: "", inputs: n, evaluated: n };
@@ -396,139 +382,184 @@ function evalModels(p) {
   return [{ id: "all", label: "全部" }, ...EV_FAMILIES.filter((f) => present.has(f.id)).map(({ id, label }) => ({ id, label }))];
 }
 
-function evalWindow(p) {
+function evalMonths(p, model = EV.model) {
+  const set = new Set();
+  evalRows(p).forEach((r) => {
+    if (model !== "all" && modelFamily(r.m) !== model) return;
+    const ym = String(r.d || "").slice(0, 7);
+    if (/^\d{4}-\d{2}$/.test(ym)) set.add(ym);
+  });
+  return [...set].sort();
+}
+
+function resolveEvalMonth(p, model = EV.model, month = EV.month) {
+  const months = evalMonths(p, model);
+  if (month === "all" && months.length) return "all";
+  if (month && months.includes(month)) return month;
+  return months[months.length - 1] || "";
+}
+
+const formatMonthLabel = (ym) => (ym === "all" ? "全部时间" : ym ? `${ym.slice(0, 4)}年${Number(ym.slice(5, 7))}月` : "暂无月份");
+
+const shortMonthLabel = (ym, multiYear) => (multiYear ? `${ym.slice(2, 4)}/${Number(ym.slice(5, 7))}月` : `${Number(ym.slice(5, 7))}月`);
+
+function evalWindow(p, model = EV.model, month = EV.month) {
+  const months = evalMonths(p, model);
+  const activeMonth = resolveEvalMonth(p, model, month);
+  const isAll = activeMonth === "all";
+  const monthIdx = isAll ? -1 : months.indexOf(activeMonth);
+  if (!activeMonth) {
+    return {
+      month: "", months, monthIdx: -1, pad: 0, days: [], monthBars: [], activeDays: 0,
+      totalInputs: 0, totalEval: 0, totalSessions: 0, totalTraces: 0, totalTokens: 0,
+      totalTokenRecords: 0, totalInputSessions: null, totalInputTraces: null, peakEval: 0,
+    };
+  }
+  const blank = () => ({
+    inputs: 0, evaluated: 0, traces: 0, tokens: 0, tokenRecords: 0, sessions: 0,
+    inTraces: 0, hasTraces: true, hasIns: true, sids: new Set(), inSids: new Set(),
+  });
+  const addRow = (x, r) => {
+    x.inputs += r.inputs || 0;
+    x.evaluated += r.evaluated || 0;
+    x.traces += r.traces ?? r.evaluated ?? 0;
+    x.tokens += r.tokens || 0;
+    x.tokenRecords += r.token_records || 0;
+    if (r.input_traces == null) x.hasTraces = false;
+    else x.inTraces += r.input_traces;
+    if (!Array.isArray(r.in_sids)) x.hasIns = false;
+    else r.in_sids.forEach((sid) => x.inSids.add(`${r.sp}|${r.m}|${sid}`));
+    if (Array.isArray(r.sids)) r.sids.forEach((sid) => x.sids.add(`${r.sp}|${r.m}|${sid}`));
+    else x.sessions += r.sessions || r.evaluated || 0;
+  };
   const byDay = new Map();
-  const blank = () => ({ inputs: 0, evaluated: 0, traces: 0, tokens: 0, tokenRecords: 0, sessions: 0,
-    inTraces: 0, hasTraces: true, hasIns: true, sids: new Set(), inSids: new Set() });
+  const byMonth = new Map();
   evalRows(p)
-    .filter((r) => EV.model === "all" || modelFamily(r.m) === EV.model)
+    .filter((r) => (model === "all" || modelFamily(r.m) === model) && (isAll || String(r.d || "").startsWith(activeMonth)))
     .forEach((r) => {
-      const x = byDay.get(r.d) || blank();
-      x.inputs += r.inputs || 0;
-      x.evaluated += r.evaluated || 0;
-      x.traces += r.traces ?? r.evaluated ?? 0;
-      x.tokens += r.tokens || 0;
-      x.tokenRecords += r.token_records || 0;
-      if (r.input_traces == null) x.hasTraces = false;
-      else x.inTraces += r.input_traces;
-      if (!Array.isArray(r.in_sids)) x.hasIns = false;
-      else r.in_sids.forEach((sid) => x.inSids.add(`${r.sp}|${r.m}|${sid}`));
-      if (Array.isArray(r.sids)) r.sids.forEach((sid) => x.sids.add(`${r.sp}|${r.m}|${sid}`));
-      else x.sessions += r.sessions || r.evaluated || 0;
-      byDay.set(r.d, x);
+      const xd = byDay.get(r.d) || blank();
+      addRow(xd, r);
+      byDay.set(r.d, xd);
+      if (isAll) {
+        const ym = String(r.d || "").slice(0, 7);
+        if (/^\d{4}-\d{2}$/.test(ym)) {
+          const xm = byMonth.get(ym) || blank();
+          addRow(xm, r);
+          byMonth.set(ym, xm);
+        }
+      }
     });
-  let dates = [...byDay.keys()].sort();
-  // 「全部」下钻到某一年时，窗口只保留这一年；月份桶怎么切由 evalBuckets 决定。
-  if (EV.range === "all" && EV.year) dates = dates.filter((d) => d.startsWith(EV.year));
-  if (!dates.length) {
-    return { days: [], totalInputs: 0, totalEval: 0, totalSessions: 0, totalTraces: 0, totalTokens: 0, totalInputSessions: null, totalInputTraces: null, peakEval: 0 };
+
+  let days = [];
+  let monthBars = [];
+  if (isAll) {
+    days = [...byDay.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([d, st]) => ({ day: Number(d.slice(8, 10)), d, hasData: true, ...st }));
+    const multiYear = new Set(months.map((m) => m.slice(0, 4))).size > 1;
+    monthBars = months.map((ym) => {
+      const st = byMonth.get(ym);
+      const stSessions = st ? st.sids.size + st.sessions : 0;
+      const stInSessions = st && st.hasIns ? st.inSids.size : null;
+      return { month: ym, label: shortMonthLabel(ym, multiYear), hasData: !!st, ...(st || blank()), totalSessions: stSessions, totalInputSessions: stInSessions };
+    });
+  } else {
+    const year = Number(activeMonth.slice(0, 4));
+    const mon = Number(activeMonth.slice(5, 7));
+    const dim = new Date(Date.UTC(year, mon, 0)).getUTCDate();
+    for (let day = 1; day <= dim; day++) {
+      const d = `${activeMonth}-${String(day).padStart(2, "0")}`;
+      const st = byDay.get(d);
+      days.push({ day, d, hasData: !!st, ...(st || blank()) });
+    }
   }
-  const end = dayMs(dates[dates.length - 1]);
-  const start = EV.range === "all" ? dayMs(dates[0]) : end - (Number(EV.range) - 1) * DAY_MS;
-  const days = [];
-  for (let t = start; t <= end; t += DAY_MS) {
-    const d = isoDay(t);
-    days.push({ d, ...(byDay.get(d) || blank()) });
-  }
-  const sessions = new Set(days.flatMap((x) => [...x.sids]));
+  const dataDays = days.filter((x) => x.hasData);
+  const sessions = new Set(dataDays.flatMap((x) => [...x.sids]));
   return {
+    month: activeMonth,
+    months,
+    monthIdx,
+    pad: 0,
     days,
-    totalInputs: sum(days.map((x) => x.inputs)),
-    totalEval: sum(days.map((x) => x.evaluated)),
-    totalSessions: sessions.size + sum(days.map((x) => x.sessions)),
-    totalTraces: sum(days.map((x) => x.traces)),
-    totalTokens: sum(days.map((x) => x.tokens)),
-    totalTokenRecords: sum(days.map((x) => x.tokenRecords)),
-    totalInputSessions: days.every((x) => x.hasIns) ? new Set(days.flatMap((x) => [...x.inSids])).size : null,
-    totalInputTraces: days.every((x) => x.hasTraces) ? sum(days.map((x) => x.inTraces)) : null,
-    peakEval: Math.max(0, ...days.map((x) => x.evaluated)),
+    monthBars,
+    activeDays: dataDays.length,
+    totalInputs: sum(dataDays.map((x) => x.inputs)),
+    totalEval: sum(dataDays.map((x) => x.evaluated)),
+    totalSessions: sessions.size + sum(dataDays.map((x) => x.sessions)),
+    totalTraces: sum(dataDays.map((x) => x.traces)),
+    totalTokens: sum(dataDays.map((x) => x.tokens)),
+    totalTokenRecords: sum(dataDays.map((x) => x.tokenRecords)),
+    totalInputSessions: dataDays.length && dataDays.every((x) => x.hasIns) ? new Set(dataDays.flatMap((x) => [...x.inSids])).size : null,
+    totalInputTraces: dataDays.length && dataDays.every((x) => x.hasTraces) ? sum(dataDays.map((x) => x.inTraces)) : null,
+    peakEval: Math.max(0, ...dataDays.map((x) => x.evaluated)),
   };
 }
 
-/* 全部：最多 12 根柱子。有数据的月份 ≤12 就按月（只画有数据的月）；超过 12 个月按年，
-   点某年再回到那一年的月份。近 7/30 天保持按天，和以前一样。 */
-function evalBuckets(days) {
-  if (EV.range !== "all") {
-    return days.map((x) => ({
-      ...x,
-      inTraces: x.hasTraces ? x.inTraces : x.inputs,
-      label: x.d.slice(5),
-      tip: x.d,
-    }));
-  }
-  const months = new Map();
-  days.forEach((x) => {
-    const inTr = x.hasTraces ? x.inTraces : x.inputs;
-    if (!x.inputs && !x.evaluated && !inTr && !x.traces) return;
-    const key = x.d.slice(0, 7);
-    let b = months.get(key);
-    if (!b) months.set(key, (b = { d: x.d, d0: x.d, d1: x.d, inputs: 0, evaluated: 0, inTraces: 0, traces: 0 }));
-    b.d0 = b.d0 < x.d ? b.d0 : x.d;
-    b.d1 = b.d1 > x.d ? b.d1 : x.d;
-    b.inputs += x.inputs;
-    b.evaluated += x.evaluated;
-    b.inTraces += inTr;
-    b.traces += x.traces;
-  });
-  const keys = [...months.keys()].sort();
-  const monthBar = (k) => ({ ...months.get(k), label: `${Number(k.slice(5))}月`, tip: k });
-  if (EV.year || keys.length <= 12) {
-    return keys.filter((k) => !EV.year || k.startsWith(EV.year)).map(monthBar);
-  }
-  const years = new Map();
-  keys.forEach((k) => {
-    const y = k.slice(0, 4);
-    const m = months.get(k);
-    let b = years.get(y);
-    if (!b) years.set(y, (b = { year: y, d: `${y}-01-01`, d0: `${y}-01-01`, d1: `${y}-12-31`, inputs: 0, evaluated: 0, inTraces: 0, traces: 0 }));
-    b.inputs += m.inputs;
-    b.evaluated += m.evaluated;
-    b.inTraces += m.inTraces;
-    b.traces += m.traces;
-  });
-  return [...years.keys()].sort().map((y) => ({ ...years.get(y), label: y, tip: y }));
-}
-
 function evalChart(p) {
-  const bars = evalBuckets(evalWindow(p).days);
-  if (!bars.length) return `<div class="empty">暂无评测日期</div>`;
-  const max = Math.max(1, ...bars.map((x) => Math.max(x.inTraces, x.traces)));
-  const rows = [];
-  for (let i = 0; i < bars.length; i += EV_PER_ROW) rows.push(bars.slice(i, i + EV_PER_ROW));
-  const barH = rows.length === 1 ? 160 : 44;
-  return `<div class="evrows${EV.range === "all" ? " is-buckets" : ` is-days${EV.range === "7" ? " is-week" : ""}`}" style="--bar-h:${barH}px">${rows
-    .map((row) => `<div class="evrow" style="--n:${row.length}">${row
-      .map((x) => {
-        const total = Math.max(x.inTraces, x.traces, 1);
-        const height = Math.max(3, (barH * total) / max);
-        const done = x.traces ? Math.min(100, (100 * x.traces) / Math.max(x.inTraces, x.traces)) : 0;
-        const tip = `${x.tip || x.d}|输入 ${compact(x.inTraces)} 条 Trace · 已完成 ${compact(x.traces)} 条 Trace · ${pct(x.traces, x.inTraces, 1)}`;
-        return `<div class="evday${x.traces ? " is-live" : ""}${x.year ? " is-drill" : ""}"${x.year ? ` data-year="${esc(x.year)}"` : ""} data-d0="${x.d0 || x.d}" data-d1="${x.d1 || x.d}"><div class="evnums"><b class="num">${compact(x.traces)}</b><small class="num">${compact(x.inTraces)}</small></div>
-          <div class="evbar" style="height:${height}px" data-tip="${esc(tip)}"><i style="height:${done}%"></i></div>
-          <small class="evdate num">${esc(x.label)}</small></div>`;
+  const w = evalWindow(p);
+  if (!w.month || !w.days.length) return `<div class="empty">暂无评测日期</div>`;
+  if (w.month === "all") {
+    const bars = w.monthBars;
+    if (!bars.length) return `<div class="empty">暂无评测月份</div>`;
+    const max = Math.max(1, ...bars.map((m) => Math.max(m.hasTraces ? m.inTraces : m.inputs, m.traces)));
+    const cols = bars
+      .map((m) => {
+        const inTr = m.hasTraces ? m.inTraces : m.inputs;
+        const tot = Math.max(inTr, m.traces);
+        const hasVol = tot > 0;
+        const hPct = hasVol ? Math.max(10, Math.round((100 * tot) / max)) : 0;
+        const donePct = hasVol && m.traces > 0 ? Math.min(100, Math.max(4, Math.round((100 * m.traces) / tot))) : 0;
+        const tip = `${formatMonthLabel(m.month)}|输入 ${compact(inTr)} 条 Trace · 已完成 ${compact(m.traces)} 条 Trace · 点击进入该月`;
+        return `<button type="button" class="evday ev-mcol is-live" data-jump-month="${esc(m.month)}" data-tip="${esc(tip)}">
+          ${hasVol ? `<small class="evday-val num">${compact(m.traces)}</small>` : `<span class="evday-val is-nil" aria-hidden="true"></span>`}
+          <span class="evbar-track">${hasVol ? `<span class="evbar" style="height:${hPct}%"><i style="height:${donePct}%"></i></span>` : `<span class="evbar is-zero"></span>`}</span>
+          <b class="evday-num num">${esc(m.label)}</b>
+        </button>`;
       })
-      .join("")}</div>`)
-    .join("")}</div>`;
+      .join("");
+    return `<div class="ev-month-row" style="--cols:${bars.length}">${cols}</div>
+      <div class="ev-cal-foot"><span><i class="ev-done"></i>已完成 Trace</span><span><i class="ev-in"></i>评测输入 Trace</span></div>`;
+  }
+  const max = Math.max(1, ...w.days.map((x) => Math.max(x.hasTraces ? x.inTraces : x.inputs, x.traces)));
+  const renderDay = (x) => {
+    if (!x) return `<div class="evday is-pad" aria-hidden="true"></div>`;
+    const inTr = x.hasTraces ? x.inTraces : x.inputs;
+    const tot = Math.max(inTr, x.traces);
+    const hasVol = tot > 0;
+    const live = x.traces > 0;
+    const hPct = hasVol ? Math.max(10, Math.round((100 * tot) / max)) : 0;
+    const donePct = hasVol && x.traces > 0 ? Math.min(100, Math.max(4, Math.round((100 * x.traces) / tot))) : 0;
+    const tip = hasVol
+      ? `${x.d}|输入 ${compact(inTr)} 条 Trace · 已完成 ${compact(x.traces)} 条 Trace · ${pct(x.traces, inTr, 1)}`
+      : `${x.d}|当天无评测数据`;
+    return `<button type="button" class="evday${live ? " is-live" : hasVol ? " is-inonly" : " is-empty"}" data-d0="${x.d}" data-d1="${x.d}"${live ? "" : " disabled"}${hasVol ? ` data-tip="${esc(tip)}"` : ""}>
+      ${hasVol ? `<small class="evday-val num">${compact(x.traces)}</small>` : `<span class="evday-val is-nil" aria-hidden="true"></span>`}
+      <span class="evbar-track">${hasVol ? `<span class="evbar" style="height:${hPct}%"><i style="height:${donePct}%"></i></span>` : `<span class="evbar is-zero"></span>`}</span>
+      <b class="evday-num num">${x.day}</b>
+    </button>`;
+  };
+  const r1 = w.days.slice(0, 15);
+  const r2 = w.days.slice(15);
+  while (r2.length < 15) r2.push(null);
+  const rowsHtml = [r1, r2]
+    .map((row) => `<div class="ev-bar-row" style="--cols:${row.length}">${row.map(renderDay).join("")}</div>`)
+    .join("");
+  return `<div class="ev-cal-rows">${rowsHtml}</div>
+    <div class="ev-cal-foot"><span><i class="ev-done"></i>已完成 Trace</span><span><i class="ev-in"></i>评测输入 Trace</span></div>`;
 }
 
-/* 评测量是「输出 / 输入」对账：口径跟 ev-range 走，近 7/30 天用窗口合计，
-   全部（以及年份下钻）用全量/该年合计。默认全部，所以首次加载的
-   完成 Session / 输入 Session、完成 Trace / 输入 Trace 与数据量卡逐位相等；
-   切到近 7/30 天是本卡的缩放，不再声称与全量数据量卡对账。 */
 function evalTotals(p) {
   const w = evalWindow(p);
-  const k = p.kpi;
-  const input = p.input || {};
-  const scoped = EV.range !== "all" || !!EV.year;
-  const model = EV.model !== "all";
-  const allInput = model ? familyInput(input, EV.model) : input;
   return {
-    scoped,
-    sessions: [scoped || model ? w.totalSessions : k.unique_sessions, scoped ? w.totalInputSessions : allInput.sessions],
-    traces: [scoped || model ? w.totalTraces : k.traces, scoped ? w.totalInputTraces : allInput.traces],
-    tokens: scoped || model ? w.totalTokens : k.tokens,
-    tokenRecords: scoped || model ? (w.totalTokenRecords || 0) : k.token_records,
-    records: scoped || model ? w.totalEval : k.sessions,
+    month: w.month,
+    months: w.months,
+    scoped: true,
+    sessions: [w.totalSessions, w.totalInputSessions],
+    traces: [w.totalTraces, w.totalInputTraces],
+    tokens: w.totalTokens,
+    tokenRecords: w.totalTokenRecords,
+    records: w.totalEval,
+    activeDays: w.activeDays,
   };
 }
 
@@ -542,60 +573,80 @@ function evalStats(p) {
     ["完成 Session / 输入", ratio(t.sessions)],
     ["完成 Trace / 输入", ratio(t.traces)],
     ["评测 Tokens",
-      counter(t.tokens, { unit: true, title: `已上报 tokens 合计 ${fmt(t.tokens)} · 覆盖 ${fmt(t.tokenRecords)} / ${fmt(t.records)} 条评测记录` })],
+      counter(t.tokens, { unit: true, title: `当月已上报 tokens 合计 ${fmt(t.tokens)} · 覆盖 ${fmt(t.tokenRecords)} / ${fmt(t.records)} 条评测记录` })],
   ];
   return stats(items);
-}
-
-/* 图例行右侧的「‹ 2026 年」只在年份下钻时出现，点它回到全部年份。 */
-function evalLegend() {
-  const back = EV.range === "all" && EV.year
-    ? `<button type="button" class="link ev-back" id="evYearBack" aria-label="返回全部年份">‹ ${esc(EV.year)} 年</button>`
-    : "";
-  return `<div class="ev-legend"><span><i class="ev-done"></i>已完成 Trace</span><span><i class="ev-in"></i>评测输入 Trace</span>${back}</div>`;
 }
 
 function evalCard(p) {
   const models = evalModels(p);
   if (!models.some((m) => m.id === EV.model)) EV.model = "all";
-  // 产品/数据变了以后旧的下钻年份可能已经没有数据，退回全部年份。
-  if (EV.year && !evalRows(p).some((r) => r.d.startsWith(EV.year))) EV.year = null;
-  return card(6, "评测量", `<div class="eval-content">
-    <div class="ev-tools">
-      <div class="seg ev-range" id="evRange"><span class="seg-knob" aria-hidden="true"></span>
-        ${["7", "30", "all"].map((v) => `<button type="button" data-value="${v}">${RANGE_LABEL[v]}</button>`).join("")}
+  EV.month = resolveEvalMonth(p, EV.model, EV.month) || null;
+  const w = evalWindow(p, EV.model, EV.month);
+  const isAll = w.month === "all";
+  const hasPrev = isAll ? w.months.length > 0 : w.monthIdx > 0;
+  const hasNext = !isAll && w.monthIdx >= 0 && w.monthIdx < w.months.length - 1;
+  return card(
+    6,
+    "评测量",
+    `<div class="eval-content">
+      <div class="ev-bar">
+        <div class="ev-toolbar">
+          <div class="ev-mnav" id="evMonthNav">
+            <button type="button" class="ev-mbtn" id="evPrevMonth" aria-label="上一个月"${hasPrev ? "" : " disabled"}>‹</button>
+            <span class="ev-mlabel num" id="evMonthLabel">${esc(formatMonthLabel(w.month))}</span>
+            <button type="button" class="ev-mbtn" id="evNextMonth" aria-label="下一个月"${hasNext ? "" : " disabled"}>›</button>
+          </div>
+          <span class="ev-sep" aria-hidden="true"></span>
+          <button type="button" class="ev-all-btn" id="evAllTime" aria-pressed="${isAll}"${w.months.length ? "" : " disabled"}>全部时间</button>
+          ${models.length > 1 ? `<span class="ev-sep" aria-hidden="true"></span><div class="seg ev-model" id="evModel"><span class="seg-knob" aria-hidden="true"></span>${models.map((m) => `<button type="button" data-value="${esc(m.id)}">${esc(m.label)}</button>`).join("")}</div>` : ""}
+        </div>
       </div>
-      <div class="seg ev-model" id="evModel"><span class="seg-knob" aria-hidden="true"></span>
-        ${models.map((m) => `<button type="button" data-value="${esc(m.id)}">${esc(m.label)}</button>`).join("")}
-      </div>
-    </div>
-    <div id="evLegend">${evalLegend()}</div>
-    <div id="evChart">${evalChart(p)}</div>
-    <div id="evStats">${evalStats(p)}</div></div>${GX}${evalCompact(p)}`,
-    `<button type="button" class="link end" id="evDetail" aria-label="查看评测数据详情">详情</button>`, "eval");
+      <div class="ev-cal" id="evChart">${evalChart(p)}</div>
+      <div class="ev-stats" id="evStats">${evalStats(p)}</div>
+    </div>${GX}${evalCompact(p)}`,
+    `<button type="button" class="link end" id="evDetail" aria-label="查看评测数据详情">详情</button>`,
+    "eval",
+  );
 }
-/* 换窗口 / 换模型 / 年份下钻都只重画这一张卡：图、图例（含返回按钮）、三个数、折叠态。 */
 function repaintEvalCard(bento, p) {
+  EV.month = resolveEvalMonth(p, EV.model, EV.month) || null;
+  const w = evalWindow(p, EV.model, EV.month);
+  const isAll = w.month === "all";
+  const lbl = $("#evMonthLabel", bento);
+  if (lbl) lbl.textContent = formatMonthLabel(w.month);
+  const prev = $("#evPrevMonth", bento);
+  if (prev) prev.disabled = isAll ? !w.months.length : w.monthIdx <= 0;
+  const next = $("#evNextMonth", bento);
+  if (next) next.disabled = isAll || w.monthIdx < 0 || w.monthIdx >= w.months.length - 1;
+  const allBtn = $("#evAllTime", bento);
+  if (allBtn) {
+    allBtn.setAttribute("aria-pressed", String(isAll));
+    allBtn.disabled = !w.months.length;
+  }
   const chart = $("#evChart", bento);
   if (chart) chart.innerHTML = evalChart(p);
-  const legend = $("#evLegend", bento);
-  if (legend) legend.innerHTML = evalLegend();
   const box = $("#evStats", bento);
   if (box) {
     box.innerHTML = evalStats(p);
     runCounters(box);
   }
-  const compact = $('[data-card="eval"] > .compact', bento);
-  if (compact) compact.outerHTML = evalCompact(p);
+  const compactEl = $('[data-card="eval"] > .compact', bento);
+  if (compactEl) compactEl.outerHTML = evalCompact(p);
 }
 function evalCompact(p) {
   const w = evalWindow(p);
-  const days = evalBuckets(w.days).slice(-12);
-  // The folded card keeps the day chart it had open, scaled into whatever height the versions leave.
+  const days = w.days
+    .filter((x) => (x.hasTraces ? x.inTraces : x.inputs) || x.traces)
+    .slice(-12)
+    .map((x) => ({
+      ...x,
+      label: x.d.slice(8),
+      inTraces: x.hasTraces ? x.inTraces : x.inputs,
+    }));
   const cols = miniCols(days.map((x) => ({ done: x.traces || 0, all: Math.max(x.inTraces || 0, x.traces || 0) })));
   const ends = days.length > 1 ? [days[0], days[days.length - 1]] : days;
-  const foot = days.length ? `<div class="cx-days">${cols}<span>${ends.map((x) => `<small>${esc(x.label)}</small>`).join("")}</span></div>` : "";
-  // Per version over the same window: done / inputs, the bar is the version's completion.
+  const foot = days.length ? `<div class="cx-days">${cols}<span>${ends.map((x) => `<small>${esc(x.label)}日</small>`).join("")}</span></div>` : "";
   const inWindow = new Set(w.days.map((x) => x.d));
   const by = new Map();
   evalRows(p)
@@ -612,7 +663,6 @@ function evalCompact(p) {
     .sort((a, b) => b.done - a.done || b.inputs - a.inputs)
     .slice(0, 8)
     .map((x) => ({ name: x.m === "all" ? "全部" : modelName(p, x.m), value: `${compact(x.done)}<span class="stat-of"> / ${compact(x.inputs)}</span>`, share: x.inputs ? x.done / x.inputs : 0 }));
-  // 图和展开态一样按窗口/模型走；底部三个数也跟 ev-range 同一口径。
   const t = evalTotals(p);
   const ratio = ([a, b]) => `${compact(a)}${b == null ? "" : `<span class="stat-of"> / ${compact(b)}</span>`}`;
   return miniView("", [
@@ -946,11 +996,7 @@ function modalMeta(row, D) {
   return `<span>${bits.join(" · ")}</span>${sid ? `<button type="button" class="ed-id" data-copy="${esc(sid)}" title="复制 Session ID">Session ${esc(String(sid).slice(0, 8))}…</button>` : ""}${tid ? `<button type="button" class="ed-id" data-copy="${esc(tid)}" title="复制 Trace ID">Trace ${esc(String(tid).slice(0, 8))}…</button>` : ""}`;
 }
 
-async function openInputModal(btn) {
-  const tr = btn.closest("tr");
-  if (!tr) return;
-  const slug = tr.dataset.slug || "";
-  const row = inputAll.find((r) => r.r === tr.dataset.ref) || {};
+async function openInputDetailModal(row) {
   const modal = ensureModal();
   $("#edModalTitle").textContent = row.q || "（无提问）";
   $("#edModalMeta").innerHTML = modalMeta(row, null);
@@ -958,7 +1004,17 @@ async function openInputModal(btn) {
   modal.hidden = false;
   document.body.classList.add("is-modal");
   try {
-    const D = slug ? await loadSample(slug) : await loadInput(tr);
+    const D = row.s
+      ? await loadSample(row.s)
+      : await loadInput({
+          dataset: {
+            product: row.product || ctx.product,
+            d: row.d || "",
+            m: row.m || "",
+            sp: row.sp || "daily",
+            ref: row.r || "",
+          },
+        });
     if (modal.hidden) return;
     $("#edModalTitle").textContent = D.question || D.question_zh || row.q || "（无提问）";
     $("#edModalMeta").innerHTML = modalMeta(row, D);
@@ -967,6 +1023,21 @@ async function openInputModal(btn) {
   } catch (err) {
     $("#edModalBody").innerHTML = `<div class="ed-expand-error">加载失败：${esc(err.message)}</div>`;
   }
+}
+
+async function openInputModal(btn) {
+  const tr = btn.closest("tr");
+  if (!tr) return;
+  const slug = tr.dataset.slug || "";
+  const row = inputAll.find((r) => r.r === tr.dataset.ref) || {};
+  await openInputDetailModal({
+    ...row,
+    s: slug,
+    r: tr.dataset.ref || row.r,
+    d: tr.dataset.d || row.d,
+    m: tr.dataset.m || row.m,
+    sp: tr.dataset.sp || row.sp || "daily",
+  });
 }
 
 function wireEvalDetail(root, state) {
@@ -1028,7 +1099,12 @@ function wireEvalDetail(root, state) {
 
 const inputCache = new Map();
 const loadInput = (tr) => {
-  const q = new URLSearchParams({ product: ctx.product, d: tr.dataset.d, m: tr.dataset.m, sp: tr.dataset.sp });
+  const q = new URLSearchParams({
+    product: tr.dataset.product || ctx.product,
+    d: tr.dataset.d,
+    m: tr.dataset.m,
+    sp: tr.dataset.sp,
+  });
   const url = `inputs/${encodeURIComponent(tr.dataset.ref)}.json?${q}`;
   if (!inputCache.has(url)) {
     const p = fetch(url).then((r) => {
@@ -1236,18 +1312,197 @@ function sankeySVG(left, right, value, { W = 440, H = 212, x0 = 130, x1 = 340, i
   return `<svg class="sankey${cls ? ` ${cls}` : ""}" viewBox="0 0 ${W} ${h}"><defs>${defs}</defs><g clip-path="url(#${id}clip)">${flows}</g>${lnode}${rnode}</svg>`;
 }
 
-function attrCard(p) {
-  const left = p.field
-    .map((g, i) => ({ key: String(i), name: groupName(p, g), roles: g.roles || {}, c: shade(i, p.field.length) }))
-    .map((g) => ({ ...g, n: sum(Object.values(g.roles)) }))
-    .filter((g) => g.n);
-  const right = p.roles.filter((r) => r.problems).map((r) => ({ key: r.id, name: r.label, n: r.problems }));
-  const top = right.reduce((a, b) => (!a || b.n > a.n ? b : a), null);
+const ATTR_SEVS = ["P0", "P1", "P2", "P3", "P4"];
+function taxNodeName(col, key, fallback) {
+  if (!key) return fallback || "";
+  if (Array.isArray(col)) {
+    const hit = col.find((x) => x && (x.id === key || x.key === key));
+    if (hit && hit.name) return hit.name;
+  } else if (col && typeof col === "object" && col[key]?.name) {
+    return col[key].name;
+  }
+  return fallback ?? key;
+}
+function sevLabel(s) {
+  const name = SEV_NAME[s];
+  if (!name || name === s) return s === "none" ? "无等级" : s;
+  return `${s} ${name}`;
+}
+function sankeyCol(items, y0, h, gap, minH = 0) {
+  const nItems = items.length;
+  const tot = sum(items.map((x) => x.n)) || 1;
+  const avail = Math.max(0, h - gap * Math.max(nItems - 1, 0));
+  const floor = nItems && avail >= minH * nItems ? minH : nItems ? Math.min(minH, avail / nItems) : 0;
+  const flex = Math.max(0, avail - floor * nItems);
+  let y = y0;
+  const nodes = items.map((x) => {
+    const bh = floor + (x.n / tot) * flex;
+    const o = { x, y, h: bh, offIn: 0, offOut: 0, inTot: 0, outTot: 0 };
+    y += bh + gap;
+    return o;
+  });
+  return { nodes, tot };
+}
+function sankey3SVG(col1, col2, col3, val12, val23, { W = 480, H = 224, x0 = 72, x1 = 186, x2 = 294, id = "ska", cls = "" } = {}) {
+  const gap = 6;
+  const topPad = 18;
+  const botPad = 6;
+  const innerH = H - topPad - botPad;
+  const c1 = sankeyCol(col1, topPad, innerH, 8, 26);
+  const c2 = sankeyCol(col2, topPad, innerH, gap, 18);
+  const c3 = sankeyCol(col3, topPad, innerH, gap, 16);
+  const pillHalf = 17;
+  const x1L = x1 - pillHalf;
+  const x1R = x1 + pillHalf;
+  c1.nodes.forEach((m) => c2.nodes.forEach((s) => {
+    const n = val12(m.x, s.x);
+    if (n > 0) { m.outTot += n; s.inTot += n; }
+  }));
+  c2.nodes.forEach((s) => c3.nodes.forEach((r) => {
+    const n = val23(s.x, r.x);
+    if (n > 0) { s.outTot += n; r.inTot += n; }
+  }));
+  const xm1 = (x0 + x1L) / 2;
+  const xm2 = (x1R + x2) / 2;
+  let flows = "";
+  let defs = "";
+  let d = 0;
+  c1.nodes.forEach((m, mi) =>
+    c2.nodes.forEach((s, si) => {
+      const n = val12(m.x, s.x);
+      if (!n) return;
+      const dh1 = n * (m.h / (m.outTot || 1));
+      const dh2 = n * (s.h / (s.inTot || 1));
+      const a0 = m.y + m.offOut, a1 = a0 + dh1, b0 = s.y + s.offIn, b1 = b0 + dh2;
+      m.offOut += dh1;
+      s.offIn += dh2;
+      const gid = `${id}m${mi}s${si}`;
+      defs += `<linearGradient id="${gid}" gradientUnits="userSpaceOnUse" x1="${x0}" x2="${x1L}" y1="0" y2="0"><stop offset="0" style="stop-color:${m.x.c};stop-opacity:.46"/><stop offset="1" style="stop-color:${s.x.c};stop-opacity:.32"/></linearGradient>`;
+      const tip = `${m.x.name} → ${s.x.name}|${fmt(n)} · 占 ${m.x.name} ${pct(n, m.x.n, 1)}`;
+      flows += `<path class="sk-f" style="--d:${d++}" d="M${x0} ${a0}C${xm1} ${a0} ${xm1} ${b0} ${x1L} ${b0}L${x1L} ${b1}C${xm1} ${b1} ${xm1} ${a1} ${x0} ${a1}Z" fill="url(#${gid})" data-m="${esc(m.x.key)}" data-g="${esc(s.x.key)}" data-tip="${esc(tip)}"/>`;
+    }),
+  );
+  c2.nodes.forEach((s, si) =>
+    c3.nodes.forEach((r) => {
+      const n = val23(s.x, r.x);
+      if (!n) return;
+      const dh1 = n * (s.h / (s.outTot || 1));
+      const dh2 = n * (r.h / (r.inTot || 1));
+      const a0 = s.y + s.offOut, a1 = a0 + dh1, b0 = r.y + r.offIn, b1 = b0 + dh2;
+      s.offOut += dh1;
+      r.offIn += dh2;
+      const tip = `${s.x.name} → ${r.x.name}|${fmt(n)} · 占 ${s.x.name} ${pct(n, s.x.n, 1)}`;
+      flows += `<path class="sk-f" style="--d:${d++}" d="M${x1R} ${a0}C${xm2} ${a0} ${xm2} ${b0} ${x2} ${b0}L${x2} ${b1}C${xm2} ${b1} ${xm2} ${a1} ${x1R} ${a1}Z" fill="url(#${id}s${si})" data-g="${esc(s.x.key)}" data-r="${esc(r.x.key)}" data-tip="${esc(tip)}"/>`;
+    }),
+  );
+  defs += c2.nodes.map(
+    (s, si) => `<linearGradient id="${id}s${si}" gradientUnits="userSpaceOnUse" x1="${x1R}" x2="${x2}" y1="0" y2="0"><stop offset="0" style="stop-color:${s.x.c};stop-opacity:.38"/><stop offset="1" style="stop-color:${s.x.c};stop-opacity:.10"/></linearGradient>`,
+  ).join("") + `<clipPath id="${id}clip"><rect class="sk-reveal" x="0" y="0" width="${W}" height="${H}"/></clipPath>`;
+  const top3 = c3.nodes.reduce((a, b) => (!a || b.x.n > a.x.n ? b : a), null);
+  const headers = `<text x="${x0 - 10}" y="6" text-anchor="end" class="sk-col-head">模型</text>
+    <text x="${x1}" y="6" text-anchor="middle" class="sk-col-head">等级</text>
+    <text x="${x2 + 10}" y="6" text-anchor="start" class="sk-col-head">问题类型</text>`;
+  const n1 = c1.nodes.map((m) => {
+    const cy = m.y + m.h / 2;
+    const tip = `${m.x.name}|${fmt(m.x.n)} 个问题 · 占 ${pct(m.x.n, c1.tot, 1)}`;
+    return `<g class="sk-node" data-m="${esc(m.x.key)}" data-tip="${esc(tip)}"><rect x="${x0 - 5}" y="${m.y}" width="5" height="${m.h}" rx="2" style="fill:${m.x.c}"/>
+      <text x="${x0 - 10}" y="${cy - 6}" text-anchor="end" class="sk-t">${esc(m.x.name)}</text>
+      <text x="${x0 - 10}" y="${cy + 8}" text-anchor="end" class="sk-t sk-n sk-sub">${compact(m.x.n)}</text></g>`;
+  }).join("");
+  const n2 = c2.nodes.map((s) => {
+    const cy = s.y + s.h / 2;
+    const tip = `${s.x.name} 等级|${fmt(s.x.n)} 个问题 · 占 ${pct(s.x.n, c2.tot, 1)}`;
+    return `<g class="sk-node" data-g="${esc(s.x.key)}" data-tip="${esc(tip)}"><rect x="${x1L}" y="${s.y}" width="${pillHalf * 2}" height="${s.h}" rx="4" style="fill:${s.x.c}"/>
+      <text x="${x1}" y="${cy}" text-anchor="middle" class="sk-pill-t">${esc(s.x.name)}</text></g>`;
+  }).join("");
+  const n3 = c3.nodes.map((r) => {
+    const cy = r.y + r.h / 2;
+    const tip = `${r.x.name}|${fmt(r.x.n)} 个问题 · 占 ${pct(r.x.n, c3.tot, 1)}`;
+    return `<g class="sk-node${r === top3 ? " is-top" : ""}" data-r="${esc(r.x.key)}" data-tip="${esc(tip)}"><rect x="${x2}" y="${r.y}" width="5" height="${r.h}" rx="2"/>
+      <text x="${x2 + 10}" y="${cy}" text-anchor="start" class="sk-t">${esc(r.x.name)}</text>
+      <text x="${W - 40}" y="${cy}" text-anchor="end" class="sk-t sk-n">${compact(r.x.n)}</text>
+      <text x="${W - 2}" y="${cy}" text-anchor="end" class="sk-t sk-p">${pct(r.x.n, c3.tot)}</text></g>`;
+  }).join("");
+  return `<svg class="sankey${cls ? ` ${cls}` : ""}" viewBox="0 0 ${W} ${H}"><defs>${defs}</defs>${headers}<g clip-path="url(#${id}clip)">${flows}</g>${n1}${n2}${n3}</svg>`;
+}
+function attrFlows(p, tax) {
+  const pair = {};
+  const sevTot = { P0: 0, P1: 0, P2: 0, P3: 0, P4: 0 };
+  const mechTot = {};
+  const mx = p.matrix || {};
+  Object.values(mx).forEach((byMech) => {
+    Object.entries(byMech || {}).forEach(([m, cell]) => {
+      if (!cell) return;
+      const sevObj = cell.sev || {};
+      ATTR_SEVS.forEach((s) => {
+        const n = Number(sevObj[s] || 0);
+        if (!n) return;
+        sevTot[s] += n;
+        mechTot[m] = (mechTot[m] || 0) + n;
+        pair[s] = pair[s] || {};
+        pair[s][m] = (pair[s][m] || 0) + n;
+      });
+    });
+  });
+  const byModel = Array.isArray(p.by_model) ? p.by_model : [];
+  const models = byModel
+    .map((m, i) => ({
+      key: m.id,
+      name: m.label || modelName(p, m.id),
+      n: sum(ATTR_SEVS.map((s) => Number(m.sev?.[s] || 0))),
+      sev: m.sev || {},
+      c: i === 0 ? "var(--accent)" : leadTone(i),
+    }))
+    .filter((x) => x.n > 0)
+    .sort((a, b) => b.n - a.n);
+  const sevs = ATTR_SEVS
+    .map((s) => ({
+      key: s,
+      name: sevLabel(s),
+      n: models.length ? sum(models.map((m) => Number(m.sev?.[s] || 0))) : sevTot[s],
+      c: sevColor(WORST.indexOf(s)),
+    }))
+    .filter((x) => x.n > 0);
+  const mechs = Object.entries(mechTot)
+    .filter(([, n]) => n > 0)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([m, n]) => ({ key: m, name: taxNodeName(tax?.mechanisms, m, m), n }));
+  return {
+    models,
+    sevs,
+    mechs,
+    total: sum(sevs.map((x) => x.n)) || sum(mechs.map((x) => x.n)),
+    valMS: (m, s) => Number(m.sev?.[s.key] || 0),
+    valSM: (s, r) => (pair[s.key] && pair[s.key][r.key]) || 0,
+  };
+}
+
+function attrCard(p, tax) {
+  const { models, sevs, mechs, valMS, valSM, total } = attrFlows(p, tax);
+  const top = mechs[0] || null;
   const sevParts = WORST.map((w, i) => ({ n: p.severity[w] || 0, c: sevColor(i) }));
-  return card(4, "归因体系", `<div class="hero"><b class="big">${counter(p.kpi.problems)}</b><small>个问题</small></div>
-    ${sankeySVG(left, right, (l, r) => l.roles[r.key] || 0, { id: "ska", x0: 128, x1: 322 })}${GX}${miniView(miniStrip(sevParts), [
-      [counter(p.kpi.problems), "问题"], top ? [pct(top.n, p.kpi.problems), `${top.name}占比`] : null,
-    ], "", [...right].sort((a, b) => b.n - a.n).slice(0, 6).map((r, i) => ({ name: r.name, value: fmt(r.n), share: r.n / (sum(right.map((x) => x.n)) || 1), c: leadTone(i) })))}`, "", "attr");
+  const body = total && models.length && sevs.length && mechs.length
+    ? sankey3SVG(models, sevs, mechs, valMS, valSM, { id: "ska" })
+    : total && sevs.length && mechs.length
+      ? sankeySVG(sevs, mechs, valSM, { id: "ska", x0: 84, x1: 274 })
+      : `<div class="empty">暂无归因流向数据</div>`;
+  const rightSum = sum(mechs.map((x) => x.n)) || 1;
+  return card(
+    4,
+    "归因体系",
+    `<div class="hero"><b class="big">${counter(p.kpi.problems)}</b><small>个问题</small></div>
+    ${body}${GX}${miniView(
+      miniStrip(sevParts),
+      [
+        [counter(p.kpi.problems), "问题"],
+        top ? [pct(top.n, p.kpi.problems), `${top.name}占比`] : null,
+      ],
+      "",
+      mechs.slice(0, 6).map((r, i) => ({ name: r.name, value: fmt(r.n), share: r.n / rightSum, c: leadTone(i) })),
+    )}`,
+    "",
+    "attr",
+  );
 }
 
 /* ---------------------------------------------------------------- 聚类体系: phase → stage → mechanism → pattern */
@@ -1794,11 +2049,13 @@ function wireMatrixAnalysis(panel, model, state, trend) {
     $$(".mxp-ring-arc", panel).forEach((arc) => arc.classList.toggle("is-off", !focus.has(arc.dataset.level)));
   };
   // 抽屉是 K 线地图的侧栏：开合只改宽度，图表用 autoSize 跟着走，不需要重画。
-  const drawer = trendSampleDrawer(chartHost, (pick) => loadTraceSamplePage(trend, pick), () => {}, {
+  const drawer = trendSampleDrawer(chartHost, (pick) => loadTraceSamplePage(ctx, trend, pick), () => {}, {
     onOpenChange: (open) => {
       const seg = panel.querySelector(".mxp-kseg");
       if (seg) seg.hidden = open;
     },
+    loadSample,
+    openSamples,
   });
   chartHost._drawer = drawer;
   const zoomBtn = panel.querySelector("[data-mxp-zoom]");
@@ -2160,15 +2417,6 @@ function loadTrend(c) {
   return TREND_CACHE.get(key);
 }
 
-/* AB 轮次同样按 (产品, 构建) 缓存一次：几十 KB，切回来不再请求。 */
-const AB_CACHE = new Map();
-function loadAB(c, url) {
-  const key = `${c.product}|${c.data.generated_at}`;
-  keepOnly(AB_CACHE, key);
-  if (!AB_CACHE.has(key)) AB_CACHE.set(key, getJSON(url).catch(() => null));
-  return AB_CACHE.get(key);
-}
-
 /* 场景行 → payload.scenes 下标：subtask 行精确匹配，task 行取它下面的全部 subtask；
    范围切到「全部场景」时不按行过滤，就是整个产品的问题率。 */
 function trendScenes(trend, row, scope) {
@@ -2488,8 +2736,12 @@ function paintTrendPlot(box, spec, trend, onOpenChange = null, wheelZoom = null,
       },
     });
   };
-  const drawer = trendSampleDrawer(plot, (pick) => loadTrendSamplePage(trend, spec, pick), () => {},
-    onOpenChange ? { onOpenChange } : {});
+  const drawer = trendSampleDrawer(
+    plot,
+    (pick) => loadTrendSamplePage(ctx, loadSample, trend, spec, pick),
+    () => {},
+    { ...(onOpenChange ? { onOpenChange } : {}), loadSample, openSamples },
+  );
   plot._drawer = drawer;
   draw();
   if (initialPickDate && view.series.length) {
@@ -2532,12 +2784,13 @@ function matrixCard(p, tax) {
   const klineBtn = tax
     ? `<button type="button" class="link mx-kline" id="mxKline" aria-expanded="false" aria-controls="mxKlineFace">问题K线图</button>`
     : "";
-  const abBtn = p.ab && tax
-    ? `<button type="button" class="link mx-ab" id="mxAB" aria-expanded="false" aria-controls="mxABFace" title="固定题集改版前后对比 + 线上真实用户验证">A/B Test<small>${esc(p.ab.label || "")}</small></button>`
-    : "";
   const matrix = (body, actions = "", chrome = false) => `<article class="card mx-card${page ? " is-page" : ""}" id="mxCard" style="--span:12">
     <div class="mx-face mx-matrix-face" id="mxMatrixFace">
-      <header class="card-head mx-card-head"><h2>聚类矩阵</h2><div class="mx-head-mxt" id="mxHeadMxt" hidden></div>${actions ? `<div class="mx-head-actions">${actions}</div>` : ""}</header>
+      <header class="card-head mx-card-head">
+        <div class="mx-head-title"><h2>聚类矩阵</h2><button type="button" class="mx-back" id="mxBack" hidden aria-label="返回上一级">← 返回上一级</button></div>
+        <div class="mx-head-mxt" id="mxHeadMxt" hidden></div>
+        ${actions ? `<div class="mx-head-actions">${actions}</div>` : ""}
+      </header>
       ${body}
       ${chrome ? `<section class="mx-daily" id="mxDaily" hidden aria-label="每日 TOP 问题"></section>` : ""}
     </div>
@@ -2557,20 +2810,6 @@ function matrixCard(p, tax) {
         <section class="mx-perspective" id="mxPerspective" hidden aria-label="聚类矩阵问题分析"></section>
       </div>
     </div>` : ""}
-    <div class="mx-face mx-ab-face" id="mxABFace" hidden>
-      <header class="card-head ab-card-head">
-        <h2>A/B Test</h2>
-        <div class="ab-rounds" id="abRounds" role="group" aria-label="AB 测试期次"></div>
-        <div class="ab-head-actions">
-          <button type="button" class="icon-btn ab-full" id="abFull" aria-pressed="false" aria-label="全屏查看 A/B Test" title="全屏">
-            <svg class="i-abfull-open" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 2.5H2.5V6M10 2.5h3.5V6M6 13.5H2.5V10M10 13.5h3.5V10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            <svg class="i-abfull-close" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 6H6V2.5M13.5 6H10V2.5M2.5 10H6v3.5M13.5 10H10v3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </button>
-          <button type="button" class="link ab-close" id="abClose" aria-label="返回聚类矩阵">← 返回矩阵</button>
-        </div>
-      </header>
-      <div class="ab-body" id="abBody"><div class="empty">正在读取 AB 测试数据…</div></div>
-    </div>
   </article>`;
   if (!tax) return matrix(`<div class="empty">缺少聚类体系文件</div>`);
   const sceneRoot = { name: "全部", children: capScenes(sceneTree(p)) };
@@ -2580,10 +2819,10 @@ function matrixCard(p, tax) {
   }
   return matrix(
     `<div id="mxShell">${matrixTable(matrixView(p, sceneRoot.children, clusterRoot.children))}</div>`,
-    `${klineBtn}${abBtn}<button type="button" class="icon-btn mx-full" id="mxFull" aria-pressed="false" aria-label="全屏查看聚类矩阵" title="全屏">
+    `${klineBtn}<button type="button" class="icon-btn mx-full" id="mxFull" aria-pressed="false" aria-label="全屏查看聚类矩阵" title="全屏">
       <svg class="i-mxfull-open" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 2.5H2.5V6M10 2.5h3.5V6M6 13.5H2.5V10M10 13.5h3.5V10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
       <svg class="i-mxfull-close" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 6H6V2.5M13.5 6H10V2.5M2.5 10H6v3.5M13.5 10H10v3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    </button><button type="button" class="mx-back" id="mxBack" hidden aria-label="返回上一级">← 返回</button>`,
+    </button>`,
     true,
   );
 }
@@ -2598,418 +2837,7 @@ const WIDE = "(min-width: 1181px)";
 const LAYOUT_EASE = window.CSS && CSS.supports && CSS.supports("transition-timing-function", "linear(0, 1)")
   ? "linear(0, 0.012, 0.047 2.6%, 0.18 5.6%, 0.738 17.3%, 0.928 23.1%, 1.012 28.4%, 1.04 33%, 1.042 37.4%, 1.027 43.7%, 1.003 55.8%, 0.996 66.3%, 1)"
   : "cubic-bezier(0.16, 1, 0.3, 1)";
-const RESULT = { correct: "正确", wrong: "错误", mixed: "各版本不一", undetermined: "无法判定", pending: "待揭晓", revealed: "已揭晓" };
-const sevIdx = (w) => {
-  const i = WORST.indexOf(w);
-  return i < 0 ? 5 : i;
-};
-/* The Traces behind an opened card, worst first, beside its star map: a severity (or result) dot, the
-   question and its problem count (or verdict). The head is the slice's size and its severity split. */
-const LEDGER_MAX = 120;
-const RECALL_CAP = 2000;
-const predDot = (it) => (it.r === "correct" ? "var(--accent)" : it.r === "wrong" ? "var(--sev-1)" : it.r === "mixed" ? "var(--sev-3)" : it.r === "pending" ? "var(--muted)" : "var(--faint)");
-function ledger(groups, pred, unit = null, rows = null, { count = true, strip = true, size = LEDGER_MAX, page = 0, sum = true, total = null, rawParts = null } = {}) {
-  const all = groups.flatMap((g) => g.items);
-  const ordered = pred ? all : [...all].sort((a, b) => a.w - b.w || b.n - a.n || (b.d || "").localeCompare(a.d || ""));
-  const pages = Math.max(1, Math.ceil(ordered.length / size));
-  const at = Math.max(0, Math.min(pages - 1, page));
-  // The summary always speaks about everything found; the list is one page of it.
-  const items = rows ?? ordered.slice(at * size, (at + 1) * size);
-  const parts = Array.isArray(rawParts) && !pred
-    ? WORST.map((_, i) => ({ n: Number(rawParts[i]) || 0, c: sevColor(i) }))
-    : pred
-      ? ["correct", "wrong", "mixed", "pending", "undetermined"].map((r) => ({ n: all.filter((it) => (r === "undetermined" ? !["correct", "wrong", "mixed", "pending"].includes(it.r) : it.r === r)).length, c: predDot({ r }) }))
-      : WORST.map((_, i) => ({ n: all.filter((it) => it.w === i).length, c: sevColor(i) }));
-  const rowHTML = (it, k) =>
-    `<button type="button" class="gl-r${pred && !it.s ? " is-inert" : ""}" data-i="${k}" style="--i:${Math.min(k, 14)};--c:${pred ? predDot(it) : sevColor(it.w)}" title="${esc(it.q || "（无提问）")}"><i></i><span>${esc(it.q || "（无提问）")}</span>${count ? `<b class="num">${pred ? esc(RESULT[it.r] || "") : it.n ? fmt(it.n) : "—"}</b>` : ""}</button>`;
-  const rowsHtml = items.slice(0, size).map(rowHTML);
-  const capped = total != null && total > all.length;
-  const countLabel = capped ? `${fmt(all.length)} / ${fmt(total)}` : fmt(all.length);
-  const sumHtml = `<div class="gl-sum"><b class="num">${countLabel}</b><small>${unit || (pred ? "道预测题" : "条 Trace")}</small>${strip ? `<span class="gl-strip" aria-hidden="true">${parts
-    .filter((x) => x.n)
-    .map((x) => `<i style="flex:${x.n} 1 0;background:${x.c}"></i>`)
-    .join("")}</span>` : ""}</div>`;
-  const body = `${sum ? sumHtml : ""}<div class="gx-list">${rowsHtml.join("")}</div>`;
-  return { items, all, ordered, parts, pages, page: at, size, rowHTML, sumHtml, body, html: `<div class="gx-side">${body}</div>` };
-}
-const caseItem = (r) => ({ s: r.s, w: sevIdx(r.w), n: r.n || 0, q: r.q || "", m: r.m, sp: r.sp, d: r.d || "" });
-function groupCases(rows, keyOf, nameOf = (k) => k) {
-  const by = new Map();
-  rows.forEach((r) => {
-    const k = keyOf(r);
-    if (!by.has(k)) by.set(k, { key: k, name: nameOf(k), items: [] });
-    by.get(k).items.push(caseItem(r));
-  });
-  return [...by.values()];
-}
-
-/* The same gx-map / gx-side and ledger used by 数据量, revealed on the sunburst clock. */
-function trendSampleDrawer(plot, load, repaint, interaction = {}) {
-  const frame = plot.closest(".mxt-samples");
-  const layout = $(".mxt-sample-layout", frame);
-  const map = $(".gx-map", layout);
-  const side = $(".mxt-sample-side", layout);
-  let opened = false, token = 0, cancel = () => {};
-  const clear = () => {
-    [map, side].forEach((el) => { el.style.transform = ""; el.style.transformOrigin = ""; el.style.opacity = ""; });
-  };
-  const change = (next, animate = true) => {
-    if (next === opened) return;
-    cancel();
-    const before = map.getBoundingClientRect();
-    opened = next;
-    interaction.onOpenChange?.(next);
-    side.hidden = false;
-    layout.classList.toggle("is-open", next);
-    layout.classList.toggle("is-closing", !next);
-    const overlay = frame.clientWidth < 640;
-    map.inert = next && overlay;
-    if (map.inert) map.setAttribute("aria-hidden", "true");
-    else map.removeAttribute("aria-hidden");
-    repaint();
-    const after = map.getBoundingClientRect();
-    const clean = () => {
-      clear();
-      layout.classList.remove("is-closing");
-      side.hidden = !opened;
-    };
-    const stop = sunburstTween((k) => {
-      const progress = next ? k : 1 - k;
-      side.style.transform = `translateX(${(1 - progress) * 100}%)`;
-      side.style.opacity = String(progress);
-      map.style.transformOrigin = "0 50%";
-      map.style.transform = overlay
-        ? `translateX(${-progress * 100}%)`
-        : `scaleX(${1 + (before.width / Math.max(1, after.width) - 1) * (1 - k)})`;
-      map.style.opacity = String(overlay ? 1 - progress : 1);
-    }, { animate, finish: clean });
-    cancel = () => { stop(); clean(); };
-  };
-  const close = () => {
-    token++;
-    change(false);
-    pickNow = null;
-    current = null;
-    scanNext = null;
-    plot.focus({ preventScroll: true });
-  };
-  /* 抽屉：抬头只写日期和样本量；列表按 20 条一页，扫描在后台补页。 */
-  const head = (pick, count = null) => `<header class="mxt-sample-head">
-    <span class="mxt-sample-when num">${esc(pick.when || pick.date)}</span>
-    ${count == null ? "" : `<span class="mxt-sample-vol num">量 ${fmt(count)}</span>`}
-    <button type="button" class="mx-back" data-samples-close aria-label="返回趋势图">← 返回</button>
-  </header>`;
-  const PAGE = 20;
-  let current = null, page = 0, pageItems = [], scanNext = null, pumping = false, busy = false, pickNow = null;
-  const focusKey = () => {
-    const el = document.activeElement;
-    if (!el || !side.contains(el)) return null;
-    if (el.matches("[data-samples-close]")) return "close";
-    if (el.matches("[data-sample-page]")) return `page:${el.dataset.samplePage}`;
-    if (el.matches(".gl-r")) return `row:${el.dataset.i}`;
-    return null;
-  };
-  const restoreFocus = (key) => {
-    if (!key) return;
-    const el = key === "close" ? $("[data-samples-close]", side)
-      : key.startsWith("page:") ? $(`[data-sample-page="${key.slice(5)}"]`, side)
-        : $(`.gl-r[data-i="${key.slice(4)}"]`, side);
-    el?.focus({ preventScroll: true });
-  };
-  const pagesOf = () => Math.max(1, Math.ceil((current?.items.length || 0) / PAGE));
-  const loading = () => `<div class="mxt-sample-loading"><div class="empty">正在读取样本…</div>${!busy && current?.canScan ? '<button type="button" class="mx-back" data-sample-scan>继续读取</button>' : ""}</div>`;
-  const render = () => {
-    if (!current || !pickNow) return;
-    const key = focusKey();
-    if (!current.items.length) {
-      side.innerHTML = `${head(pickNow, current.items.length)}${current.done
-        ? `<div class="empty">${esc(current.emptyText || "当前索引中没有匹配样本")}</div>`
-        : loading()}`;
-      restoreFocus(key);
-      return;
-    }
-    const pages = pagesOf();
-    page = Math.max(0, Math.min(pages - 1, page));
-    const led = ledger([{ items: current.items }], false, current.unit, current.items.slice(page * PAGE, (page + 1) * PAGE), { count: false, strip: false, sum: false });
-    pageItems = led.items;
-    const scanning = busy;
-    const canNext = page + 1 < pages || (current.canScan && !busy);
-    const pager = pages > 1 ? `<div class="mxt-sample-pager">
-      <button type="button" data-sample-page="prev" aria-label="上一页"${page === 0 ? " disabled" : ""}>‹</button>
-      <span class="mxt-sample-page num">第 <b>${page + 1}</b> / ${pages} 页${scanning ? '<span class="mxt-sample-reading">读取中…</span>' : ""}</span>
-      <button type="button" data-sample-page="next" aria-label="下一页"${canNext ? "" : " disabled"}>›</button>
-    </div>` : current.canScan && !busy ? '<button type="button" class="mx-back mxt-sample-scan" data-sample-scan>继续读取更多</button>' : "";
-    side.innerHTML = `${head(pickNow, current.items.length)}${led.body}${pager}`;
-    restoreFocus(key);
-  };
-  const scan = async () => {
-    if (!scanNext || !current?.canScan) return false;
-    const snap = await scanNext();
-    if (!pickNow) return false;
-    current = snap;
-    return true;
-  };
-  /* Bounded scan: at most `chunks` candidate chunks, and stop once `need` rows are in hand. A
-     sparse cluster must not drag hundreds of detail requests along just to prefetch one page. */
-  const scanChunks = async (chunks, need = Infinity) => {
-    if (!scanNext || busy) return;
-    busy = true;
-    render();
-    for (let n = 0; n < chunks && current?.canScan && current.items.length < need; n += 1) {
-      if (!(await scan())) break;
-      render();
-    }
-    busy = false;
-    render();
-  };
-  const pump = () => {
-    if (pumping || !scanNext) return;
-    pumping = true;
-    // 预取到当前页的下一页，翻页时基本不用等；再往后的页在用户翻到附近时补。
-    scanChunks(3, (page + 2) * PAGE).finally(() => { pumping = false; });
-  };
-  const flip = async (dir) => {
-    if (!current) return;
-    if (dir === "prev") {
-      if (page > 0) { page -= 1; render(); $(".gx-list", side).scrollTop = 0; }
-      return;
-    }
-    if (page + 1 >= pagesOf() && current.canScan) await scanChunks(8, (page + 2) * PAGE);
-    if (page + 1 < pagesOf()) { page += 1; render(); $(".gx-list", side).scrollTop = 0; }
-  };
-  const openItem = async (item) => {
-    // An AB drawer opens the paired compare view; every other drawer stays on 具体数据.
-    if (interaction.openItem) { interaction.openItem(item); return; }
-    let trace = item.trace;
-    if (!trace && item.turn != null) {
-      try { trace = (await loadSample(item.s)).attribution?.turns?.[item.turn]?.trace_id; }
-      catch { /* The sample page can still open the selected Trace. */ }
-    }
-    openSamples({ case: item.s, trace: trace || null });
-  };
-  const open = async (pick) => {
-    const stamp = ++token;
-    pickNow = pick;
-    current = null;
-    page = 0;
-    pageItems = [];
-    scanNext = null;
-    side.innerHTML = `${head(pick)}<div class="empty">正在读取样本…</div>`;
-    change(true);
-    $("[data-samples-close]", side)?.focus({ preventScroll: true });
-    try {
-      const first = await load(pick);
-      if (stamp !== token || !side.isConnected || !opened) return;
-      current = first;
-      scanNext = typeof first.scanMore === "function" ? first.scanMore : null;
-      render();
-      pump();
-    } catch {
-      if (stamp !== token || !side.isConnected || !opened) return;
-      side.innerHTML = `${head(pickNow)}<div class="empty">样本读取失败</div><button type="button" class="mx-back" data-samples-retry>重试</button>`;
-      $("[data-samples-retry]", side)?.addEventListener("click", () => open(pick));
-    }
-  };
-  side.onclick = async (event) => {
-    if (event.target.closest("[data-samples-close]")) { close(); return; }
-    if (event.target.closest("[data-sample-scan]")) { await scanChunks(6, (page + 1) * PAGE); return; }
-    const flipBtn = event.target.closest("[data-sample-page]");
-    if (flipBtn) { await flip(flipBtn.dataset.samplePage); return; }
-    const row = event.target.closest(".gl-r");
-    const item = row && pageItems[Number(row.dataset.i)];
-    if (item) await openItem(item);
-  };
-  frame.onkeydown = (event) => { if (event.key === "Escape" && opened) { event.preventDefault(); event.stopPropagation(); close(); } };
-  return {
-    open,
-    // A drawer is a split of the same frame: revealing it narrows the map on purpose, so the
-    // caller must not treat that resize as a reason to rebuild and close it.
-    isOpen: () => opened,
-    destroy: () => { token++; cancel(); opened = false; pickNow = null; current = null; scanNext = null; layout.classList.remove("is-open", "is-closing"); side.hidden = true; side.innerHTML = ""; map.inert = false; map.removeAttribute("aria-hidden"); clear(); },
-  };
-}
-
-/* One chunk of candidates per scan: details arrive in waves, and the first chunk is small enough
-   that the drawer has rows to paint well before a whole page of candidates has been read.
-   Candidates are paged from the server's bounded recall slice (<= 2,000) so clicking a candle
-   never pulls the tens-of-MB full samples index into the browser. */
-async function loadTrendSamplePage(trend, spec, pick) {
-  const product = ctx.product;
-  const series = pick.series;
-  const scenesList = !spec.scenes || spec.scenes.size === trend.scenes.length
-    ? null
-    : [...spec.scenes].map((i) => trend.scenes[i]);
-  const mildest = series.levelAll ? -1 : Math.max(...series.levelIdxs);
-  const SLICE_PAGE = 48;
-  const baseQuery = {
-    mode: "trend",
-    date: pick.date,
-    node: spec.node || "",
-    models: (series.models || []).join(","),
-    uts: (series.uts || []).join(","),
-    scenes: scenesList ? JSON.stringify(scenesList) : "",
-    mildest: mildest >= 0 ? String(mildest) : "",
-    cap: RECALL_CAP,
-  };
-
-  let pool = [];
-  let total = 0;
-  let candidateCount = 0;
-  let serverPaged = false;
-  let serverHasMore = false;
-  let serverOffset = 0;
-
-  if (typeof ctx.recallSlice === "function") {
-    const first = await ctx.recallSlice(product, { ...baseQuery, offset: 0, limit: SLICE_PAGE });
-    if (first && Array.isArray(first.rows)) {
-      serverPaged = true;
-      pool = first.rows.slice();
-      total = Number(first.recalled ?? first.rows.length);
-      candidateCount = Number(first.candidates ?? first.rows.length);
-      serverHasMore = Boolean(first.has_more);
-      serverOffset = first.rows.length;
-    }
-  }
-  if (!serverPaged) {
-    const index = await ctx.loadIndex(product);
-    const candidates = trendSampleCandidates(index.products?.[product]?.rows || [], {
-      date: pick.date, node: spec.node, models: series.models, uts: series.uts, scenes: scenesList,
-    });
-    candidateCount = candidates.length;
-    const matched = mildest < 0 ? candidates : candidates.filter((row) => {
-      const worst = WORST.indexOf(row.w);
-      return worst < 0 || worst <= mildest;
-    });
-    pool = matched.slice(0, RECALL_CAP);
-    total = pool.length;
-  }
-
-  const state = { items: [], scanned: 0, done: false };
-  const CHUNK = 12;
-  const CONCURRENCY = 8;
-  const snapshot = () => ({
-    items: state.items.slice(), unit: "条 Trace",
-    // No candidate at all is not the same as candidates that miss the cluster/levels: say which
-    // one happened instead of blaming the index for every empty drawer.
-    emptyText: candidateCount ? "候选样本没有命中该簇的问题" : "",
-    done: state.done,
-    canScan: !state.done && (state.scanned < pool.length || serverHasMore) && state.items.length < LEDGER_MAX,
-  });
-  const ensureCandidates = async () => {
-    if (!serverPaged || !serverHasMore || state.scanned < pool.length) return;
-    const next = await ctx.recallSlice(product, { ...baseQuery, offset: serverOffset, limit: SLICE_PAGE });
-    if (next && Array.isArray(next.rows) && next.rows.length) {
-      pool.push(...next.rows);
-      serverOffset += next.rows.length;
-      serverHasMore = Boolean(next.has_more);
-      total = Math.max(total, pool.length);
-    } else {
-      serverHasMore = false;
-    }
-  };
-  const scanMore = async () => {
-    if (state.done || state.items.length >= LEDGER_MAX) {
-      state.done = true;
-      return snapshot();
-    }
-    await ensureCandidates();
-    if (state.scanned >= pool.length) {
-      state.done = true;
-      return snapshot();
-    }
-    const batch = pool.slice(state.scanned, state.scanned + CHUNK);
-    state.scanned += batch.length;
-    for (let start = 0; start < batch.length; start += CONCURRENCY) {
-      const results = await Promise.allSettled(batch.slice(start, start + CONCURRENCY).map(async (row) => {
-        const detail = await loadSample(row.s);
-        const problems = trendSampleProblems(detail, spec.node, series.levelIdxs.map((i) => TREND_SEV[i]));
-        if (!problems.length) return null;
-        return { ...caseItem(row), n: problems.length, w: Math.min(...problems.map((problem) => sevIdx(problem.sev))) };
-      }));
-      results.forEach((result) => { if (result.status === "fulfilled" && result.value) state.items.push(result.value); });
-      if (state.items.length >= LEDGER_MAX) break;
-    }
-    if ((state.scanned >= pool.length && !serverHasMore) || state.items.length >= LEDGER_MAX) state.done = true;
-    return snapshot();
-  };
-  await scanMore();
-  return { ...snapshot(), scanMore };
-}
-
-async function loadTraceSamplePage(trend, pick) {
-  const product = ctx.product;
-  const refs = traceSampleRefs(trend, pick.date, pick.series.level).slice(0, RECALL_CAP);
-  const slugs = [...new Set(refs.map(([, slug]) => slug).filter(Boolean))];
-  let rows = null;
-  if (slugs.length && typeof ctx.recallLookup === "function") {
-    const looked = await ctx.recallLookup(product, { slugs, cap: RECALL_CAP });
-    if (looked && Array.isArray(looked.rows)) rows = looked.rows;
-  }
-  if (!rows) {
-    const index = await ctx.loadIndex(product);
-    rows = index.products?.[product]?.rows || [];
-  }
-  const bySlug = new Map(rows.map((row) => [row.s, row]));
-  const items = refs.map(([, slug, turn, level, trace]) => {
-    const row = bySlug.get(slug);
-    return row ? { ...caseItem(row), w: level, trace, turn, n: 0, q: `${row.q || "（无提问）"} · 第 ${turn + 1} 轮` } : null;
-  }).filter(Boolean);
-  return { items, unit: "条 Trace", done: true, canScan: false, scanMore: null };
-}
-
-async function loadABTrendSamplePage(spec, pick) {
-  const { round, sides } = pick.series.samples[pick.index];
-  if (!round.sample_refs) return { items: [], emptyText: "当前快照缺少 A/B 样本关联" };
-  const refs = abTrendSampleRefs(round, sides, spec.row, spec.node).slice(0, RECALL_CAP);
-  const slugs = [...new Set(refs.map((ref) => ref.slug).filter(Boolean))];
-  const tids = [...new Set(refs.filter((ref) => !ref.slug && ref.side === "before" && ref.trace).map((ref) => ref.trace))];
-  let rows = null;
-  if ((slugs.length || tids.length) && typeof ctx.recallLookup === "function") {
-    const looked = await ctx.recallLookup(ctx.product, { slugs, tids, cap: RECALL_CAP });
-    if (looked && Array.isArray(looked.rows)) rows = looked.rows;
-  }
-  if (!rows) {
-    const index = await ctx.loadIndex(ctx.product);
-    rows = index.products?.[ctx.product]?.rows || [];
-  }
-  const { items } = resolveABSamples(refs, rows, spec.node);
-  return {
-    items: items.map(({ row, trace, n, ref }) => ({ ...caseItem(row), trace, n, ref, pair: ref.pair || ref.trace, round: spec.round?.id })), unit: "个样本",
-    // An empty drawer must name the real reason: this side of the batch has no hit here, or the
-    // hits exist but have no detail to open — never "no samples in the index" for AB data.
-    emptyText: refs.length ? "这些样本暂无可打开的评测详情" : "该批次这一格没有命中样本",
-    done: true, canScan: false, scanMore: null,
-  };
-}
-
-/* A K-line whose candles open the shared sample drawer. The chart follows its host's width on its
-   own (ResizeObserver), so opening or closing the drawer needs no redraw. */
-function mountSampleTrend(plot, makeChart, load, interaction = {}) {
-  const drawer = trendSampleDrawer(plot, load, () => {}, interaction);
-  const chart = makeChart(plot, (pick) => drawer.open(pick));
-  return {
-    destroy: () => { chart.destroy(); drawer.destroy(); },
-    // Recall a source the chart may not draw as its own point (e.g. online samples while the
-    // matrix shows the paired change). The pick's series carries the sides to load.
-    openPick: (pick) => drawer.open(pick),
-  };
-}
-
-function mountABCellTrend(plot, spec) {
-  const makeChart = (host, onPick) => createKlineChart(host, {
-    ...spec.kline,
-    onPick: (candle) => {
-      const sample = spec.picks.get(String(candle.time));
-      if (sample) onPick({ date: String(candle.time), series: { samples: [sample] }, index: 0 });
-    },
-  });
-  return mountSampleTrend(plot, makeChart, (pick) => loadABTrendSamplePage(spec, pick), {
-    openItem: (item) => {
-      if (item.ref?.side === "online") openCompare({ online: item.ref.slug, round: item.round });
-      else openCompare({ pair: item.pair, round: item.round });
-    },
-  });
-}
+/* The shared ledger & trend sample drawer helpers are imported from sample_drawer.js. */
 
 function pushPull(bento, p, tax, u) {
   u.deep = u.deep || { top: null, bottom: null };
@@ -3025,9 +2853,9 @@ function pushPull(bento, p, tax, u) {
   /* A card only has a deep state while there is something behind it to open: empty cards keep
      their default size instead of pushing a row mate into a star map with no stars. */
   const openable = {
-    vol: () => (p.field || []).some((g) => (g.cells || []).length),
-    eval: () => evalRows(p).some((r) => (r.evaluated || 0) > 0),
-    attr: () => (p.roles || []).some((r) => r.problems),
+    vol: () => (p.input?.traces || p.input?.records || p.kpi?.inputs || 0) > 0 || (p.field || []).some((g) => (g.cells || []).length),
+    eval: () => evalRows(p).some((r) => (r.evaluated || 0) > 0 || (r.traces || 0) > 0),
+    attr: () => attrFlows(p, tax).total > 0,
     clu: () => !!(tax && (p.kpi.clustered || 0) > 0),
     pred: () => !!p.prediction && ((p.prediction.items || []).length > 0),
   };
@@ -3150,14 +2978,14 @@ function pushPull(bento, p, tax, u) {
 
   function volSpec(focus, opened) {
     const at = innermost(focus, opened);
-    if (!at || at.ev === 0) return null;
+    if (!at) return null;
     const chain = [];
     for (let n = at; n; n = n.parent) chain.unshift(n);
     const models = !!(p.input && p.input.models && Object.keys(p.input.models).length);
     const model = models ? (chain[1] && chain[1].id.split("/")[1]) : null;
     const task = chain[models ? 2 : 1] || null;
     return {
-      card: "vol", id: `vol|${model || ""}|${task ? task.id : ""}`, model,
+      card: "vol", id: `vol|${model || ""}|${task ? task.id : ""}`, model, isInput: true,
       task: task && !task.other ? task.name : null,
       others: task && task.other ? (task.parent.children || []).filter((c) => !c.other).map((c) => c.name) : null,
       focus: at === focus && opened ? opened.name : null,
@@ -3217,6 +3045,40 @@ function pushPull(bento, p, tax, u) {
       return { groups: [...by.values()], total: null, rawParts: null };
     }
 
+    if (spec.card === "vol" && typeof ctx.inputSlice === "function") {
+      const query = { cap: RECALL_CAP };
+      if (spec.model) query.model = spec.model;
+      if (spec.task) query.task = spec.task;
+      if (spec.others) query.others = JSON.stringify(spec.others);
+      const sliced = await ctx.inputSlice(ctx.product, query);
+      if (sliced && Array.isArray(sliced.groups)) {
+        return {
+          groups: sliced.groups.map((g) => ({
+            key: g.key,
+            name: g.name || g.key,
+            items: (g.items || []).map((it) => ({
+              s: it.s || "",
+              r: it.r || "",
+              m: it.m || "",
+              sp: it.sp || "daily",
+              d: it.d || "",
+              q: it.q || "",
+              tr: it.tr || 1,
+              ev: it.ev ? 1 : 0,
+              cat: it.cat || "",
+              w: it.ev ? 4 : 5,
+              n: 0,
+              isInput: true,
+            })),
+          })),
+          total: Number(sliced.total) || null,
+          rawParts: null,
+          isInput: true,
+          evalCounts: Array.isArray(sliced.eval_counts) ? sliced.eval_counts : null,
+        };
+      }
+    }
+
     if (typeof ctx.recallSlice === "function") {
       const query = { mode: "galaxy", card: spec.card, unified: p.unified ? "1" : "0", cap: RECALL_CAP };
       if (spec.card === "vol") {
@@ -3228,19 +3090,23 @@ function pushPull(bento, p, tax, u) {
         query.d1 = spec.d1 || "";
         query.model = spec.model || "all";
       } else if (spec.card === "attr") {
-        if (spec.role) query.role = spec.role;
-        else if (spec.version) query.version = spec.version;
+        if (spec.model) query.model = spec.model;
+        if (spec.sev) query.sev = spec.sev;
+        if (spec.mech) query.mech = spec.mech;
       } else if (spec.card === "clu") {
         query.prefix = spec.prefix || "";
         if (spec.kids?.length) query.kids = JSON.stringify(spec.kids.map((c) => c.key));
       }
       const sliced = await ctx.recallSlice(ctx.product, query);
       if (sliced && Array.isArray(sliced.groups)) {
-        const roleLabel = (id) => (p.roles.find((x) => x.id === id) || { label: id }).label;
         const kidNames = spec.card === "clu" ? new Map((spec.kids || []).map((c) => [c.key, c.name])) : null;
         const nameOf = (gkey) => {
           if (spec.card === "eval") return versionName(gkey);
-          if (spec.card === "attr") return spec.role ? versionName(gkey) : roleLabel(gkey);
+          if (spec.card === "attr") {
+            if (spec.sev && spec.mech) return taxNodeName(tax?.stages, gkey, gkey === "~un" ? "其他阶段" : gkey);
+            if (spec.sev) return taxNodeName(tax?.mechanisms, gkey, gkey === "~un" ? "其他问题" : gkey);
+            return sevLabel(gkey);
+          }
           if (spec.card === "clu") return kidNames.get(gkey) || (gkey === "~" ? "其他" : patName(tax, gkey));
           return gkey;
         };
@@ -3262,10 +3128,18 @@ function pushPull(bento, p, tax, u) {
       const picked = all.filter((r) => r.d >= spec.d0 && r.d <= spec.d1 && (spec.model === "all" || r.m === spec.model));
       groups = groupCases(picked, (r) => versionKey(r.sp, r.m), versionName);
     } else if (spec.card === "attr") {
-      if (spec.role) groups = groupCases(all.filter((r) => (r.r || []).includes(spec.role)), (r) => versionKey(r.sp, r.m), versionName);
-      else {
-        const role = (id) => (p.roles.find((x) => x.id === id) || { label: id }).label;
-        groups = groupCases(all.filter((r) => versionKey(r.sp, r.m) === spec.version && (r.r || []).length), (r) => r.r[0], role);
+      const hasMech = (r, m) => (r.pt || []).some((pt) => String(pt).split(".")[1] === m);
+      const matchMod = (r) => !spec.model || r.m === spec.model || String(r.m || "").startsWith(spec.model);
+      if (spec.sev && spec.mech) {
+        groups = groupCases(all.filter((r) => matchMod(r) && r.w === spec.sev && hasMech(r, spec.mech)), (r) => (r.st || [])[0] || "~un", (k) => taxNodeName(tax?.stages, k, k));
+      } else if (spec.model && spec.sev) {
+        groups = groupCases(all.filter((r) => matchMod(r) && r.w === spec.sev), (r) => (r.pt?.[0] ? String(r.pt[0]).split(".")[1] : "~un"), (k) => taxNodeName(tax?.mechanisms, k, k));
+      } else if (spec.sev) {
+        groups = groupCases(all.filter((r) => r.w === spec.sev), (r) => (r.pt?.[0] ? String(r.pt[0]).split(".")[1] : "~un"), (k) => taxNodeName(tax?.mechanisms, k, k));
+      } else if (spec.mech) {
+        groups = groupCases(all.filter((r) => hasMech(r, spec.mech)), (r) => r.w || "none", sevLabel);
+      } else if (spec.model) {
+        groups = groupCases(all.filter((r) => matchMod(r) && r.n > 0), (r) => r.w || "none", sevLabel);
       }
     } else if (spec.card === "clu") {
       const hit = (r) => (r.pt || []).some((x) => x === spec.prefix || x.startsWith(`${spec.prefix}.`));
@@ -3281,10 +3155,13 @@ function pushPull(bento, p, tax, u) {
 
   const caseTip = (it) => `<div class="t-head">${esc(it.q || "（无提问）")}</div>
     <div class="t-row"><span class="sev" style="--c:${sevColor(it.w)}"><i></i>${SEV_NAME[WORST[it.w]]}</span><span>${esc(modelName(p, it.m))} · ${esc((it.d || "").slice(5))}</span><b class="num">${it.n ? `${fmt(it.n)} 个问题` : "无问题"}</b></div>`;
+  const inputTip = (it) => `<div class="t-head">${esc(it.q || "（无提问）")}</div>
+    <div class="t-row"><span class="sev" style="--c:${it.ev ? "var(--accent)" : "var(--muted)"}"><i></i>${it.ev ? "已评测" : "待评测"}</span><span>${esc(modelName(p, it.m))}${it.d ? ` · ${esc(String(it.d).slice(5))}` : ""}</span><b class="num">第 ${fmt(it.tr || 1)} 轮</b></div>`;
   const predTip = (it) => `<div class="t-head">${esc(it.q || "")}</div>
     <div class="t-row"><span>${esc(it.c || "其他")} · ${esc(it.t || "")}${it.d ? ` · ${esc(String(it.d).slice(5))}` : ""}</span></div>
     ${(it.vers || []).map((x) => `<div class="t-row"><span>${esc(modelName(p, x.v))}</span>${x.e ? `<span class="dim">${esc(x.e)}</span>` : ""}<b>${esc(RESULT[x.r] || x.r || "")}</b></div>`).join("")}`;
   const predColor = (it, c) => (it.r === "correct" ? c.accent : it.r === "wrong" ? c.sev[1] : it.r === "mixed" ? c.sev[3] : it.r === "pending" ? c.muted : c.faint);
+  const inputColor = (it, c) => (it.ev ? c.accent : c.muted);
 
   async function paintGalaxy(k, gx, spec) {
     if (maps[k] && maps[k].id === spec.id) return maps[k].map.focus(spec.focus);
@@ -3295,17 +3172,19 @@ function pushPull(bento, p, tax, u) {
     let groups = [];
     let total = null;
     let rawParts = null;
+    let isInput = Boolean(spec.isInput || spec.card === "vol");
     try {
       const res = await groupsFor(spec);
       groups = res.groups || [];
       total = res.total;
       rawParts = res.rawParts;
+      if (res.isInput != null) isInput = res.isInput;
     } catch (err) {
       console.error(err);
     }
     if (gx._token !== token || gx.hidden) return;
     if (!groups.some((g) => g.items.length)) {
-      gx.innerHTML = `<div class="empty">暂无已评测的 Trace</div>`;
+      gx.innerHTML = `<div class="empty">${isInput ? "暂无评测输入记录" : "暂无已评测的 Trace"}</div>`;
       return;
     }
     const pred = spec.card === "pred";
@@ -3317,7 +3196,7 @@ function pushPull(bento, p, tax, u) {
       <span class="mxt-sample-page num">第 <b>${page + 1}</b> / ${n} 页</span>
       <button type="button" data-gxpage="next" aria-label="下一页"${page === n - 1 ? " disabled" : ""}>›</button>
     </div>`);
-    const led = ledger(groups, pred, null, null, { size: GX_PAGE, page: 0, total, rawParts });
+    const led = ledger(groups, pred, null, null, { size: GX_PAGE, page: 0, total, rawParts, isInput });
     let pageItems = led.items;
     gx.innerHTML = `<div class="gx-in"><div class="gx-map"></div><div class="gx-side">${led.sumHtml}<div class="gx-list"></div><div class="gx-pager-slot"></div></div></div>`;
     const side = $(".gx-side", gx);
@@ -3345,11 +3224,29 @@ function pushPull(bento, p, tax, u) {
         list.scrollTo({ top: top - (list.clientHeight - lit.offsetHeight) / 2, behavior: REDUCED ? "auto" : "smooth" });
       }
     };
+    const tipFn = pred ? predTip : isInput ? inputTip : caseTip;
+    const pickItem = (it) => {
+      if (pred) return openForecast(it.s);
+      if (isInput && !it.s) {
+        return openInputDetailModal({
+          product: ctx.product,
+          split: it.sp || "daily",
+          model: it.m || "",
+          date: it.d || "",
+          ref: it.r || "",
+          q: it.q || "",
+          tr: it.tr || 1,
+          cat: it.cat || "",
+          ev: 0,
+        });
+      }
+      return openSamples({ case: it.s });
+    };
     const map = galaxy($(".gx-map", gx), groups, {
       focus: spec.focus,
-      tip: pred ? predTip : caseTip,
-      colorOf: pred ? predColor : null,
-      onPick: (it) => (pred ? openForecast(it.s) : openSamples({ case: it.s })),
+      tip: tipFn,
+      colorOf: pred ? predColor : isInput ? inputColor : null,
+      onPick: pickItem,
       onHover: light,
     });
     const rowItem = (e) => {
@@ -3360,7 +3257,7 @@ function pushPull(bento, p, tax, u) {
       const it = rowItem(e);
       if (!it) return;
       map.mark(it);
-      showTip((pred ? predTip : caseTip)(it), e.clientX, e.clientY);
+      showTip(tipFn(it), e.clientX, e.clientY);
     });
     side.addEventListener("pointerleave", () => {
       map.mark(null);
@@ -3373,7 +3270,7 @@ function pushPull(bento, p, tax, u) {
         return;
       }
       const it = rowItem(e);
-      if (it) pred ? openForecast(it.s) : openSamples({ case: it.s });
+      if (it) pickItem(it);
     });
     maps[k] = { id: spec.id, map };
   }
@@ -3382,11 +3279,27 @@ function pushPull(bento, p, tax, u) {
     const t = u.deep.top;
     $$("#evChart .evday", bento).forEach((d) => d.classList.toggle("is-on", !!t && t.card === "eval" && d.dataset.d0 === t.d0));
     const b = u.deep.bottom && u.deep.bottom.card === "attr" ? u.deep.bottom : null;
-    $$('[data-card="attr"] .sk-node', bento).forEach((n) =>
-      n.classList.toggle("is-pick", !!b && (b.role ? n.dataset.r === b.role : n.dataset.g === b.gi)));
+    $$('[data-card="attr"] .sk-node', bento).forEach((n) => {
+      const hit = !!b && (
+        (n.dataset.m && n.dataset.m === b.model && !b.sev)
+        || (n.dataset.g && n.dataset.g === b.sev && !b.model && !b.mech)
+        || (n.dataset.r && n.dataset.r === b.mech && !b.sev)
+        || (b.model && b.sev && (n.dataset.m === b.model || n.dataset.g === b.sev))
+        || (b.sev && b.mech && (n.dataset.g === b.sev || n.dataset.r === b.mech))
+      );
+      n.classList.toggle("is-pick", hit);
+    });
     $$('[data-card="attr"] .sankey', bento).forEach((sv) => sv.classList.toggle("is-picked", !!b));
-    $$('[data-card="attr"] .sk-f', bento).forEach((f) =>
-      f.classList.toggle("is-pick", !!b && (b.role ? f.dataset.r === b.role : f.dataset.g === b.gi)));
+    $$('[data-card="attr"] .sk-f', bento).forEach((f) => {
+      const hit = !!b && (
+        (b.model && b.sev && ((f.dataset.m === b.model && f.dataset.g === b.sev) || (f.dataset.g === b.sev && !f.dataset.m)))
+        || (b.sev && b.mech && f.dataset.g === b.sev && f.dataset.r === b.mech)
+        || (b.model && !b.sev && !b.mech && f.dataset.m === b.model)
+        || (b.sev && !b.model && !b.mech && f.dataset.g === b.sev)
+        || (b.mech && !b.sev && f.dataset.r === b.mech)
+      );
+      f.classList.toggle("is-pick", hit);
+    });
     const pr = u.deep.bottom && u.deep.bottom.card === "pred" ? u.deep.bottom : null;
     $$('[data-card="pred"] [data-pm]', bento).forEach((n) => n.classList.toggle("is-pick", !!pr && pr.kind === "model" && n.dataset.pm === pr.key));
   }
@@ -3402,32 +3315,27 @@ function pushPull(bento, p, tax, u) {
       close(ROW[folded.dataset.card]);
       return;
     }
-    if (e.target.closest("#evYearBack")) {
-      EV.year = null;
-      close(ROW.eval);
-      repaintEvalCard(bento, p);
-      return;
-    }
-    const day = e.target.closest('[data-card="eval"] .evday');
+    const day = e.target.closest('[data-card="eval"] .evday.is-live');
     if (day) {
-      // 年份柱是下钻入口（点它看这一年的月份），月份/日柱才是打开当天。
-      if (day.dataset.year) {
-        EV.year = day.dataset.year;
-        close(ROW.eval);
-        repaintEvalCard(bento, p);
-        return;
-      }
       toggle({ card: "eval", id: `eval|${day.dataset.d0}|${day.dataset.d1}|${EV.model}`, d0: day.dataset.d0, d1: day.dataset.d1, model: EV.model });
       return;
     }
-    const sk = e.target.closest('[data-card="attr"] .sankey [data-g], [data-card="attr"] .sankey [data-r]');
+    const sk = e.target.closest('[data-card="attr"] .sankey [data-m], [data-card="attr"] .sankey [data-g], [data-card="attr"] .sankey [data-r]');
     if (sk) {
-      // Left keys are p.field indexes (one per version); right keys are component roles.
-      const gi = sk.dataset.g != null ? sk.dataset.g : null;
-      const g = gi != null ? p.field[Number(gi)] : null;
-      const vkey = g ? versionKey(g.split, g.model) : null;
-      if (sk.dataset.r) toggle({ card: "attr", id: `attr|${sk.dataset.r}`, role: sk.dataset.r, focus: vkey });
-      else if (vkey) toggle({ card: "attr", id: `attr|v|${vkey}`, version: vkey, gi });
+      const model = sk.dataset.m || null;
+      const sev = sk.dataset.g || null;
+      const mech = sk.dataset.r || null;
+      if (model && sev) {
+        toggle({ card: "attr", id: `attr|ms|${model}|${sev}`, model, sev });
+      } else if (sev && mech) {
+        toggle({ card: "attr", id: `attr|${sev}|${mech}`, sev, mech });
+      } else if (model) {
+        toggle({ card: "attr", id: `attr|M|${model}`, model });
+      } else if (sev) {
+        toggle({ card: "attr", id: `attr|s|${sev}`, sev });
+      } else if (mech) {
+        toggle({ card: "attr", id: `attr|m|${mech}`, mech });
+      }
       return;
     }
     const pm = e.target.closest('[data-card="pred"] [data-pm]');
@@ -3536,14 +3444,50 @@ function wire(bento, p, tax, u) {
   const evDetail = $("#evDetail", bento);
   if (evDetail) evDetail.addEventListener("click", () => ctx.navigate({ detail: "eval" }));
 
-  const evRange = $("#evRange", bento);
+  const evPrev = $("#evPrevMonth", bento);
+  const evNext = $("#evNextMonth", bento);
+  const evAllBtn = $("#evAllTime", bento);
+  const stepMonth = (delta) => {
+    const months = evalMonths(p, EV.model);
+    if (!months.length) return;
+    const cur = resolveEvalMonth(p, EV.model, EV.month);
+    if (cur === "all") {
+      if (delta < 0) EV.month = months[months.length - 1];
+      else return;
+    } else {
+      const idx = months.indexOf(cur);
+      const nextIdx = idx + delta;
+      if (nextIdx < 0 || nextIdx >= months.length) return;
+      EV.month = months[nextIdx];
+    }
+    push.closeEval();
+    repaintEvalCard(bento, p);
+  };
+  evPrev?.addEventListener("click", () => stepMonth(-1));
+  evNext?.addEventListener("click", () => stepMonth(1));
+  evAllBtn?.addEventListener("click", () => {
+    const months = evalMonths(p, EV.model);
+    if (!months.length) return;
+    EV.month = EV.month === "all" ? months[months.length - 1] : "all";
+    push.closeEval();
+    repaintEvalCard(bento, p);
+  });
+  $("#evChart", bento)?.addEventListener("click", (e) => {
+    const mcol = e.target.closest("[data-jump-month]");
+    if (!mcol) return;
+    EV.month = mcol.dataset.jumpMonth;
+    push.closeEval();
+    repaintEvalCard(bento, p);
+  });
+
   const evModel = $("#evModel", bento);
-  if (evRange && evModel) {
-    // A new window or model invalidates the picked day's star map; a new window also
-    // drops the year drill (it belongs to 「全部」).
-    const range = segmented(evRange, (v) => { EV.range = v; EV.year = null; push.closeEval(); repaintEvalCard(bento, p); });
-    const model = segmented(evModel, (v) => { EV.model = v; push.closeEval(); repaintEvalCard(bento, p); });
-    range.set(EV.range, { silent: true });
+  if (evModel) {
+    const model = segmented(evModel, (v) => {
+      EV.model = v;
+      EV.month = resolveEvalMonth(p, EV.model, EV.month) || null;
+      push.closeEval();
+      repaintEvalCard(bento, p);
+    });
     model.set(EV.model, { silent: true });
   }
 
@@ -4326,7 +4270,6 @@ function wire(bento, p, tax, u) {
 
   push.rings.vol = sunburst($("#vol", bento), volTree(p), {
     unit: "评测输入", state: u.vol, animate: !ctx.refresh, onChange: (f, o) => push.fromRing("vol", f, o),
-    inert: (n) => (n.ev === 0 ? NO_CASE : null),
   });
   if (tax) {
     push.rings.clu = sunburst($("#clu", bento), cluTree(p, tax), {
@@ -4342,10 +4285,15 @@ function wire(bento, p, tax, u) {
 
   $$(".sankey", bento).forEach((sk) => {
     sk.addEventListener("pointerover", (e) => {
-      const t = e.target.closest("[data-g],[data-r]");
+      const t = e.target.closest("[data-m],[data-g],[data-r]");
       sk.classList.toggle("hl", !!t);
       if (!t) return;
-      const hit = (f) => (t.classList.contains("sk-f") ? f === t : t.dataset.g != null ? f.dataset.g === t.dataset.g : f.dataset.r === t.dataset.r);
+      const hit = (f) => {
+        if (t.classList.contains("sk-f")) return f === t;
+        if (t.dataset.m != null) return f.dataset.m === t.dataset.m;
+        if (t.dataset.g != null) return f.dataset.g === t.dataset.g;
+        return f.dataset.r === t.dataset.r;
+      };
       $$(".sk-f", sk).forEach((f) => f.classList.toggle("on", hit(f)));
     });
     sk.addEventListener("pointerleave", () => sk.classList.remove("hl"));
@@ -4378,33 +4326,24 @@ function wire(bento, p, tax, u) {
       <span>${esc(groupName(p, p.field[g]))}</span>${c[4] ? `<span class="dim">流失用户</span>` : ""}<b class="num">${c[2]} 个问题</b></div>`;
   });
 
-  /* 问题K线图 & A/B Test: 聚类矩阵卡原位翻转成背面的分析或对比面板，返回时再翻回矩阵。
-     数据按需拉一次；展开状态活在 u.kline / u.ab 上，就地刷新后还停在原来那一面。 */
+  /* 问题K线图: 聚类矩阵卡原位翻转成背面的问题分析面板，返回时再翻回矩阵。
+     数据按需拉一次；展开状态活在 u.kline 上，就地刷新后还停在原来那一面。 */
   const klineBtn = $("#mxKline", bento);
   const klineFace = $("#mxKlineFace", bento);
-  const abBtn = $("#mxAB", bento);
   const mxCard = $("#mxCard", bento);
   const matrixFace = $("#mxMatrixFace", bento);
-  const abFace = $("#mxABFace", bento);
-  const abBody = $("#abBody", bento);
-  if (mxCard && matrixFace && (klineFace || (abBtn && abFace && abBody && p.ab))) {
+  if (mxCard && matrixFace && klineFace) {
     u.kline = u.kline || { open: false, full: false };
-    u.ab = u.ab || { open: false, full: false, round: -1, metric: "", cell: null, mxRows: [], mxCols: [], mxTrail: [] };
     let currentFace = "matrix";
     let targetFace = "matrix";
     let flipping = false;
-    let abLoading = false;
-    let abLoaded = false;
 
     const setFace = (face) => {
       currentFace = face;
       matrixFace.hidden = face !== "matrix";
-      if (klineFace) klineFace.hidden = face !== "kline";
-      if (abFace) abFace.hidden = face !== "ab";
+      klineFace.hidden = face !== "kline";
       mxCard.classList.toggle("is-kline", face === "kline");
-      mxCard.classList.toggle("is-ab", face === "ab");
       if (klineBtn) klineBtn.setAttribute("aria-expanded", String(face === "kline"));
-      if (abBtn) abBtn.setAttribute("aria-expanded", String(face === "ab"));
       setKlinePanelsOpen(face === "kline", false);
       if (face === "matrix" && shell) fitMatrix(shell.querySelector(".matrix:last-of-type"));
     };
@@ -4450,42 +4389,19 @@ function wire(bento, p, tax, u) {
       }
     };
 
-    const hydrateAB = async () => {
-      if (!abBody || !p.ab || abLoaded || abLoading) return;
-      abLoading = true;
-      const data = await loadAB(ctx, p.ab.url);
-      if (!data || !data.rounds || !data.rounds.length) {
-        abBody.innerHTML = `<div class="empty">暂无 AB 测试数据</div>`;
-        abLoaded = true;
-        abLoading = false;
-        return;
-      }
-      mountAB(abBody, data, u.ab, tax, p, { openCompare, mountCellTrend: mountABCellTrend });
-      abLoaded = true;
-      abLoading = false;
-    };
-
-    /* Fullscreen keeps the reader inside the same card: it leaves the bento, covers the viewport and
-       returns to its slot on Esc or the same icon, so no second panel is mounted. */
     const klineFullBtn = $("#klineFull", mxCard);
-    const abFullBtn = $("#abFull", mxCard);
     const setFull = (on, animate = true) => {
       const had = mxCard.classList.contains("is-full");
       if (currentFace === "kline") u.kline.full = on;
-      if (currentFace === "ab") u.ab.full = on;
       if (had === on) return;
       const first = animate && !REDUCED ? mxCard.getBoundingClientRect() : null;
       mxCard.classList.toggle("is-full", on);
       document.body.classList.toggle("is-ab-full", on);
-      [
-        [klineFullBtn, "全屏查看问题K线图"],
-        [abFullBtn, "全屏查看 A/B Test"],
-      ].forEach(([btn, openLabel]) => {
-        if (!btn) return;
-        btn.setAttribute("aria-pressed", String(on));
-        btn.setAttribute("aria-label", on ? "退出全屏" : openLabel);
-        btn.title = on ? "退出全屏" : "全屏";
-      });
+      if (klineFullBtn) {
+        klineFullBtn.setAttribute("aria-pressed", String(on));
+        klineFullBtn.setAttribute("aria-label", on ? "退出全屏" : "全屏查看问题K线图");
+        klineFullBtn.title = on ? "退出全屏" : "全屏";
+      }
       if (!first) return;
       const last = mxCard.getBoundingClientRect();
       mxCard.animate([
@@ -4497,53 +4413,32 @@ function wire(bento, p, tax, u) {
     const closeBackFace = () => {
       u.kline.open = false;
       u.kline.full = false;
-      u.ab.open = false;
-      u.ab.full = false;
       setFull(false, false);
       requestFace("matrix");
     };
     const openKline = async () => {
       u.kline.open = true;
-      u.ab.open = false;
       await requestFace("kline");
-    };
-    const openAB = async () => {
-      if (!p.ab || !abFace) return;
-      u.ab.open = true;
-      u.kline.open = false;
-      await requestFace("ab");
-      if (u.ab.open) hydrateAB();
     };
 
     klineBtn?.addEventListener("click", () => (u.kline.open ? closeBackFace() : openKline()));
     $("#klineClose", mxCard)?.addEventListener("click", closeBackFace);
     klineFullBtn?.addEventListener("click", () => setFull(!mxCard.classList.contains("is-full")));
 
-    if (abBtn && abFace && abBody && p.ab) {
-      abBtn.addEventListener("click", () => (u.ab.open ? closeBackFace() : openAB()));
-      $("#abClose", mxCard)?.addEventListener("click", closeBackFace);
-      abFullBtn?.addEventListener("click", () => setFull(!mxCard.classList.contains("is-full")));
-    }
-
     const onDocKey = (e) => {
-      if (e.key !== "Escape" || (!u.ab.open && !u.kline.open) || !mxCard.isConnected) return;
+      if (e.key !== "Escape" || !u.kline.open || !mxCard.isConnected) return;
       if (mxCard.querySelector(".mxt-sample-layout.is-open") || mxCard.querySelector(".mxp-lens.is-full")) return;
       if (mxCard.classList.contains("is-full")) setFull(false);
       else closeBackFace();
     };
-    if (abDocKey) document.removeEventListener("keydown", abDocKey);
-    abDocKey = onDocKey;
-    document.addEventListener("keydown", abDocKey);
+    if (mxDocKey) document.removeEventListener("keydown", mxDocKey);
+    mxDocKey = onDocKey;
+    document.addEventListener("keydown", mxDocKey);
 
-    if (u.kline.open && klineFace) {
+    if (u.kline.open) {
       setFace("kline");
       targetFace = "kline";
       if (u.kline.full) setFull(true, false);
-    } else if (u.ab.open && abFace && p.ab) {
-      setFace("ab");
-      targetFace = "ab";
-      if (u.ab.full) setFull(true, false);
-      hydrateAB();
     }
   }
 }

@@ -6,12 +6,15 @@
 
    Route: ?view=compare&product=…&round=<roundId>&pair=<口径① trace>[&online=<slug>]
    Sample entries in the A/B panel land here; every other sample entry stays on 具体数据. */
-import { $, $$, esc, fmt, getJSON } from "./core.js";
+import { $, $$, esc, fmt, getJSON, segmented, REDUCED } from "./core.js";
 import { md } from "./render.js";
 import { createSampleDetail, detailPaneHTML } from "./sample_detail.js";
+import { mountAB } from "./abtest.js";
+import { mountABCellTrend } from "./sample_drawer.js";
 
 const PAGE = 50;
 const AB_CACHE = new Map();
+const AB_STATES = new Map();
 const SAMPLE_VIEW_RESET = {
   detail: null, ed: null, em: null, ep: null, edp: null, p: null, q: null, w: null, split: null,
   model: null, scene: null, sub: null, stage: null, mech: null, case: null, trace: null,
@@ -28,6 +31,13 @@ export function parseCompareURL(search) {
   const q = new URLSearchParams(search || "");
   const clean = (value) => (value == null || value === "" ? null : value);
   return { round: clean(q.get("round")), pair: clean(q.get("pair")), online: clean(q.get("online")) };
+}
+
+export function resolveCompareFace(search, { hasAB = true, isStandalone = false } = {}) {
+  if (isStandalone || !hasAB) return "detail";
+  const q = new URLSearchParams(search || "");
+  if (q.get("face") === "detail" || q.get("pair") || q.get("online")) return "detail";
+  return "ab";
 }
 
 export function pickRound(rounds, id) {
@@ -283,19 +293,26 @@ function listPairs() {
 }
 
 /* ---------------------------------------------------------------- shell */
-function skeleton(root, round) {
+function skeleton(host, round, hasAB = false) {
   const mode = modelMode(round);
-  root.innerHTML = `<div class="compare-standalone-head">
+  const backBtn = hasAB
+    ? `<button type="button" class="compare-back compare-to-ab" data-act="to-ab" title="返回版本对比分析" aria-label="返回版本对比分析">${CHEV_LEFT}<span>分析</span></button>`
+    : `<button type="button" class="compare-back" data-act="testsets" title="返回测试集" aria-label="返回测试集">${CHEV_LEFT}</button>`;
+  const railBackBtn = hasAB
+    ? `<button type="button" class="compare-rail-ab" data-act="to-ab" title="返回版本对比分析" aria-label="返回版本对比分析">${CHEV_LEFT}<span>分析</span></button>`
+    : "";
+  host.innerHTML = `<div class="compare-standalone-head">
       <b class="compare-top-name">${esc(roundName(round))}</b>
       ${mode ? `<span class="compare-mode">${esc(mode)} 模式</span>` : ""}
       <span class="compare-top-count num">${fmt(roundCount(round))} 道题目</span>
     </div>
     <div class="bench bench-compare">
     <aside class="pane pane-sticky compare-list" aria-label="同题列表">
+      ${railBackBtn}
       <button type="button" class="compare-rail-btn" data-act="toggle-list" title="展开同题列表" aria-label="展开同题列表">${CHEV_RIGHT}<span class="compare-rail-label">同题列表</span></button>
       <div class="pane-head compare-list-head">
         <div class="compare-round">
-          <button type="button" class="compare-back" data-act="testsets" title="返回测试集" aria-label="返回测试集">${CHEV_LEFT}</button>
+          ${backBtn}
           <b class="compare-top-name">${esc(roundName(round))}</b>
           <span class="compare-top-count num">${fmt(roundCount(round))} 道题目</span>
         </div>
@@ -318,7 +335,7 @@ function skeleton(root, round) {
     </aside>
     <div class="compare-panes" id="cmppanes"></div>
   </div>`;
-  wireSkeleton(root);
+  wireSkeleton(host);
 }
 
 /* 单侧全屏：先收起另一侧，让这一侧按单模型工作台重新挂载（轨迹 / 链路 / threads / 归因列），
@@ -402,9 +419,9 @@ if (typeof document !== "undefined") {
   });
 }
 
-function wireSkeleton(root) {
+function wireSkeleton(host) {
   let timer = 0;
-  const search = $("#cmpq", root);
+  const search = $("#cmpq", host);
   search.value = C.query;
   search.addEventListener("input", () => {
     clearTimeout(timer);
@@ -416,7 +433,7 @@ function wireSkeleton(root) {
       paintList(pagePairs(C.list, C.page));
     }, 140);
   });
-  $("#cmppager", root).addEventListener("click", (e) => {
+  $("#cmppager", host).addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-page]");
     if (!btn) return;
     const current = pagePairs(C.list, C.page);
@@ -426,16 +443,20 @@ function wireSkeleton(root) {
     C.page = Math.max(1, Math.min(current.pages, C.page));
     C.listKey = "";
     paintList(pagePairs(C.list, C.page));
-    $("#cmplist", root).scrollTop = 0;
+    $("#cmplist", host).scrollTop = 0;
   });
-  $("#cmplist", root).addEventListener("click", (e) => {
+  $("#cmplist", host).addEventListener("click", (e) => {
     const row = e.target.closest(".srow");
     if (!row) return;
     if (!C.online && String(row.dataset.pair) === String(C.pairId)) return;
-    C.ctx.navigate({ pair: row.dataset.pair, online: null });
+    C.ctx.navigate({ pair: row.dataset.pair, online: null, face: "detail" });
   });
-  $(".bench-compare", root).addEventListener("click", (e) => {
+  $(".bench-compare", host).addEventListener("click", (e) => {
     const act = e.target.closest("[data-act]");
+    if (act?.dataset.act === "to-ab") {
+      C.ctx?.navigate({ face: null, pair: null, online: null });
+      return;
+    }
     if (act?.dataset.act === "toggle-list") {
       C.listOff = !C.listOff;
       applyLayout();
@@ -445,7 +466,7 @@ function wireSkeleton(root) {
       toggleSideFull(act.closest(".compare-side"));
     }
   });
-  $(".compare-list-head", root).addEventListener("click", (e) => {
+  $(".compare-list-head", host).addEventListener("click", (e) => {
     const act = e.target.closest("[data-act]");
     if (act?.dataset.act === "testsets") {
       if (C.ctx) C.ctx.navigate({ round: null, pair: null, online: null });
@@ -464,7 +485,7 @@ function wireSkeleton(root) {
       C.list = listPairs();
       C.listKey = "";
       paintList(pagePairs(C.list, C.page));
-      $("#cmplist", root).scrollTop = 0;
+      $("#cmplist", host).scrollTop = 0;
       return;
     }
     if (act?.dataset.act === "side") {
@@ -883,48 +904,59 @@ async function paintSides(round, pair, online) {
   if (token !== C.token) return;
 }
 
-/* ---------------------------------------------------------------- render */
-export async function render(root, ctx) {
-  if (fullSide || fullRestore) closeSideFull(false);
-  stopPickerObserver();
-  C.root = root;
-  C.ctx = ctx;
-  C.product = ctx.product;
-  const payload = await loadAB(ctx);
-  const rounds = Array.isArray(payload?.rounds) ? payload.rounds : [];
-  const url = parseCompareURL(location.search);
-  const round = url.round ? rounds.find((item) => String(item.id) === String(url.round)) : null;
-  if (!round) {
-    if (document.documentElement.dataset.compare === "1") {
-      root.innerHTML = `<div class="bento"><div class="card" style="--span:12"><div class="empty">缺少对比参数</div></div></div>`;
-      return;
-    }
-    testsetPicker(root, ctx, rounds);
-    return;
+let abEscDoc = null;
+
+function abStateFor(product, rounds) {
+  if (!AB_STATES.has(product)) {
+    AB_STATES.set(product, {
+      full: false,
+      round: Math.max(0, rounds.length - 1),
+      metric: "",
+      cell: null,
+      mxRows: [],
+      mxCols: [],
+      mxTrail: [],
+      orbit: {},
+      orbitSide: "before",
+      overviewOpen: "",
+    });
   }
-  const pairs = Array.isArray(round.pairs) ? round.pairs : [];
+  const st = AB_STATES.get(product);
+  if (!(Number(st.round) >= 0 && Number(st.round) < rounds.length)) st.round = Math.max(0, rounds.length - 1);
+  return st;
+}
+
+async function mountBackDetail(backHost, ctx, payload, round, url, hasAB) {
+  const pairs = Array.isArray(round?.pairs) ? round.pairs : [];
   if (!pairs.length) {
     destroyDetails();
     C.skelKey = ""; C.listKey = ""; C.sidesKey = "";
     C.round = round;
-    root.innerHTML = `<div class="compare-empty-head">
-      <button type="button" class="compare-back" data-act="testsets" title="返回测试集" aria-label="返回测试集">${CHEV_LEFT}</button>
+    const backBtn = hasAB
+      ? `<button type="button" class="compare-back compare-to-ab" data-act="to-ab" title="返回版本对比分析" aria-label="返回版本对比分析">${CHEV_LEFT}<span>分析</span></button>`
+      : `<button type="button" class="compare-back" data-act="testsets" title="返回测试集" aria-label="返回测试集">${CHEV_LEFT}</button>`;
+    backHost.innerHTML = `<div class="compare-empty-head">
+      ${backBtn}
       <b class="compare-top-name">${esc(roundName(round))}</b>
       <span class="compare-top-count num">${fmt(roundCount(round))} 道题目</span>
     </div><div class="bento"><div class="card" style="--span:12"><div class="empty">暂无同题详情</div></div></div>`;
-    $(".compare-empty-head", root).addEventListener("click", (event) => {
-      if (event.target.closest("[data-act='testsets']")) ctx.navigate({ round: null, pair: null, online: null });
+    $(".compare-empty-head", backHost).addEventListener("click", (event) => {
+      if (hasAB && event.target.closest("[data-act='to-ab']")) {
+        ctx.navigate({ face: null, pair: null, online: null });
+      } else if (event.target.closest("[data-act='testsets']")) {
+        ctx.navigate({ round: null, pair: null, online: null });
+      }
     });
     return;
   }
   C.round = round;
-  const skelKey = `${ctx.product}|${round.id}`;
-  if (C.skelKey !== skelKey || !root.querySelector(".bench-compare")) {
+  const skelKey = `${ctx.product}|${round.id}|${hasAB ? 1 : 0}`;
+  if (C.skelKey !== skelKey || !backHost.querySelector(".bench-compare")) {
     destroyDetails();
     C.query = "";
     C.page = 1;
     C.verifyOnly = false;
-    skeleton(root, round);
+    skeleton(backHost, round, hasAB);
     C.skelKey = skelKey;
     C.listKey = "";
     C.sidesKey = "";
@@ -935,15 +967,12 @@ export async function render(root, ctx) {
   C.pairs = pairs;
   C.list = listPairs();
   let wanted = !url.online && url.pair ? C.list.find((pair) => String(pair.id) === String(url.pair)) : null;
-  // A link from the A/B panel can land on a question the still-active search or the
-  // verify-only filter hides. Reset both for that deep link, so the selected pair is never
-  // silently replaced by page one.
   if ((url.pair && !wanted) || url.online) {
     if (C.query || C.verifyOnly) {
       C.query = "";
       C.verifyOnly = false;
-      $("#cmpq", root).value = "";
-      $(".compare-filter", root)?.setAttribute("aria-pressed", "false");
+      $("#cmpq", backHost).value = "";
+      $(".compare-filter", backHost)?.setAttribute("aria-pressed", "false");
       C.list = listPairs();
       wanted = !url.online && url.pair ? C.list.find((pair) => String(pair.id) === String(url.pair)) : null;
     }
@@ -955,4 +984,199 @@ export async function render(root, ctx) {
   C.pairId = selected ? selected.id : null;
   paintList(page);
   await paintSides(round, selected, url.online);
+}
+
+/* ---------------------------------------------------------------- render */
+export async function render(root, ctx) {
+  if (fullSide || fullRestore) closeSideFull(false);
+  stopPickerObserver();
+  document.body.classList.remove("is-ab-full");
+  C.root = root;
+  C.ctx = ctx;
+  C.product = ctx.product;
+  const payload = await loadAB(ctx);
+  const rounds = Array.isArray(payload?.rounds) ? payload.rounds : [];
+  const url = parseCompareURL(location.search);
+  const isStandalone = document.documentElement.dataset.compare === "1";
+
+  if (isStandalone || !rounds.length) {
+    const round = url.round ? rounds.find((item) => String(item.id) === String(url.round)) : null;
+    if (!round) {
+      if (isStandalone) {
+        root.innerHTML = `<div class="bento"><div class="card" style="--span:12"><div class="empty">缺少对比参数</div></div></div>`;
+        return;
+      }
+      testsetPicker(root, ctx, rounds);
+      return;
+    }
+    await mountBackDetail(root, ctx, payload, round, url, false);
+    return;
+  }
+
+  const tax = ctx.data?.taxonomy || null;
+  const abState = abStateFor(ctx.product, rounds);
+  const targetFace = resolveCompareFace(location.search, { hasAB: true, isStandalone: false });
+  const stageKey = `${ctx.product}|${payload?.generated_at || ""}`;
+  let stage = root.querySelector("#cmpStage");
+
+  if (!stage || stage.dataset.cmpKey !== stageKey) {
+    root._cmpAbApi?.destroy?.();
+    destroyDetails();
+    C.skelKey = ""; C.listKey = ""; C.sidesKey = "";
+    root.innerHTML = `<div class="cmp-stage" id="cmpStage" data-cmp-key="${esc(stageKey)}" data-face="ab">
+      <div class="cmp-face cmp-front" id="cmpFront">
+        <article class="card cmp-ab-card" id="cmpAbCard">
+          <div class="cmp-ab-inner">
+            <header class="card-head ab-card-head">
+              <h2>版本对比</h2>
+              <div class="ab-rounds" id="abRounds" role="group" aria-label="AB 测试期次"></div>
+              <div class="ab-head-actions">
+                <div class="seg cmp-face-seg" id="cmpFaceSeg" role="group" aria-label="版本对比模式">
+                  <span class="seg-knob" aria-hidden="true"></span>
+                  <button type="button" data-value="ab" aria-pressed="true">对比分析</button>
+                  <button type="button" data-value="detail" aria-pressed="false">具体数据</button>
+                </div>
+                <button type="button" class="icon-btn ab-full" id="abFull" aria-pressed="false" aria-label="全屏查看对比分析" title="全屏">
+                  <svg class="i-abfull-open" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 2.5H2.5V6M10 2.5h3.5V6M6 13.5H2.5V10M10 13.5h3.5V10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  <svg class="i-abfull-close" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 6H6V2.5M13.5 6H10V2.5M2.5 10H6v3.5M13.5 10H10v3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+              </div>
+            </header>
+            <div class="ab-body" id="abBody"></div>
+          </div>
+        </article>
+      </div>
+      <div class="cmp-face cmp-back" id="cmpBack" hidden></div>
+    </div>`;
+
+    stage = $("#cmpStage", root);
+    const frontEl = $("#cmpFront", stage);
+    const backEl = $("#cmpBack", stage);
+    const abCard = $("#cmpAbCard", stage);
+    const abBody = $("#abBody", stage);
+    const roundsHost = $("#abRounds", stage);
+    const abFullBtn = $("#abFull", stage);
+    const faceSegEl = $("#cmpFaceSeg", stage);
+
+    const setAbFull = (on, animate = true) => {
+      const had = abCard.classList.contains("is-full");
+      abState.full = on;
+      if (had === on) return;
+      const first = animate && !REDUCED ? abCard.getBoundingClientRect() : null;
+      abCard.classList.toggle("is-full", on);
+      document.body.classList.toggle("is-ab-full", on);
+      abFullBtn?.setAttribute("aria-pressed", String(on));
+      if (abFullBtn) abFullBtn.title = on ? "退出全屏" : "全屏";
+      if (!first) return;
+      const last = abCard.getBoundingClientRect();
+      abCard.animate([
+        { transform: `translate(${first.left - last.left}px, ${first.top - last.top}px) scale(${first.width / Math.max(1, last.width)}, ${first.height / Math.max(1, last.height)})`, transformOrigin: "0 0" },
+        { transform: "none" },
+      ], { duration: 340, easing: "cubic-bezier(0.16, 1, 0.3, 1)" });
+    };
+    abFullBtn?.addEventListener("click", () => setAbFull(!abCard.classList.contains("is-full")));
+
+    if (abEscDoc) document.removeEventListener("keydown", abEscDoc);
+    abEscDoc = (e) => {
+      if (e.key !== "Escape" || !abCard.isConnected || !abCard.classList.contains("is-full")) return;
+      if (abCard.querySelector(".mxt-sample-layout.is-open")) return;
+      setAbFull(false);
+    };
+    document.addEventListener("keydown", abEscDoc);
+
+    const openDetailPatch = (patch = {}) => {
+      if (abCard.classList.contains("is-full")) setAbFull(false, false);
+      const activeRound = rounds[abState.round];
+      const nextRound = patch.round || activeRound?.id || null;
+      ctx.navigate({ face: "detail", round: nextRound, pair: patch.pair ?? null, online: patch.online ?? null });
+    };
+
+    const faceSeg = faceSegEl
+      ? segmented(faceSegEl, (v) => {
+          if (v === "detail") openDetailPatch({});
+          else ctx.navigate({ face: null, pair: null, online: null });
+        })
+      : null;
+    root._cmpFaceSeg = faceSeg;
+
+    const prodObj = ctx.data?.products?.[ctx.product] || { id: ctx.product, unified: false };
+    const abApi = mountAB(abBody, payload, abState, tax, prodObj, {
+      roundsHost,
+      openCompare: openDetailPatch,
+      mountCellTrend: (plot, spec) => mountABCellTrend(plot, spec, C.ctx, openDetailPatch),
+    });
+    root._cmpAbApi = abApi;
+    if (abState.full && targetFace === "ab") setAbFull(true, false);
+
+    let flipBusy = false;
+    root._cmpFlipTo = async (nextFace, animate = true) => {
+      const curFace = stage.dataset.face || "ab";
+      faceSeg?.set(nextFace, { silent: true });
+      if (curFace === nextFace) return;
+      if (nextFace === "detail" && abCard.classList.contains("is-full")) setAbFull(false, false);
+      const fromEl = curFace === "ab" ? frontEl : backEl;
+      const toEl = nextFace === "ab" ? frontEl : backEl;
+      const sign = nextFace === "detail" ? 1 : -1;
+
+      if (!animate || REDUCED || flipBusy || !stage.animate) {
+        fromEl.hidden = true;
+        toEl.hidden = false;
+        stage.dataset.face = nextFace;
+        if (nextFace === "ab") root._cmpAbApi?.fit?.();
+        return;
+      }
+
+      flipBusy = true;
+      stage.classList.add("is-flipping");
+      try {
+        const out = fromEl.animate(
+          [
+            { transform: "perspective(2000px) rotateY(0deg) scale(1)", opacity: 1 },
+            { transform: `perspective(2000px) rotateY(${-8 * sign}deg) scale(0.985)`, opacity: 0 },
+          ],
+          { duration: 150, easing: "cubic-bezier(0.4, 0, 1, 1)", fill: "forwards" },
+        );
+        await out.finished.catch(() => {});
+        out.cancel();
+        fromEl.hidden = true;
+        toEl.hidden = false;
+        stage.dataset.face = nextFace;
+        if (nextFace === "ab") root._cmpAbApi?.fit?.();
+        const enter = toEl.animate(
+          [
+            { transform: `perspective(2000px) rotateY(${8 * sign}deg) scale(0.985)`, opacity: 0 },
+            { transform: "perspective(2000px) rotateY(0deg) scale(1)", opacity: 1 },
+          ],
+          { duration: 280, easing: "cubic-bezier(0.22, 1, 0.36, 1)", fill: "forwards" },
+        );
+        await enter.finished.catch(() => {});
+        enter.cancel();
+      } finally {
+        flipBusy = false;
+        stage.classList.remove("is-flipping");
+      }
+    };
+  }
+
+  const frontEl = $("#cmpFront", stage);
+  const backEl = $("#cmpBack", stage);
+  if (targetFace === "detail") {
+    const activeAbRound = rounds[abState.round];
+    const round = url.round ? pickRound(rounds, url.round) : (activeAbRound || pickRound(rounds, null));
+    const roundIdx = rounds.findIndex((r) => String(r.id) === String(round?.id));
+    if (roundIdx >= 0 && roundIdx !== abState.round) {
+      root._cmpAbApi?.setRound?.(roundIdx);
+    }
+    const detailJob = mountBackDetail(backEl, ctx, payload, round, url, true);
+    const shouldAnimate = (stage.dataset.face || "ab") !== "detail";
+    await Promise.all([root._cmpFlipTo("detail", shouldAnimate), detailJob]);
+  } else {
+    root._cmpFaceSeg?.set("ab", { silent: true });
+    await root._cmpFlipTo("ab", (stage.dataset.face || "ab") !== "ab");
+    if (url.round) {
+      const ri = rounds.findIndex((r) => String(r.id) === String(url.round));
+      if (ri >= 0 && ri !== abState.round) root._cmpAbApi?.setRound?.(ri);
+    }
+    frontEl.hidden = false;
+  }
 }

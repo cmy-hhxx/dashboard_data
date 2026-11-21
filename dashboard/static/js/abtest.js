@@ -464,7 +464,7 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
   const rounds = data && Array.isArray(data.rounds) ? data.rounds : [];
   if (!rounds.length) {
     host.innerHTML = `<div class="empty">暂无 AB 测试数据</div>`;
-    return;
+    return { destroy() {}, setRound() {}, fit() {} };
   }
   const labels = data.labels || {};
   if (!(Number(state.round) >= 0 && Number(state.round) < rounds.length)) state.round = rounds.length - 1;
@@ -490,8 +490,8 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
   let orbitApi = null;
   let overviewTimer = 0;
   /* The records and the fullscreen control sit in the card head, outside the body re-rendered here. */
-  const face = typeof host.closest === "function" ? host.closest(".mx-ab-face") : null;
-  const roundsHost = face ? face.querySelector("#abRounds") : null;
+  const face = typeof host.closest === "function" ? host.closest(".mx-ab-face, .cmp-ab-card") : null;
+  const roundsHost = actions.roundsHost || (face ? face.querySelector("#abRounds") : null);
 
   function pickRound(i) {
     if (!(i >= 0 && i < rounds.length) || i === state.round) return;
@@ -504,14 +504,17 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     state.mxRows = [];
     state.mxCols = [];
     state.mxTrail = [];
+    actions.onRoundChange?.(rounds[i], i);
     render();
   }
 
+  let onRoundsClick = null;
   if (roundsHost) {
-    roundsHost.addEventListener("click", (e) => {
+    onRoundsClick = (e) => {
       const btn = e.target.closest('[data-act="round"]');
       if (btn) pickRound(Number(btn.dataset.i));
-    });
+    };
+    roundsHost.addEventListener("click", onRoundsClick);
   }
 
   /* The leaf list is the current round's own batch, not the main taxonomy's examples: a
@@ -611,13 +614,12 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     const top = stages.slice(0, limit);
     const max = Math.max(1, ...top.map((row) => Math.abs(row.d)));
     return top.map((row) => {
-      const w = (50 * Math.abs(row.d)) / max;
+      const h = Math.max(8, (46 * Math.abs(row.d)) / max);
       const tone = row.d < 0 ? "is-better" : "is-worse";
-      return `<div class="ab-stage ${tone}" title="${esc(`${row.id} ${row.name} · ${fmt(row.before)} → ${fmt(row.after)}`)}">
-        <span class="ab-stage-name"><code>${esc(row.id)}</code>${esc(row.name)}</span>
-        <span class="ab-stage-bar" aria-hidden="true"><i style="${row.d < 0 ? `right:50%` : `left:50%`};width:${w.toFixed(1)}%"></i></span>
-        <span class="num ab-stage-ft">${fmt(row.before)}→${fmt(row.after)}</span>
-        <b class="num">${signed(row.d)}</b>
+      return `<div class="ab-stage-col ${tone}" title="${esc(`${row.name} · ${fmt(row.before)} → ${fmt(row.after)}`)}">
+        <b class="ab-stage-val num">${signed(row.d)}</b>
+        <div class="ab-stage-plot" aria-hidden="true"><span class="ab-stage-stem" style="${row.d > 0 ? "bottom:50%" : "top:50%"};height:${h.toFixed(1)}%"><i></i></span></div>
+        <span class="ab-stage-name">${esc(row.name)}</span>
       </div>`;
     }).join("");
   }
@@ -644,6 +646,9 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     const floor = lo - pad;
     const span = Math.max(1, hi + pad - floor);
     const y = (value) => (100 * (1 - (value - floor) / span)).toFixed(2);
+    const wfPts = [[0, y(before)], [12.5, y(steps[0].to)], [37.5, y(steps[1].to)], [62.5, y(steps[2].to)], [87.5, y(steps[3].to)], [100, y(steps[3].to)]];
+    const wfLine = wfPts.map(([px, py]) => `${px},${py}`).join(" ");
+    const wfArea = `M0,${wfPts[0][1]} ${wfPts.slice(1).map(([px, py]) => `L${px},${py}`).join(" ")} L100,100 L0,100 Z`;
     const cols = steps.map((step, i) => {
       const top = Math.min(Number(y(step.from)), Number(y(step.to)));
       const h = Math.abs(Number(y(step.from)) - Number(y(step.to)));
@@ -659,7 +664,13 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
         ${abComparisonHTML(rnd)}
         <div class="ab-bridge-main"><b class="num${measured && net < 0 ? " is-better" : measured && net > 0 ? " is-worse" : ""}">${measured ? signed(net) : DASH}</b><small>${measured ? "个问题" : "待复测"}</small>${measured && before ? `<span class="ab-bridge-chips"><span class="num${net < 0 ? " is-better" : net > 0 ? " is-worse" : ""}">${net > 0 ? "+" : net < 0 ? "−" : ""}${((100 * Math.abs(net)) / before).toFixed(1)}%</span><span class="is-better"><b class="num">${fmt(better)}</b> 类变好</span><span class="is-worse"><b class="num">${fmt(worse)}</b> 类变差</span></span>` : ""}</div>
         ${measured ? `<div class="ab-wf" role="img" aria-label="${esc(aria)}" title="纵轴只展开变化区间 ${fmt(lo)}–${fmt(hi)}，未从 0 起">
-          <div class="ab-wf-plot">${cols}</div>
+          <div class="ab-wf-plot">
+            <svg class="ab-wf-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+              <path class="ab-wf-area" d="${wfArea}"/>
+              <polyline class="ab-wf-curve" points="${wfLine}"/>
+            </svg>
+            ${cols}
+          </div>
           <div class="ab-wf-labels">${labels}</div>
         </div>` : ""}
         ${stages.length ? `<div class="ab-stages" aria-label="各环节净变化">${stageRows(stages, state.overviewOpen === "change" ? 10 : 5)}</div>` : ""}
@@ -668,16 +679,13 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     </section>`;
   }
 
-  /* 问题变化：变好与变差共用 0–max 刻度，两张排行合成一张卡；两段列表上下排，展开后卡更宽，
-     哑铃和数值有更多横向空间。 */
+  /* 问题变化：每行用斜率趋势火花线直观展示 改版前 → 改版后 的降幅/增幅斜率。 */
   function rankCard(rnd, improved, worsened, max) {
     const open = state.overviewOpen === "ranks";
     return `<section class="ab-card ab-rank-card${open ? " is-deep" : state.overviewOpen ? " is-compact" : ""}" data-abcard="ranks" data-abname="问题变化">
       <div class="ab-card-top">
         <span class="ab-card-title" title="同一道题改版后的结果减去改版前的结果；线上真实用户的数据另算">问题变化</span>
-        <span class="ab-rank-legend" aria-hidden="true"><i class="is-from"></i>改版前<i class="is-to"></i>改版后</span>
       </div>
-      <div class="ab-rank-axis" aria-hidden="true"><div class="ab-rank-axis-track"><span>0</span><span>${fmt(max)}</span></div></div>
       ${rankPanel("变好", improved.slice(0, open ? 12 : 7), "is-better", max, improved.length, rnd)}
       ${rankPanel("变差", worsened.slice(0, open ? 12 : 7), "is-worse", max, worsened.length, rnd)}
     </section>`;
@@ -725,18 +733,16 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
   function rankPanel(title, rows, tone, max, total, rnd) {
     const body = rows.length
       ? rows.map((row) => {
-          const from = Math.min(100, Math.max(0, (100 * row.before) / max));
-          const to = Math.min(100, Math.max(0, (100 * row.after) / max));
-          const left = Math.min(from, to);
-          const width = Math.abs(to - from);
-          return `<div class="ab-rankrow ${tone}" title="${esc(`${row.leaf.id} · 前 ${fmt(row.before)} → 后 ${fmt(row.after)} · 线上 ${row.online == null ? DASH : fmt(row.online)}`)}">
+          const yFrom = (17 - (Math.min(max, Math.max(0, row.before)) / max) * 14).toFixed(1);
+          const yTo = (17 - (Math.min(max, Math.max(0, row.after)) / max) * 14).toFixed(1);
+          return `<div class="ab-rankrow ${tone}" title="${esc(`${row.leaf.name || row.leaf.id} · 前 ${fmt(row.before)} → 后 ${fmt(row.after)} · 线上 ${row.online == null ? DASH : fmt(row.online)}`)}">
           <span class="ab-rankname">${esc(row.leaf.name || row.leaf.id)}</span>
-          <span class="ab-dumbbell" aria-hidden="true">
-            <i class="ab-db-rule"></i>
-            <i class="ab-db-link" style="left:${left.toFixed(1)}%;width:${Math.max(width, 0.6).toFixed(1)}%"></i>
-            <i class="ab-db-dot is-from" style="left:${from.toFixed(1)}%"></i>
-            <i class="ab-db-dot is-to" style="left:${to.toFixed(1)}%"></i>
-          </span>
+          <svg class="ab-slope" viewBox="0 0 64 20" aria-hidden="true">
+            <path class="ab-slope-area" d="M4,${yFrom} L60,${yTo} L60,19 L4,19 Z"/>
+            <line class="ab-slope-line" x1="4" y1="${yFrom}" x2="60" y2="${yTo}"/>
+            <circle class="ab-slope-from" cx="4" cy="${yFrom}" r="2.2"/>
+            <circle class="ab-slope-to" cx="60" cy="${yTo}" r="3"/>
+          </svg>
           <b class="num">${fmt(row.before)} → ${fmt(row.after)}</b>
         </div>`;
         }).join("")
@@ -1122,4 +1128,15 @@ function trend(rnd, selectedCell, metric) {
     ro.observe(host);
   }
   render();
+  return {
+    setRound: pickRound,
+    fit: () => fitMatrix(host.querySelector(".abmatrix")),
+    destroy: () => {
+      clearTimeout(overviewTimer);
+      window.removeEventListener("resize", onResize);
+      if (ro) ro.disconnect();
+      if (roundsHost && onRoundsClick) roundsHost.removeEventListener("click", onRoundsClick);
+      cellTrendDrawer?.destroy();
+    },
+  };
 }

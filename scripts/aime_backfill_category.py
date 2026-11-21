@@ -15,7 +15,10 @@
 
 * 索引取**所有日期** category_meta.json 的并集（同一天的文件不足以覆盖：11-13 曾被合并重写、
   归因按评测日归档而不是按 trace 日归档）。实测并集比同日高 13~40 个百分点，跨日期无冲突。
-* 只写查得到的 trace；查不到的保持 ``null``，不造数、不按 session 推断。
+* 归因是会话级一行，但只按**本行 turns 覆盖的 trace** 取分类：`session_meta.trace_agents`
+  里的同会话兄弟 trace 分类可能完全不同，卷进来会把能填的行误判成「冲突」（实测少填 3,054 行）。
+* 只写查得到的 trace；查不到的、以及同一行 turns 内部真出现两个分类的，保持 ``null``，
+  不造数、不按 session 推断。
 * 就是「补字段」：在 ``meta`` / ``session_meta`` 对象里替换同名字段的值，没有该字段就插到对象开头，
   其余字节一律不动；写临时文件 + fsync + ``os.replace``，写完把该行重新 json 解析校验。
 * ``slim_publish`` 的 ``state.sqlite3.target_files`` 用 offset==size 记账；重写后必须把
@@ -305,10 +308,16 @@ def process_file(path: Path, index: dict, key: bytes, dry_run: bool) -> dict:
                 continue
             tid = m[0] if key == b"session_meta" else m[-1]
             if key == b"session_meta":
-                # 会话级归因：旧行的 session_meta.trace_id 是 thread_xxx，真正的 trace 在 turns 里。
-                # 取这一行所有 trace_id 的分类，一致才填；不一致就留空（不猜）。
-                pairs = {index[t.decode("ascii", "ignore")] for t in set(m)
+                # 会话级归因：只看**本行 turns 覆盖的 trace**。
+                # 会话里常有多条 trace（session_meta.trace_agents 全列了），兄弟 trace 的分类
+                # 与这条归因无关，卷进来只会把本来能填的行误判成「冲突」。
+                # turns 内部若真出现两个分类，才留空（不猜）。
+                turns_at = line.find(b'"turns"')
+                turn_ids = TID.findall(line[turns_at:]) if turns_at > 0 else []
+                pairs = {index[t.decode("ascii", "ignore")] for t in set(turn_ids)
                          if t.decode("ascii", "ignore") in index}
+                if not pairs and tid.decode("ascii", "ignore") in index:
+                    pairs = {index[tid.decode("ascii", "ignore")]}   # 退回顾 session_meta.trace_id
                 if len(pairs) > 1:
                     stat["conflict"] += 1
                     if out:

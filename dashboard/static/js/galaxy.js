@@ -240,10 +240,9 @@ export function galaxy(host, groups, { onPick = null, tip = null, focus = null, 
     if (!alive) return;
     if (!host.isConnected) return destroy();
     const moving = draw(now);
-    // Entry runs at full rate; the idle twinkle is cheap and capped near 24 fps.
-    if (animate && visible && !document.hidden) {
-      if (moving) raf = requestAnimationFrame(loop);
-      else setTimeout(() => !raf && alive && (raf = requestAnimationFrame(loop)), 42);
+    // Entry runs at full rate and rests cleanly at 0% idle CPU once settled; pointer/focus/theme wake it via kick().
+    if (animate && visible && !document.hidden && moving) {
+      raf = requestAnimationFrame(loop);
     }
   }
   const kick = () => {

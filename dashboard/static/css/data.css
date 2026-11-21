@@ -43,8 +43,23 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
 .sk-node rect { transition: opacity var(--snap); transform-box: fill-box; transform-origin: center; animation: sk-node 520ms cubic-bezier(0.3, 1.4, 0.5, 1) both; }
 .sk-node[data-r] rect { fill: var(--t1); }
 .sk-node.is-top[data-r] rect { fill: var(--ink-2); }
+.sk-col-head { font-size: var(--fs-micro); fill: var(--faint); font-weight: var(--w-medium); dominant-baseline: middle; }
 .sk-t { font-size: var(--fs-small); fill: var(--ink-2); dominant-baseline: middle; }
+.sk-sub { font-size: var(--fs-micro); }
+.sk-mid {
+  font-size: var(--fs-meta);
+  font-weight: var(--w-medium);
+  fill: var(--ink);
+  paint-order: stroke;
+  stroke: var(--card);
+  stroke-width: 4.5px;
+  stroke-linejoin: round;
+}
+.sk-pill-t { font-size: 11px; font-weight: 600; fill: #fff; dominant-baseline: central; pointer-events: none; }
 .sk-n { fill: var(--muted); }
+[data-card="attr"] .hero { margin-bottom: 10px; }
+[data-card="attr"] .hero .big { font-size: var(--fs-num-m); }
+[data-card="attr"] .sk-node.is-pick rect { stroke: var(--ink); stroke-width: 1.5px; }
 .sk-p { fill: var(--faint); font-size: var(--fs-meta); }
 .sk-node.is-top .sk-t { fill: var(--ink); font-weight: var(--w-medium); }
 .sk-node.is-top .sk-n { fill: var(--ink-2); }
@@ -79,28 +94,83 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
   /* 日期/数字按自身宽度居中在柱子上，左右各留 10px，最外侧一列也不会被 overflow 裁掉。 */
   padding-inline: 10px;
 }
-#evChart .evrows { width: 100%; padding-inline: 8px; }
-#evStats { flex: 0 0 auto; margin-top: auto; padding-top: 16px; }
-#evStats .stats { margin-top: 0; padding-top: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); min-height: 50px; }
-.evrow {
-  display: grid; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); gap: 5px;
-  width: min(100%, calc(var(--n) * 64px)); justify-self: center; align-items: end;
+.eval-content { container-type: inline-size; display: flex; flex-direction: column; gap: 8px; flex: 1; min-height: 0; }
+.ev-bar { display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+.ev-toolbar {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px; flex-wrap: wrap; justify-content: center;
+  border-radius: calc(var(--r-ctl) + 2px); background: var(--well);
 }
-/* 显式 minmax(0,1fr) 轨道：隐式轨道会按 max-content 撑宽，数字/日期就被塞进 33px 的盒子里
-   在更窄的柱子上“居中”，整列视觉右偏；显式轨道 + 居中后再给 #evChart 留边，四边都不裁字。 */
-.evday { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto var(--bar-h, 52px) auto; gap: 5px; min-width: 0; }
-.evday > * { min-width: 0; }
-.evnums { display: grid; justify-self: center; gap: 1px; align-content: end; text-align: center; min-height: 28px; }
-.evnums b { font-size: var(--fs-meta); line-height: 1.2; font-weight: var(--w-medium); color: var(--ink); }
-.evnums small { font-size: var(--fs-meta); line-height: 1.2; color: var(--muted); }
+.ev-mnav { display: inline-flex; align-items: center; gap: 2px; height: 26px; padding: 0; background: transparent; }
+.ev-mbtn {
+  width: 26px; height: 26px; border-radius: var(--r-knob); display: grid; place-items: center;
+  color: var(--muted); font-size: 15px; line-height: 1;
+  transition: background var(--snap), color var(--snap), transform var(--spring);
+}
+.ev-mbtn:not(:disabled):hover { background: color-mix(in oklab, var(--card) 75%, transparent); color: var(--ink); }
+.ev-mbtn:not(:disabled):active { transform: scale(0.92); }
+.ev-mbtn:disabled { opacity: 0.35; cursor: default; }
+.ev-mlabel { min-width: 78px; padding: 0 4px; text-align: center; font-size: var(--fs-meta); font-weight: var(--w-medium); color: var(--ink); white-space: nowrap; }
+.ev-sep { width: 1px; height: 14px; background: color-mix(in oklab, var(--ink) 10%, transparent); flex: none; }
+.ev-all-btn {
+  height: 26px; padding: 0 10px; border-radius: var(--r-knob);
+  font-size: var(--fs-meta); font-weight: var(--w-medium); color: var(--muted); white-space: nowrap;
+  transition: background var(--snap), color var(--snap), box-shadow var(--snap);
+}
+.ev-all-btn:hover:not(:disabled) { color: var(--ink-2); }
+.ev-all-btn[aria-pressed="true"] {
+  background: var(--card); color: var(--ink);
+  box-shadow: 0 1px 2px color-mix(in oklab, var(--ink) 7%, transparent);
+}
+.ev-all-btn:disabled { opacity: 0.35; cursor: default; }
+.ev-bar .seg { height: 26px; padding: 0; background: transparent; border-radius: var(--r-knob); }
+.ev-bar .seg button { padding: 0 10px; font-size: var(--fs-meta); }
+.ev-bar .seg-knob { top: 0; bottom: 0; background: var(--card); box-shadow: 0 1px 2px color-mix(in oklab, var(--ink) 7%, transparent); }
+
+.ev-cal { display: flex; flex-direction: column; gap: 6px; flex: 1 1 0; min-height: 0; }
+.ev-cal-rows { display: grid; grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 8px; flex: 1 1 0; min-height: 0; }
+.ev-bar-row { display: grid; grid-template-columns: repeat(var(--cols, 15), minmax(0, 1fr)); gap: 4px; min-height: 0; }
+.ev-month-row {
+  display: grid; grid-template-columns: repeat(var(--cols, 6), minmax(0, 1fr)); gap: 10px;
+  flex: 1 1 0; min-height: 0; align-items: stretch; padding-block: 10px;
+}
+.evday {
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-end; min-width: 0; min-height: 0;
+  padding: 4px 2px 3px; border-radius: var(--r-ctl); background: transparent; text-align: center;
+  transition: background var(--snap), box-shadow var(--snap), transform var(--spring);
+}
+.evday.is-pad { background: transparent; pointer-events: none; }
+.evday.is-empty { background: transparent; opacity: 0.6; cursor: default; }
+.evday.is-inonly { cursor: default; }
+.evday.is-live { cursor: pointer; }
+.evday.is-live:hover { background: color-mix(in oklab, var(--well) 65%, transparent); }
+.evday.is-live:active { transform: scale(0.96); }
+.evday.is-on { background: color-mix(in oklab, var(--accent) 10%, transparent); box-shadow: inset 0 0 0 1.5px var(--accent); }
+.evday-val {
+  font-size: 9px; line-height: 1; height: 11px; color: var(--muted); font-weight: var(--w-medium);
+  letter-spacing: -0.03em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; flex: 0 0 auto;
+}
+.evday-val.is-nil { visibility: hidden; }
+.evbar-track {
+  display: flex; align-items: flex-end; justify-content: center; width: 100%; flex: 1 1 0; min-height: 22px; margin: 3px 0;
+}
 .evbar {
-  position: relative; display: flex; align-items: flex-end; align-self: end; width: 100%;
-  background: var(--well-2); border-radius: 3px 3px 1px 1px; overflow: hidden;
-  min-height: 3px;
+  position: relative; display: flex; align-items: flex-end; width: 100%; max-width: 18px;
+  background: color-mix(in oklab, var(--ink) 7%, transparent); border-radius: 4px 4px 2px 2px; overflow: hidden; min-height: 4px;
 }
-.evbar i { display: block; width: 100%; min-height: 0; background: var(--accent); opacity: 0.82; border-radius: 2px 2px 0 0; }
-.evbar:hover i { opacity: 1; }
-.evdate { justify-self: center; text-align: center; font-size: var(--fs-meta); color: var(--faint); white-space: nowrap; overflow: visible; text-overflow: clip; }
+.ev-month-row .evbar { max-width: 34px; }
+.evbar.is-zero { height: 2px; min-height: 2px; background: color-mix(in oklab, var(--ink) 8%, transparent); border-radius: 2px; }
+.evbar i { display: block; width: 100%; min-height: 0; background: var(--accent); opacity: 0.88; border-radius: 2px 2px 0 0; }
+.evday.is-live:hover .evbar i, .evday.is-on .evbar i { opacity: 1; }
+.evday-num { font-size: var(--fs-micro); line-height: 1.1; font-weight: var(--w-medium); color: var(--muted); flex: 0 0 auto; }
+.evday.is-live .evday-num { color: var(--ink-2); }
+.evday.is-on .evday-num { color: var(--accent); }
+.ev-cal-foot { display: flex; align-items: center; gap: 12px; flex: 0 0 auto; padding-top: 2px; font-size: var(--fs-micro); color: var(--muted); }
+.ev-cal-foot span { display: inline-flex; align-items: center; gap: 5px; }
+.ev-cal-foot i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+.ev-cal-foot .ev-done { background: var(--accent); opacity: 0.85; }
+.ev-cal-foot .ev-in { background: var(--well-2); }
+.ev-stats { flex: 0 0 auto; padding-top: 4px; }
+.ev-stats .stats { margin-top: 0; padding-top: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); min-height: 46px; }
 
 /* ------------------------------------------------------------------ drill-down sunburst */
 .duo.sbx { display: block; container-type: inline-size; }
@@ -160,26 +230,6 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
   #vol .sb-r { grid-template-columns: 8px minmax(0, 1fr) auto; }
   #vol .sb-r .sb-markn, #vol .sb-r em { display: none; }
 }
-.ev-tools { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
-.ev-tools .seg { height: 30px; padding: 2px; }
-.ev-tools .seg button { padding: 0 9px; font-size: var(--fs-meta); }
-.ev-tools .seg-knob { top: 2px; bottom: 2px; }
-.eval-content { container-type: inline-size; }
-.eval-content .stats { margin-top: var(--py); grid-template-columns: repeat(4, minmax(0, 1fr)); }
-/* 每行 15 天以一周为刻度，标出首日、中间和末日；完整日期仍在柱子的提示里。 */
-#evChart .evrows.is-days .evdate { visibility: hidden; }
-#evChart .evrows.is-days .evday:nth-child(7n + 1) .evdate,
-#evChart .evrows.is-week .evday:nth-child(3n + 1) .evdate { visibility: visible; }
-@container (min-width: 400px) {
-  #evChart .evrows.is-week .evdate { visibility: visible; }
-}
-@container (max-width: 560px) {
-  #evChart .evrows.is-days:not(.is-week) .evday:nth-child(2n) .evnums { visibility: hidden; }
-}
-/* 全部视图里年份柱是下钻入口（点它看这一年的月份）；返回按钮跟在图例行右端。 */
-.evday.is-drill { cursor: pointer; }
-.ev-legend .ev-back { margin-left: auto; }
-/* Paired desktop cards share chart columns and a bottom-aligned stats row. */
 @media (min-width: 861px) {
   .card:has(> #vol), .card:has(> .eval-content) { display: flex; flex-direction: column; height: 456px; overflow: hidden; }
   .card:has(> #vol) .stats { flex: 0 0 auto; margin-top: auto; padding-top: 16px; min-height: 50px; }
@@ -193,19 +243,18 @@ button.li:active { transform: scale(0.985); transition-duration: 120ms; }
   /* Keep the cluster list beside the sunburst instead of stacking it below. */
   .card:has(> #clu) { display: flex; flex-direction: column; }
   #clu { flex: 1 1 0; min-height: 0; }
-  /* 数字列定宽后要占 104px，46% 的旭日图在 1024 档只留给名字 59px（3 个字就被截断）；
-     收窄到 38%、下限 120px，桌面档仍被 220px 上限兜住。 */
   #clu .sb-view { grid-template-columns: clamp(120px, 38%, 220px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 12px; height: 100%; }
   #clu .sb { width: 100%; max-width: 220px; max-height: 100%; }
   #clu .sb-list { max-height: 100%; overflow-y: auto; align-content: safe center; }
   #clu .sb-r { min-height: 24px; }
 }
-@container (max-width: 420px) {
-  /* #evStats .stats sets 3 columns with ID specificity; repeat 2 here so labels are not clipped. */
+@container (max-width: 400px) {
   #evStats .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .evday-val { display: none; }
 }
 
 .mx-card-head { align-items: center; margin-bottom: 6px; }
+.mx-head-title { display: flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; }
 .mx-head-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-left: auto; flex-wrap: wrap; }
 .mx-full { width: 28px; height: 28px; border-radius: var(--r-ctl); color: var(--muted); }
 .mx-full:hover, .mx-full:focus-visible { background: var(--hover); color: var(--ink); }
@@ -1346,7 +1395,7 @@ body.is-modal { overflow: hidden; }
 [data-card="attr"] .sk-node, [data-card="attr"] .sk-f,
 [data-card="pred"] .pred-sk .sk-node, [data-card="pred"] .pred-sk .sk-f, [data-card="pred"] [data-pm],
 [data-card="pred"] [data-pane="vol"] .comp, [data-card="eval"] .evday.is-live { cursor: pointer; }
-[data-card="eval"] .evday.is-on .evbar { box-shadow: 0 0 0 1.5px var(--card), 0 0 0 3px var(--accent); }
+[data-card="attr"] .sk-node.is-pick .sk-n, [data-card="attr"] .sk-node.is-pick .sk-mid { fill: var(--accent); }
 [data-card="eval"] .evday.is-on .evdate { color: var(--accent); }
 .sankey.is-picked .sk-f:not(.is-pick) { opacity: 0.16; }
 .sk-node.is-pick .sk-t { fill: var(--accent); }

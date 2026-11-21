@@ -236,3 +236,56 @@ test("buildBenchDailyModel computes cumulative pool/bench growth and day-over-da
   assert.equal(daily.last7Pool, 839);
   assert.equal(daily.last7Bench, 30);
 });
+
+test("formatClientExportCase produces clean flat 11-field records for single & multi-turn cases", () => {
+  const single = benchMod.formatClientExportCase(
+    {
+      trace_id: "t-s1",
+      session_id: "sess-s1",
+      turn: "single",
+      model: "aime_fast",
+      day: "2026-11-18",
+      severity: "GOLD",
+      question: "上证指数今天收多少？",
+      primary: { l1: "NA", l2: "NA", l3: "NA", label: "goldencase" },
+    },
+    {},
+  );
+  assert.deepEqual(Object.keys(single), [
+    "case_id", "session_id", "turn_type", "turn_count", "turns",
+    "model", "date", "severity", "stage", "mechanism", "problem",
+  ]);
+  assert.equal(single.turn_type, "single");
+  assert.equal(single.turn_count, 1);
+  assert.deepEqual(single.turns, [{ role: "user", content: "上证指数今天收多少？" }]);
+
+  const multi = benchMod.formatClientExportCase(
+    {
+      trace_id: "t-m1",
+      session_id: "sess-m1",
+      turn: "multi",
+      session_round: 2,
+      model: "aime_expert",
+      day: "2026-11-19",
+      severity: "P1",
+      question: "那净资产收益率是多少？",
+      message_pool: [
+        { role: "system", content: "ignore" },
+        { role: "user", content: "查贵州茅台净利润" },
+        { role: "assistant", content: "归母净利润 608 亿元" },
+      ],
+      primary: { l1: "S9", l2: "M6", l3: "S9.M6.1", label: "指标口径混淆" },
+    },
+    { stageNames: { S9: "答案合成" }, mechNames: { M6: "无依据断言" } },
+  );
+  assert.equal(multi.turn_type, "multi");
+  assert.equal(multi.turn_count, 2);
+  assert.deepEqual(multi.turns, [
+    { role: "user", content: "查贵州茅台净利润" },
+    { role: "assistant", content: "归母净利润 608 亿元" },
+    { role: "user", content: "那净资产收益率是多少？" },
+  ]);
+  assert.equal(multi.stage, "答案合成");
+  assert.equal(multi.mechanism, "无依据断言");
+  assert.equal(multi.problem, "指标口径混淆");
+});

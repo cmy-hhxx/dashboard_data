@@ -12,7 +12,9 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 from datetime import timezone
 from email.utils import parsedate_to_datetime
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -60,15 +62,52 @@ GPT_DETAIL_RE = re.compile(r"^/gpt_samples/([^/]+)/([0-9A-Za-z_-]+)\.json$")
 # /bench/<product>.json: serves schema:1 golden/bad slices or schema:2 dynamic bench views/fields.
 BENCH_RE = re.compile(r"^/bench/([a-z][a-z0-9_]*)\.json$")
 BENCH_CASE_RE = re.compile(r"^/bench_case/([a-z][a-z0-9_]*)/([a-z0-9_]+)/([^/]+)\.json$")
-# /api/recall*: bounded (<= 2000) server-side paginated & sliced sample recall.
+BENCH_EXPORT_RE = re.compile(r"^/bench_export/([a-z][a-z0-9_]*)\.jsonl$")
+# /api/recall* & /api/input_slice*: bounded (<= 500) server-side paginated & sliced sample recall.
 RECALL_RE = re.compile(r"^/api/recall/([a-z][a-z0-9_]*)\.json$")
 RECALL_SLICE_RE = re.compile(r"^/api/recall_slice/([a-z][a-z0-9_]*)\.json$")
 RECALL_LOOKUP_RE = re.compile(r"^/api/recall_lookup/([a-z][a-z0-9_]*)\.json$")
+INPUT_SLICE_RE = re.compile(r"^/api/input_slice/([a-z][a-z0-9_]*)\.json$")
 _BENCH_CACHE = {}
 _BENCH_LOCK = threading.Lock()
 _BENCH_INDEX_CACHE = {}
 _BENCH_INDEX_LOCK = threading.Lock()
 _RECALL_STORE = None
+_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def _bench_upstream():
+    return (os.environ.get("EVAL_BENCH_UPSTREAM") or "").strip().rstrip("/")
+
+
+def _data_upstream():
+    return (os.environ.get("EVAL_DATA_UPSTREAM") or "").strip().rstrip("/")
+
+
+def _upstream_request(base_url, path, method="GET", body=None, headers=None, timeout=12):
+    """Fetch from an optional upstream preview host bypassing local proxy env vars with brief retries."""
+    if not base_url:
+        return None
+    hdrs = {"Accept-Encoding": "identity"}
+    if headers:
+        hdrs.update(headers)
+    url = f"{base_url}{path}"
+    for attempt in range(3):
+        req = urllib.request.Request(url, data=body, headers=hdrs, method=method)
+        try:
+            with _NO_PROXY_OPENER.open(req, timeout=timeout) as resp:
+                ctype = resp.headers.get("Content-Type") or "application/json; charset=utf-8"
+                return resp.status, ctype, resp.read()
+        except urllib.error.HTTPError as exc:
+            try:
+                raw = exc.read()
+            except Exception:  # noqa: BLE001
+                raw = b""
+            return exc.code, (exc.headers.get("Content-Type") if exc.headers else None) or "application/json", raw
+        except Exception:  # noqa: BLE001
+            if attempt < 2:
+                time.sleep(0.15 * (attempt + 1))
+    return None
 
 
 def recall_entry(product):
@@ -127,6 +166,15 @@ def prewarm_input_listings():
         print(f"[serve] input listing prewarm failed: {exc}", flush=True)
 
 
+def prewarm_recall():
+    """Warm sorted/bucketed recall_index tables so date/attr/clu galaxy clicks are instant."""
+    try:
+        for product in sorted(_products()):
+            recall_entry(product)
+    except Exception as exc:  # noqa: BLE001 - recall prewarm is best effort
+        print(f"[serve] recall prewarm failed: {exc}", flush=True)
+
+
 def _products():
     import build as _build
     return _build.ENABLED
@@ -180,6 +228,7 @@ def refresh_once():
             if not isinstance(_state["build"], dict) or not _state["build"].get("reused"):
                 threading.Thread(target=prewarm_details, daemon=True).start()
                 threading.Thread(target=prewarm_input_listings, daemon=True).start()
+                threading.Thread(target=prewarm_recall, daemon=True).start()
                 if _ab_builder is not None:
                     threading.Thread(target=_ab_builder.warm, daemon=True).start()
         else:
@@ -284,7 +333,7 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
         super().end_headers()
 
-    def _send_body(self, status, body, ctype, etag=None):
+    def _send_body(self, status, body, ctype, etag=None, headers=None):
         # HTTP/1.1 keep-alive: without Content-Length the client waits for a body
         # that never ends, which is how a failed detail used to hang the page.
         # Generated JSON has no precompressed twin, so compress it here; the
@@ -324,6 +373,9 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Content-Encoding", encoding)
         if etag:
             self.send_header("ETag", etag)
+        if headers:
+            for k, v in headers:
+                self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
@@ -345,10 +397,16 @@ class Handler(SimpleHTTPRequestHandler):
             return True
         if path_only == "/inputs.json":
             try:
-                payload = _lister.listing(product, day, model, split)
+                payload = _lister.listing(product, day, model, split) if _lister else None
             except Exception as exc:  # noqa: BLE001 - 读不到就告诉前端，别挂页面
                 print(f"[serve] inputs {product} {day} {model}: {exc}", flush=True)
                 self._send_body(500, b'{"error":"input listing failed"}', "application/json")
+                return True
+            if (not payload or not (payload.get("rows") or [])) and _data_upstream():
+                if self._proxy_data_upstream():
+                    return True
+            if payload is None:
+                self._send_body(404, b'{"error":"input listing unavailable"}', "application/json")
                 return True
             body = json.dumps(payload, ensure_ascii=False).encode()
             sig = hashlib.sha1(json.dumps(payload.get("sig"), separators=(",", ":")).encode()).hexdigest()[:20]
@@ -356,11 +414,13 @@ class Handler(SimpleHTTPRequestHandler):
             return True
         ref = urllib.parse.unquote(path_only[len("/inputs/"):-len(".json")])
         try:
-            detail = _lister.detail(product, day, model, split, ref)
+            detail = _lister.detail(product, day, model, split, ref) if _lister else None
         except Exception as exc:  # noqa: BLE001
             print(f"[serve] input detail {product} {day} {model} {ref}: {exc}", flush=True)
             detail = None
         if detail is None:
+            if _data_upstream() and self._proxy_data_upstream():
+                return True
             self._send_body(404, b'{"error":"input detail unavailable"}', "application/json")
             return True
         self._send_body(200, json.dumps(detail, ensure_ascii=False).encode(), "application/json")
@@ -456,20 +516,90 @@ class Handler(SimpleHTTPRequestHandler):
             if elapsed >= 2.0:
                 sys.stderr.write(f"[slow] {elapsed:.1f}s {getattr(self, 'command', '?')} {self.path}\n")
 
-    def _proxy_bench_upstream(self):
-        upstream = (os.environ.get("EVAL_BENCH_UPSTREAM") or "").strip().rstrip("/")
-        if not upstream:
+    def _proxy_bench_upstream(self, path_override=None):
+        res = _upstream_request(_bench_upstream(), path_override or self.path, timeout=12)
+        if not res or res[0] >= 400:
             return False
-        try:
-            import urllib.request
-            with urllib.request.urlopen(f"{upstream}{self.path}", timeout=6) as resp:
-                raw = resp.read()
-                ctype = resp.headers.get("Content-Type") or "application/json; charset=utf-8"
-                self._cache_policy = "no-cache"
-                self._send_body(resp.status, raw, ctype)
-                return True
-        except Exception:
+        status, ctype, raw = res
+        self._cache_policy = "no-cache"
+        self._send_body(status, raw, ctype)
+        return True
+
+    def _proxy_data_upstream(self, path_override=None):
+        res = _upstream_request(_data_upstream(), path_override or self.path, timeout=12)
+        if not res or res[0] >= 400:
             return False
+        status, ctype, raw = res
+        self._cache_policy = "no-cache"
+        self._send_body(status, raw, ctype)
+        return True
+
+    def _serve_bench_export(self, path_only):
+        """Export filtered dynamic Bench cases as a flat 1-case-per-line JSONL file."""
+        match = BENCH_EXPORT_RE.match(path_only)
+        if not match:
+            return False
+        product = match.group(1)
+        parsed = urllib.parse.urlparse(self.path)
+        query = urllib.parse.parse_qs(parsed.query)
+        q_flat = {k: vals[0] for k, vals in query.items() if vals}
+        model = q_flat.get("model") or ""
+        tier = q_flat.get("tier") or ""
+
+        import bench_dynamic
+        payload = bench_payload(product)
+        idx = bench_index(product)
+        jsonl_bytes = None
+
+        if payload and payload.get("schema") == 2 and idx:
+            rows = (idx["models"].get(model) or []) if model else [r for lst in idx["models"].values() for r in lst]
+            long_tok = int(((payload.get("manifest") or {}).get("params") or {}).get("long_tokens") or 65536)
+            matched = [r for r in rows if bench_dynamic.case_matches_query(r, q_flat, long_tok)]
+            sorted_rows = bench_dynamic.sort_case_rows(matched, q_flat.get("sort") or "rank")
+            from build import default_datasets
+            jsonl_bytes = bench_dynamic.export_bench_jsonl(default_datasets(), sorted_rows, summary=payload)
+        else:
+            up = _bench_upstream()
+            if up:
+                res = _upstream_request(up, self.path, timeout=15)
+                if res and res[0] == 200 and res[2]:
+                    jsonl_bytes = res[2]
+                else:
+                    sum_res = _upstream_request(up, f"/bench/{product}.json?view=summary", timeout=15)
+                    fld_qs = urllib.parse.urlencode([(k, v) for k, vals in query.items() if k != "view" and k != "sort" for v in vals] + [("view", "fields")])
+                    fld_res = _upstream_request(up, f"/bench/{product}.json?{fld_qs}", timeout=20)
+                    if fld_res and fld_res[0] == 200:
+                        try:
+                            summary = json.loads(sum_res[2].decode("utf-8")) if (sum_res and sum_res[0] == 200) else {}
+                            fld_data = json.loads(fld_res[2].decode("utf-8"))
+                            cases = fld_data.get("cases") or []
+                            try:
+                                sorted_rows = bench_dynamic.sort_case_rows(cases, q_flat.get("sort") or "rank")
+                            except Exception:  # noqa: BLE001
+                                sorted_rows = cases
+                            jsonl_bytes = bench_dynamic.export_bench_jsonl(None, sorted_rows, summary=summary)
+                        except (ValueError, UnicodeDecodeError, TypeError) as exc:
+                            print(f"[serve] bench export upstream fallback failed: {exc}", flush=True)
+                            jsonl_bytes = None
+
+        if jsonl_bytes is None:
+            self._send_body(404, b'{"error":"bench export unavailable"}', "application/json")
+            return True
+
+        parts = ["bench", product]
+        if model:
+            parts.append(re.sub(r"[^a-zA-Z0-9_-]", "", model))
+        if tier:
+            parts.append(("long" if q_flat.get("long") == "1" else "std") + re.sub(r"[^a-zA-Z0-9_-]", "", tier))
+        fname = "-".join(parts) + ".jsonl"
+        self._cache_policy = "no-cache"
+        self._send_body(
+            200,
+            jsonl_bytes,
+            "application/x-ndjson; charset=utf-8",
+            headers=[("Content-Disposition", f'attachment; filename="{fname}"')],
+        )
+        return True
 
     def _serve_bench(self, path_only):
         """Serve Bench payloads: schema:2 dynamic bench views/fields or schema:1 golden/bad slices."""
@@ -578,6 +708,102 @@ class Handler(SimpleHTTPRequestHandler):
         self._send_body(200, body, "application/json; charset=utf-8")
         return True
 
+    @staticmethod
+    def _cap_recall_payload(data, cap=500):
+        if not isinstance(data, dict):
+            return data
+        if "rows" in data and isinstance(data["rows"], list):
+            if int(data.get("cap") or cap) > cap or len(data["rows"]) > cap:
+                data["rows"] = data["rows"][:cap]
+                data["cap"] = cap
+                data["recalled"] = min(int(data.get("recalled") or len(data["rows"])), cap)
+                data["capped"] = int(data.get("matched") or data["recalled"]) > cap
+        elif "groups" in data and isinstance(data["groups"], list):
+            total_items = sum(len(g.get("items") or []) for g in data["groups"])
+            if int(data.get("cap") or cap) > cap or total_items > cap:
+                remaining = cap
+                for g in data["groups"]:
+                    items = g.get("items") or []
+                    take = min(len(items), remaining)
+                    g["items"] = items[:take]
+                    remaining -= take
+                data["recalled"] = sum(len(g.get("items") or []) for g in data["groups"])
+                data["cap"] = cap
+                data["capped"] = int(data.get("total") or data["recalled"]) > data["recalled"]
+        return data
+
+    def _upstream_attr_fallback(self, up, product, query, cap=500):
+        """Build bounded (<=500) model/sev/mech galaxy groups from upstream paginated /api/recall/."""
+        model = query.get("model") or ""
+        sev = query.get("sev") or ""
+        mech = query.get("mech") or ""
+        sessions = []
+        matched_total = 0
+        for pg in range(1, 6):
+            params = [("size", "100"), ("cap", str(cap)), ("facets", "0"), ("page", str(pg))]
+            if model:
+                params.append(("model", model))
+            if sev:
+                params.append(("w", sev))
+            if mech:
+                params.append(("mech", mech))
+            res = _upstream_request(up, f"/api/recall/{product}.json?{urllib.parse.urlencode(params)}", timeout=10)
+            if not res or res[0] != 200:
+                break
+            try:
+                page_data = json.loads(res[2].decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                break
+            matched_total = int(page_data.get("matched") or matched_total)
+            rows = page_data.get("rows") or []
+            if not rows:
+                break
+            sessions.extend(rows)
+            if len(sessions) >= cap or pg >= int(page_data.get("pages") or 1):
+                break
+
+        sev_map = {"P0": 0, "P1": 1, "P2": 2, "P3": 3, "P4": 4}
+        parts = [0, 0, 0, 0, 0, 0]
+        grouped = {}
+        for sess in sessions[:cap]:
+            slug = ((sess.get("rows") or [{}])[0].get("s")) or sess.get("s") or sess.get("key") or ""
+            w = sess.get("w") or "none"
+            parts[sev_map.get(w, 5)] += 1
+            item = {
+                "s": slug,
+                "k": sess.get("key") or slug,
+                "m": sess.get("m") or "",
+                "sp": sess.get("sp") or "daily",
+                "q": sess.get("q") or "",
+                "w": w,
+                "n": int(sess.get("n") or 0),
+                "d": sess.get("d") or "",
+                "sc": sess.get("sc") or sess.get("task") or "",
+            }
+            if sev and mech:
+                gkey = sess.get("sc") or sess.get("task") or "~un"
+            elif sev:
+                gkey = sess.get("sc") or sess.get("task") or mech or "~un"
+            else:
+                gkey = w if w in sev_map else "none"
+            grouped.setdefault(gkey, []).append(item)
+
+        groups = [
+            {"key": k, "total": len(items), "items": items}
+            for k, items in sorted(grouped.items(), key=lambda kv: -len(kv[1]))
+        ]
+        recalled = len(sessions[:cap])
+        total = max(matched_total, recalled)
+        return {
+            "product": product,
+            "total": total,
+            "recalled": recalled,
+            "cap": cap,
+            "capped": total > recalled,
+            "parts": parts,
+            "groups": groups,
+        }
+
     def _serve_recall(self, path_only):
         """Serve bounded paginated session recall and sliced galaxy/trend/session queries."""
         m_list = RECALL_RE.match(path_only)
@@ -585,12 +811,28 @@ class Handler(SimpleHTTPRequestHandler):
         if not m_list and not m_slice:
             return False
         product = (m_list or m_slice).group(1)
+        parsed = urllib.parse.urlparse(self.path)
+        query = {k: vals[0] for k, vals in urllib.parse.parse_qs(parsed.query).items() if vals}
         entry = recall_entry(product)
+        up = _data_upstream()
+        if up and (entry is None or len(entry.rows) <= 5):
+            res = _upstream_request(up, self.path, timeout=25)
+            if res and res[0] == 200:
+                try:
+                    up_data = json.loads(res[2].decode("utf-8"))
+                except (ValueError, UnicodeDecodeError):
+                    up_data = None
+                if isinstance(up_data, dict):
+                    if m_slice and query.get("mode") == "galaxy" and query.get("card") == "attr" and (query.get("model") or query.get("sev") or query.get("mech")) and not (up_data.get("groups") or []):
+                        up_data = self._upstream_attr_fallback(up, product, query, cap=500)
+                    up_data = self._cap_recall_payload(up_data, cap=500)
+                    self._cache_policy = "no-cache"
+                    body = json.dumps(up_data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                    self._send_body(200, body, "application/json; charset=utf-8")
+                    return True
         if entry is None:
             self._send_body(404, b'{"error":"recall index unavailable"}', "application/json")
             return True
-        parsed = urllib.parse.urlparse(self.path)
-        query = {k: vals[0] for k, vals in urllib.parse.parse_qs(parsed.query).items() if vals}
         if m_list:
             result = entry.query_sessions(query)
         else:
@@ -610,6 +852,150 @@ class Handler(SimpleHTTPRequestHandler):
         body = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         self._send_body(200, body, "application/json; charset=utf-8", etag=etag)
         return True
+
+    def _serve_input_slice(self, path_only):
+        """Serve bounded (<= 500) sampled inputs (evaluated + pending) for 数据量 drilldown."""
+        match = INPUT_SLICE_RE.match(path_only)
+        if not match:
+            return False
+        product = match.group(1)
+        parsed = urllib.parse.urlparse(self.path)
+        query = {k: vals[0] for k, vals in urllib.parse.parse_qs(parsed.query).items() if vals}
+        model = query.get("model") or ""
+        task = query.get("task") or ""
+        others = set()
+        if query.get("others"):
+            try:
+                others = {str(x) for x in json.loads(query["others"])}
+            except ValueError:
+                others = set()
+        try:
+            cap = max(1, min(500, int(query.get("cap") or "500")))
+        except ValueError:
+            cap = 500
+
+        up = _data_upstream()
+        entry = recall_entry(product)
+        preview_upstream = bool(up and (entry is None or len(entry.rows) <= 5))
+
+        result = None
+        if _lister and not preview_upstream:
+            result = _lister.slice_inputs(product, model=model, task=task, others=others, cap=cap)
+
+        if (result is None or int(result.get("recalled") or 0) == 0) and up:
+            up_res = _upstream_request(up, self.path, timeout=12)
+            if up_res and up_res[0] == 200:
+                try:
+                    up_json = json.loads(up_res[2].decode("utf-8"))
+                    if isinstance(up_json, dict) and "groups" in up_json:
+                        result = self._cap_recall_payload(up_json, cap=cap)
+                except (ValueError, UnicodeDecodeError):
+                    pass
+            if result is None or int(result.get("recalled") or 0) == 0:
+                result = self._upstream_input_slice_fallback(up, product, model=model, task=task, others=others, cap=cap)
+        if result is None and _lister:
+            result = _lister.slice_inputs(product, model=model, task=task, others=others, cap=cap)
+
+        if result is None:
+            result = {
+                "product": product, "source": "inputs", "total": 0, "recalled": 0,
+                "cap": cap, "capped": False, "eval_counts": [0, 0], "groups": [],
+            }
+        self._cache_policy = "no-cache"
+        body = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        self._send_body(200, body, "application/json; charset=utf-8")
+        return True
+
+    @staticmethod
+    def _upstream_input_slice_fallback(up, product, model="", task="", others=None, cap=500):
+        """Synthesize bounded <=500 input slice from local data-<p>.json daily metadata + upstream /inputs.json."""
+        import recall_index
+        others_set = set(others or ())
+        dpath = os.path.join(STATIC, f"data-{product}.json")
+        daily = []
+        try:
+            with open(dpath, encoding="utf-8") as fh:
+                payload = json.load(fh)
+            daily = (payload.get("products") or {}).get(product, {}).get("daily") or []
+        except (OSError, ValueError):
+            daily = []
+
+        batches = []
+        total_inputs = 0
+        seen = set()
+        for r in daily:
+            rm = r.get("m") or ""
+            if not recall_index._match_model_family(rm, model):
+                continue
+            sp = r.get("sp") or "daily"
+            day = r.get("d") or ""
+            total_inputs += int(r.get("inputs") or 0)
+            if day and (day, sp, rm) not in seen and int(r.get("inputs") or 0) > 0:
+                seen.add((day, sp, rm))
+                batches.append((day, sp, rm))
+        batches.sort(reverse=True)
+
+        collected = []
+        for day, sp, rm in batches[:4]:
+            if len(collected) >= cap:
+                break
+            qs = urllib.parse.urlencode({"product": product, "d": day, "m": rm, "sp": sp})
+            res = _upstream_request(up, f"/inputs.json?{qs}", timeout=10)
+            if not res or res[0] != 200:
+                continue
+            try:
+                lst = json.loads(res[2].decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                continue
+            rows = lst.get("rows") or []
+            want = cap - len(collected)
+            step = max(1, len(rows) // max(1, want)) if not task and not others_set else 1
+            for row in rows[::step]:
+                cat = row.get("cat") or "未接入分类体系"
+                if task and cat != task:
+                    continue
+                if not task and others_set and cat in others_set:
+                    continue
+                collected.append({
+                    "q": row.get("q") or "",
+                    "m": rm,
+                    "sp": sp,
+                    "d": day,
+                    "r": row.get("r") or "",
+                    "tr": int(row.get("tr") or 1),
+                    "ev": 1 if row.get("ev") else 0,
+                    "s": row.get("s") or "",
+                    "cat": cat,
+                })
+                if len(collected) >= cap:
+                    break
+
+        grouped = {}
+        ev_done = 0
+        ev_pending = 0
+        for it in collected:
+            gkey = it.get("cat") or it.get("d") or it.get("m") or "未接入分类体系"
+            if it.get("ev"):
+                ev_done += 1
+            else:
+                ev_pending += 1
+            grouped.setdefault(gkey, []).append(it)
+
+        groups = [
+            {"key": k, "name": k, "total": len(items), "items": items}
+            for k, items in sorted(grouped.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+        ]
+        reported_total = max(len(collected), total_inputs) if total_inputs > 0 else len(collected)
+        return {
+            "product": product,
+            "source": "inputs",
+            "total": reported_total,
+            "recalled": len(collected),
+            "cap": cap,
+            "capped": reported_total > len(collected),
+            "eval_counts": [ev_done, ev_pending],
+            "groups": groups,
+        }
 
     def do_POST(self):
         path_only = self.path.split("?", 1)[0]
@@ -641,6 +1027,21 @@ class Handler(SimpleHTTPRequestHandler):
         except ValueError:
             self._send_body(400, b'{"error":"invalid json"}', "application/json")
             return
+        up = _data_upstream()
+        if up and (entry is None or len(entry.rows) <= 5):
+            payload["cap"] = min(500, int(payload.get("cap") or 500))
+            res = _upstream_request(
+                up,
+                self.path,
+                method="POST",
+                body=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                timeout=10,
+            )
+            if res and res[0] == 200:
+                self._cache_policy = "no-store"
+                self._send_body(200, res[2], res[1])
+                return
         slugs = payload.get("slugs") if isinstance(payload.get("slugs"), list) else []
         tids = payload.get("tids") if isinstance(payload.get("tids"), list) else []
         cap = payload.get("cap")
@@ -671,7 +1072,7 @@ class Handler(SimpleHTTPRequestHandler):
             self._cache_policy = "no-cache"
         # Warming up after a restart: the port already answers (so browsers wait instead of seeing
         # ERR_CONNECTION_REFUSED), pages and assets load, data asks to be retried shortly.
-        if _warming.is_set() and (self.path.startswith("/healthz") or path_only.endswith(".json")):
+        if _warming.is_set() and (self.path.startswith("/healthz") or path_only.endswith((".json", ".jsonl"))):
             self._cache_policy = "no-store"
             body = b'{"ok": false, "warming": true}'
             self.send_response(503)
@@ -700,7 +1101,6 @@ class Handler(SimpleHTTPRequestHandler):
             upstream = os.environ.get("EVAL_SPEED_UPSTREAM")
             if payload.get("available") is False and upstream:
                 try:
-                    import urllib.request
                     with urllib.request.urlopen(upstream, timeout=3.5) as resp:
                         if resp.status == 200:
                             payload = json.loads(resp.read().decode("utf-8"))
@@ -709,12 +1109,14 @@ class Handler(SimpleHTTPRequestHandler):
             body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
             self._send_body(200, body, "application/json; charset=utf-8")
             return
-        if _lister and (path_only == "/inputs.json" or (path_only.startswith("/inputs/") and path_only.endswith(".json"))):
+        if (_lister or _data_upstream()) and (path_only == "/inputs.json" or (path_only.startswith("/inputs/") and path_only.endswith(".json"))):
             if self._serve_inputs(path_only):
                 return
+        if self._serve_input_slice(path_only):
+            return
         if self._serve_recall(path_only):
             return
-        if self._serve_bench(path_only) or self._serve_bench_case(path_only):
+        if self._serve_bench_export(path_only) or self._serve_bench(path_only) or self._serve_bench_case(path_only):
             return
         if _builder and path_only.startswith("/samples/") and path_only.endswith(".json"):
             slug = path_only[len("/samples/"):-len(".json")]
@@ -724,7 +1126,12 @@ class Handler(SimpleHTTPRequestHandler):
                 print(f"[serve] detail {slug} failed: {exc}", flush=True)
                 generated = None
             if generated is None and not os.path.isfile(self.translate_path(path_only)):
+                if _data_upstream() and self._proxy_data_upstream():
+                    return
                 self._send_body(404, b"sample detail unavailable", "text/plain; charset=utf-8")
+                return
+        elif _data_upstream() and path_only.startswith("/samples/") and path_only.endswith(".json") and not os.path.isfile(self.translate_path(path_only)):
+            if self._proxy_data_upstream():
                 return
         if _ab_builder and path_only.startswith("/ab_samples/"):
             match = AB_DETAIL_RE.match(path_only)
@@ -743,7 +1150,12 @@ class Handler(SimpleHTTPRequestHandler):
                     print(f"[serve] ab detail {ref[0]}/{ref[1]} failed: {exc}", flush=True)
             # A malformed / traversal-looking path is a 404 without touching the static tree.
             if generated is None and (ref is None or not os.path.isfile(self.translate_path(path_only))):
+                if _data_upstream() and self._proxy_data_upstream():
+                    return
                 self._send_body(404, b"ab sample detail unavailable", "text/plain; charset=utf-8")
+                return
+        elif _data_upstream() and path_only.startswith("/ab_samples/") and not os.path.isfile(self.translate_path(path_only)):
+            if self._proxy_data_upstream():
                 return
         if _ab_builder and path_only.startswith("/gpt_samples/"):
             match = GPT_DETAIL_RE.match(path_only)
@@ -755,10 +1167,15 @@ class Handler(SimpleHTTPRequestHandler):
                     print(f"[serve] gpt answer {match.group(1)}/{match.group(2)} failed: {exc}",
                           flush=True)
             if answer is None:
+                if _data_upstream() and self._proxy_data_upstream():
+                    return
                 self._send_body(404, b'{"error":"gpt answer unavailable"}', "application/json")
                 return
             self._send_body(200, json.dumps(answer, ensure_ascii=False).encode(), "application/json")
             return
+        elif _data_upstream() and path_only.startswith("/gpt_samples/") and not os.path.isfile(self.translate_path(path_only)):
+            if self._proxy_data_upstream():
+                return
         accept = {part.strip().split(";")[0] for part in self.headers.get("Accept-Encoding", "").split(",")}
         path = self.translate_path(self.path)
         if os.path.isdir(path):
@@ -898,6 +1315,7 @@ def main():
     seed_state()
     threading.Thread(target=scheduler, args=(REFRESH if age < 120 else 0,), daemon=True).start()
     threading.Thread(target=prewarm_details, daemon=True).start()
+    threading.Thread(target=prewarm_recall, daemon=True).start()
     _warming.clear()
     print(f"[serve] http://0.0.0.0:{PORT} static={STATIC} refresh={REFRESH}s", flush=True)
     serving.join()

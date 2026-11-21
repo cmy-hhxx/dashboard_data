@@ -106,8 +106,11 @@ python3 scripts/aime_backfill_category.py --force      # 忽略「文件和分�
   归因按「评测日」归档而不是 trace 日归档。并集比同日高 13~40 个百分点，跨日期 0 冲突。
 - **输入侧认顶层 `trace_id`（行尾那个）**：2026-11-09 之前的旧行里 `meta.trace_id` 写的是 `thread_xxx`（session id），
   拿它去查一定查不到。
-- **归因按会话判定**：取该行所有 `turns[].meta.trace_id` 的分类，**一致才填**，不一致留空（不猜）。
-  旧归因的 `session_meta.trace_id` 同样是 `thread_xxx`。
+- **归因按会话判定，但只看本行 `turns` 覆盖的 trace**：会话级归因一行对应一个 session，
+  `session_meta.trace_agents` 里还列着同会话的其他 trace（可能是完全不同的分类）。
+  把整行的 `trace_id` 都拿去查，会把本该能填的行误判成「分类冲突」——实测这样少填 3,054 行；
+  只看 `turns` 后 `turns` 内部从未出现过冲突。旧归因的 `session_meta.trace_id` 是 `thread_xxx`，
+  所以不能只靠它。
 - 查不到埋点的记录保持 `null`；只写目标对象里的两个字段，其余字节不动（临时文件 + fsync + `os.replace`），
   每条改完的行走一遍 `json.loads` 校验。
 - 写完要把 `1_slim_publish/state/state.sqlite3` 的 `target_files` 里该文件的 `(size, mtime, offset)`

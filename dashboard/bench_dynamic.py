@@ -944,3 +944,180 @@ def load_bench_case(datasets: Path, row: dict) -> dict | None:
     rec["slug"] = row.get("slug")
     rec["case_key"] = row.get("case_key")
     return rec
+
+
+def _extract_msg_text(val) -> str:
+    """Normalize string or structured message content blocks into plain text."""
+    if isinstance(val, str):
+        return _clean(val).strip()
+    if isinstance(val, list):
+        parts = []
+        for item in val:
+            if isinstance(item, str):
+                s = _clean(item).strip()
+                if s:
+                    parts.append(s)
+            elif isinstance(item, dict):
+                txt = item.get("text") or item.get("content") or item.get("value") or ""
+                s = _extract_msg_text(txt)
+                if s:
+                    parts.append(s)
+        return "\n".join(parts).strip()
+    if isinstance(val, dict):
+        return _extract_msg_text(val.get("text") or val.get("content") or val.get("user_question") or "")
+    return ""
+
+
+def _resolve_current_question(rec: dict) -> str:
+    """Extract the full current-turn user query from a Bench full record or summary row."""
+    for key in ("question_full", "question"):
+        txt = _clean(rec.get(key)).strip()
+        if txt:
+            return txt
+    msgs = rec.get("messages")
+    if isinstance(msgs, dict):
+        q = _clean(msgs.get("user_question") or msgs.get("question")).strip()
+        if q:
+            return q
+    elif isinstance(msgs, list):
+        for m in msgs:
+            if isinstance(m, dict) and m.get("type") == "user_question":
+                q = _extract_msg_text(m.get("content") or m.get("text") or m.get("question"))
+                if q:
+                    return q
+    return ""
+
+
+def extract_case_turns(rec: dict) -> list[dict[str, str]]:
+    """Build ordered flat ``[{role, content}]`` turns for single- or multi-turn export."""
+    turns: list[dict[str, str]] = []
+    role_map = {"user": "user", "human": "user", "assistant": "assistant", "ai": "assistant"}
+
+    raw_pool = rec.get("message_pool") or rec.get("history") or rec.get("conversation")
+    if not isinstance(raw_pool, list) and isinstance(rec.get("messages"), list):
+        has_chat_roles = any(
+            isinstance(m, dict) and str(m.get("role") or "").lower() in role_map
+            for m in rec["messages"]
+        )
+        if has_chat_roles:
+            raw_pool = rec["messages"]
+
+    if isinstance(raw_pool, list):
+        for m in raw_pool:
+            if not isinstance(m, dict):
+                continue
+            role = role_map.get(str(m.get("role") or "").strip().lower())
+            if not role:
+                continue
+            content = _extract_msg_text(m.get("content") if m.get("content") is not None else m.get("text"))
+            if content:
+                turns.append({"role": role, "content": content})
+
+    cur_q = _resolve_current_question(rec)
+    if cur_q:
+        last_user = next((t["content"] for t in reversed(turns) if t["role"] == "user"), "")
+        if not turns or (turns[-1]["role"] != "user" and cur_q != last_user) or (last_user and cur_q != last_user and cur_q not in [t["content"] for t in turns if t["role"] == "user"]):
+            turns.append({"role": "user", "content": cur_q})
+    return turns
+
+
+def format_export_case(
+    rec: dict,
+    row: dict | None = None,
+    stage_names: dict[str, str] | None = None,
+    mech_names: dict[str, str] | None = None,
+    pat_names: dict[str, str] | None = None,
+) -> dict:
+    """Produce a clean, flat 11-field Bench export record (1 line per single/multi-turn case)."""
+    src = row if isinstance(row, dict) else {}
+    merged = {**src, **(rec or {})}
+    if not merged.get("question_full") and src.get("question"):
+        merged["question_full"] = src.get("question")
+    turns = extract_case_turns(merged)
+    user_turns = sum(1 for t in turns if t["role"] == "user")
+
+    raw_turn = _clean(merged.get("turn") or src.get("turn") or "").lower()
+    turn_type = "multi" if (raw_turn == "multi" or user_turns > 1) else "single"
+    turn_count = user_turns if user_turns > 0 else (1 if turns else 0)
+    if turn_type == "multi" and turn_count <= 1 and not (merged.get("message_pool") or merged.get("history") or merged.get("conversation")):
+        turn_count = max(1, int(merged.get("session_round") or merged.get("turn_index") or 1))
+
+    prim = merged.get("primary") or src.get("primary") or {}
+    if not isinstance(prim, dict):
+        prim = {}
+    l1 = _clean(prim.get("l1"))
+    l2 = _clean(prim.get("l2"))
+    l3 = _clean(prim.get("l3") or prim.get("path"))
+
+    stage = (stage_names or {}).get(l1, "") if l1 and l1 != "NA" else ""
+    if not stage and l1 and l1 != "NA":
+        stage = l1
+
+    mechanism = (mech_names or {}).get(l2, "") if l2 and l2 != "NA" else ""
+    if not mechanism and l2 and l2 != "NA":
+        mechanism = l2
+
+    sev = _clean(merged.get("severity") or src.get("severity") or "GOLD") or "GOLD"
+    problem = _clean(prim.get("label")) or ((pat_names or {}).get(l3, "") if l3 and l3 != "NA" else "")
+    if not problem and sev == "GOLD":
+        problem = "goldencase"
+
+    day = _clean(merged.get("day") or src.get("day")) or _extract_day(merged)
+    return {
+        "case_id": _clean(merged.get("trace_id") or src.get("trace_id")),
+        "session_id": _clean(merged.get("session_id") or src.get("session_id")),
+        "turn_type": turn_type,
+        "turn_count": int(turn_count),
+        "turns": turns,
+        "model": _clean(merged.get("model") or src.get("model")),
+        "date": day,
+        "severity": sev,
+        "stage": stage,
+        "mechanism": mechanism,
+        "problem": problem,
+    }
+
+
+def export_bench_jsonl(datasets: Path | None, rows: list[dict], summary: dict | None = None) -> bytes:
+    """Stream-seek filtered Bench rows in batches by file and serialize compact JSONL bytes."""
+    s = summary if isinstance(summary, dict) else {}
+    stage_names = s.get("stage_names") if isinstance(s.get("stage_names"), dict) else {}
+    mech_names = s.get("mech_names") if isinstance(s.get("mech_names"), dict) else {}
+    pat_names = s.get("pat_names") if isinstance(s.get("pat_names"), dict) else {}
+
+    bench_root = (Path(datasets) / DYNAMIC_DIR).resolve() if datasets else None
+    loaded_by_idx: dict[int, dict] = {}
+    by_file: dict[str, list[tuple[int, int, int]]] = defaultdict(list)
+
+    if bench_root:
+        for idx, row in enumerate(rows):
+            loc = row.get("loc")
+            if isinstance(loc, (list, tuple)) and len(loc) == 3:
+                relpath, offset, length = loc
+                by_file[str(relpath)].append((int(offset), int(length), idx))
+
+        for relpath, spans in by_file.items():
+            try:
+                target = (bench_root / relpath).resolve()
+                if not target.is_relative_to(bench_root) or not target.is_file():
+                    continue
+                spans.sort(key=lambda x: x[0])
+                with target.open("rb") as fh:
+                    for offset, length, idx in spans:
+                        fh.seek(offset)
+                        raw = fh.read(length)
+                        rec = _scrub_obj(_jloads(raw))
+                        if isinstance(rec, dict):
+                            loaded_by_idx[idx] = rec
+            except (OSError, ValueError, TypeError):
+                continue
+
+    lines: list[bytes] = []
+    for idx, row in enumerate(rows):
+        rec = loaded_by_idx.get(idx) or row
+        item = format_export_case(rec, row=row, stage_names=stage_names, mech_names=mech_names, pat_names=pat_names)
+        if _orjson is not None:
+            lines.append(_orjson.dumps(item) + b"\n")
+        else:
+            lines.append((json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8"))
+    return b"".join(lines)

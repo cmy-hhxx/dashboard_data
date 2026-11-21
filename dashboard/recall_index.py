@@ -1,4 +1,4 @@
-"""Server-side cached recall index with bounded queries (max 2000) and lazy pagination.
+"""Server-side cached recall index with bounded queries (max 500) and lazy pagination.
 
 Replaces downloading multi-ten-MB ``samples-<product>.json`` + ``labels-<product>.json``
 into the browser on every recall jump, filter, sunburst galaxy open, trend drawer,
@@ -11,11 +11,42 @@ import math
 import os
 import threading
 
-RECALL_CAP = 2000
+RECALL_CAP = 500
 SEV = ("P0", "P1", "P2", "P3", "P4")
 WORST = ("P0", "P1", "P2", "P3", "P4", "none")
 WORST_IDX = {w: i for i, w in enumerate(WORST)}
 USER_TYPE_KEYS = frozenset(("real", "test", "internal", "unknown"))
+
+
+def _match_model_family(row_model: str | None, query_model: str | None) -> bool:
+    qm = str(query_model or "").strip().lower()
+    if not qm or qm == "all":
+        return True
+    rm = str(row_model or "").strip().lower()
+    return rm == qm or rm.startswith(qm)
+
+
+def _row_has_sev(row: dict, sev: str) -> bool:
+    if not sev:
+        return True
+    sv = row.get("sv")
+    if isinstance(sv, list) and len(sv) >= 5:
+        if sev == "none":
+            return not any(int(v or 0) > 0 for v in sv[:5])
+        idx = WORST_IDX.get(sev, -1)
+        return 0 <= idx < 5 and int(sv[idx] or 0) > 0
+    return (row.get("w") or "none") == sev
+
+
+def _row_mechs(row: dict) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for path in row.get("pt") or ():
+        parts = str(path).split(".")
+        if len(parts) >= 2 and parts[1] and parts[1] not in seen:
+            seen.add(parts[1])
+            out.append(parts[1])
+    return out
 
 
 def sev_idx(w) -> int:
@@ -342,20 +373,65 @@ class RecallEntry:
         self.by_tid: dict[str, list[dict]] = {}
         self.by_sid: dict[str, list[dict]] = {}
         self.by_date: dict[str, list[dict]] = {}
+        self.by_sev: dict[str, list[dict]] = {w: [] for w in WORST}
+        self.by_mech: dict[str, list[dict]] = {}
+        self.by_stage: dict[str, list[dict]] = {}
+        self.by_model: dict[str, list[dict]] = {}
+
         for r in rows:
+            sid = r.get("sid")
+            if sid:
+                self.by_sid.setdefault(str(sid), []).append(r)
+
+        self.sorted_rows = sorted(
+            rows,
+            key=lambda r: (sev_idx(r.get("w")), -int(r.get("n") or 0), _date_desc_key(r.get("d") or "")),
+        )
+        for r in self.sorted_rows:
             slug = r.get("s")
             if slug:
                 self.by_slug[slug] = r
             tid = r.get("tid")
             if tid:
                 self.by_tid.setdefault(str(tid), []).append(r)
-            sid = r.get("sid")
-            if sid:
-                self.by_sid.setdefault(str(sid), []).append(r)
             d = r.get("d")
             if d:
                 self.by_date.setdefault(str(d), []).append(r)
+            m = r.get("m") or ""
+            self.by_model.setdefault(m, []).append(r)
 
+            sv = r.get("sv")
+            if isinstance(sv, list) and len(sv) >= 5:
+                hit_any = False
+                for i, s_name in enumerate(SEV):
+                    if int(sv[i] or 0) > 0:
+                        self.by_sev[s_name].append(r)
+                        hit_any = True
+                if not hit_any:
+                    self.by_sev["none"].append(r)
+            else:
+                rw = r.get("w") or "none"
+                self.by_sev.setdefault(rw if rw in WORST_IDX else "none", []).append(r)
+
+            mechs = _row_mechs(r)
+            if mechs:
+                for mech_id in mechs:
+                    self.by_mech.setdefault(mech_id, []).append(r)
+            elif int(r.get("n") or 0) > 0:
+                self.by_mech.setdefault("~un", []).append(r)
+
+            stages_seen: set[str] = set()
+            for s in r.get("st") or ():
+                if s and s not in stages_seen:
+                    stages_seen.add(s)
+                    self.by_stage.setdefault(s, []).append(r)
+            for path in r.get("pt") or ():
+                s = str(path).split(".")[0]
+                if s and s not in stages_seen:
+                    stages_seen.add(s)
+                    self.by_stage.setdefault(s, []).append(r)
+
+        self.sorted_dates = sorted(self.by_date.keys())
         self.sessions, self.session_by_key, self.session_by_slug = _group_sessions(rows)
         empty_f = {k: "" for k in ("q", "w", "split", "model", "ut", "date", "scene", "sub", "stage", "mech", "pattern")}
         self.default_facets = _compute_facets(self.sessions, empty_f)
@@ -468,9 +544,22 @@ class RecallEntry:
         def ver_key(r: dict) -> str:
             return str(r.get("m") or "") if unified else f"{r.get('sp') or ''}|{r.get('m') or ''}"
 
-        grouped: dict[str, list[dict]] = {}
+        group_totals: dict[str, int] = {}
+        group_samples: dict[str, list[dict]] = {}
         parts = [0, 0, 0, 0, 0, 0]
         total_matched = 0
+        needs_sort = False
+
+        def record(gkey: str, r: dict, keep_all: bool = False) -> None:
+            nonlocal total_matched
+            group_totals[gkey] = group_totals.get(gkey, 0) + 1
+            bucket = group_samples.get(gkey)
+            if bucket is None:
+                group_samples[gkey] = [r]
+            elif keep_all or len(bucket) < cap:
+                bucket.append(r)
+            parts[sev_idx(r.get("w"))] += 1
+            total_matched += 1
 
         if card == "vol":
             model = q.get("model") or ""
@@ -481,9 +570,16 @@ class RecallEntry:
                     others = set(json.loads(q["others"]))
                 except ValueError:
                     others = set()
-            for r in self.rows:
-                if model and r.get("m") != model:
-                    continue
+            candidates = (
+                self.by_model[model]
+                if model and model in self.by_model
+                else (
+                    [r for r in self.sorted_rows if _match_model_family(r.get("m"), model)]
+                    if model
+                    else self.sorted_rows
+                )
+            )
+            for r in candidates:
                 rtask = r.get("task") or "未接入分类体系"
                 if task:
                     if rtask != task:
@@ -491,44 +587,106 @@ class RecallEntry:
                 elif others and rtask in others:
                     continue
                 gkey = (r.get("sub") or r.get("sc") or r.get("task") or "未接入分类体系") if (task or others) else (r.get("task") or r.get("sc") or "未接入分类体系")
-                grouped.setdefault(gkey, []).append(r)
-                parts[sev_idx(r.get("w"))] += 1
-                total_matched += 1
+                record(gkey, r)
         elif card == "eval":
             d0 = q.get("d0") or ""
             d1 = q.get("d1") or ""
             model = q.get("model") or "all"
-            for r in self.rows:
-                rd = r.get("d") or ""
-                if d0 and rd < d0:
+            if d0 and d0 == d1:
+                candidates = self.by_date.get(d0, ())
+            else:
+                date_list = [d for d in self.sorted_dates if (not d0 or d >= d0) and (not d1 or d <= d1)]
+                needs_sort = len(date_list) > 1
+                candidates = [r for d in date_list for r in self.by_date.get(d, ())]
+            for r in candidates:
+                if model != "all" and not _match_model_family(r.get("m"), model):
                     continue
-                if d1 and rd > d1:
-                    continue
-                if model != "all" and r.get("m") != model:
-                    continue
-                gkey = ver_key(r)
-                grouped.setdefault(gkey, []).append(r)
-                parts[sev_idx(r.get("w"))] += 1
-                total_matched += 1
+                record(ver_key(r), r, keep_all=needs_sort)
         elif card == "attr":
+            model = q.get("model") or ""
+            sev = q.get("sev") or ""
+            mech = q.get("mech") or ""
             role = q.get("role") or ""
             version = q.get("version") or ""
-            for r in self.rows:
-                roles = r.get("r") or []
-                if role:
-                    if role not in roles:
-                        continue
-                    gkey = ver_key(r)
+
+            def stage_for_mech(r: dict, target_mech: str) -> str:
+                stage = next((str(p).split(".")[0] for p in (r.get("pt") or ()) if len(str(p).split(".")) >= 2 and str(p).split(".")[1] == target_mech), "")
+                if stage:
+                    return stage
+                st_list = r.get("st") or ()
+                return st_list[0] if st_list else "~un"
+
+            def model_rows() -> list[dict]:
+                if not model or model == "all":
+                    return self.sorted_rows
+                if model in self.by_model:
+                    return self.by_model[model]
+                return [r for r in self.sorted_rows if _match_model_family(r.get("m"), model)]
+
+            if model or sev or mech:
+                if sev and mech:
+                    b_sev = self.by_sev.get(sev, ())
+                    b_mech = self.by_mech.get(mech, ())
+                    if len(b_sev) <= len(b_mech):
+                        for r in b_sev:
+                            if model and not _match_model_family(r.get("m"), model):
+                                continue
+                            mechs = _row_mechs(r)
+                            hit = (not mechs and int(r.get("n") or 0) > 0) if mech == "~un" else (mech in mechs)
+                            if not hit:
+                                continue
+                            record(stage_for_mech(r, mech), r)
+                    else:
+                        for r in b_mech:
+                            if (model and not _match_model_family(r.get("m"), model)) or not _row_has_sev(r, sev):
+                                continue
+                            record(stage_for_mech(r, mech), r)
+                elif model and sev:
+                    b_mod = model_rows()
+                    b_sev = self.by_sev.get(sev, ())
+                    if len(b_mod) <= len(b_sev):
+                        for r in b_mod:
+                            if not _row_has_sev(r, sev):
+                                continue
+                            mechs = _row_mechs(r)
+                            record(mechs[0] if mechs else "~un", r)
+                    else:
+                        for r in b_sev:
+                            if not _match_model_family(r.get("m"), model):
+                                continue
+                            mechs = _row_mechs(r)
+                            record(mechs[0] if mechs else "~un", r)
+                elif sev:
+                    for r in self.by_sev.get(sev, ()):
+                        mechs = _row_mechs(r)
+                        record(mechs[0] if mechs else "~un", r)
+                elif mech:
+                    for r in self.by_mech.get(mech, ()):
+                        rw = r.get("w")
+                        record(rw if rw in WORST_IDX else "none", r)
                 else:
-                    if not roles or ver_key(r) != version:
-                        continue
-                    gkey = str(roles[0])
-                grouped.setdefault(gkey, []).append(r)
-                parts[sev_idx(r.get("w"))] += 1
-                total_matched += 1
+                    for r in model_rows():
+                        if int(r.get("n") or 0) <= 0:
+                            continue
+                        rw = r.get("w")
+                        record(rw if rw in WORST_IDX else "none", r)
+            else:
+                for r in self.sorted_rows:
+                    roles = r.get("r") or []
+                    if role:
+                        if role not in roles:
+                            continue
+                        gkey = ver_key(r)
+                    else:
+                        if not roles or ver_key(r) != version:
+                            continue
+                        gkey = str(roles[0])
+                    record(gkey, r)
         elif card == "clu":
             prefix = q.get("prefix") or ""
             prefix_dot = prefix + "."
+            stage_id = prefix.split(".", 1)[0] if prefix else ""
+            candidates = self.by_stage.get(stage_id, ()) if stage_id else self.sorted_rows
             kids: list[str] = []
             if q.get("kids"):
                 try:
@@ -536,7 +694,7 @@ class RecallEntry:
                 except ValueError:
                     kids = []
             kid_dots = [(k, k + ".") for k in kids]
-            for r in self.rows:
+            for r in candidates:
                 pt = r.get("pt") or ()
                 if not any(x == prefix or x.startswith(prefix_dot) for x in pt):
                     continue
@@ -548,25 +706,22 @@ class RecallEntry:
                             matched_kid = k
                             break
                     gkey = matched_kid if matched_kid is not None else "~"
-                grouped.setdefault(gkey, []).append(r)
-                parts[sev_idx(r.get("w"))] += 1
-                total_matched += 1
+                record(gkey, r)
 
-        # Worst-first sort inside each cluster, then stratified cap at `cap` (<= 2000).
-        ordered_groups = []
-        for gkey, items in grouped.items():
-            items.sort(key=lambda r: (sev_idx(r.get("w")), -int(r.get("n") or 0), _date_desc_key(r.get("d") or "")))
-            ordered_groups.append((gkey, items))
-        ordered_groups.sort(key=lambda pair: len(pair[1]), reverse=True)
+        if needs_sort:
+            for items in group_samples.values():
+                items.sort(key=lambda r: (sev_idx(r.get("w")), -int(r.get("n") or 0), _date_desc_key(r.get("d") or "")))
+
+        ordered_groups = sorted(group_totals.items(), key=lambda pair: pair[1], reverse=True)
 
         quotas: dict[str, int] = {}
         if total_matched <= cap:
-            for gkey, items in ordered_groups:
-                quotas[gkey] = len(items)
+            for gkey, tot in ordered_groups:
+                quotas[gkey] = tot
         else:
             assigned = 0
-            for gkey, items in ordered_groups:
-                take = min(len(items), max(1, round(cap * len(items) / total_matched)))
+            for gkey, tot in ordered_groups:
+                take = min(tot, max(1, round(cap * tot / total_matched)))
                 quotas[gkey] = take
                 assigned += take
             # Trim or top-up largest clusters so total == cap.
@@ -581,8 +736,8 @@ class RecallEntry:
                     break
             idx = 0
             while assigned < cap and ordered_groups:
-                gkey, items = ordered_groups[idx % len(ordered_groups)]
-                if quotas[gkey] < len(items):
+                gkey, tot = ordered_groups[idx % len(ordered_groups)]
+                if quotas[gkey] < tot:
                     quotas[gkey] += 1
                     assigned += 1
                 idx += 1
@@ -591,11 +746,11 @@ class RecallEntry:
 
         out_groups = []
         recalled = 0
-        for gkey, items in ordered_groups:
+        for gkey, tot in ordered_groups:
             take = quotas.get(gkey, 0)
-            sliced = [_compact_case_item(r) for r in items[:take]]
+            sliced = [_compact_case_item(r) for r in group_samples[gkey][:take]]
             recalled += len(sliced)
-            out_groups.append({"key": gkey, "total": len(items), "items": sliced})
+            out_groups.append({"key": gkey, "total": tot, "items": sliced})
 
         return {
             "product": self.product,

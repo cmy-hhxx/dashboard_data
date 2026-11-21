@@ -235,6 +235,62 @@ class DynamicBenchTests(unittest.TestCase):
         self.assertEqual(by_tid2["tid-2"]["slug"], "slug-2")
         self.assertIsNone(by_tid2["tid-1"]["slug"])
 
+    def test_extract_turns_and_flat_11_field_export_schema(self):
+        single = {
+            "trace_id": "t-single",
+            "session_id": "s-1",
+            "turn": "single",
+            "model": "aime_fast",
+            "day": "2026-11-18",
+            "severity": "GOLD",
+            "question_full": "今日沪深300涨幅如何？",
+            "primary": {"l1": "NA", "l2": "NA", "l3": "NA", "label": "goldencase"},
+        }
+        out_single = bench_dynamic.format_export_case(single)
+        self.assertEqual(
+            list(out_single.keys()),
+            ["case_id", "session_id", "turn_type", "turn_count", "turns", "model", "date", "severity", "stage", "mechanism", "problem"],
+        )
+        self.assertEqual(out_single["turn_type"], "single")
+        self.assertEqual(out_single["turn_count"], 1)
+        self.assertEqual(out_single["turns"], [{"role": "user", "content": "今日沪深300涨幅如何？"}])
+        self.assertEqual(out_single["problem"], "goldencase")
+
+        multi = {
+            "trace_id": "t-multi",
+            "session_id": "s-2",
+            "turn": "multi",
+            "model": "aime_expert",
+            "day": "2026-11-19",
+            "severity": "P1",
+            "question_full": "对比去年同期净利润变化",
+            "message_pool": [
+                {"role": "system", "content": "系统提示词"},
+                {"role": "user", "content": "查询贵州茅台三季报"},
+                {"role": "assistant", "content": "已查询三季报数据…"},
+                {"role": "tool", "content": "{}"},
+            ],
+            "primary": {"l1": "S9", "l2": "M6", "l3": "S9.M6.1", "label": "无依据数字"},
+        }
+        out_multi = bench_dynamic.format_export_case(
+            multi,
+            stage_names={"S9": "答案合成"},
+            mech_names={"M6": "无依据断言"},
+        )
+        self.assertEqual(out_multi["turn_type"], "multi")
+        self.assertEqual(out_multi["turn_count"], 2)
+        self.assertEqual(
+            out_multi["turns"],
+            [
+                {"role": "user", "content": "查询贵州茅台三季报"},
+                {"role": "assistant", "content": "已查询三季报数据…"},
+                {"role": "user", "content": "对比去年同期净利润变化"},
+            ],
+        )
+        self.assertEqual(out_multi["stage"], "答案合成")
+        self.assertEqual(out_multi["mechanism"], "无依据断言")
+        self.assertEqual(out_multi["problem"], "无依据数字")
+
 
 class BenchRouteTests(unittest.TestCase):
     def setUp(self):
@@ -302,6 +358,23 @@ class BenchRouteTests(unittest.TestCase):
 
         st, _ = self._get("/bench_case/aime/aime_expert/missing-tid.json")
         self.assertEqual(st, 404)
+
+        conn = self._http_client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            conn.request("GET", "/bench_export/aime.jsonl?model=aime_expert&tier=500&long=0")
+            resp = conn.getresponse()
+            raw = resp.read().decode("utf-8")
+            self.assertEqual(resp.status, 200)
+            self.assertIn("attachment; filename=", resp.getheader("Content-Disposition") or "")
+            lines = [json.loads(line) for line in raw.splitlines() if line.strip()]
+            self.assertEqual(len(lines), 1)
+            self.assertEqual(lines[0]["case_id"], "tid-1")
+            self.assertEqual(
+                set(lines[0].keys()),
+                {"case_id", "session_id", "turn_type", "turn_count", "turns", "model", "date", "severity", "stage", "mechanism", "problem"},
+            )
+        finally:
+            conn.close()
 
 
 if __name__ == "__main__":

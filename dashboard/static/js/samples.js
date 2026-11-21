@@ -7,7 +7,7 @@ const CHEV_LEFT = `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" a
 const CHEV_RIGHT = `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
 const PAGE = 50;
-const RECALL_CAP = 2000;
+const RECALL_CAP = 500;
 const S = {
   product: null, all: [], rows: [], pageRows: [], page: 1, slug: null, refocusList: false, listOff: false,
   serverMode: false, pages: 1, total: 0, matched: 0, recalled: 0, cap: RECALL_CAP, capped: false,

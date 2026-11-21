@@ -5,7 +5,7 @@ import test from "node:test";
 // the other front-end tests (core.js reads location.search at import time).
 globalThis.location = { search: "" };
 globalThis.window = {};
-const { parseCompareURL, pickRound, sortPairs, filterPairs, pagePairs, pairGaps, readyOf, detailReady, timelineModel } =
+const { parseCompareURL, resolveCompareFace, pickRound, sortPairs, filterPairs, pagePairs, pairGaps, readyOf, detailReady, timelineModel } =
   await import("../static/js/compare.js");
 
 const pair = (eq, before, after, q = `题目 ${eq}`) => ({ id: `t${eq}`, eq, q, before: { n: before, detail: "s1" }, after: after == null ? null : { n: after, detail: eq } });
@@ -110,4 +110,13 @@ test("an empty payload or rounds without a release date still produce a usable t
   const model = timelineModel([{ id: "a", label: "vA" }, { id: "b", label: "vB" }], 1200);
   assert.equal(model.nodes.length, 2);
   assert.ok(model.nodes.every((node) => Number.isFinite(node.x)));
+});
+
+test("resolveCompareFace defaults to AB front face and flips to detail on explicit params or standalone", () => {
+  assert.equal(resolveCompareFace("?view=compare&product=aime", { hasAB: true, isStandalone: false }), "ab");
+  assert.equal(resolveCompareFace("?view=compare&face=detail", { hasAB: true, isStandalone: false }), "detail");
+  assert.equal(resolveCompareFace("?view=compare&pair=t7", { hasAB: true, isStandalone: false }), "detail");
+  assert.equal(resolveCompareFace("?view=compare&online=slug-1", { hasAB: true, isStandalone: false }), "detail");
+  assert.equal(resolveCompareFace("?view=compare", { hasAB: true, isStandalone: true }), "detail");
+  assert.equal(resolveCompareFace("?view=compare", { hasAB: false, isStandalone: false }), "detail");
 });

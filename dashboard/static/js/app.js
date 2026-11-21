@@ -13,7 +13,7 @@ const SAMPLE_PARAMS = {
   model: null, scene: null, sub: null, stage: null, mech: null, pattern: null, date: null, case: null, trace: null,
   res: null, cls: null, typ: null, cause: null,
 };
-const COMPARE_PARAMS = { pair: null, online: null, round: null };
+const COMPARE_PARAMS = { pair: null, online: null, round: null, face: null };
 const BENCH_PARAMS = { bm: null, bl: null, bt: null, bd: null, bv: null };
 // Views that read data-<product>.json (17 MB for AIME). The others only need the data.json shell,
 // so they neither wait for it nor spend the bandwidth their own payloads need.
@@ -211,7 +211,11 @@ function recallSlice(product = state.product, params = {}) {
   const qs = buildQS(params);
   return cachedRecall(`api/recall_slice/${encodeURIComponent(product)}.json${qs ? `?${qs}` : ""}`);
 }
-async function recallLookup(product = state.product, { slugs = [], tids = [], cap = 2000 } = {}) {
+function inputSlice(product = state.product, params = {}) {
+  const qs = buildQS(params);
+  return cachedRecall(`api/input_slice/${encodeURIComponent(product)}.json${qs ? `?${qs}` : ""}`);
+}
+async function recallLookup(product = state.product, { slugs = [], tids = [], cap = 500 } = {}) {
   if (recallApiBroken) return null;
   try {
     const res = await fetch(`api/recall_lookup/${encodeURIComponent(product)}.json`, {
@@ -252,7 +256,7 @@ async function render({ refresh = false } = {}) {
         console.error(err);
       }
     }
-    await modules[state.view].render(root, { ...state, navigate, loadIndex, peekIndex, loadRecallHead, recallPage, recallSlice, recallLookup, refresh });
+    await modules[state.view].render(root, { ...state, navigate, loadIndex, peekIndex, loadRecallHead, recallPage, recallSlice, inputSlice, recallLookup, refresh });
   } catch (err) {
     console.error(err);
     root.innerHTML = `<div class="bento"><div class="card" style="--span:12"><div class="empty">页面加载失败：${esc(String(err.message || err))}</div></div></div>`;
@@ -353,6 +357,14 @@ async function boot() {
     const docsBtn = e.target.closest('button[data-value="docs"]');
     if (docsBtn && new URLSearchParams(location.search).get("doc")) {
       navigate({ view: "docs", doc: null });
+      return;
+    }
+    const cmpBtn = e.target.closest('button[data-value="compare"]');
+    if (cmpBtn) {
+      const sp = new URLSearchParams(location.search);
+      if (sp.get("face") || sp.get("pair") || sp.get("online")) {
+        navigate({ view: "compare", face: null, pair: null, online: null });
+      }
     }
   });
   // The theme switch is a pixel day/night toggle. Flipping it (click, drag or keyboard) grows the

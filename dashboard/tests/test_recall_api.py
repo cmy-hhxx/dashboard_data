@@ -1,4 +1,4 @@
-"""Tests for bounded (<= 2000) server-side recall index and HTTP pagination endpoints."""
+"""Tests for bounded (<= 500) server-side recall index, attr flows, input slicing and HTTP endpoints."""
 import http.client
 import json
 import tempfile
@@ -13,6 +13,9 @@ except ImportError:
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import build  # noqa: E402
+import build_store  # noqa: E402
+import input_list  # noqa: E402
 import recall_index  # noqa: E402
 import server  # noqa: E402
 
@@ -35,7 +38,7 @@ def _write_fixture(static_dir: Path, product: str, rows: list[dict], labels: lis
 
 
 class RecallIndexUnitTests(unittest.TestCase):
-    def test_sessions_grouping_filtering_facets_and_2000_cap(self):
+    def test_sessions_grouping_filtering_facets_and_500_cap(self):
         with tempfile.TemporaryDirectory() as tmp:
             static = Path(tmp)
             rows = [
@@ -54,8 +57,8 @@ class RecallIndexUnitTests(unittest.TestCase):
                  "q": "板块轮动", "w": "none", "n": 0, "tr": 1, "sv": [0, 0, 0, 0, 0], "st": [], "pt": [],
                  "task": "行情走势", "sub": "", "ut": "test", "ul": 1, "r": []},
             ]
-            # Add 2,300 more sessions to verify RECALL_CAP = 2000 enforcement
-            for i in range(2300):
+            # Add 700 more sessions to verify RECALL_CAP = 500 enforcement
+            for i in range(700):
                 rows.append({
                     "s": f"bulk-{i:04d}", "sid": f"sid-{i:04d}", "tid": f"tid-{i:04d}",
                     "sp": "daily", "m": "aime_fast", "d": "2026-11-19",
@@ -69,13 +72,13 @@ class RecallIndexUnitTests(unittest.TestCase):
             entry = store.get(str(static), "aime")
             self.assertIsNotNone(entry)
 
-            # Default page 1 is capped at 2000 (40 pages x 50)
+            # Default page 1 is capped at 500 (10 pages x 50)
             p1 = entry.query_sessions({"page": "1", "size": "50"})
-            self.assertEqual(p1["total_sessions"], 2303)
-            self.assertEqual(p1["matched"], 2303)
-            self.assertEqual(p1["recalled"], 2000)
+            self.assertEqual(p1["total_sessions"], 703)
+            self.assertEqual(p1["matched"], 703)
+            self.assertEqual(p1["recalled"], 500)
             self.assertTrue(p1["capped"])
-            self.assertEqual(p1["pages"], 40)
+            self.assertEqual(p1["pages"], 10)
             self.assertEqual(len(p1["rows"]), 50)
             # Multi-round session aggregated sv=[1,2,0,0,0], worst=P0, peer models=[aime_expert, aime_fast]
             first = p1["rows"][0]
@@ -86,9 +89,9 @@ class RecallIndexUnitTests(unittest.TestCase):
             self.assertIn("财报分析", p1["facets"]["scenes"])
             self.assertIn("S1", p1["facets"]["stages"])
 
-            # Page beyond cap clamps cleanly to page 40
+            # Page beyond cap clamps cleanly to page 10
             p99 = entry.query_sessions({"page": "99", "size": "50", "facets": "0"})
-            self.assertEqual(p99["page"], 40)
+            self.assertEqual(p99["page"], 10)
             self.assertEqual(len(p99["rows"]), 50)
             self.assertNotIn("facets", p99)
 
@@ -107,23 +110,52 @@ class RecallIndexUnitTests(unittest.TestCase):
             self.assertEqual(lost["matched"], 1)
             self.assertEqual(lost["rows"][0]["sid"], "sess-lost")
 
-            # Galaxy slice stratifies and caps at 2000 while reporting exact total & severity parts
+            # Galaxy slice stratifies and caps at 500 while reporting exact total & severity parts
             gx = entry.query_galaxy({"card": "vol", "model": "aime_fast"})
-            self.assertEqual(gx["total"], 2303)
-            self.assertEqual(gx["recalled"], 2000)
+            self.assertEqual(gx["total"], 703)
+            self.assertEqual(gx["recalled"], 500)
             self.assertTrue(gx["capped"])
-            self.assertEqual(sum(gx["parts"]), 2303)
-            self.assertEqual(sum(len(g["items"]) for g in gx["groups"]), 2000)
+            self.assertEqual(sum(gx["parts"]), 703)
+            self.assertEqual(sum(len(g["items"]) for g in gx["groups"]), 500)
             # Highest severity row (P0) must survive capping
             all_slugs = {it["s"] for g in gx["groups"] for it in g["items"]}
             self.assertIn("s0002", all_slugs)
 
-            # Trend slice paginates lazily within day index
+            # Eval single-day fast O(1) lookup caps cleanly at 500
+            ev_day = entry.query_galaxy({"card": "eval", "d0": "2026-11-19", "d1": "2026-11-19", "model": "all"})
+            self.assertEqual(ev_day["recalled"], 500)
+            self.assertTrue(ev_day["capped"])
+
+            # Attr model / severity / mechanism queries (Model -> P0-P4 -> M1-M7)
+            att_mod = entry.query_galaxy({"card": "attr", "model": "aime_fast"})
+            self.assertEqual(att_mod["recalled"], 500)
+            self.assertEqual({g["key"] for g in att_mod["groups"]}, {"P0", "P1", "P3"})
+            self.assertTrue(all(it["m"] == "aime_fast" and it["n"] > 0 for g in att_mod["groups"] for it in g["items"]))
+
+            att_ms = entry.query_galaxy({"card": "attr", "model": "aime_fast", "sev": "P1"})
+            self.assertGreater(att_ms["recalled"], 0)
+            self.assertEqual(att_ms["groups"][0]["key"], "M1")
+            self.assertEqual(att_ms["groups"][0]["items"][0]["s"], "s0001")
+
+            att_s = entry.query_galaxy({"card": "attr", "sev": "P1"})
+            self.assertEqual(att_s["groups"][0]["key"], "M1")
+            self.assertEqual(att_s["groups"][0]["items"][0]["s"], "s0001")
+
+            att_m = entry.query_galaxy({"card": "attr", "mech": "M1"})
+            att_m_keys = {g["key"] for g in att_m["groups"]}
+            self.assertTrue({"P1", "P2", "P3"}.issubset(att_m_keys))
+            self.assertEqual(att_m["recalled"], 500)
+
+            att_both = entry.query_galaxy({"card": "attr", "sev": "P1", "mech": "M1"})
+            self.assertEqual(att_both["groups"][0]["key"], "S1")
+            self.assertEqual(att_both["total"], 1)
+
+            # Trend slice paginates lazily within day index, capped at 500
             tr1 = entry.query_trend({"date": "2026-11-19", "node": "S1.M1", "offset": "0", "limit": "30"})
             self.assertEqual(len(tr1["rows"]), 30)
             self.assertTrue(tr1["has_more"])
             self.assertTrue(tr1["capped"])
-            self.assertEqual(tr1["recalled"], 2000)
+            self.assertEqual(tr1["recalled"], 500)
 
             # Session sibling lookup
             sib = entry.query_session({"sid": "sess-shared", "m": "aime_fast"})
@@ -132,6 +164,70 @@ class RecallIndexUnitTests(unittest.TestCase):
             # Direct slug + tid lookup
             lk = entry.lookup(["s0003", "missing"], ["t-4"])
             self.assertEqual({r["s"] for r in lk["rows"]}, {"s0003", "s0004"})
+
+    def test_input_lister_slice_inputs_bounds_at_500(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            datasets = root / "datasets"
+            cache = root / "cache"
+            static = root / "static"
+            static.mkdir(parents=True)
+            in_dir = datasets / "2_aime" / "eval_input" / "0_daily_eval_input" / "aime_fast"
+            in_dir.mkdir(parents=True)
+            jsonl_path = in_dir / "2026-11-19.jsonl"
+
+            lines = []
+            for i in range(600):
+                rec = {
+                    "meta": {
+                        "question": f"输入问题 {i}",
+                        "session_id": f"in-sid-{i}",
+                        "request_time": "2026-11-19T10:00:00",
+                        "task_category": "深度研究" if i % 2 == 0 else "实时行情",
+                        "subtask_category": "研报解读" if i % 2 == 0 else "个股价格",
+                    },
+                    "traces": [{"meta": {"trace_id": f"in-tid-{i}"}}],
+                }
+                lines.append(json.dumps(rec, ensure_ascii=False))
+            jsonl_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+            # Mark line 1 (i=0) as paired/evaluated in sqlite store
+            store = build_store.BuildStore(cache / "build.sqlite3")
+            first_bytes = lines[0].encode("utf-8")
+            ih0 = build_store.line_hash(first_bytes)
+            store.db.execute(
+                "INSERT INTO samples(slug,fp,oh,ih,ch,product,model,date,split,output,output_line,refs,row,facts,brief,golden,built_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("s-eval-0", "fp0", "oh0", f"{ih0:016x}", None, "aime", "aime_fast", "2026-11-19", "daily",
+                 "out.jsonl", 1, "[]",
+                 json.dumps({"s": "s-eval-0", "q": "输入问题 0", "w": "P4", "tr": 1, "task": "深度研究", "sub": "研报解读"}),
+                 "{}", "{}", None, 0.0),
+            )
+            store.db.commit()
+            store.close()
+
+            _write_fixture(static, "aime", [])
+            old_bstatic = build.STATIC
+            build.STATIC = static
+            lister = input_list.InputLister(datasets, cache / "build.sqlite3", cache, static)
+            try:
+                res = lister.slice_inputs("aime", model="aime_fast", cap=500)
+                self.assertEqual(res["source"], "inputs")
+                self.assertEqual(res["recalled"], 500)
+                self.assertEqual(res["cap"], 500)
+                self.assertTrue(res["capped"])
+                done, pending = res["eval_counts"]
+                self.assertEqual(done + pending, 500)
+                self.assertGreaterEqual(done, 1)
+                self.assertGreaterEqual(pending, 1)
+
+                task_slice = lister.slice_inputs("aime", model="aime_fast", task="深度研究", cap=500)
+                self.assertGreater(task_slice["recalled"], 0)
+                self.assertTrue(all(it["cat"] == "深度研究" for g in task_slice["groups"] for it in g["items"]))
+            finally:
+                build.STATIC = old_bstatic
+                st = getattr(lister._local, "store", None)
+                if st is not None:
+                    st.close()
 
 
 class RecallHttpEndpointTests(unittest.TestCase):

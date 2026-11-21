@@ -24,11 +24,32 @@ html[data-compare="1"] .compare-standalone-head {
 }
 html[data-compare="1"] .compare-standalone-head .compare-top-count { margin-left: auto; }
 .compare-back {
-  flex: none; display: inline-grid; place-items: center; width: 24px; height: 24px;
-  border-radius: 6px; color: var(--muted); transition: background var(--snap), color var(--snap);
+  flex: none; display: inline-flex; align-items: center; gap: 3px; min-width: 24px; height: 24px; padding: 0 5px;
+  border-radius: 6px; color: var(--muted); font-size: var(--fs-meta); white-space: nowrap;
+  transition: background var(--snap), color var(--snap);
 }
+.compare-back.compare-to-ab { padding: 0 8px 0 4px; background: var(--well); color: var(--ink-2); font-weight: var(--w-medium); }
 .compare-back:hover { background: var(--hover); color: var(--ink); }
-.compare-back svg { width: 14px; height: 14px; }
+.compare-back svg { width: 14px; height: 14px; flex: none; }
+.compare-rail-ab {
+  display: none; flex: none; align-items: center; justify-content: center; gap: 2px;
+  width: 100%; padding: 8px 4px; border: 0; border-bottom: 1px solid var(--well);
+  color: var(--muted); font-size: 11px; transition: color var(--snap), background var(--snap);
+}
+.compare-rail-ab svg { width: 12px; height: 12px; }
+.compare-rail-ab:hover { color: var(--ink); background: var(--hover); }
+.compare-list.is-collapsed > .compare-rail-ab { display: inline-flex; }
+
+/* 版本对比双面翻转容器：正面 = 对比分析（A/B Test），反面 = 具体数据 */
+.cmp-stage { position: relative; min-width: 0; }
+.cmp-stage.is-flipping { user-select: none; overflow-x: clip; }
+.cmp-face { min-width: 0; transform-origin: 50% 45%; will-change: transform, opacity; }
+.cmp-face[hidden] { display: none; }
+.cmp-ab-card { --span: 12; }
+.cmp-ab-inner { min-width: 0; }
+.cmp-face-seg { height: 28px; padding: 2px; background: var(--well); }
+.cmp-face-seg button { padding: 0 10px; font-size: var(--fs-meta); }
+.cmp-face-seg .seg-knob { top: 2px; bottom: 2px; }
 .compare-top-name {
   min-width: 0; overflow: hidden; color: var(--ink); font-size: var(--fs-title);
   font-weight: var(--w-medium); text-overflow: ellipsis; white-space: nowrap;
