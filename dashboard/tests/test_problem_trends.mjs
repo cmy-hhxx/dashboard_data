@@ -586,9 +586,12 @@ test("daily top model computes top 10 most frequent and top 10 most dropped prob
   assert.equal(state.dailyDay, "2026-11-17");
   clickedHandler({ target: { closest: (sel) => (sel === "[data-daily-day]" ? dayBtns[0] : null) } });
   assert.equal(state.dailyDay, "2026-11-16");
+  assert.equal(state.dailyModalDate, undefined);
+  assert.equal(modalSlotEl.innerHTML, "");
+  assert.match(boardsEl.innerHTML, /2026-11-16 出现最多 TOP 10/);
+  clickedHandler({ target: { closest: (sel) => (sel === "[data-daily-day]" ? dayBtns[0] : null) } });
   assert.equal(state.dailyModalDate, "2026-11-16");
   assert.match(modalSlotEl.innerHTML, /mxd-modal-backdrop/);
-  assert.match(boardsEl.innerHTML, /2026-11-16 出现最多 TOP 10/);
   const rowTarget = { dataset: { dailyCode: "S1.M1.12", dailyName: "问题模式12" } };
   clickedHandler({ target: { closest: (sel) => (sel === "[data-daily-code]" ? rowTarget : null) } });
   assert.equal(pickedProblem.code, "S1.M1.12");

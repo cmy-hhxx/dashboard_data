@@ -858,6 +858,7 @@ export function dailyTopHTML(model, selectedDate = "", options = {}) {
 export function mountDailyTop(host, trend, tax, state = {}, actions = {}) {
   if (!host) return;
   if (host._mxdClick) host.removeEventListener("click", host._mxdClick);
+  if (host._mxdClearTimers) host._mxdClearTimers();
   if (host._mxdKey) {
     if (typeof document !== "undefined") document.removeEventListener("keydown", host._mxdKey);
     host._mxdKey = null;
@@ -899,6 +900,26 @@ export function mountDailyTop(host, trend, tax, state = {}, actions = {}) {
     modalSev: state.dailyModalSev,
   });
 
+  let pickTimer = 0;
+  let swapTimer = 0;
+  let flipTimer = 0;
+  let revealTimer = 0;
+  host._mxdClearTimers = () => {
+    clearTimeout(pickTimer);
+    clearTimeout(swapTimer);
+    clearTimeout(flipTimer);
+    clearTimeout(revealTimer);
+  };
+
+  const pulseClass = (el, cls, ms, prev) => {
+    clearTimeout(prev);
+    if (!el || REDUCED || typeof el.classList?.remove !== "function" || typeof el.classList?.add !== "function") return 0;
+    el.classList.remove(cls);
+    void el.offsetWidth;
+    el.classList.add(cls);
+    return setTimeout(() => el.classList?.remove(cls), ms);
+  };
+
   const repaintCalendar = () => {
     const calFront = host.querySelector("#mxdCalFront");
     if (calFront) calFront.innerHTML = calendarCardHTML(model, state.dailyDay, state.dailyPage, state.dailyMetric, state.dailyMonth);
@@ -906,6 +927,8 @@ export function mountDailyTop(host, trend, tax, state = {}, actions = {}) {
 
   const setModalDate = (date) => {
     const nextDate = date && model.byDate.has(date) ? date : null;
+    const prevFlipped = Boolean(state.dailyModalDate);
+    const nextFlipped = Boolean(nextDate);
     if (nextDate !== state.dailyModalDate) state.dailyModalSev = "";
     state.dailyModalDate = nextDate;
     const slot = host.querySelector("#mxdModalSlot");
@@ -914,7 +937,17 @@ export function mountDailyTop(host, trend, tax, state = {}, actions = {}) {
         ? dayModalHTML(model.byDate.get(state.dailyModalDate), state.dailyModalSev)
         : "";
     }
-    host.querySelector("#mxdCalStage")?.classList?.toggle("is-flipped", Boolean(state.dailyModalDate));
+    const stage = host.querySelector("#mxdCalStage");
+    if (stage?.classList) {
+      stage.classList.toggle("is-flipped", nextFlipped);
+      if (prevFlipped !== nextFlipped) {
+        flipTimer = pulseClass(stage, "is-flipping", 640, flipTimer);
+      }
+      if (nextFlipped) {
+        const modal = slot?.querySelector?.(".mxd-modal");
+        revealTimer = pulseClass(modal, "is-reveal", 500, revealTimer);
+      }
+    }
   };
 
   if (typeof document !== "undefined") {
@@ -984,12 +1017,7 @@ export function mountDailyTop(host, trend, tax, state = {}, actions = {}) {
       height: 310,
       onPick: ({ time }) => {
         if (!time || !model.byDate.has(time) || time === state.dailyDay) return;
-        state.dailyDay = time;
-        state.dailyPage = heatPageForDate(model.pages, time);
-        state.dailyMonth = time.slice(0, 7);
-        repaintCalendar();
-        const boards = host.querySelector("#mxdBoards");
-        if (boards) boards.innerHTML = dailyTopBoardsHTML(model.byDate.get(time));
+        selectDay(time, false);
       },
     });
     applyChartLock(state.dailyZoom);
@@ -1067,24 +1095,25 @@ export function mountDailyTop(host, trend, tax, state = {}, actions = {}) {
       state.dailyDay = nextDate;
       const targetPage = heatPageForDate(model.pages, nextDate);
       const targetMonth = nextDate.slice(0, 7);
+      let pickedBtn = null;
       if (targetPage !== state.dailyPage || targetMonth !== state.dailyMonth) {
         state.dailyPage = targetPage;
         state.dailyMonth = targetMonth;
         repaintCalendar();
+        pickedBtn = [...(host.querySelectorAll("[data-daily-day]") || [])].find((btn) => btn.dataset.dailyDay === nextDate) || null;
       } else {
         host.querySelectorAll("[data-daily-day]").forEach((btn) => {
           const on = btn.dataset.dailyDay === nextDate;
+          if (on) pickedBtn = btn;
           btn.classList.toggle("is-active", on);
           btn.setAttribute("aria-pressed", String(on));
         });
       }
+      if (!openModal) pickTimer = pulseClass(pickedBtn, "is-just-picked", 300, pickTimer);
       const boards = host.querySelector("#mxdBoards");
       if (boards) {
         boards.innerHTML = dailyTopBoardsHTML(model.byDate.get(nextDate));
-        if (boards.classList) {
-          boards.classList.remove("is-pulse");
-          boards.classList.add("is-pulse");
-        }
+        swapTimer = pulseClass(boards, "is-swap", 400, swapTimer);
       }
     }
     if (openModal || state.dailyModalDate) {
@@ -1201,7 +1230,11 @@ export function mountDailyTop(host, trend, tax, state = {}, actions = {}) {
       if (typeof document !== "undefined") hideTip();
       const nextDate = dayBtn.dataset.dailyDay;
       if (!nextDate || !model.byDate.has(nextDate)) return;
-      selectDay(nextDate, true);
+      if (nextDate === state.dailyDay && !state.dailyModalDate) {
+        setModalDate(nextDate);
+      } else {
+        selectDay(nextDate, Boolean(state.dailyModalDate));
+      }
       return;
     }
     const rowBtn = e.target.closest("[data-daily-code]");
