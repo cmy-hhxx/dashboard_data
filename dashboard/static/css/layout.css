@@ -352,7 +352,9 @@ html[data-view="samples"] main, html[data-view="forecast"] main { max-width: non
 /* One look for every hover, page or chart: a title, then label · value rows whose numbers line up
    on the right. Same surface, radius, shadow and rhythm as a card, one step lighter. */
 .tip, .kl-tip {
-  background: var(--lift); color: var(--muted); border-radius: var(--r-tip); box-shadow: var(--shadow-pop);
+  background: var(--lift); color: var(--muted); border-radius: var(--r-tip);
+  border: 1px solid color-mix(in oklab, var(--ink) 10%, transparent);
+  box-shadow: 0 12px 28px -6px rgba(15, 23, 42, 0.16), 0 2px 6px rgba(15, 23, 42, 0.06);
   padding: var(--sp-3) var(--sp-4); font-size: var(--fs-meta); line-height: 1.6;
 }
 .tip {

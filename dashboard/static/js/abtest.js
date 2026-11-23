@@ -8,7 +8,7 @@
    The matrix reads 同题变化 (fixed set alone), 发版前, 发版后同题 or 发版后线上, matching the
    orbit tree's release side.  State lives in data.js's u.ab so an in-place dashboard refresh
    returns to the same round, summary / matrix step, metric and selected cell. */
-import { compact, esc, fmt, pct, REDUCED, segmented } from "./core.js";
+import { bindTips, compact, esc, fmt, pct, REDUCED, segmented } from "./core.js";
 import { patternOf } from "./taxonomy.js";
 import { sunburst } from "./sunburst.js";
 import { createKlineChart } from "./kline_chart.js";
@@ -104,22 +104,23 @@ export function abRoundsHTML(rounds, active) {
 
 /* 三批问题数量收成一行读数：变化构成的卡头不再重复画一组柱子，每一批只留问题数与其体量。
    基线与复测之间仍是一条发丝红虚线，线上真实是另一批人，不参与相减。 */
-export function abComparisonHTML(rnd) {
+export function abComparisonHTML(rnd, activeSide = "") {
   const labels = { before: "改版前", after: "改版后同题", online: "线上真实" };
   return `<div class="ab-batches" role="group" aria-label="三批问题数量">${SIDES.map((side) => {
     const result = rnd.sides?.[side];
     const n = result ? num(result.hits) : null;
     const traces = result?.traces == null ? DASH : fmt(result.traces);
     const problemTraces = result?.problem_traces;
-    const title = result
+    const aria = result
       ? side === "online"
         ? `线上真实：${fmt(n)} 个问题，${traces} 条评测样本`
         : `同题交集：${traces} 条 Trace，其中 ${problemTraces == null ? DASH : fmt(problemTraces)} 条有问题；共 ${fmt(n)} 个问题`
       : `${labels[side]}暂无数据`;
-    return `<div class="ab-batch is-${side}${result ? "" : " is-missing"}" title="${esc(title)}">
+    const active = Boolean(result && activeSide === side);
+    return `<button type="button" class="ab-batch is-${side}${result ? "" : " is-missing"}" data-act="abbatch" data-side="${side}" data-tip="ab-batch:${side}" aria-pressed="${active}" aria-label="${esc(aria)}"${result ? "" : " disabled"}>
       <span>${labels[side]}</span>
       <b class="num">${n == null ? DASH : fmt(n)}</b>
-    </div>`;
+    </button>`;
   }).join("")}</div>`;
 }
 
@@ -484,11 +485,15 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
   state.mxRows = Array.isArray(state.mxRows) ? state.mxRows : [];
   state.mxCols = Array.isArray(state.mxCols) ? state.mxCols : [];
   state.mxTrail = Array.isArray(state.mxTrail) ? state.mxTrail : [];
+  state.changeFlow = ["clear", "down", "up", "add"].includes(state.changeFlow) ? state.changeFlow : "";
+  state.changeStage = typeof state.changeStage === "string" ? state.changeStage : "";
+  state.changeDir = ["better", "worse"].includes(state.changeDir) ? state.changeDir : "";
   let mxNow = null;
   let cellTrendChart = null;
   let cellTrendDrawer = null;
   let orbitApi = null;
   let overviewTimer = 0;
+  let changeSnap = null;
   /* The records and the fullscreen control sit in the card head, outside the body re-rendered here. */
   const face = typeof host.closest === "function" ? host.closest(".mx-ab-face, .cmp-ab-card") : null;
   const roundsHost = actions.roundsHost || (face ? face.querySelector("#abRounds") : null);
@@ -504,6 +509,9 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     state.mxRows = [];
     state.mxCols = [];
     state.mxTrail = [];
+    state.changeFlow = "";
+    state.changeStage = "";
+    state.changeDir = "";
     actions.onRoundChange?.(rounds[i], i);
     render();
   }
@@ -562,77 +570,117 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     </section>`;
   }
 
+  const leafFlowKey = (leaf) => {
+    if (leaf?.after == null) return "";
+    const b = num(leaf.before);
+    const a = num(leaf.after);
+    if (b > 0 && a === 0) return "clear";
+    if (b > 0 && a > 0 && a < b) return "down";
+    if (b === 0 && a > 0) return "add";
+    if (b > 0 && a > b) return "up";
+    return "";
+  };
+
   /* 同题变化 split by what the release did to each problem: cleared out, fallen back, climbed, or
      newly appeared.  The four flows add up to the same net the two bars carry. */
-  function changeFlows(rnd) {
+  function changeFlows(rnd, stageId = "") {
     const flows = [
-      { key: "clear", name: "消除", sign: -1, dir: "is-better", n: 0, count: 0 },
-      { key: "down", name: "减少", sign: -1, dir: "is-better", n: 0, count: 0 },
-      { key: "up", name: "增加", sign: 1, dir: "is-worse", n: 0, count: 0 },
-      { key: "add", name: "新增", sign: 1, dir: "is-worse", n: 0, count: 0 },
+      { key: "clear", name: "消除", sign: -1, dir: "is-better", n: 0, count: 0, top: [] },
+      { key: "down", name: "减少", sign: -1, dir: "is-better", n: 0, count: 0, top: [] },
+      { key: "up", name: "增加", sign: 1, dir: "is-worse", n: 0, count: 0, top: [] },
+      { key: "add", name: "新增", sign: 1, dir: "is-worse", n: 0, count: 0, top: [] },
     ];
     const by = new Map(flows.map((flow) => [flow.key, flow]));
+    let same = 0;
     (Array.isArray(rnd.leaves) ? rnd.leaves : []).forEach((leaf) => {
       if (leaf.after == null) return;
+      if (stageId && String(leaf.id || "").split(".")[0] !== stageId) return;
       const before = num(leaf.before);
       const after = num(leaf.after);
-      const key = before > 0 && after === 0 ? "clear"
-        : before > 0 && after > 0 && after < before ? "down"
-          : before === 0 && after > 0 ? "add"
-            : before > 0 && after > before ? "up" : "";
+      if (before > 0 && after === before) {
+        same += 1;
+        return;
+      }
+      const key = leafFlowKey(leaf);
       const flow = by.get(key);
       if (!flow) return;
-      flow.n += key === "clear" ? before : key === "down" ? before - after : key === "add" ? after : after - before;
+      const mag = key === "clear" ? before : key === "down" ? before - after : key === "add" ? after : after - before;
+      flow.n += mag;
       flow.count += 1;
+      flow.top.push({ id: leaf.id, name: leaf.name || leaf.id, before, after, d: after - before, mag });
+    });
+    flows.forEach((f) => {
+      f.top.sort((a, b) => b.mag - a.mag || b.before - a.before);
+      f.top = f.top.slice(0, 3);
+      f.same = same;
     });
     return flows;
   }
 
-  /* 变化构成：三批总量收成一行读数，下方是四步瀑布桥。  Each problem the release touched
-     moves the running total once, so the four steps walk 改版前 → 改版后 and the head keeps the two
-     totals.  The plot is zoomed to the change band (totals in the head, values on every step), so a
-     483 out of 3288 still reads; the dashed step lines carry the running total between columns.
-     The card also hosts the orbit's leaf sample pane, so the tree stays a pure navigator. */
   /* Net change per stage (S1, S2 …): where the release moved problems, largest first. */
-  function stageChanges(rnd) {
+  function stageChanges(rnd, flowKey = "") {
     const names = new Map((Array.isArray(rnd.nodes) ? rnd.nodes : []).map((n) => [n.id, n.name || n.id]));
     const by = new Map();
     (Array.isArray(rnd.leaves) ? rnd.leaves : []).forEach((leaf) => {
       if (leaf.after == null) return;
+      if (flowKey && leafFlowKey(leaf) !== flowKey) return;
       const id = String(leaf.id || "").split(".")[0];
       if (!id) return;
-      const row = by.get(id) || { id, name: names.get(id) || id, before: 0, after: 0 };
-      row.before += num(leaf.before);
-      row.after += num(leaf.after);
+      const before = num(leaf.before);
+      const after = num(leaf.after);
+      const d = after - before;
+      const row = by.get(id) || { id, name: names.get(id) || id, before: 0, after: 0, better: 0, worse: 0, classes: 0, top: [] };
+      row.before += before;
+      row.after += after;
+      row.classes += 1;
+      if (d < 0) row.better += 1;
+      else if (d > 0) row.worse += 1;
+      row.top.push({ id: leaf.id, name: leaf.name || leaf.id, before, after, d });
       by.set(id, row);
     });
-    return [...by.values()].map((row) => ({ ...row, d: row.after - row.before }))
-      .filter((row) => row.d).sort((a, b) => Math.abs(b.d) - Math.abs(a.d));
+    return [...by.values()]
+      .map((row) => {
+        row.top.sort((a, b) => Math.abs(b.d) - Math.abs(a.d) || b.before - a.before);
+        row.top = row.top.slice(0, 3);
+        return { ...row, d: row.after - row.before };
+      })
+      .filter((row) => row.d)
+      .sort((a, b) => Math.abs(b.d) - Math.abs(a.d));
   }
 
   function stageRows(stages, limit) {
     const top = stages.slice(0, limit);
     const max = Math.max(1, ...top.map((row) => Math.abs(row.d)));
+    const hasActiveStage = Boolean(state.changeStage);
     return top.map((row) => {
-      const h = Math.max(8, (46 * Math.abs(row.d)) / max);
+      const h = Math.max(10, (44 * Math.abs(row.d)) / max);
       const tone = row.d < 0 ? "is-better" : "is-worse";
-      return `<div class="ab-stage-col ${tone}" title="${esc(`${row.name} · ${fmt(row.before)} → ${fmt(row.after)}`)}">
+      const active = state.changeStage === row.id;
+      const dirDim = (state.changeDir === "better" && row.d > 0) || (state.changeDir === "worse" && row.d < 0);
+      const dim = (hasActiveStage && !active) || dirDim;
+      return `<button type="button" class="ab-stage-col ${tone}${active ? " is-active" : ""}${dim ? " is-dim" : ""}" data-act="abstage" data-stage="${esc(row.id)}" data-tip="ab-stage:${esc(row.id)}" aria-pressed="${active}">
         <b class="ab-stage-val num">${signed(row.d)}</b>
-        <div class="ab-stage-plot" aria-hidden="true"><span class="ab-stage-stem" style="${row.d > 0 ? "bottom:50%" : "top:50%"};height:${h.toFixed(1)}%"><i></i></span></div>
+        <span class="ab-stage-plot" aria-hidden="true"><span class="ab-stage-stem" style="${row.d > 0 ? "bottom:50%" : "top:50%"};height:${h.toFixed(1)}%"><i></i></span></span>
         <span class="ab-stage-name">${esc(row.name)}</span>
-      </div>`;
+      </button>`;
     }).join("");
   }
 
-  function changeCard(rnd) {
+  function changePaneHTML(rnd) {
     const measured = sideReady(rnd, "before") && sideReady(rnd, "after");
-    const before = num(rnd.sides?.before?.hits);
-    const after = num(rnd.sides?.after?.hits);
+    const stageAll = measured ? stageChanges(rnd, "") : [];
+    const selectedStage = state.changeStage ? stageAll.find((s) => s.id === state.changeStage) : null;
+    if (state.changeStage && !selectedStage) state.changeStage = "";
+
+    const before = selectedStage ? selectedStage.before : num(rnd.sides?.before?.hits);
+    const after = selectedStage ? selectedStage.after : num(rnd.sides?.after?.hits);
     const net = after - before;
-    const flows = changeFlows(rnd);
+    const flows = changeFlows(rnd, state.changeStage);
+    const grossMove = flows.reduce((acc, f) => acc + f.n, 0);
     const better = flows.filter((f) => f.sign < 0).reduce((n, f) => n + f.count, 0);
     const worse = flows.filter((f) => f.sign > 0).reduce((n, f) => n + f.count, 0);
-    const stages = measured ? stageChanges(rnd) : [];
+    const stages = measured ? stageChanges(rnd, state.changeFlow) : [];
+
     let level = before;
     const steps = flows.map((flow) => {
       const from = level;
@@ -642,39 +690,66 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     const levels = [before, ...steps.map((step) => step.to)];
     const lo = Math.min(...levels);
     const hi = Math.max(...levels);
-    const pad = Math.max(1, (hi - lo) * 0.08);
+    const pad = Math.max(1, (hi - lo) * 0.12);
     const floor = lo - pad;
     const span = Math.max(1, hi + pad - floor);
     const y = (value) => (100 * (1 - (value - floor) / span)).toFixed(2);
     const wfPts = [[0, y(before)], [12.5, y(steps[0].to)], [37.5, y(steps[1].to)], [62.5, y(steps[2].to)], [87.5, y(steps[3].to)], [100, y(steps[3].to)]];
     const wfLine = wfPts.map(([px, py]) => `${px},${py}`).join(" ");
     const wfArea = `M0,${wfPts[0][1]} ${wfPts.slice(1).map(([px, py]) => `L${px},${py}`).join(" ")} L100,100 L0,100 Z`;
+    const flowMatchesDir = (f) => !state.changeDir || (state.changeDir === "better" ? f.sign < 0 : f.sign > 0);
+    const wfFiltering = Boolean(state.changeFlow || state.changeDir);
+
+    changeSnap = {
+      rnd,
+      steps: new Map(steps.map((s) => [s.key, { ...s, grossMove }])),
+      stages: new Map(stageAll.map((s) => [s.id, s])),
+      stagesScoped: new Map(stages.map((s) => [s.id, s])),
+    };
+
     const cols = steps.map((step, i) => {
       const top = Math.min(Number(y(step.from)), Number(y(step.to)));
       const h = Math.abs(Number(y(step.from)) - Number(y(step.to)));
       const bar = step.n ? `<i class="ab-wf-bar" style="top:${top.toFixed(2)}%;height:${h.toFixed(2)}%"></i>` : "";
       const link = i < steps.length - 1 ? `<span class="ab-wf-link" style="top:${y(step.to)}%"></span>` : "";
-      return `<div class="ab-wf-col ${step.dir}" data-flow="${step.key}" title="${esc(`${step.name} ${signed(step.delta)} 个问题 · ${step.count} 个问题类型`)}">${bar}${link}</div>`;
+      const isAct = state.changeFlow === step.key || (!state.changeFlow && state.changeDir && flowMatchesDir(step));
+      return `<div class="ab-wf-col ${step.dir}${isAct ? " is-active" : ""}" data-flow="${step.key}" data-act="abflow" data-tip="ab-wf:${step.key}" role="button" tabindex="0" aria-pressed="${state.changeFlow === step.key}">${bar}${link}</div>`;
     }).join("");
+
     const labels = steps.map((step) => `<div class="ab-wf-label"><span>${step.name}</span><b class="num" data-flow="${step.key}">${signed(step.delta)}</b></div>`).join("");
-    const aria = `变化构成（纵轴只展开变化区间）：${steps.map((step) => `${step.name} ${signed(step.delta)}`).join("，")}；${fmt(before)} → ${fmt(after)}`;
-    return `<section class="ab-card ab-change-card ab-overview-side${state.overviewOpen === "change" ? " is-deep" : state.overviewOpen ? " is-compact" : ""}" id="abOverviewSide" data-abcard="change" data-abname="变化构成">
-      <div class="ab-change-pane">
-        <div class="ab-card-top"><span class="ab-card-title">变化构成</span></div>
-        ${abComparisonHTML(rnd)}
-        <div class="ab-bridge-main"><b class="num${measured && net < 0 ? " is-better" : measured && net > 0 ? " is-worse" : ""}">${measured ? signed(net) : DASH}</b><small>${measured ? "个问题" : "待复测"}</small>${measured && before ? `<span class="ab-bridge-chips"><span class="num${net < 0 ? " is-better" : net > 0 ? " is-worse" : ""}">${net > 0 ? "+" : net < 0 ? "−" : ""}${((100 * Math.abs(net)) / before).toFixed(1)}%</span><span class="is-better"><b class="num">${fmt(better)}</b> 类变好</span><span class="is-worse"><b class="num">${fmt(worse)}</b> 类变差</span></span>` : ""}</div>
-        ${measured ? `<div class="ab-wf" role="img" aria-label="${esc(aria)}" title="纵轴只展开变化区间 ${fmt(lo)}–${fmt(hi)}，未从 0 起">
-          <div class="ab-wf-plot">
-            <svg class="ab-wf-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-              <path class="ab-wf-area" d="${wfArea}"/>
-              <polyline class="ab-wf-curve" points="${wfLine}"/>
-            </svg>
-            ${cols}
-          </div>
-          <div class="ab-wf-labels">${labels}</div>
-        </div>` : ""}
-        ${stages.length ? `<div class="ab-stages" aria-label="各环节净变化">${stageRows(stages, state.overviewOpen === "change" ? 10 : 5)}</div>` : ""}
+
+    const activeFilterTags = [
+      selectedStage?.name,
+      state.changeFlow ? steps.find((s) => s.key === state.changeFlow)?.name : "",
+      state.changeDir === "better" ? "变好" : state.changeDir === "worse" ? "变差" : "",
+    ].filter(Boolean);
+    const activeFilterText = activeFilterTags.join(" · ");
+
+    const aria = `变化构成：${steps.map((step) => `${step.name} ${signed(step.delta)}`).join("，")}；${fmt(before)} → ${fmt(after)}`;
+    return `<div class="ab-card-top">
+        <span class="ab-card-title">变化构成</span>
+        ${activeFilterText ? `<button type="button" class="ab-filter-pill" data-act="abclear">${esc(activeFilterText)} ✕</button>` : ""}
       </div>
+      <div class="ab-bridge-main"><b class="num${measured && net < 0 ? " is-better" : measured && net > 0 ? " is-worse" : ""}">${measured ? signed(net) : DASH}</b><small>${measured ? "个问题" : "待复测"}</small>${measured && (before || after) ? `<span class="ab-bridge-chips"><span class="ab-pct-tag num${net < 0 ? " is-better" : net > 0 ? " is-worse" : ""}">${before ? `${net > 0 ? "+" : net < 0 ? "−" : ""}${((100 * Math.abs(net)) / before).toFixed(1)}%` : "新增"}</span><button type="button" class="ab-dir-chip is-better" data-act="abdir" data-dir="better" aria-pressed="${state.changeDir === "better"}"><b class="num">${fmt(better)}</b> 类变好</button><button type="button" class="ab-dir-chip is-worse" data-act="abdir" data-dir="worse" aria-pressed="${state.changeDir === "worse"}"><b class="num">${fmt(worse)}</b> 类变差</button></span>` : ""}</div>
+      ${measured ? `<div class="ab-wf${wfFiltering ? " is-filtering" : ""}" role="img" aria-label="${esc(aria)}">
+        <div class="ab-wf-plot">
+          <svg class="ab-wf-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+            <line class="ab-wf-ref" x1="0" y1="${y(before)}" x2="100" y2="${y(before)}"/>
+            <path class="ab-wf-area" d="${wfArea}"/>
+            <polyline class="ab-wf-curve" points="${wfLine}"/>
+          </svg>
+          <span class="ab-wf-anchor is-start" style="top:${y(before)}%"><i aria-hidden="true"></i><b class="num">${fmt(before)}</b></span>
+          <span class="ab-wf-anchor is-end ${net > 0 ? "is-worse" : "is-better"}" style="top:${y(steps[steps.length - 1].to)}%"><i aria-hidden="true"></i><b class="num">${fmt(after)}</b></span>
+          ${cols}
+        </div>
+        <div class="ab-wf-labels">${labels}</div>
+      </div>` : ""}
+      ${stages.length ? `<div class="ab-stages${state.changeStage ? " is-filtering" : ""}" aria-label="各环节净变化">${stageRows(stages, state.overviewOpen === "change" ? 10 : 5)}</div>` : ""}`;
+  }
+
+  function changeCard(rnd) {
+    return `<section class="ab-card ab-change-card ab-overview-side${state.overviewOpen === "change" ? " is-deep" : state.overviewOpen ? " is-compact" : ""}" id="abOverviewSide" data-abcard="change" data-abname="变化构成">
+      <div class="ab-change-pane">${changePaneHTML(rnd)}</div>
       <div class="ab-side-pane" data-pane="samples"></div>
     </section>`;
   }
@@ -739,7 +814,9 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
           const yTo = yFor(row.after);
           const curveD = `M4,${yFrom} C19,${yFrom} 29,${yTo} 44,${yTo}`;
           const areaD = `${curveD} L44,23 L4,23 Z`;
-          return `<div class="ab-rankrow ${tone}" title="${esc(`${row.leaf.name || row.leaf.id} · 前 ${fmt(row.before)} → 后 ${fmt(row.after)} · 净 ${signed(row.d)} · 线上 ${row.online == null ? DASH : fmt(row.online)}`)}">
+          const flowKey = leafFlowKey(row.leaf);
+          const stageId = String(row.leaf.id || "").split(".")[0];
+          return `<div class="ab-rankrow ${tone}" data-flow="${esc(flowKey)}" data-stage="${esc(stageId)}" data-dir="${tone === "is-better" ? "better" : "worse"}" title="${esc(`${row.leaf.name || row.leaf.id} · 前 ${fmt(row.before)} → 后 ${fmt(row.after)} · 净 ${signed(row.d)} · 线上 ${row.online == null ? DASH : fmt(row.online)}`)}">
           <span class="ab-rankname">${esc(row.leaf.name || row.leaf.id)}</span>
           <svg class="ab-slope" viewBox="0 0 48 24" aria-hidden="true">
             <path class="ab-slope-area" d="${areaD}"/>
@@ -992,16 +1069,62 @@ function trend(rnd, selectedCell, metric) {
     mountMatrixTail();
   }
 
+  let orbitControl = null;
+
+  function syncRankInteract(hoverFlow = "", hoverStage = "") {
+    const rankCardEl = host.querySelector(".ab-rank-card");
+    if (!rankCardEl) return;
+    const fFlow = state.changeFlow || hoverFlow;
+    const fStage = state.changeStage || hoverStage;
+    const fDir = state.changeDir;
+    const active = Boolean(fFlow || fStage || fDir);
+    rankCardEl.classList.toggle("is-filtered", active);
+    rankCardEl.querySelectorAll(".ab-rankrow").forEach((row) => {
+      const match = active
+        && (!fFlow || row.dataset.flow === fFlow)
+        && (!fStage || row.dataset.stage === fStage)
+        && (!fDir || row.dataset.dir === fDir);
+      row.classList.toggle("is-match", match);
+    });
+  }
+
+  function syncWfLabels() {
+    const wf = host.querySelector("#abOverviewSide .ab-wf");
+    if (!wf) return;
+    const activeFlow = state.changeFlow;
+    wf.querySelectorAll(".ab-wf-label").forEach((lbl) => {
+      const k = lbl.querySelector("b[data-flow]")?.dataset.flow || "";
+      const on = Boolean(
+        (activeFlow && k === activeFlow)
+        || (!activeFlow && state.changeDir && (
+          (state.changeDir === "better" && (k === "clear" || k === "down"))
+          || (state.changeDir === "worse" && (k === "up" || k === "add"))
+        ))
+      );
+      lbl.classList.toggle("is-active", on);
+      lbl.classList.toggle("is-dim", Boolean((activeFlow || state.changeDir) && !on));
+    });
+  }
+
+  function repaintChangePane() {
+    const pane = host.querySelector("#abOverviewSide .ab-change-pane");
+    if (!pane) return;
+    pane.innerHTML = changePaneHTML(rounds[state.round]);
+    syncWfLabels();
+    syncRankInteract();
+  }
+
   function render() {
     cellTrendDrawer?.destroy();
     cellTrendDrawer = null;
     cellTrendChart = null;
+    orbitControl = null;
     const rnd = rounds[state.round];
     if (roundsHost) roundsHost.innerHTML = abRoundsHTML(rounds, state.round);
     host.innerHTML = `<div class="abw">${summary(rnd)}${matrix(rnd)}</div>`;
     const sideSwitch = host.querySelector("#abOrbitSides");
     if (sideSwitch) {
-      const control = segmented(sideSwitch, (side) => {
+      orbitControl = segmented(sideSwitch, (side) => {
         if (side === state.orbitSide || !sideReady(rnd, side)) return;
         state.orbitSide = side;
         showOrbitPane(null);
@@ -1009,10 +1132,60 @@ function trend(rnd, selectedCell, metric) {
         if (!orbitHost) return;
         mountOrbit(rnd, true);
       });
-      control.set(state.orbitSide, { silent: true });
+      orbitControl.set(state.orbitSide, { silent: true });
     }
     mountOrbit(rnd, true);
+    syncWfLabels();
+    syncRankInteract();
     mountMatrixTail();
+  }
+
+  if (typeof document !== "undefined") {
+    const abTipHTML = ({ title, tone, big, tag, metaHTML, top }) => `<div class="ab-tip ${tone}">
+      <div class="ab-tip-hero">
+        <span class="ab-tip-title"><i class="ab-tip-dot" aria-hidden="true"></i>${esc(title)}</span>
+        <span class="ab-tip-val"><b class="ab-tip-big num">${esc(big)}</b>${tag ? `<span class="ab-tip-tag num">${esc(tag)}</span>` : ""}</span>
+      </div>
+      <div class="ab-tip-meta num">${metaHTML}</div>
+      ${top.length ? `<div class="ab-tip-list">${top.map((t) => `<div class="ab-tip-row">
+        <span class="ab-tip-name">${esc(t.name)}</span>
+        <span class="ab-tip-io num">${fmt(t.before)}→${fmt(t.after)}</span>
+        <b class="ab-tip-d num ${t.d < 0 ? "is-better" : "is-worse"}">${signed(t.d)}</b>
+      </div>`).join("")}</div>` : ""}
+    </div>`;
+
+    bindTips(host, (el) => {
+      const tip = el?.dataset?.tip || "";
+      if (!tip || !changeSnap) return null;
+      if (tip.startsWith("ab-wf:")) {
+        const step = changeSnap.steps.get(tip.slice(6));
+        if (!step) return null;
+        const share = step.grossMove ? `${Math.round((100 * step.n) / step.grossMove)}%` : "";
+        return abTipHTML({
+          title: step.name,
+          tone: step.dir,
+          big: signed(step.delta),
+          tag: share,
+          metaHTML: `<span><b>${fmt(step.count)}</b> 类</span><span>${fmt(step.from)} → ${fmt(step.to)}</span>`,
+          top: step.top,
+        });
+      }
+      if (tip.startsWith("ab-stage:")) {
+        const sid = tip.slice(9);
+        const st = changeSnap.stagesScoped.get(sid) || changeSnap.stages.get(sid);
+        if (!st) return null;
+        const rate = st.before ? `${st.d > 0 ? "+" : "−"}${Math.round((100 * Math.abs(st.d)) / st.before)}%` : "新增";
+        return abTipHTML({
+          title: st.name,
+          tone: st.d < 0 ? "is-better" : "is-worse",
+          big: signed(st.d),
+          tag: rate,
+          metaHTML: `<span>${fmt(st.before)} → ${fmt(st.after)}</span><span><b class="is-better">${st.better} 好</b> · <b class="is-worse">${st.worse} 差</b></span>`,
+          top: st.top,
+        });
+      }
+      return null;
+    });
   }
 
   host.addEventListener("click", (e) => {
@@ -1023,13 +1196,49 @@ function trend(rnd, selectedCell, metric) {
       else actions.openCompare && actions.openCompare({ pair: ref.dataset.comparePair, round: rnd.id });
       return;
     }
-    const action = e.target.closest("[data-act]");
-    if (!action) return;
+    let action = e.target.closest("[data-act]");
+    if (!action) {
+      const wfLbl = e.target.closest(".ab-wf-label");
+      const flowKey = wfLbl?.querySelector("b[data-flow]")?.dataset.flow || "";
+      if (flowKey) {
+        state.changeFlow = state.changeFlow === flowKey ? "" : flowKey;
+        if (state.changeFlow) state.changeDir = "";
+        repaintChangePane();
+      }
+      return;
+    }
     const act = action.dataset.act;
     const rnd = rounds[state.round];
     if (act === "orbitBack") { if (orbitApi) orbitApi.up(); return; }
     if (act === "abcard") { setOverviewOpen(action.dataset.card); return; }
     if (act === "round") { pickRound(Number(action.dataset.i)); return; }
+    if (act === "abflow") {
+      const flowKey = action.dataset.flow || "";
+      state.changeFlow = state.changeFlow === flowKey ? "" : flowKey;
+      if (state.changeFlow) state.changeDir = "";
+      repaintChangePane();
+      return;
+    }
+    if (act === "abstage") {
+      const sid = action.dataset.stage || "";
+      state.changeStage = state.changeStage === sid ? "" : sid;
+      repaintChangePane();
+      return;
+    }
+    if (act === "abdir") {
+      const dir = action.dataset.dir || "";
+      state.changeDir = state.changeDir === dir ? "" : dir;
+      if (state.changeDir) state.changeFlow = "";
+      repaintChangePane();
+      return;
+    }
+    if (act === "abclear") {
+      state.changeFlow = "";
+      state.changeStage = "";
+      state.changeDir = "";
+      repaintChangePane();
+      return;
+    }
     if (act === "metric") {
       const next = action.dataset.metric;
       if (!METRICS.some(([key]) => key === next) || action.disabled || !metricReady(rnd, next)) return;
@@ -1085,7 +1294,26 @@ function trend(rnd, selectedCell, metric) {
     }
   });
 
+  host.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const wf = e.target.closest?.('.ab-wf-col[data-act="abflow"]');
+    if (!wf) return;
+    e.preventDefault();
+    const flowKey = wf.dataset.flow || "";
+    state.changeFlow = state.changeFlow === flowKey ? "" : flowKey;
+    if (state.changeFlow) state.changeDir = "";
+    repaintChangePane();
+  });
+
   host.addEventListener("pointerover", (e) => {
+    const wfTarget = e.target.closest?.('.ab-wf-col[data-flow], .ab-wf-label, .ab-stage-col[data-stage]');
+    if (wfTarget && !state.changeFlow && !state.changeStage && !state.changeDir) {
+      const hf = wfTarget.dataset.flow || wfTarget.querySelector?.("b[data-flow]")?.dataset.flow || "";
+      const hs = wfTarget.dataset.stage || "";
+      syncRankInteract(hf, hs);
+    } else if (!e.target.closest?.("#abOverviewSide")) {
+      syncRankInteract("", "");
+    }
     const cell = e.target.closest(".cell[data-abmx]");
     const table = host.querySelector(".abmatrix");
     if (!table) return;
@@ -1107,6 +1335,8 @@ function trend(rnd, selectedCell, metric) {
     if (!pane.classList || !pane.classList.contains("mx-scroll")) return;
     pane.classList.toggle("is-at-end", pane.scrollLeft + pane.clientWidth >= pane.scrollWidth - 2);
   }, true);
+
+  host.addEventListener("pointerleave", () => syncRankInteract("", ""));
 
   const onResize = () => {
     if (!host.isConnected) {

@@ -178,9 +178,9 @@ test("AB overview is three cards whose four flows add up to the net paired chang
     assert.equal((host.innerHTML.match(/data-abcard="/g) || []).length, 3, "three cards share the row");
     assert.equal((host.innerHTML.match(/data-act="abcard"/g) || []).length, 1, "only the orbit card keeps its expand control");
     assert.match(host.innerHTML, /class="ab-bridge-main"><b class="num is-better">−60<\/b><small>个问题<\/small>/);
-    assert.match(host.innerHTML, /<span>改版后同题<\/span>\s*<b class="num">65<\/b>/);
-    assert.match(host.innerHTML, /<span>改版前<\/span>\s*<b class="num">125<\/b>/);
-    assert.equal((host.innerHTML.match(/class="ab-batch is-/g) || []).length, 3, "both batches stay one readout");
+    assert.match(host.innerHTML, /class="ab-wf-anchor is-start"[^>]*>.*?<b class="num">125<\/b>/);
+    assert.match(host.innerHTML, /class="ab-wf-anchor is-end is-better"[^>]*>.*?<b class="num">65<\/b>/);
+    assert.equal((host.innerHTML.match(/class="ab-batch is-/g) || []).length, 0, "overview omits duplicate batch cards");
     const flows = [...host.innerHTML.matchAll(/class="ab-wf-label"><span>([^<]+)<\/span><b class="num" data-flow="([^"]+)">([^<]+)<\/b>/g)].map((m) => [m[1], m[2], m[3]]);
     assert.deepEqual(flows, [["消除", "clear", "−50"], ["减少", "down", "−40"], ["增加", "up", "+20"], ["新增", "add", "+10"]]);
     assert.equal((host.innerHTML.match(/class="ab-wf-col /g) || []).length, 4, "one floating step per flow");
