@@ -32,6 +32,9 @@ if [ -z "$ONLY" ] || [ "$ONLY" = page_service ]; then
     run "page_service $(basename "$(dirname "$d")")" "$(dirname "$d")" python3 -m unittest discover -s tests -q
   done
 fi
+if [ -z "$ONLY" ] || [ "$ONLY" = user_kyc ]; then
+  run "user_kyc unittest" "$ROOT/scripts/user_kyc" python3 -m unittest discover -s tests -q
+fi
 
 if [ "${#FAILED[@]}" -gt 0 ]; then
   echo "FAILED: ${FAILED[*]}"
