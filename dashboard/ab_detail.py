@@ -33,6 +33,7 @@ from pathlib import Path
 import ab_test
 import build
 import build_store as bs
+import human_read_overlay as hro
 from keylocks import KeyedLocks
 
 INDEX_VERSION = 3
@@ -172,6 +173,7 @@ class ABDetailBuilder:
         self._rounds = {}
         self._inputs = None
         self._inputs_lock = threading.Lock()
+        self._human_read = hro.HumanReadOverlay(self.datasets)
 
     def _eq_lock(self, round_id: str, eq: int):
         return self._eq_locks((round_id, eq))
@@ -571,7 +573,12 @@ class ABDetailBuilder:
                 if before_trace not in index["traces"]:
                     self._drop(path)
                     return None
-                if self._fresh(path, index.get("built_at_ns") or 0):
+                hr_stamp = 0
+                if product == "aime":
+                    entry = index["traces"][before_trace]
+                    attr_rel = hro.ab_rel_path(round_id, index["sources"][entry[0]]["rel"])
+                    hr_stamp = self._human_read.file_latest_ns(attr_rel)
+                if self._fresh(path, max(index.get("built_at_ns") or 0, hr_stamp)):
                     return path
                 detail = self._build_before_detail(product, round_dir, round_id, before_trace, index)
                 if detail is None:
@@ -587,7 +594,15 @@ class ABDetailBuilder:
             if str(eq) not in index["attribution"]:
                 self._drop(path)
                 return None
-            if self._fresh(path, index.get("built_at_ns") or 0):
+            hr_stamp = 0
+            if product == "aime":
+                found_meta = index["attribution"][str(eq)]
+                attr_rel = hro.ab_rel_path(round_id, index["sources"][found_meta["file"]]["rel"])
+                item_id = str(found_meta.get("item_id") or "")
+                comp_ref = index["compact_by_item"].get(item_id) if item_id else None
+                comp_rel = hro.ab_rel_path(round_id, index["sources"][comp_ref[0]]["rel"]) if comp_ref else None
+                hr_stamp = self._human_read.file_latest_ns(attr_rel, comp_rel)
+            if self._fresh(path, max(index.get("built_at_ns") or 0, hr_stamp)):
                 return path
             detail = self._build_detail(product, round_dir, round_id, eq, index)
             if detail is None:
@@ -624,6 +639,12 @@ class ABDetailBuilder:
             "input": None, "compact": None, "output": None,
         }
         detail, _row, _facts = build.build_sample(pair, inp, attr, None, {}, Counter())
+        if product == "aime":
+            attr_rel = hro.ab_rel_path(round_id, index["sources"][file_idx]["rel"])
+            try:
+                self._human_read.overlay_detail(detail, attr_rel, attr)
+            except Exception as exc:  # noqa: BLE001
+                build.debug(f"ab before detail {round_id}/{trace}: human_read overlay failed: {exc}")
         detail["ab"] = {"round": round_id, "trace": trace, "side": "before"}
         return detail
 
@@ -664,6 +685,13 @@ class ABDetailBuilder:
         detail, _row, _facts = build.build_sample(
             pair, inp, attr, comp if isinstance(comp, dict) else None, {}, Counter())
         matched, total, first_hit = _fill_clusters(detail, target_trace, index, retest_trace)
+        if product == "aime":
+            attr_rel = hro.ab_rel_path(round_id, index["sources"][found["file"]]["rel"])
+            comp_rel = hro.ab_rel_path(round_id, index["sources"][compact_ref[0]]["rel"]) if compact_ref else None
+            try:
+                self._human_read.overlay_detail(detail, attr_rel, attr, comp_rel, comp if isinstance(comp, dict) else None)
+            except Exception as exc:  # noqa: BLE001
+                build.debug(f"ab detail {round_id}/{eq}: human_read overlay failed: {exc}")
         if total:
             build.debug(f"ab detail {round_id}/{eq}: cluster backfill {matched}/{total}")
         if first_hit and not pair["date"]:

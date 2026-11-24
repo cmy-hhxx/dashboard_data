@@ -16,6 +16,7 @@ from pathlib import Path
 
 import build
 import build_store as bs
+import human_read_overlay as hro
 from keylocks import KeyedLocks
 
 SLUG = re.compile(r"^[0-9a-f]{10}$")
@@ -119,6 +120,7 @@ class DetailBuilder:
         self._trace_inputs_lock = threading.Lock()
         self._slug_lock = KeyedLocks()
         self._forecast = ForecastIndex(self.datasets)
+        self._human_read = hro.HumanReadOverlay(self.datasets)
 
     def _sync_version(self):
         try:
@@ -252,27 +254,61 @@ class DetailBuilder:
                 self._cluster_loaded = stamp
             return self._cluster_index
 
-    def _fresh(self, path, stamp):
+    def _fresh(self, path, stamp, extra_ns=0):
         try:
-            if path.stat().st_mtime >= max(stamp, self.version_stamp):
+            st = path.stat()
+            need_ns = max(int(max(stamp, self.version_stamp) * 1_000_000_000), extra_ns)
+            if st.st_mtime_ns >= need_ns - 20_000_000:
                 build.ensure_detail_gz(path)
                 return True
         except OSError:
             pass
         return False
 
+    def _human_read_fresh(self, path, stamp, store, slug):
+        """Return (is_fresh, preloaded_row) factoring in human_read updates for this slug's files."""
+        try:
+            cached_mtime_ns = path.stat().st_mtime_ns
+        except OSError:
+            return False, None
+        base_ns = int(max(stamp, self.version_stamp) * 1_000_000_000)
+        if cached_mtime_ns < base_ns - 20_000_000:
+            return False, None
+        # Fast path: if human_read DB hasn't changed since this cached file was written, it's fresh!
+        db_ns = self._human_read.db_mtime_ns()
+        if db_ns == 0 or cached_mtime_ns >= db_ns - 20_000_000:
+            build.ensure_detail_gz(path)
+            return True, None
+        # DB has newer writes: check whether THIS slug's specific attribution/compact file was updated
+        row = store.sample_row(slug)
+        if not row:
+            build.ensure_detail_gz(path)
+            return True, None
+        output = row[9]
+        refs = json.loads(row[11]) if row[11] else {}
+        attr_rel = hro.daily_rel_path(output)
+        comp_rel = hro.daily_rel_path(refs["compact"][0]) if refs.get("compact") else None
+        file_ns = self._human_read.file_latest_ns(attr_rel, comp_rel)
+        if cached_mtime_ns >= file_ns - 20_000_000:
+            build.ensure_detail_gz(path)
+            return True, row
+        return False, row
+
     def ensure(self, slug: str):
         if not SLUG.match(slug):
             return None
         path = self.sample_dir / f"{slug}.json"
         stamp = self._cluster_stamp()
-        if self._fresh(path, stamp):
+        store = self._open()
+        fresh, row = self._human_read_fresh(path, stamp, store, slug)
+        if fresh:
             return path
         with self._slug_lock(slug):
-            if self._fresh(path, stamp):
+            fresh, row = self._human_read_fresh(path, stamp, store, slug)
+            if fresh:
                 return path
-            store = self._open()
-            row = store.sample_row(slug)
+            if not row:
+                row = store.sample_row(slug)
             if not row:
                 # The build may have committed this row after the long-lived
                 # read-only connection opened; retry with a fresh snapshot.
@@ -317,6 +353,13 @@ class DetailBuilder:
                     return None
             finally:
                 reader.close()
+            if product == "aime":
+                attr_rel = hro.daily_rel_path(output)
+                comp_rel = hro.daily_rel_path(pair["compact"][0]) if pair["compact"] else None
+                try:
+                    self._human_read.overlay_detail(detail, attr_rel, attr, comp_rel, comp)
+                except Exception as exc:  # noqa: BLE001 - human_read is best-effort overlay
+                    build.debug(f"detail {slug}: human_read overlay failed: {exc}")
             detail["slug"] = slug
             build.write_json(path, detail)
             return path

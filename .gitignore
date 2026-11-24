@@ -52,3 +52,6 @@ dashboard/*.pid
 # 本地 Claude worktree 与会话产物（不入库）
 .claude/
 tmp/
+
+# 网关密钥（只放服务器 $ROOT/human_read.env，不入库）
+human_read.env
