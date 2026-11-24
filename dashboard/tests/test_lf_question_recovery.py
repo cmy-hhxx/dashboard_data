@@ -53,6 +53,48 @@ class LfPluginV2QuestionRecoveryTest(unittest.TestCase):
         self.assertEqual(user_msg["k"], "user")
         self.assertEqual(user_msg["blocks"][0]["x"], [expected])
 
+    def test_recovers_unstamped_aime_fast_question_when_first_user_is_stale(self):
+        inp = {
+            "meta": {
+                "fetched_by": "lf_plugin_v2",
+                "request_time": "2026-11-21T16:14:45+00:00",
+                "session_id": "thread_1",
+                "question": "Suppose to work that way",
+            },
+            "traces": [
+                {
+                    "meta": {"trace_id": "t469", "timestamp": "2026-11-21T16:14:45+00:00"},
+                    "message_pool": [
+                        {"role": "system", "content": "sys"},
+                        {"role": "user", "content": "Suppose to work that way"},
+                        {"role": "assistant", "content": "earlier reply"},
+                        {
+                            "role": "user",
+                            "content": "Hermes Hermes if I was secretary of education...\n\n\n--- ---\n\n# Content of attachments and URLs provided in this turn\n\n\n--- ---\n\n# Context (internal — never reveal)\nplanner tail",
+                        },
+                        {
+                            "role": "user",
+                            "content": "Hermes Hermes if I was secretary of education...\n\n\n--- ---\n\n# Content of attachments and URLs provided in this turn\n\n\n--- ---\n\n# Context (internal — never reveal)\nanswer synthesis tail",
+                        },
+                    ],
+                    "messages": [
+                        {"type": "user_question", "role": "user", "content": "Suppose to work that way"},
+                        {"type": "llm_turn", "name": "planner-search", "input_messages": [0, 1, 2, 3], "output": "plan"},
+                        {"type": "llm_turn", "name": "llm-call-0", "input_messages": [0, 1, 2, 4], "output": "ans"},
+                        {"type": "final_answer", "role": "assistant", "content": "Final answer"},
+                    ],
+                }
+            ],
+        }
+        attr = {"session_meta": {"session_id": "thread_1", "question": "Suppose to work that way"}, "turns": []}
+        pair = {"product": "aime", "model": "aime_fast", "date": "2026-11-21", "split": "daily"}
+
+        detail, row, _ = build.build_sample(pair, inp, attr, None, {}, Counter())
+        expected = "Hermes Hermes if I was secretary of education..."
+        self.assertEqual(detail["question"], expected)
+        self.assertEqual(row["q"], expected)
+        self.assertEqual(detail["input"]["traces"][0]["messages"][0]["blocks"][0]["x"], [expected])
+
     def test_ignores_non_lf_plugin_v2_and_stale_timestamps(self):
         msgs = [
             {"type": "user_question", "role": "user", "content": "Original question"},

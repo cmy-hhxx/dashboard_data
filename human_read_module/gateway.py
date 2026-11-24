@@ -10,6 +10,7 @@ import urllib.request
 from typing import Any
 
 from .config import GatewayConfig
+from .runtime_config import is_paused, live_target_rpm
 
 FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 RETRY_AFTER_RE = re.compile(r"Try again in\s+(\d+(?:\.\d+)?)\s*s", re.IGNORECASE)
@@ -21,9 +22,12 @@ _PACE_LOCK = threading.Lock()
 _NEXT_SLOT = 0.0
 
 
-def _acquire_rate_slot(target_rpm: int):
-    """Smoothly space outgoing requests to stay just under gateway RPM cap without bursting."""
+def _acquire_rate_slot(fallback_rpm: int):
+    """Smoothly space outgoing requests using hot-reloaded target_rpm & pause flag."""
     global _NEXT_SLOT
+    while is_paused():
+        time.sleep(2.0)
+    target_rpm = live_target_rpm(fallback_rpm)
     if target_rpm <= 0:
         return
     interval = 60.0 / float(target_rpm)

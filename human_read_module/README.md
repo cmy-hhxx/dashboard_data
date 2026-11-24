@@ -12,6 +12,22 @@ AIME 评测输出（`attribution.jsonl` 与 `compact.jsonl`）的**人话同义�
   - 三层硬护栏（结构隔离 + 数值/日期/单位等价校验 + 失败安全跳过回退原版）。
 - **增量顺序**：按 `0_daily_eval` **日期从新到旧**回刷（可选 `--include-ab` 同步覆盖 `ab_test/`），按白名单原文本指纹去重，免疫上游追加与元数据回填重写。
 
+## 动态热配置（改完 5 秒内生效，无需重启）
+
+配置文件位于：`/mnt/aime_eval_ssd/1_aime/eval_output/human_read/.state/runtime_config.json`
+
+```json
+{
+  "target_rpm": 40,
+  "workers": 16,
+  "paused": false
+}
+```
+
+- `target_rpm`：每分钟请求上限，修改后 **5 秒内热生效**；
+- `paused`：设为 `true` 立即暂停发请求，改回 `false` 自动恢复；
+- `workers`：线程上限，在切换到下一个文件时自动生效。
+
 ## 常用命令（弗吉尼亚 `/opt/human_read_service`）
 
 ```bash

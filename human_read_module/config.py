@@ -44,7 +44,7 @@ class GatewayConfig:
     max_tokens: int = 16384
     problem_batch_size: int = 3
     compact_batch_size: int = 12
-    target_rpm: int = 280
+    target_rpm: int = 40
 
     def __post_init__(self):
         if not self.api_key:

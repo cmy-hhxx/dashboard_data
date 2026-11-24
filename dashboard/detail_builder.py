@@ -21,7 +21,7 @@ from keylocks import KeyedLocks
 
 SLUG = re.compile(r"^[0-9a-f]{10}$")
 # 详情文件单独失效：配对修正后要给旧样本补输入，但不能连带让 116k 样本缓存全量重建。
-DETAIL_VERSION = "2026-11-24.1"
+DETAIL_VERSION = "2026-11-24.3"
 
 
 class ForecastIndex:

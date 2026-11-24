@@ -1561,17 +1561,46 @@ LF_USER_STAMP_RE = re.compile(
     r"\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))\][ \t]+([\s\S]+)$",
     re.IGNORECASE,
 )
+# `aime_fast` appends attachment/internal-context sections after the user's actual text
+# in `llm_turn.input_messages`; each planner/answer turn injects a different tail.
+_INJECTED_USER_SUFFIX_RE = re.compile(
+    r"\n+--- ---\n+#\s*(?:Content of attachments and URLs provided in this turn|Context\s*\(internal)",
+    re.IGNORECASE,
+)
+
+
+def _strip_injected_user_suffix(text: str) -> str:
+    m = _INJECTED_USER_SUFFIX_RE.search(text)
+    return text[:m.start()].strip() if m else text.strip()
+
+
+def _extract_user_text(content) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+        return "\n".join(parts).strip()
+    return ""
 
 
 def recover_lf_plugin_v2_question(imeta: dict, tmeta: dict, msgs: list, pool=None) -> str | None:
     """Recover the actual turn question for `lf_plugin_v2` traces.
 
-    Upstream `lf_plugin_v2` sometimes writes a stale window-head user message into
-    `messages[0]` (`user_question`) and `meta.question` across up to 10 consecutive
-    turns.  Mirroring the evaluator's resolver (`eval_harness` `engine.mjs`), we
-    inspect each `llm_turn`'s `input_messages` (resolving `message_pool` indices if
-    present) and take the last `role == "user"` entry whose leading ISO timestamp
-    matches `request_time` / `lf_start_time` / `timestamp` within 5 seconds.
+    Upstream `lf_plugin_v2` often writes the FIRST `role == "user"` message from the
+    LLM context window into `messages[0]` (`user_question`) and `meta.question`
+    instead of the LAST (current-turn) user message.
+
+    Two formats exist in production:
+    1. Stamped (`aime_expert`): last user message in `llm_turn.input_messages` starts
+       with `[ISO_TIMESTAMP]` within 5s of `request_time`/`lf_start_time`/`timestamp`.
+    2. Unstamped (`aime_fast`): `llm_turn.input_messages` has multiple `user` turns
+       where `users[0]` matches the stale `user_question`/`meta.question` and all
+       `llm_turn`s agree on a different `users[-1]`.
     """
     if imeta.get("fetched_by") != "lf_plugin_v2" and tmeta.get("fetched_by") != "lf_plugin_v2":
         return None
@@ -1581,15 +1610,24 @@ def recover_lf_plugin_v2_question(imeta: dict, tmeta: dict, msgs: list, pool=Non
         if isinstance(v, str)
     ]
     ref_ts = [v for v in ref_ts if v is not None]
-    if not ref_ts:
-        return None
     q_text_raw = imeta.get("question_text")
     if q_text_raw is not None and not isinstance(q_text_raw, str):
         return None
     q_text = q_text_raw.strip() if isinstance(q_text_raw, str) else ""
     pool_list = pool if isinstance(pool, list) else None
 
-    found = None  # (at_ms, text)
+    current_q = ""
+    for m in msgs:
+        if isinstance(m, dict) and kind_of(m) == "user":
+            current_q = _extract_user_text(m.get("content"))
+            break
+    stale_candidates = {q for q in (current_q, decode_question(imeta.get("question"))) if q}
+
+    stamped_found = None  # (at_ms, text)
+    stamped_valid = bool(ref_ts)
+    unstamped_found = None
+    unstamped_valid = bool(stale_candidates)
+
     for m in msgs:
         if not isinstance(m, dict):
             continue
@@ -1604,30 +1642,63 @@ def recover_lf_plugin_v2_question(imeta: dict, tmeta: dict, msgs: list, pool=Non
             seq = raw_in["messages"]
         else:
             continue
-        last_user = None
-        for item in reversed(seq):
+        users = []
+        for item in seq:
             if isinstance(item, int) and pool_list is not None and 0 <= item < len(pool_list):
                 item = pool_list[item]
             if isinstance(item, dict) and item.get("role") == "user":
-                last_user = item
-                break
-        if not last_user:
+                users.append(item)
+        if not users:
             continue
-        content = last_user.get("content")
-        match = LF_USER_STAMP_RE.match(content) if isinstance(content, str) else None
-        if not match:
-            return None
-        at_ms = ts_ms(match.group(1))
-        text = match.group(2).strip()
-        if not text or at_ms is None or not any(abs(at_ms - ref) <= 5000 for ref in ref_ts):
-            return None
-        if q_text and q_text != text:
-            return None
-        if found is not None and found != (at_ms, text):
-            return None
-        if found is None:
-            found = (at_ms, text)
-    return found[1] if found else None
+        last_content = users[-1].get("content")
+
+        # Path 1: stamped user message (matches eval_harness engine.mjs)
+        if stamped_valid:
+            match = LF_USER_STAMP_RE.match(last_content) if isinstance(last_content, str) else None
+            if not match:
+                stamped_valid = False
+            else:
+                at_ms = ts_ms(match.group(1))
+                text = match.group(2).strip()
+                if (
+                    not text
+                    or at_ms is None
+                    or not any(abs(at_ms - ref) <= 5000 for ref in ref_ts)
+                    or (q_text and q_text != text)
+                    or (stamped_found is not None and stamped_found != (at_ms, text))
+                ):
+                    stamped_valid = False
+                elif stamped_found is None:
+                    stamped_found = (at_ms, text)
+
+        # Path 2: unstamped multi-turn window where users[0] equals the stale question
+        if unstamped_valid:
+            first_text = _strip_injected_user_suffix(_extract_user_text(users[0].get("content")))
+            last_text = _strip_injected_user_suffix(_extract_user_text(last_content))
+            # Strip optional leading timestamp if present on last_text
+            m_last = LF_USER_STAMP_RE.match(last_text)
+            if m_last:
+                last_text = m_last.group(2).strip()
+            m_first = LF_USER_STAMP_RE.match(first_text)
+            if m_first:
+                first_text = m_first.group(2).strip()
+            if (
+                len(users) < 2
+                or first_text not in stale_candidates
+                or not last_text
+                or last_text == first_text
+                or (q_text and q_text != last_text)
+                or (unstamped_found is not None and unstamped_found != last_text)
+            ):
+                unstamped_valid = False
+            elif unstamped_found is None:
+                unstamped_found = last_text
+
+    if stamped_valid and stamped_found:
+        return stamped_found[1]
+    if unstamped_valid and unstamped_found:
+        return unstamped_found
+    return None
 
 
 def session_question(inp, attr):

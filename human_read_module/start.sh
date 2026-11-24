@@ -23,17 +23,15 @@ if [ -f "$PID_FILE" ]; then
   rm -f "$PID_FILE"
 fi
 
-WORKERS="${HUMAN_READ_WORKERS:-48}"
-RPM="${HUMAN_READ_RPM:-280}"
 INTERVAL="${HUMAN_READ_INTERVAL:-300}"
 DATA_ROOT="${HUMAN_READ_DATA_ROOT:-/mnt/aime_eval_ssd/1_aime}"
+CONFIG_PATH="${HUMAN_READ_CONFIG:-$DATA_ROOT/eval_output/human_read/.state/runtime_config.json}"
 EXTRA_ARGS="${HUMAN_READ_EXTRA_ARGS:---include-ab}"
 
 cd "$ROOT"
 nohup python3 -u -m human_read_module.runner \
   --data-root "$DATA_ROOT" \
-  --workers "$WORKERS" \
-  --rpm "$RPM" \
+  --config "$CONFIG_PATH" \
   --daemon \
   --interval "$INTERVAL" \
   $EXTRA_ARGS \
@@ -41,4 +39,4 @@ nohup python3 -u -m human_read_module.runner \
 
 NEW_PID=$!
 echo "$NEW_PID" > "$PID_FILE"
-echo "Started human_read daemon (pid=$NEW_PID, workers=$WORKERS, rpm=$RPM, interval=${INTERVAL}s, log=$LOG_DIR/daemon.log)"
+echo "Started human_read daemon (pid=$NEW_PID, config=$CONFIG_PATH, interval=${INTERVAL}s, log=$LOG_DIR/daemon.log)"

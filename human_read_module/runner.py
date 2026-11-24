@@ -26,6 +26,7 @@ from typing import Any
 from .config import GatewayConfig, PROMPT_VERSION
 from .gateway import GatewayClient
 from .input_index import InputOffsetIndex, daily_input_window
+from .runtime_config import init_runtime_config, reload_if_changed
 from .store import HumanReadStore, record_key_for_record, text_fingerprint_for_record
 from .translator import translate_attribution, translate_compact
 
@@ -317,9 +318,12 @@ def run_cycle(
                 break
             if limit_rem is not None and limit_rem[0] <= 0:
                 break
+            rt_cfg = reload_if_changed(force=True)
+            eff_workers = int(rt_cfg.get("workers") or workers)
+            cfg.target_rpm = int(rt_cfg.get("target_rpm") or cfg.target_rpm)
             c = process_file(
                 task, store, cfg,
-                workers=workers, retry_failed=retry_failed, limit_remaining=limit_rem,
+                workers=eff_workers, retry_failed=retry_failed, limit_remaining=limit_rem,
             )
             totals["files"] += 1
             totals["ok"] += c["ok"]
@@ -345,8 +349,9 @@ def main():
     ap.add_argument("--kinds", default="attribution,compact", help="attribution,compact")
     ap.add_argument("--include-ab", action="store_true", help="Also translate ab_test rounds after daily")
     ap.add_argument("--ab-only", action="store_true", help="Only translate ab_test rounds")
-    ap.add_argument("--workers", type=int, default=48, help="Concurrent LLM workers")
-    ap.add_argument("--rpm", type=int, default=280, help="Target RPM cap (default 280 for 300-RPM key)")
+    ap.add_argument("--workers", type=int, default=None, help="Initial workers (overrides runtime_config only when creating it)")
+    ap.add_argument("--rpm", type=int, default=None, help="Initial RPM cap (overrides runtime_config only when creating it)")
+    ap.add_argument("--config", default=None, help="Path to hot-reloadable runtime_config.json")
     ap.add_argument("--limit", type=int, default=None, help="Max records to translate in one cycle")
     ap.add_argument("--retry-failed", action="store_true", help="Retry previously failed records")
     ap.add_argument("--daemon", action="store_true", help="Run continuously on an interval")
@@ -375,7 +380,13 @@ def main():
         print("[human_read] Another runner instance holds runner.lock; exiting.", flush=True)
         sys.exit(0)
 
-    cfg = GatewayConfig(target_rpm=args.rpm)
+    cfg_path = Path(args.config) if args.config else (lock_dir / "runtime_config.json")
+    init_runtime_config(cfg_path, {"target_rpm": args.rpm, "workers": args.workers})
+    rt_cfg = reload_if_changed(force=True)
+    eff_rpm = int(args.rpm if args.rpm is not None else rt_cfg.get("target_rpm", 40))
+    eff_workers = int(args.workers if args.workers is not None else rt_cfg.get("workers", 8))
+
+    cfg = GatewayConfig(target_rpm=eff_rpm)
     models = [m.strip() for m in args.models.split(",") if m.strip()]
     dates = {d.strip() for d in args.dates.split(",") if d.strip()} if args.dates else None
     kinds = {k.strip() for k in args.kinds.split(",") if k.strip()}
@@ -386,7 +397,7 @@ def main():
                 data_root, out_root, cfg,
                 models=models, dates=dates, kinds=kinds,
                 include_ab=args.include_ab, ab_only=args.ab_only,
-                workers=args.workers, retry_failed=args.retry_failed,
+                workers=eff_workers, retry_failed=args.retry_failed,
                 limit=args.limit,
             )
             if not args.daemon:
