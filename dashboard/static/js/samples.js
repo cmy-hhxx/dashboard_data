@@ -408,6 +408,7 @@ function skeleton() {
     product: ctx.product,
     prod: S.prod,
     sessions: S.all,
+    roundQuestion: true,
     loadDetail: (slug) => getJSON(`samples/${slug}.json`),
     onPattern: (pattern) => setFilter({ pattern }),
   });

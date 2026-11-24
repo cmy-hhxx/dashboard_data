@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 globalThis.location = { search: "" };
 globalThis.window = {};
 const dir = path.dirname(fileURLToPath(import.meta.url));
-const { detailPaneHTML, detailIds, utOf, isLostRow, USER_TYPE_SHORT, mergeSessionDetails, dropSubsetParts, hasSessionComment } = await import("../static/js/sample_detail.js");
+const { detailPaneHTML, detailIds, utOf, isLostRow, USER_TYPE_SHORT, mergeSessionDetails, dropSubsetParts, hasSessionComment, roundQuestionOf } = await import("../static/js/sample_detail.js");
 const { sessionRows } = await import("../static/js/compare.js");
 
 test("detail pane ids carry the prefix so two panes can coexist", () => {
@@ -46,10 +46,28 @@ test("user type helpers match the dashboard vocabulary", () => {
 test("samples.js keeps the list and delegates the detail to the shared module", () => {
   const source = fs.readFileSync(path.join(dir, "../static/js/samples.js"), "utf8");
   assert.ok(source.includes("createSampleDetail"));
+  assert.ok(source.includes("roundQuestion: true"), "samples page headline must follow the selected round's user message");
   assert.ok(source.includes("detailPaneHTML()"));
   for (const gone of ["function loadSession", "function renderOut", "function attrHTML", "function drawThreads"]) {
     assert.ok(!source.includes(gone), `${gone} must live in sample_detail.js only`);
   }
+});
+
+test("roundQuestionOf follows the selected trace's user message and falls back in session view", () => {
+  const D = {
+    question: "National security is easily rationalized",
+    input: {
+      traces: [
+        { messages: [{ k: "user", blocks: [{ x: ["Round 1 question"] }] }] },
+        { messages: [{ k: "user", blocks: [{ x: ["Suppose to work that way"] }] }] },
+        { messages: [{ k: "answer", blocks: [{ x: ["No user msg"] }] }] },
+      ],
+    },
+  };
+  assert.equal(roundQuestionOf(D, 0, false), "Round 1 question");
+  assert.equal(roundQuestionOf(D, 1, false), "Suppose to work that way");
+  assert.equal(roundQuestionOf(D, 2, false), "National security is easily rationalized");
+  assert.equal(roundQuestionOf(D, 1, true), "National security is easily rationalized");
 });
 
 

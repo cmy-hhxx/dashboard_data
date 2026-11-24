@@ -220,6 +220,22 @@ export function mergeSessionDetails(parts, session, product) {
    这时不渲染 Session 点评入口；旧数据 / 后处理聚合数据照旧展示。 */
 export const hasSessionComment = (D) => !!(D && D.attribution && D.attribution.summary);
 
+/* 当前轮次的提问文本：与消息流里的用户气泡（k === "user"）取同一来源；
+   在 session 总评视图或该轮无用户消息时回退到会话级 D.question。 */
+export function roundQuestionOf(D, traceIndex = 0, sessionView = false) {
+  if (!sessionView) {
+    const turn = D?.input?.traces?.[traceIndex];
+    const user = (turn?.messages || []).find((m) => m.k === "user");
+    const text = (user?.blocks || [])
+      .map((b) => (b.x || []).filter((x) => typeof x === "string").join(""))
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (text) return text;
+  }
+  return D?.question || "";
+}
+
 export function createSampleDetail(host, ctxArg, opts = {}) {
   const prefix = opts.prefix || "";
   const loadDetail = opts.loadDetail || ((slug) => getJSON(`samples/${slug}.json`));
@@ -251,17 +267,7 @@ export function createSampleDetail(host, ctxArg, opts = {}) {
   const cardPid = (card) => Number(card.id.slice(prefix.length + 3));
 
   function questionOf(D) {
-    if (roundQuestion && !S.sessionView) {
-      const turn = D.input?.traces?.[S.trace];
-      const user = (turn?.messages || []).find((m) => m.k === "user");
-      const text = (user?.blocks || [])
-        .map((b) => (b.x || []).filter((x) => typeof x === "string").join(""))
-        .join(" ")
-        .replace(/\s+/g, " ")
-        .trim();
-      if (text) return text;
-    }
-    return D.question || "";
+    return roundQuestion ? roundQuestionOf(D, S.trace, S.sessionView) : (D?.question || "");
   }
 
   /* 轮次切换、session 总评切换只改内容列，标题行也要跟着换。 */
