@@ -161,8 +161,11 @@ def _group_sessions(rows: list[dict]) -> tuple[list[dict], dict[str, dict], dict
     by_key: dict[str, dict] = {}
     by_slug: dict[str, dict] = {}
     for g in groups.values():
-        g_rows = g["rows"]
-        last = max(g_rows, key=lambda x: x.get("d") or "")
+        g_rows = sorted(
+            g["rows"],
+            key=lambda x: (str(x.get("d") or ""), str(x.get("tid") or ""), str(x.get("s") or "")),
+        )
+        last = g_rows[-1]
         if g["hasSv"]:
             counted_w = "none"
             for i, s_name in enumerate(SEV):
@@ -209,7 +212,17 @@ def _group_sessions(rows: list[dict]) -> tuple[list[dict], dict[str, dict], dict
             "ul": g["ul"],
             "lang": g["lang"],
             "pm": peer_models if len(peer_models) > 1 else None,
-            "rows": [{"s": x.get("s"), "d": x.get("d") or ""} for x in g_rows],
+            "rows": [
+                {
+                    "s": x.get("s"),
+                    "d": x.get("d") or "",
+                    **({"tid": x["tid"]} if x.get("tid") else {}),
+                    **({"tr": x["tr"]} if x.get("tr") and x.get("tr") != 1 else {}),
+                    **({"w": x["w"]} if x.get("w") and x.get("w") != "none" else {}),
+                    **({"sv": x["sv"]} if isinstance(x.get("sv"), list) and any(x["sv"]) else {}),
+                }
+                for x in g_rows
+            ],
             # Internal server-only fields (stripped on wire serialization)
             "_st": g["st"],
             "_pt": g["pt"],

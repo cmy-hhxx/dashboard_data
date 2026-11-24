@@ -11,6 +11,9 @@ import { threadFlow } from "./particles.js";
 const params = () => new URLSearchParams(location.search);
 const FOLD_OPEN = new Set(["user", "answer"]);
 const TABS_PER_PAGE = 20;
+// 单轮独立评测且轮次超过该阈值时启用按轮懒加载：避免 400+ 轮会话首屏并发拉几百个 JSON。
+const LAZY_ROUND_THRESHOLD = 12;
+const DETAIL_CACHE_LIMIT = 128;
 
 /* 用户类型：构建时按 dashboard/user_rules.py 的规则写进样本行的 ut（real / test / internal / unknown），
    流失是独立标记 ul（流失目录或流失 uid 名单）。 */
@@ -236,6 +239,59 @@ export function roundQuestionOf(D, traceIndex = 0, sessionView = false) {
   return D?.question || "";
 }
 
+export function sortSessionRows(rows) {
+  return (rows || []).slice().sort((a, b) =>
+    String(a.d || "").localeCompare(String(b.d || "")) ||
+    String(a.tid || "").localeCompare(String(b.tid || "")) ||
+    String(a.s || "").localeCompare(String(b.s || "")));
+}
+
+export function canLazyLoadSession(rows, focusTrace = "") {
+  if (!Array.isArray(rows) || rows.length <= LAZY_ROUND_THRESHOLD) return false;
+  if (rows.some((r) => Number(r.tr || 1) > 1)) return false;
+  if (focusTrace && !rows.some((r) => r.tid)) return false;
+  return true;
+}
+
+export function pickLazyRound(rows, { focusSlug = "", focusTrace = "", sev = "" } = {}) {
+  let round = Math.max(0, rows.length - 1);
+  let traceMiss = null;
+  if (focusSlug) {
+    const at = rows.findIndex((r) => r.s === focusSlug);
+    if (at >= 0) round = at;
+  } else if (sev) {
+    const sevIdx = SEV.indexOf(sev);
+    const at = rows.findIndex((r) => {
+      if (Array.isArray(r.sv) && sevIdx >= 0 && Number(r.sv[sevIdx] || 0) > 0) return true;
+      return r.w === sev;
+    });
+    if (at >= 0) round = at;
+  }
+  if (focusTrace) {
+    const at = rows.findIndex((r) => r.tid && r.tid === focusTrace);
+    if (at >= 0) round = at;
+    else traceMiss = focusTrace;
+  }
+  return { round, traceMiss };
+}
+
+export function buildLazyRoundDetail(detail, rows, roundIndex, session, product) {
+  const D = clone(detail);
+  const activeTid = D.input?.traces?.[0]?.trace_id || D.attribution?.turns?.[0]?.trace_id || D.ids?.trace || "";
+  D.product = D.product || product;
+  D.ids = { ...(D.ids || {}), session: session?.sid || D.ids?.session || "", trace: activeTid };
+  D._lazyRows = rows;
+  D.rounds = rows.map((row, idx) => ({
+    slug: row.s,
+    tid: row.tid || (idx === roundIndex ? activeTid : ""),
+    trace: idx === roundIndex ? 0 : -1,
+    turn: idx === roundIndex ? 0 : -1,
+    compact: idx === roundIndex ? 0 : -1,
+    loaded: idx === roundIndex,
+  }));
+  return D;
+}
+
 export function createSampleDetail(host, ctxArg, opts = {}) {
   const prefix = opts.prefix || "";
   const loadDetail = opts.loadDetail || ((slug) => getJSON(`samples/${slug}.json`));
@@ -254,7 +310,7 @@ export function createSampleDetail(host, ctxArg, opts = {}) {
   const root = host;
   const S = {
     product: opts.product, prod: opts.prod, all: opts.sessions || [],
-    cache: new Map(), loadSeq: 0, D: null, sessionKey: null, session: null,
+    cache: new Map(), loadSeq: 0, roundSeq: 0, D: null, sessionKey: null, session: null,
     round: 0, trace: 0, turn: 0, cturn: 0, sessionView: false, tabPage: 0, open: new Set(),
     folds: { traj: true, chain: false, ...(opts.folds || {}) }, closedAnswers: new Set(),
     active: null, bandOpen: false, traceMiss: null,
@@ -328,7 +384,7 @@ async function fetchDetail(slug) {
   if (!D) {
     D = seedDetails[slug] || await loadDetail(slug);
     S.cache.set(slug, D);
-    if (S.cache.size > 32) S.cache.delete(S.cache.keys().next().value);
+    if (S.cache.size > DETAIL_CACHE_LIMIT) S.cache.delete(S.cache.keys().next().value);
   }
   return D;
 }
@@ -337,6 +393,7 @@ async function loadSession(session, focusSlug, focusTrace, sev) {
   // 连点样本时详情是异步拉的：先发起的旧请求可能后到，晚到的旧数据会把新样本的界面盖掉。
   // 每次进入都领一个序号，await 回来后发现已经不是最新一次就整段丢掉。
   const token = ++S.loadSeq;
+  S.roundSeq += 1;
   S.slug = session.key;
   S.sessionKey = session.key;
   S.session = session;
@@ -345,6 +402,38 @@ async function loadSession(session, focusSlug, focusTrace, sev) {
   $(`#${prefix}sout`, root).innerHTML = "";
   $(`#${prefix}sattr`, root).innerHTML = "";
   scheduleThreadsCompensate();
+
+  const sortedRows = sortSessionRows(session.rows || []);
+  if (canLazyLoadSession(sortedRows, focusTrace)) {
+    const picked = pickLazyRound(sortedRows, { focusSlug, focusTrace, sev });
+    const targetRow = sortedRows[picked.round];
+    let rawDetail;
+    try {
+      rawDetail = await fetchDetail(targetRow.s);
+    } catch (e) {
+      if (token !== S.loadSeq) return;
+      $(`#${prefix}shead`, root).innerHTML = `<div class="empty">会话详情读取失败（${esc(e.message)}）</div>`;
+      scheduleThreadsCompensate();
+      return;
+    }
+    if (token !== S.loadSeq) return;
+    const D = buildLazyRoundDetail(rawDetail, sortedRows, picked.round, session, S.product);
+    index(D);
+    S.D = D;
+    S.round = picked.round;
+    S.sessionView = false;
+    S.traceMiss = picked.traceMiss;
+    S.tabPage = Math.floor(S.round / TABS_PER_PAGE);
+    S.trace = 0;
+    S.turn = 0;
+    S.cturn = 0;
+    S.open = new Set();
+    S.active = null;
+    renderIn();
+    renderOut();
+    return;
+  }
+
   let parts;
   try {
     parts = await Promise.all(session.rows.map(async (row) => ({ slug: row.s, detail: await fetchDetail(row.s) })));
@@ -442,6 +531,46 @@ function selectRound(i, { scroll = true } = {}) {
   const n = D.rounds?.length || 1;
   const round = Math.max(0, Math.min(n - 1, Number(i) || 0));
   const r = D.rounds?.[round];
+  if (D._lazyRows && !r?.loaded) {
+    const seq = ++S.roundSeq;
+    const sessionKey = S.sessionKey;
+    const rows = D._lazyRows;
+    const row = rows[round];
+    S.round = round;
+    const tabPage = Math.floor(round / TABS_PER_PAGE);
+    if (S.tabPage !== tabPage) {
+      S.tabPage = tabPage;
+      renderTraceTabs();
+    } else {
+      syncTraceTabs();
+    }
+    $(`#${prefix}stl`, root).innerHTML = `<div class="empty">正在读取第 ${round + 1} 轮…</div>`;
+    $(`#${prefix}sout`, root).innerHTML = "";
+    $(`#${prefix}sattr`, root).innerHTML = "";
+    scheduleThreadsCompensate();
+    fetchDetail(row.s).then((rawDetail) => {
+      if (seq !== S.roundSeq || sessionKey !== S.sessionKey) return;
+      const nextD = buildLazyRoundDetail(rawDetail, rows, round, S.session, S.product);
+      index(nextD);
+      S.D = nextD;
+      S.round = round;
+      S.tabPage = Math.floor(round / TABS_PER_PAGE);
+      S.trace = 0;
+      S.turn = 0;
+      S.cturn = 0;
+      S.open = new Set();
+      S.active = null;
+      syncTraceParam();
+      renderIn();
+      renderOut();
+      if (scroll) revealRound();
+    }).catch((e) => {
+      if (seq !== S.roundSeq || sessionKey !== S.sessionKey) return;
+      $(`#${prefix}stl`, root).innerHTML = `<div class="empty">第 ${round + 1} 轮读取失败（${esc(e.message)}）</div>`;
+      scheduleThreadsCompensate();
+    });
+    return;
+  }
   S.round = round;
   S.tabPage = Math.floor(round / TABS_PER_PAGE);
   S.trace = r?.trace ?? round;
@@ -1498,7 +1627,8 @@ function renderOverview() {
     if (!ov.isConnected) return;
     const C = S.D && S.D.compact;
     const t = C && C.turns && C.turns[S.cturn];
-    ov.innerHTML = t ? compactMapHTML(S.D, t, C.turns.length > 1) : "";
+    const multi = (S.D?.rounds?.length || C?.turns?.length || 0) > 1;
+    ov.innerHTML = t ? compactMapHTML(S.D, t, multi) : "";
     requestAnimationFrame(markCmapScroll);
   });
 }
@@ -1507,7 +1637,7 @@ function compactHTML(D) {
   const C = D.compact;
   if (!C || !C.turns || !C.turns.length) return `<div class="empty">这一组没有 compact 输出</div>`;
   const turns = C.turns;
-  const multi = turns.length > 1;
+  const multi = (D.rounds?.length || turns.length) > 1;
   S.cturn = Math.max(0, Math.min(S.cturn || 0, turns.length - 1));
   const t = turns[S.cturn];
   return t ? compactFlowHTML(D, t, multi) : "";
@@ -1543,7 +1673,8 @@ function compactParts(D, t, multi) {
     });
   }
   nodes.sort((a, b) => a.pos - b.pos || a.ci - b.ci || a.i - b.i);
-  const at = (pos) => (Number.isFinite(pos) && pos >= 0 ? `${multi ? `${trace + 1}·` : ""}#${pos}` : "");
+  const displayRound = D._lazyRows ? S.round + 1 : trace + 1;
+  const at = (pos) => (Number.isFinite(pos) && pos >= 0 ? `${multi ? `${displayRound}·` : ""}#${pos}` : "");
   return { nodes, at };
 }
 

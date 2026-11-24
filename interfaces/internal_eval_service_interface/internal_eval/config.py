@@ -36,6 +36,18 @@ def _normalize_gateway_url(raw: str) -> str:
     return url
 
 
+def _normalize_task_manager_url(raw: str) -> str:
+    url = (raw or "").strip().rstrip("/")
+    if not url:
+        return ""
+    if not url.endswith("/api/v1/task"):
+        if url.endswith("/api/v1"):
+            url = url + "/task"
+        elif "/api/v1/task" not in url:
+            url = url + "/api/v1/task"
+    return url.rstrip("/")
+
+
 def _load_env_file(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     if not path.is_file():
@@ -120,12 +132,23 @@ class ServiceConfig:
     cluster_l4_enabled: bool = True
 
     # Colleague trace collector settings
-    collector_mode: str = "file_drop"  # file_drop | http | mock
+    collector_mode: str = "file_drop"  # file_drop | http | task_manager | mock
     collector_base_url: str = ""
     collector_token: str = ""
     collector_dispatch_split: str = "by_side"  # by_side | by_turn | both
     collector_silence_timeout_sec: float = 1800.0
     collector_poll_interval_sec: float = 2.0
+
+    # TaskManager inference API settings (`collector_mode = "task_manager"`)
+    task_manager_base_url: str = ""
+    task_manager_user_id: str = ""
+    task_manager_template_task_id: str = ""
+    task_manager_concurrency: int = 10
+    task_manager_batch_size: int = 100
+    task_manager_poll_interval_sec: float = 10.0
+    task_manager_max_recovery_rounds: int = 2
+    task_manager_retry_recall_wait_sec: int = 60
+    task_manager_max_history_turns: int = 0
 
     # Orchestrator & HTTP API settings
     max_concurrent_runs: int = 1
@@ -155,6 +178,9 @@ class ServiceConfig:
             "state_db_path": str(self.state_db_path),
             "collector_mode": self.collector_mode,
             "collector_dispatch_split": self.collector_dispatch_split,
+            "task_manager_base_url": self.task_manager_base_url or None,
+            "task_manager_auth_configured": bool(self.task_manager_user_id),
+            "task_manager_template_task_id": self.task_manager_template_task_id or None,
             "max_concurrent_runs": self.max_concurrent_runs,
             "write_auth_enabled": bool(self.api_write_token),
             "gateway_configured": bool(self.gateway_api_key),
@@ -266,6 +292,18 @@ def load_config(
         collector_dispatch_split=get("INTERNAL_EVAL_DISPATCH_SPLIT", "by_side").lower(),
         collector_silence_timeout_sec=_as_float(merged.get("INTERNAL_EVAL_COLLECTOR_SILENCE_TIMEOUT_SEC"), 1800.0, minimum=1.0),
         collector_poll_interval_sec=_as_float(merged.get("INTERNAL_EVAL_COLLECTOR_POLL_INTERVAL_SEC"), 2.0, minimum=0.05),
+        task_manager_base_url=_normalize_task_manager_url(
+            get("INTERNAL_EVAL_TASK_MANAGER_BASE_URL")
+            or (get("INTERNAL_EVAL_COLLECTOR_BASE_URL") if get("INTERNAL_EVAL_COLLECTOR_MODE", "").lower() in ("task_manager", "taskmanager") else "")
+        ),
+        task_manager_user_id=get("INTERNAL_EVAL_TASK_MANAGER_USER_ID"),
+        task_manager_template_task_id=get("INTERNAL_EVAL_TASK_MANAGER_TEMPLATE_TASK_ID"),
+        task_manager_concurrency=_as_int(merged.get("INTERNAL_EVAL_TASK_MANAGER_CONCURRENCY"), 10, minimum=1),
+        task_manager_batch_size=_as_int(merged.get("INTERNAL_EVAL_TASK_MANAGER_BATCH_SIZE"), 100, minimum=1),
+        task_manager_poll_interval_sec=_as_float(merged.get("INTERNAL_EVAL_TASK_MANAGER_POLL_INTERVAL_SEC"), 10.0, minimum=0.05),
+        task_manager_max_recovery_rounds=_as_int(merged.get("INTERNAL_EVAL_TASK_MANAGER_MAX_RECOVERY_ROUNDS"), 2, minimum=0),
+        task_manager_retry_recall_wait_sec=_as_int(merged.get("INTERNAL_EVAL_TASK_MANAGER_RETRY_RECALL_WAIT_SEC"), 60, minimum=1),
+        task_manager_max_history_turns=_as_int(merged.get("INTERNAL_EVAL_TASK_MANAGER_MAX_HISTORY_TURNS"), 0, minimum=0),
         max_concurrent_runs=_as_int(merged.get("INTERNAL_EVAL_MAX_CONCURRENT_RUNS"), 1, minimum=1),
         auto_resume_on_startup=_as_bool(merged.get("INTERNAL_EVAL_AUTO_RESUME"), True),
         api_prefix=get("INTERNAL_EVAL_API_PREFIX", "/api/v1/internal-eval").rstrip("/"),

@@ -292,32 +292,37 @@ class VendoredEngineBackend(EngineBackend):
 
         stderr_lines: list[str] = []
         stop_tail = threading.Event()
+        drain_lock = threading.Lock()
         tail_state = {"offset": start_offset}
 
         def _drain_output() -> None:
-            if not output_path.is_file():
-                return
-            size = output_path.stat().st_size
-            if size <= tail_state["offset"]:
-                return
-            with output_path.open("rb") as fh:
-                fh.seek(tail_state["offset"])
-                chunk = fh.read()
-            last_nl = chunk.rfind(b"\n")
-            if last_nl < 0:
-                return
-            complete = chunk[: last_nl + 1]
-            tail_state["offset"] += len(complete)
-            for raw_line in complete.splitlines():
-                text = raw_line.decode("utf-8", "replace").strip()
-                if not text:
-                    continue
-                try:
-                    row = json.loads(text)
-                except ValueError:
-                    continue
-                if isinstance(row, dict):
-                    on_row(row)
+            new_rows: list[dict[str, Any]] = []
+            with drain_lock:
+                if not output_path.is_file():
+                    return
+                size = output_path.stat().st_size
+                if size <= tail_state["offset"]:
+                    return
+                with output_path.open("rb") as fh:
+                    fh.seek(tail_state["offset"])
+                    chunk = fh.read()
+                last_nl = chunk.rfind(b"\n")
+                if last_nl < 0:
+                    return
+                complete = chunk[: last_nl + 1]
+                tail_state["offset"] += len(complete)
+                for raw_line in complete.splitlines():
+                    text = raw_line.decode("utf-8", "replace").strip()
+                    if not text:
+                        continue
+                    try:
+                        row = json.loads(text)
+                    except ValueError:
+                        continue
+                    if isinstance(row, dict):
+                        new_rows.append(row)
+            for row in new_rows:
+                on_row(row)
 
         def _tail_loop() -> None:
             while not stop_tail.is_set():
@@ -377,7 +382,7 @@ class VendoredEngineBackend(EngineBackend):
             stdout_thread.join(timeout=10)
             stderr_thread.join(timeout=10)
             stop_tail.set()
-            tail_thread.join(timeout=5)
+            tail_thread.join()
             # Final drain after process exits so no last row is missed
             _drain_output()
 

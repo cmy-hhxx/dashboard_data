@@ -12,40 +12,87 @@ under `98_service/dispatch/` (by default two files: `before_questions.jsonl` and
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
+
+_LEADING_STAMP_RE = re.compile(
+    r"^(?:\[client_id=[^\]]+\][ \t]+)?\[\d{4}-\d{2}-\d{2}T[^\]]{1,40}\][ \t]*"
+)
+
+
+def _clean_pool_content(content: Any) -> Any:
+    if isinstance(content, str):
+        return _LEADING_STAMP_RE.sub("", content).strip()
+    return content
 
 
 def _extract_history_messages(row: dict[str, Any]) -> list[dict[str, Any]]:
     """Extract prior conversation turns before the final target user question."""
     messages = row.get("messages")
-    if not isinstance(messages, list) or not messages:
+    if isinstance(messages, list) and messages:
+        last_user_idx = -1
+        for idx, msg in enumerate(messages):
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("role") == "user" or msg.get("type") == "user_question":
+                last_user_idx = idx
+
+        if last_user_idx > 0:
+            history: list[dict[str, Any]] = []
+            for msg in messages[:last_user_idx]:
+                if not isinstance(msg, dict):
+                    continue
+                role = msg.get("role")
+                mtype = msg.get("type")
+                if role not in ("user", "assistant") and mtype not in (
+                    "user_question",
+                    "final_answer",
+                    "assistant_message",
+                ):
+                    continue
+                content = msg.get("content")
+                if content is None or (isinstance(content, str) and not content.strip()):
+                    continue
+                resolved_role = role or ("user" if mtype == "user_question" else "assistant")
+                history.append({"role": resolved_role, "content": content})
+            if history:
+                return history
+
+    # Fallback for slimmed `3_dynamic_bench` multi-turn rows where prior turns live in `message_pool`
+    pool = row.get("message_pool")
+    if not isinstance(pool, list) or not pool:
         return []
-
-    last_user_idx = -1
-    for idx, msg in enumerate(messages):
-        if not isinstance(msg, dict):
-            continue
-        if msg.get("role") == "user" or msg.get("type") == "user_question":
-            last_user_idx = idx
-
-    if last_user_idx <= 0:
-        return []
-
-    history: list[dict[str, Any]] = []
-    for msg in messages[:last_user_idx]:
+    target_q = str(row.get("question") or "").strip()
+    pool_turns: list[dict[str, Any]] = []
+    for msg in pool:
         if not isinstance(msg, dict):
             continue
         role = msg.get("role")
-        mtype = msg.get("type")
-        if role not in ("user", "assistant") and mtype not in ("user_question", "final_answer", "assistant_message"):
+        if role not in ("user", "assistant"):
             continue
-        content = msg.get("content")
+        content = _clean_pool_content(msg.get("content"))
         if content is None or (isinstance(content, str) and not content.strip()):
             continue
-        resolved_role = role or ("user" if mtype == "user_question" else "assistant")
-        history.append({"role": resolved_role, "content": content})
-    return history
+        if pool_turns and pool_turns[-1]["role"] == role and pool_turns[-1]["content"] == content:
+            continue
+        pool_turns.append({"role": role, "content": content})
+
+    if not pool_turns:
+        return []
+    # Find the target question occurrence (or last user turn) and keep turns strictly before it
+    cut_idx = -1
+    if target_q:
+        for idx in range(len(pool_turns) - 1, -1, -1):
+            if pool_turns[idx]["role"] == "user" and str(pool_turns[idx]["content"]).strip() == target_q:
+                cut_idx = idx
+                break
+    if cut_idx < 0:
+        for idx in range(len(pool_turns) - 1, -1, -1):
+            if pool_turns[idx]["role"] == "user":
+                cut_idx = idx
+                break
+    return pool_turns[:cut_idx] if cut_idx > 0 else []
 
 
 def _tier_file_path(bench_root: Path, model: str, tier: int) -> Path:

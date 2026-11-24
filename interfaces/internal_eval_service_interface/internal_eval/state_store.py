@@ -188,7 +188,7 @@ def compute_severity_stats(problems: list[dict[str, Any]]) -> tuple[bool, str, d
 
 
 class StateStore:
-    """Thread-safe SQLite WAL state manager."""
+    """Thread-safe SQLite state manager (safe on local disk, overlayfs, and CephFS)."""
 
     def __init__(self, db_path: Path):
         self.db_path = Path(db_path)
@@ -199,7 +199,6 @@ class StateStore:
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path), timeout=30.0, check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA busy_timeout=30000")
         return conn
@@ -219,14 +218,17 @@ class StateStore:
 
     @contextmanager
     def _read(self) -> Iterator[sqlite3.Connection]:
-        conn = self._connect()
-        try:
-            yield conn
-        finally:
-            conn.close()
+        with self._write_lock:
+            conn = self._connect()
+            try:
+                yield conn
+            finally:
+                conn.close()
 
     def _init_schema(self) -> None:
         with self._tx() as conn:
+            # Use DELETE journal mode once at init (avoids WAL -shm mmap `disk I/O error` on overlayfs/CephFS)
+            conn.execute("PRAGMA journal_mode=DELETE")
             conn.executescript(SCHEMA_SQL)
 
     def _next_seq(self, conn: sqlite3.Connection, run_id: str) -> int:

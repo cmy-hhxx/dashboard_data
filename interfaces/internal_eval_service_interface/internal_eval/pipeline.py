@@ -223,6 +223,12 @@ class PipelineManager:
         run_id = _generate_run_id()
         round_order, round_dir_name, round_dir = allocate_round_dir(self.cfg.ab_test_root, version)
 
+        meta_payload = dict(payload["meta"]) if isinstance(payload.get("meta"), dict) else {}
+        if isinstance(payload.get("task_manager"), dict):
+            existing_tm = dict(meta_payload["task_manager"]) if isinstance(meta_payload.get("task_manager"), dict) else {}
+            merged_tm = {**payload["task_manager"], **existing_tm}
+            meta_payload["task_manager"] = merged_tm
+
         run = self.store.create_run(
             {
                 "run_id": run_id,
@@ -241,7 +247,7 @@ class PipelineManager:
                 "before_agent_label": before_label,
                 "after_agent_label": after_label,
                 "callback_url": callback_url,
-                "meta": payload.get("meta") if isinstance(payload.get("meta"), dict) else {},
+                "meta": meta_payload,
             }
         )
         self._wake.set()
@@ -250,6 +256,10 @@ class PipelineManager:
     def cancel_run(self, run_id: str) -> dict[str, Any] | None:
         run = self.store.request_cancel(run_id)
         if run:
+            try:
+                self.collector.cancel(run)
+            except Exception:
+                pass
             self._get_run_wake(run_id).set()
         return run
 
@@ -609,8 +619,15 @@ class PipelineManager:
             side: (layout["raw_before"] if side == "before" else layout["raw_after"])
             for side in live_sides
         }
+        cancel_fn = lambda: self.store.is_cancel_requested(run_id) or self._stop.is_set()
+        log_event_fn = lambda stage, ev_type, msg, level="info", details=None: self.store.add_event(
+            run_id, stage, ev_type, msg, level=level, details=details
+        )
         need_dispatch_sides = [
             s for s in live_sides if run["side_collector_status"].get(s, "pending") == "pending"
+        ]
+        resume_sides = [
+            s for s in live_sides if run["side_collector_status"].get(s, "pending") in ("dispatched", "streaming")
         ]
         if need_dispatch_sides:
             dispatch_run_view = dict(run)
@@ -621,6 +638,8 @@ class PipelineManager:
                 raw_dirs={s: raw_dirs[s] for s in need_dispatch_sides},
                 ingest_callback=lambda s, batch: self.ingest_traces(run_id, s, batch),
                 event_callback=lambda s, ev, data: self.handle_collector_event(run_id, s, ev, data),
+                cancel_check=cancel_fn,
+                log_event=log_event_fn,
             )
             for s in need_dispatch_sides:
                 self.store.set_side_collector_status(
@@ -632,6 +651,18 @@ class PipelineManager:
                 "collector_dispatched",
                 f"已通过 {self.collector.mode} 适配器派单：{need_dispatch_sides}",
                 details={"collector_mode": self.collector.mode, "upstream_jobs": upstream_jobs},
+            )
+        elif resume_sides:
+            resume_run_view = dict(run)
+            resume_run_view["sides"] = resume_sides
+            self.collector.resume(
+                run=resume_run_view,
+                dispatch_files=dispatch_files,
+                raw_dirs={s: raw_dirs[s] for s in resume_sides},
+                ingest_callback=lambda s, batch: self.ingest_traces(run_id, s, batch),
+                event_callback=lambda s, ev, data: self.handle_collector_event(run_id, s, ev, data),
+                cancel_check=cancel_fn,
+                log_event=log_event_fn,
             )
 
         # ---- Stage 3-5: Streaming Ingest -> Prepare -> Eval -> Cluster ------

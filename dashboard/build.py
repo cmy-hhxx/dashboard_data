@@ -1556,6 +1556,80 @@ def worst_of(problems):
     return "none"
 
 
+LF_USER_STAMP_RE = re.compile(
+    r"^(?:\[client_id=client-tools:[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\][ \t]+)?"
+    r"\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))\][ \t]+([\s\S]+)$",
+    re.IGNORECASE,
+)
+
+
+def recover_lf_plugin_v2_question(imeta: dict, tmeta: dict, msgs: list, pool=None) -> str | None:
+    """Recover the actual turn question for `lf_plugin_v2` traces.
+
+    Upstream `lf_plugin_v2` sometimes writes a stale window-head user message into
+    `messages[0]` (`user_question`) and `meta.question` across up to 10 consecutive
+    turns.  Mirroring the evaluator's resolver (`eval_harness` `engine.mjs`), we
+    inspect each `llm_turn`'s `input_messages` (resolving `message_pool` indices if
+    present) and take the last `role == "user"` entry whose leading ISO timestamp
+    matches `request_time` / `lf_start_time` / `timestamp` within 5 seconds.
+    """
+    if imeta.get("fetched_by") != "lf_plugin_v2" and tmeta.get("fetched_by") != "lf_plugin_v2":
+        return None
+    ref_ts = [
+        ts_ms(v)
+        for v in (imeta.get("request_time"), imeta.get("lf_start_time"), tmeta.get("request_time"), tmeta.get("timestamp"))
+        if isinstance(v, str)
+    ]
+    ref_ts = [v for v in ref_ts if v is not None]
+    if not ref_ts:
+        return None
+    q_text_raw = imeta.get("question_text")
+    if q_text_raw is not None and not isinstance(q_text_raw, str):
+        return None
+    q_text = q_text_raw.strip() if isinstance(q_text_raw, str) else ""
+    pool_list = pool if isinstance(pool, list) else None
+
+    found = None  # (at_ms, text)
+    for m in msgs:
+        if not isinstance(m, dict):
+            continue
+        if m.get("type") == "final_answer":
+            break
+        if m.get("type") != "llm_turn":
+            continue
+        raw_in = m.get("input_messages")
+        if isinstance(raw_in, list):
+            seq = raw_in
+        elif isinstance(raw_in, dict) and isinstance(raw_in.get("messages"), list):
+            seq = raw_in["messages"]
+        else:
+            continue
+        last_user = None
+        for item in reversed(seq):
+            if isinstance(item, int) and pool_list is not None and 0 <= item < len(pool_list):
+                item = pool_list[item]
+            if isinstance(item, dict) and item.get("role") == "user":
+                last_user = item
+                break
+        if not last_user:
+            continue
+        content = last_user.get("content")
+        match = LF_USER_STAMP_RE.match(content) if isinstance(content, str) else None
+        if not match:
+            return None
+        at_ms = ts_ms(match.group(1))
+        text = match.group(2).strip()
+        if not text or at_ms is None or not any(abs(at_ms - ref) <= 5000 for ref in ref_ts):
+            return None
+        if q_text and q_text != text:
+            return None
+        if found is not None and found != (at_ms, text):
+            return None
+        if found is None:
+            found = (at_ms, text)
+    return found[1] if found else None
+
+
 def session_question(inp, attr):
     meta = (attr.get("session_meta") or {})
     q = meta.get("question")
@@ -1576,14 +1650,18 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
     case = (inp or {}).get("case_id") or smeta.get("case_id") or ""
 
     # ---- input traces → messages with blocks
+    top_pool = (inp or {}).get("message_pool")
     if inp and inp.get("traces"):
-        raw_traces = [(t.get("meta") or {}, t.get("messages") or []) for t in inp["traces"]]
+        raw_traces = [
+            (t.get("meta") or {}, t.get("messages") or [], t.get("message_pool") or top_pool)
+            for t in inp["traces"]
+        ]
     elif inp:
         meta = dict(inp.get("meta") or {})
         # 老布局没有 traces[]：顶层 trace_id 才是这条 trace 的 id，别用外层 meta 里的会话 id。
         if inp.get("trace_id"):
             meta["trace_id"] = inp["trace_id"]
-        raw_traces = [(meta, inp.get("messages") or [])]
+        raw_traces = [(meta, inp.get("messages") or [], top_pool)]
     else:
         raw_traces = []
 
@@ -1591,11 +1669,11 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
     # attribution 的 session_meta.trace_id 常被写成 thread/session id，不能当 trace id。
     sid = imeta.get("session_id") or imeta.get("thread_id") or smeta.get("session_id") or smeta.get("thread_id") or ""
     if not sid:
-        for tmeta, _ in raw_traces:
+        for tmeta, _, _ in raw_traces:
             sid = tmeta.get("session_id") or tmeta.get("thread_id") or ""
             if sid:
                 break
-    input_tids = [tmeta.get("trace_id") for tmeta, _ in raw_traces
+    input_tids = [tmeta.get("trace_id") for tmeta, _, _ in raw_traces
                   if isinstance(tmeta, dict) and tmeta.get("trace_id")]
     turn_tids = []
     for turn in attr.get("turns") or []:
@@ -1605,7 +1683,11 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
     tid = (input_tids[0] if input_tids else "") or (turn_tids[0] if turn_tids else "") \
         or (inp or {}).get("trace_id") or smeta.get("trace_id") or ""
     traces = []
-    for tmeta, msgs in raw_traces:
+    recovered_questions = []
+    for tmeta, msgs, pool in raw_traces:
+        recovered_q = recover_lf_plugin_v2_question(imeta, tmeta, msgs, pool)
+        recovered_questions.append(recovered_q)
+        replaced_user = False
         call_names = {}
         rows = []
         for m in msgs:
@@ -1617,7 +1699,11 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
                 call_names[m.get("call_id")] = name
             if m.get("type") == "function_call_output":
                 name = call_names.get(m.get("call_id"))
-            blocks = [Block(*b) for b in message_blocks(m, kind)]
+            if recovered_q and not replaced_user and kind == "user":
+                blocks = [Block("/content", recovered_q, "text", None)]
+                replaced_user = True
+            else:
+                blocks = [Block(*b) for b in message_blocks(m, kind)]
             rows.append({"raw": m, "kind": kind, "name": name, "blocks": blocks, "ev": []})
         traces.append((tmeta, rows))
 
@@ -1801,7 +1887,7 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
             "messages": msgs,
         })
 
-    question = session_question(inp, attr)
+    question = next((q for q in recovered_questions if q), None) or session_question(inp, attr)
     usage = smeta.get("usage") or {}
     kinds = Counter(row["kind"] for _, rows in traces for row in rows)
     tool_calls = kinds["call"]
@@ -1814,7 +1900,7 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
     # 样本页的「用户 ID / 用户类型」：输入顶层 meta 优先，其次各轮 trace meta，最后归因 session_meta。
     uid = imeta.get("user_id")
     if uid in (None, ""):
-        for tmeta, _ in raw_traces:
+        for tmeta, _, _ in raw_traces:
             if tmeta.get("user_id") not in (None, ""):
                 uid = tmeta.get("user_id")
                 break

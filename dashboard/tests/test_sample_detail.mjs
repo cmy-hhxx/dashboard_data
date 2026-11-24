@@ -9,7 +9,11 @@ import { fileURLToPath } from "node:url";
 globalThis.location = { search: "" };
 globalThis.window = {};
 const dir = path.dirname(fileURLToPath(import.meta.url));
-const { detailPaneHTML, detailIds, utOf, isLostRow, USER_TYPE_SHORT, mergeSessionDetails, dropSubsetParts, hasSessionComment, roundQuestionOf } = await import("../static/js/sample_detail.js");
+const {
+  detailPaneHTML, detailIds, utOf, isLostRow, USER_TYPE_SHORT,
+  mergeSessionDetails, dropSubsetParts, hasSessionComment, roundQuestionOf,
+  sortSessionRows, canLazyLoadSession, pickLazyRound, buildLazyRoundDetail,
+} = await import("../static/js/sample_detail.js");
 const { sessionRows } = await import("../static/js/compare.js");
 
 test("detail pane ids carry the prefix so two panes can coexist", () => {
@@ -146,4 +150,33 @@ test("compare finds the whole session's rows by session id and model", () => {
   assert.deepEqual(sessionRows(rows, "thread_s1", "aime_fast", "daily").map((row) => row.s), ["a", "b"]);
   assert.deepEqual(sessionRows(rows, "thread_s1", "", "").map((row) => row.s), ["a", "b", "c"]);
   assert.deepEqual(sessionRows(rows, "missing", "", ""), []);
+});
+
+test("large per-trace sessions use lazy round loading with deterministic ordering and targeting", () => {
+  const rows = Array.from({ length: 25 }, (_, i) => ({
+    s: `slug_${String(24 - i).padStart(2, "0")}`,
+    d: i < 10 ? "2026-11-21" : "2026-11-20",
+    tid: `20003020${String(1000 + (24 - i))}`,
+    w: i === 5 ? "P0" : "P2",
+    sv: i === 5 ? [1, 0, 0, 0, 0] : [0, 0, 1, 0, 0],
+  }));
+  const sorted = sortSessionRows(rows);
+  assert.equal(canLazyLoadSession(sorted), true);
+  assert.equal(canLazyLoadSession(sorted.slice(0, 5)), false, "small sessions stay eager");
+  assert.equal(canLazyLoadSession([{ ...sorted[0], tr: 2 }, ...sorted.slice(1)]), false, "multi-trace parts stay eager");
+  assert.equal(canLazyLoadSession(sorted.map(({ tid, ...rest }) => rest), "t-missing"), false, "deep-link trace falls back when tid is absent");
+
+  assert.equal(pickLazyRound(sorted).round, 24, "defaults to the chronologically last round");
+  assert.equal(pickLazyRound(sorted, { focusSlug: "slug_10" }).round, sorted.findIndex((r) => r.s === "slug_10"));
+  assert.equal(pickLazyRound(sorted, { focusTrace: "200030201012" }).round, sorted.findIndex((r) => r.tid === "200030201012"));
+  assert.equal(pickLazyRound(sorted, { focusTrace: "nonexistent" }).traceMiss, "nonexistent");
+  assert.equal(pickLazyRound(sorted, { sev: "P0" }).round, sorted.findIndex((r) => r.w === "P0"));
+
+  const active = traceDetail("200030201024").detail;
+  const D = buildLazyRoundDetail(active, sorted, 24, { sid: "thread_s1" }, "aime");
+  assert.equal(D.rounds.length, 25);
+  assert.equal(D.rounds[24].loaded, true);
+  assert.equal(D.rounds[24].trace, 0);
+  assert.equal(D.rounds[0].loaded, false);
+  assert.equal(D.rounds[0].trace, -1);
 });

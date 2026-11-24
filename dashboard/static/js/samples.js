@@ -102,11 +102,14 @@ function groupSessions(rows) {
     if (r.ul) g.ul = 1;
   });
   return [...groups.values()].map((g) => {
-    const rowsByDate = g.rows.slice().sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0));
+    const rowsByDate = g.rows.slice().sort((a, b) =>
+      String(a.d || "").localeCompare(String(b.d || "")) ||
+      String(a.tid || "").localeCompare(String(b.tid || "")) ||
+      String(a.s || "").localeCompare(String(b.s || "")));
     const last = rowsByDate[rowsByDate.length - 1];
     const countedW = g.hasSv ? (SEV.find((s, i) => g.sv[i] > 0) || "none") : g.w;
     return {
-      ...last, key: g.key, s: g.key, rows: g.rows,
+      ...last, key: g.key, s: g.key, rows: rowsByDate,
       q: last.q, d: last.d, w: countedW, n: g.n, tr: g.tr, sv: g.hasSv ? g.sv : (Array.isArray(last.sv) ? last.sv : null),
       pt: [...g.pt], st: [...g.st], tg: [...g.tg], lb: [...g.lb].join("｜"),
       tid: g.tid, case: g.case, task: g.task, sub: g.sub, skill: g.skill, sc: g.sc,
