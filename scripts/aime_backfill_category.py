@@ -470,7 +470,9 @@ def main() -> int:
         st = process_file(path, index, key, args.dry_run)
         st["kind"] = kind
         if not args.dry_run:
-            if st.get("written"):
+            if st.get("written") and kind == "input":
+                # 只有 eval_input 在 slim_publish 的 target_files 里；归因文件不在其索引范围，
+                # 写进去只会留一堆没人读的脏行。
                 st["slim_state"] = sync_slim_state(base / SLIM_DB, path)
             try:        # 没改也记账：下次只要文件和分类源都没变就直接跳过
                 st2 = os.stat(path)

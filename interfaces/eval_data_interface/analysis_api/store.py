@@ -532,6 +532,48 @@ def _prefix(path: Path, size: int) -> str:
         return hashlib.sha1(handle.read(min(size, PREFIX_BYTES))).hexdigest()
 
 
+def load_category_meta(root: Path, log=None) -> tuple[dict[str, tuple[str | None, str | None]], str]:
+    """加载 AIME 上游按天产出的 category_meta.json 并集：trace_id -> (task_category, subtask_category)。
+
+    按文件内容计算指纹（不按 mtime），避免上游重写同内容文件触发无效重扫；
+    问财等没有该目录的数据集直接返回空映射。
+    """
+    if config.DATASET != "aime_eval":
+        return {}, ""
+    base = root / "0_litefusion_data" / "online_data"
+    if not base.is_dir():
+        return {}, ""
+    files = sorted(base.glob("*/[0-9][0-9]/[0-9][0-9]/category_meta.json"))
+    if not files:
+        return {}, ""
+    log = _log_factory(log)
+    index: dict[str, tuple[str | None, str | None]] = {}
+    fingerprint = hashlib.sha1()
+    for path in files:
+        try:
+            raw = path.read_bytes()
+        except OSError as exc:
+            log(f"[warn] 读取 {path} 失败：{exc}")
+            continue
+        rel = path.relative_to(base).as_posix()
+        fingerprint.update(f"{rel}:{len(raw)}:{hashlib.md5(raw).hexdigest()}\n".encode("utf-8"))
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            log(f"[warn] 跳过损坏的 {path}：{exc}")
+            continue
+        if not isinstance(data, dict):
+            continue
+        for tid, item in data.items():
+            if not isinstance(item, dict):
+                continue
+            task = _clean(item.get("task_category"))
+            subtask = _clean(item.get("subtask_category"))
+            if task or subtask:
+                index[str(tid)] = (task, subtask)
+    return index, fingerprint.hexdigest()[:16]
+
+
 def _intent_lookup(intent_tree):
     by_pair = {}
     by_label = {}
@@ -545,16 +587,46 @@ def _intent_lookup(intent_tree):
     return by_pair, by_label
 
 
-def ingest_attribution(conn, product: Path, item_codes_by_model, intent_tree, log):
+def _resolve_intent(raw_task, raw_subtask, intent_tree, by_pair, by_label):
+    """只保留能映射到当前意图树（v1.9）的意图；老体系或表外标签清空，不丢 trace。"""
+    if intent_tree is None:
+        return None, raw_task, raw_subtask
+    code = by_pair.get((raw_task, raw_subtask)) if (raw_task and raw_subtask) else None
+    if code is None and raw_subtask:
+        code = by_label.get((2, raw_subtask))
+    if code is None and raw_task:
+        code = by_label.get((1, raw_task))
+    if code is None:
+        return None, None, None
+    node = intent_tree.node(code)
+    if node is None:
+        return None, None, None
+    if node.level == 2 and node.parent and node.parent in intent_tree.nodes:
+        return code, intent_tree.nodes[node.parent].label, node.label
+    return code, node.label, None
+
+
+def ingest_attribution(
+    conn,
+    product: Path,
+    item_codes_by_model,
+    intent_tree,
+    log,
+    category_meta=None,
+    category_sig="",
+):
     """把一个 attribution 文件读进 traces / history；同一 trace 保留行号最大的一行。"""
     by_pair, by_label = _intent_lookup(intent_tree)
+    category_meta = category_meta or {}
     stats = {"files": 0, "skipped": 0, "traces": 0, "history": 0, "problems": 0, "unclustered": 0, "changes": 0}
     codes_by_model = {k: c for k, (c, _) in item_codes_by_model.items()}
 
     for path, source, model_dir in _attribution_files(product):
         codes = codes_by_model.get(model_dir) or ItemCodes()
-        # 依赖签名只取 item_index 里属于本文件的行，别的文件新增聚类不会让它重扫
+        # 依赖签名包含 item_index 属于本文件的指纹 + category_meta 全局内容指纹
         sig = f"{_file_sig(path)}|{codes.sig_for(path.name)}"
+        if category_sig:
+            sig += f"|{category_sig}"
         if _cached_sig(conn, path) == sig:
             stats["skipped"] += 1
             continue
@@ -593,24 +665,27 @@ def ingest_attribution(conn, product: Path, item_codes_by_model, intent_tree, lo
                 turn_session_id = session_id or _text(meta.get("session_id"))
                 stamp = timeutil.parse_iso(meta.get("timestamp")) or timeutil.parse_iso(smeta.get("request_time"))
                 day = timeutil.local_day(stamp, config.DAY_TZ) or default_day
-                # 意图字段兼容多代布局：优先轮次级 task/task_category，兜底会话级回填字段。
-                task = _clean(
-                    meta.get("task")
-                    or meta.get("task_category")
-                    or smeta.get("task")
-                    or smeta.get("task_category")
+                # 意图优先按 trace_id 查上游 category_meta.json（避免多轮 session 冲突，且自动追新），
+                # 查不到再兜底归因行里的轮次/会话级字段；最终只保留当前新版树里的意图，旧体系标签清空。
+                cat_pair = category_meta.get(trace_id)
+                if cat_pair is not None:
+                    raw_task, raw_subtask = cat_pair
+                else:
+                    raw_task = _clean(
+                        meta.get("task")
+                        or meta.get("task_category")
+                        or smeta.get("task")
+                        or smeta.get("task_category")
+                    )
+                    raw_subtask = _clean(
+                        meta.get("subtask")
+                        or meta.get("subtask_category")
+                        or smeta.get("subtask")
+                        or smeta.get("subtask_category")
+                    )
+                intent_code, task, subtask = _resolve_intent(
+                    raw_task, raw_subtask, intent_tree, by_pair, by_label
                 )
-                subtask = _clean(
-                    meta.get("subtask")
-                    or meta.get("subtask_category")
-                    or smeta.get("subtask")
-                    or smeta.get("subtask_category")
-                )
-                intent_code = by_pair.get((task, subtask)) if (task and subtask) else None
-                if intent_code is None and subtask:
-                    intent_code = by_label.get((2, subtask))
-                if intent_code is None and task:
-                    intent_code = by_label.get((1, task))
 
                 turn_problems = list(turn.get("problem") or [])
                 problems = list(turn_problems)
@@ -968,7 +1043,16 @@ def build(root: Path | None = None, log=None) -> dict:
             codes, sig = load_item_codes(index_path, log)
             item_codes[model_dir] = (codes, sig)
 
-        attribution = ingest_attribution(conn, product_dir, item_codes, intent_tree, log)
+        category_meta, category_sig = load_category_meta(root, log)
+        attribution = ingest_attribution(
+            conn,
+            product_dir,
+            item_codes,
+            intent_tree,
+            log,
+            category_meta=category_meta,
+            category_sig=category_sig,
+        )
         # 问财归因常缺 question，用输入行补齐；AIME 的问句本来就在归因里，不做额外处理。
         questions = filled = 0
         if config.DATASET == "wencai_eval":
@@ -1013,6 +1097,7 @@ def build(root: Path | None = None, log=None) -> dict:
             "resumed_input": inputs["resumed"],
             "attribution_files": attribution["files"],
             "skipped_attribution": attribution["skipped"],
+            "category_meta": len(category_meta),
             "skipped_input": inputs["skipped"],
             "questions_backfilled": questions,
             "questions_filled": filled,

@@ -346,8 +346,8 @@ class StoreTest(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_session_meta_task_category_fallback_and_unknown_label(self):
-        """回填到 session_meta.task_category/subtask_category 时应入库并映射编码；表外标签保留原文。"""
+    def test_session_meta_task_category_fallback_and_legacy_cleared(self):
+        """回填到 session_meta.task_category/subtask_category 时应入库并映射编码；旧体系标签清空意图但保留 trace。"""
         from analysis_api.taxonomy import load_intent
 
         attr = self.aime / "eval_output" / "0_daily_eval" / "aime_expert" / f"aime_expert_attribution-{fixtures.DAY}.jsonl"
@@ -361,14 +361,14 @@ class StoreTest(unittest.TestCase):
         backfilled["session_meta"]["subtask_category"] = "事件影响与异常波动研究"
         _append(attr, backfilled)
 
-        unknown = fixtures._session(
-            "thread_unk", "trace_unk", "2026-10-20T06:30:00.000Z", None, None, "1000000012", "AIME-Atlas", []
+        legacy = fixtures._session(
+            "thread_leg", "trace_legacy", "2026-10-20T06:30:00.000Z", None, None, "1000000012", "AIME-Atlas", []
         )
-        unknown["turns"][0]["meta"].pop("task", None)
-        unknown["turns"][0]["meta"].pop("subtask", None)
-        unknown["session_meta"]["task_category"] = "未来新增大类"
-        unknown["session_meta"]["subtask_category"] = "未来新增子类"
-        _append(attr, unknown)
+        legacy["turns"][0]["meta"].pop("task", None)
+        legacy["turns"][0]["meta"].pop("subtask", None)
+        legacy["session_meta"]["task_category"] = "事件解读"
+        legacy["session_meta"]["subtask_category"] = "行情事件解读"
+        _append(attr, legacy)
 
         store.build(self.root)
         intent_tree = load_intent(config.INTENT_TAXONOMY_FILE)
@@ -379,10 +379,12 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(bf_item["task"], "投资标的研究与分析")
         self.assertEqual(bf_item["subtask"], "事件影响与异常波动研究")
 
-        unk_item = snapshot._item(snap, snap.by_id["trace_unk"][0])
-        self.assertIsNone(unk_item["intent_code"])
-        self.assertEqual(unk_item["task"], "未来新增大类")
-        self.assertEqual(unk_item["subtask"], "未来新增子类")
+        # 旧标签的 trace 照常保留供数，只清空旧意图字段
+        self.assertIn("trace_legacy", snap.by_id)
+        leg_item = snapshot._item(snap, snap.by_id["trace_legacy"][0])
+        self.assertIsNone(leg_item["intent_code"])
+        self.assertIsNone(leg_item["task"])
+        self.assertIsNone(leg_item["subtask"])
 
         # /summary 和 /severity 按 intent 分组附带 intent_label
         filters = snapshot.Filters(dataset="aime_eval")
@@ -393,6 +395,44 @@ class StoreTest(unittest.TestCase):
         sev_rows = snapshot.severity(snap, filters, ["intent"], level="top")["groups"]
         sev_by_code = {g["keys"]["intent"]: g for g in sev_rows}
         self.assertEqual(sev_by_code["FIN-L1-03"]["intent_label"], "投资标的研究与分析")
+
+    def test_category_meta_trace_join_and_auto_rescan(self):
+        """0_litefusion_data/online_data/.../category_meta.json 按 trace_id 关联并自动触发增量变更。"""
+        from analysis_api.taxonomy import load_intent
+
+        store.build(self.root)
+        cat_file = self.root / "0_litefusion_data" / "online_data" / "2026" / "11" / "20" / "category_meta.json"
+        cat_file.parent.mkdir(parents=True, exist_ok=True)
+        cat_file.write_text(
+            json.dumps(
+                {
+                    "trace_multi_1": {
+                        "task_category": "数据资料检索与事实核验",
+                        "subtask_category": "行情与市场数据获取",
+                    },
+                    "trace_multi_2": {
+                        "task_category": "投资决策与交易建议",
+                        "subtask_category": "交易时机与价格决策",
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        updated = store.build(self.root)
+        self.assertGreater(updated["attribution_files"], 0)
+        self.assertEqual(updated["changes_emitted"], 2)
+
+        snap = self._snapshot(intent_tree=load_intent(config.INTENT_TAXONOMY_FILE))
+        m1 = snapshot._item(snap, snap.by_id["trace_multi_1"][0])
+        m2 = snapshot._item(snap, snap.by_id["trace_multi_2"][0])
+        self.assertEqual((m1["intent_code"], m1["task"]), ("FIN-L2-004", "数据资料检索与事实核验"))
+        self.assertEqual((m2["intent_code"], m2["task"]), ("FIN-L2-055", "投资决策与交易建议"))
+
+        # 内容不变：直接跳过，不重扫也不发变更
+        noop = store.build(self.root)
+        self.assertEqual(noop["attribution_files"], 0)
+        self.assertEqual(noop["changes_emitted"], 0)
 
     def test_schema_upgrade_rescans_attribution(self):
         store.build(self.root)

@@ -9,11 +9,6 @@
    "version": "2026-11",
    "status": "current",
    "released_at": "2026-11-02T00:00:00Z"
-  },
-  {
-   "version": "2026-10",
-   "status": "retired",
-   "released_at": "2026-10-31T16:00:00Z"
   }
  ],
  "nodes": [
