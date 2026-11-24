@@ -1,0 +1,13 @@
+{
+  "synced_at": "2026-11-24T04:21:44Z",
+  "packages": {
+    "eval_harness_pkg": {
+      "source": "/Users/cmy/Desktop/eval_agent_harness/eval_harness_pkg",
+      "git_commit": "39d274d67ceb5b315c3eeb6e00c0d595d0594816"
+    },
+    "cluster_pkg": {
+      "source": "/Users/cmy/Desktop/cluster_algorithm/cluster_pkg",
+      "git_commit": "d5cfeb1c90cbcb8798ce0551895d022ccc010c6d"
+    }
+  }
+}

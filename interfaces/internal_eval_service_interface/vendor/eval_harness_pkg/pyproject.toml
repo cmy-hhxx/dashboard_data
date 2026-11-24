@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eval-harness-pkg"
+version = "0.1.0"
+description = "Portable attribution evaluation and data-cleaning harness"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+eval-prepare = "eval_harness.cli:prepare_main"
+eval-run = "eval_harness.cli:run_main"
+
+[tool.setuptools.packages.find]
+include = ["eval_harness*"]
+
+[tool.setuptools.package-data]
+eval_harness = ["bundle/*"]

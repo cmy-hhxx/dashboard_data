@@ -26,6 +26,7 @@ fi
 if [ -z "$ONLY" ] || [ "$ONLY" = interfaces ]; then
   run "interfaces unittest" "$ROOT/interfaces/eval_data_interface" python3 -m unittest discover -s tests -q
   run "interfaces acceptance" "$ROOT/interfaces/eval_data_interface" python3 tests/test_acceptance.py
+  run "internal_eval_service unittest" "$ROOT/interfaces/internal_eval_service_interface" python3 -m unittest discover -s tests -q
 fi
 if [ -z "$ONLY" ] || [ "$ONLY" = page_service ]; then
   for d in "$ROOT"/page_service/*/tests; do

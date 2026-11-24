@@ -2,13 +2,16 @@
 
 import gzip
 import json
+import os
 import secrets
+import sys
 import threading
 import time
 import traceback
 from collections import OrderedDict
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from . import config, cursors, errors, snapshot, store, timeutil
@@ -225,6 +228,36 @@ class App:
 
 APP = App()
 
+# 可选挂载内部评测与聚类服务（/api/v1/internal-eval/*），默认仅在 AIME 实例且目录存在时启用。
+INTERNAL_EVAL_APP = None
+
+
+def mount_internal_eval(app=None, log=print):
+    """加载并挂载 internal_eval_service_interface（不影响现有 /api/v1/analysis/*）。"""
+    global INTERNAL_EVAL_APP
+    if app is not None:
+        INTERNAL_EVAL_APP = app
+        return INTERNAL_EVAL_APP
+    candidates = []
+    env_dir = os.environ.get("INTERNAL_EVAL_SERVICE_DIR", "").strip()
+    if env_dir:
+        candidates.append(Path(env_dir).expanduser())
+    candidates.append(config.REPO.parent / "internal_eval_service_interface")
+    candidates.append(Path("/opt/internal_eval_service"))
+    for cand in candidates:
+        if (cand / "internal_eval" / "mount.py").is_file():
+            if str(cand) not in sys.path:
+                sys.path.insert(0, str(cand))
+            try:
+                from internal_eval.mount import build_mounted_app  # type: ignore
+
+                INTERNAL_EVAL_APP = build_mounted_app(log=log)
+            except Exception as exc:  # noqa: BLE001 - 挂载失败不得影响既有 5003 供数接口
+                log(f"[internal-eval] 挂载失败（已降级忽略）：{exc}")
+                INTERNAL_EVAL_APP = None
+            return INTERNAL_EVAL_APP
+    return None
+
 
 def _json_response(handler, status, payload, headers=None):
     # 原始输入里偶有落单的代理字符（emoji 被截断），ensure_ascii=False 后直接 encode 会 503，
@@ -325,6 +358,11 @@ class Handler(BaseHTTPRequestHandler):
         return parsed.path, normalize(params)
 
     def _route(self):
+        # 若请求命中已挂载的内部评测接口前缀，直接交给独立路由模块处理，避免读取/过滤请求体。
+        mounted = INTERNAL_EVAL_APP
+        if mounted is not None and mounted.can_handle(urlparse(self.path).path):
+            mounted.handle_http(self)
+            return
         request_id = _request_id()
         # 超过并发上限直接 429：排队只会把线程和内存堆满，调用方按 Retry-After 退避即可。
         if not APP.inflight.acquire(blocking=False):
@@ -670,6 +708,7 @@ class Server(ThreadingHTTPServer):
 def serve(host=None, port=None, log=print):
     host = host or config.HOST
     port = port or config.PORT
+    mount_internal_eval(log=log)
     server = Server((host, port), Handler)
     thread = threading.Thread(target=APP.refresh_loop, args=(log,), daemon=True)
     thread.start()
@@ -679,4 +718,9 @@ def serve(host=None, port=None, log=print):
     except KeyboardInterrupt:
         log("[serve] 退出")
     finally:
+        if INTERNAL_EVAL_APP is not None:
+            try:
+                INTERNAL_EVAL_APP.pipeline.stop()
+            except Exception:  # noqa: BLE001
+                pass
         server.server_close()

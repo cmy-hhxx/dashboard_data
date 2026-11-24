@@ -1,0 +1,44 @@
+# Portable Eval Harness Configuration
+# Relative paths resolve against this config file's directory.
+# Environment variables can be referenced with ${VAR_NAME}.
+
+# 1. OpenAI Responses API endpoint (required by run_eval.py)
+api:
+  base_url: "https://your-gateway.example.com/v1"
+  model: "gpt-5.4"
+  # Recommend reading from env var; or set `api_key: "sk-..."` directly.
+  api_key_env: "OPENAI_API_KEY"
+  thinking: "low"            # off | minimal | low | medium | high | xhigh | max
+  compact_thinking: "off"
+  trace_thinking: "off"
+
+# 2. Eval-ready input JSONL (file or directory of .jsonl files)
+input: "./data/eval_input.jsonl"
+
+# 3. Expected evaluation output JSONL file path
+output: "./data/eval_output.jsonl"
+
+# 4. Data cleaning settings (used by prepare_eval.py)
+prepare:
+  raw_input: "./data/raw.jsonl"          # supports .jsonl, .jsonl.gz, .jsonl.zst, or a directory
+  output: "./data/eval_input.jsonl"      # defaults to top-level `input` when omitted
+  audit_output: "./data/prepare_audit.jsonl"  # optional: line-level reject/warn audit
+  split_traces: true                     # split multi-trace sessions into one trace per line
+  repair_question: true                  # recover missing user_question from meta/message_pool
+  slim: true                             # lossless prompt-snapshot slimming
+  default_batch_id: "eval"               # fallback batch_id when missing in record and filename
+  version: "evaluated_model"             # fallback model version label when missing in record
+
+# 5. Optional execution tuning (used by run_eval.py)
+execution:
+  concurrency: 8
+  task_concurrency: 12
+  model_requests: 32
+  worker_slots: 4
+  timeout_seconds: 900
+  idle_timeout_seconds: 120
+  retries: 3
+  resume: true                           # skip cases already present in `output`
+  # limit: 50                            # optional: smoke-test first N cases
+  # compact_output: "./data/eval_compact.jsonl"  # optional: save compact sidecar
+  # audit_output: "./data/eval_audit.jsonl"      # optional: save admission issues
