@@ -235,17 +235,17 @@ def build(root: Path) -> Path:
 
     daily = [
         _session(
-            "thread_a", "trace_alpha", "2026-10-20T12:00:00.000Z", "事件解读", "行情事件解读", "1000000001", "AIME-Atlas",
+            "thread_a", "trace_alpha", "2026-10-20T12:00:00.000Z", "投资标的研究与分析", "事件影响与异常波动研究", "1000000001", "AIME-Atlas",
             [_problem("空查询参数重试", "P2"), _problem("旧数据当当前值", "P4")],
             question="英伟达今天为什么跌",
         ),
         _session(
-            "thread_b", "trace_beta", "2026-10-20T13:00:00.000Z", "数据查询类", "时点行情查询", "1000000002", "AIME-Atlas",
+            "thread_b", "trace_beta", "2026-10-20T13:00:00.000Z", "数据资料检索与事实核验", "行情与市场数据获取", "1000000002", "AIME-Atlas",
             [],
             question="AAPL 最新价", is_correct=True,
         ),
         _session(
-            "thread_c", "trace_gamma", "2026-10-20T14:00:00.000Z", "交易建议", "入场与加仓时机建议", "1000000001", "AIME-Atlas",
+            "thread_c", "trace_gamma", "2026-10-20T14:00:00.000Z", "投资决策与交易建议", "交易时机与价格决策", "1000000001", "AIME-Atlas",
             [
                 _problem("旧数据当当前值", "P1"),
                 _problem("空查询参数重试", "P3"),
@@ -256,13 +256,13 @@ def build(root: Path) -> Path:
         ),
         # 同一 trace 的重跑：行号更大的一行生效，前一行进 history
         _session(
-            "thread_a", "trace_alpha", "2026-10-20T12:00:00.000Z", "事件解读", "行情事件解读", "1000000001", "AIME-Atlas",
+            "thread_a", "trace_alpha", "2026-10-20T12:00:00.000Z", "投资标的研究与分析", "事件影响与异常波动研究", "1000000001", "AIME-Atlas",
             [_problem("空查询参数重试", "P3")],
             question="英伟达今天为什么跌",
         ),
         # 未聚类问题：有严重度、计入 problems，只是没有聚类编码
         _session(
-            "thread_d", "trace_delta", "2026-10-20T15:00:00.000Z", "投教问答", "金融术语与指标释义", "1000000003", "AIME-Atlas",
+            "thread_d", "trace_delta", "2026-10-20T15:00:00.000Z", "知识学习与能力练习", "理解投资概念、规则与产品机制", "1000000003", "AIME-Atlas",
             [_problem("自由文本问题", "P2"), _problem("提示级问题", "P4")],
             question="什么是市盈率",
         ),
@@ -270,13 +270,13 @@ def build(root: Path) -> Path:
         _turns_session(
             "thread_multi",
             [("trace_multi_1", [_problem("空查询参数重试", "P2")]), ("trace_multi_2", [])],
-            "2026-10-20T16:00:00.000Z", "事件解读", "行情事件解读", "1000000006", "AIME-Atlas",
+            "2026-10-20T16:00:00.000Z", "投资标的研究与分析", "事件影响与异常波动研究", "1000000006", "AIME-Atlas",
             question="多轮会话问句",
             session_problems=[_problem("跨轮遗漏标的", "P1")],
         ),
         # 测试账号：供数接口不能返回它的问句 / trace。
         _session(
-            "thread_test", "trace_test", "2026-10-20T17:00:00.000Z", "投教问答", "金融术语与指标释义", "test_user", "AIME-Atlas",
+            "thread_test", "trace_test", "2026-10-20T17:00:00.000Z", "知识学习与能力练习", "理解投资概念、规则与产品机制", "test_user", "AIME-Atlas",
             [],
             question="内部测试问句",
         ),
@@ -286,7 +286,7 @@ def build(root: Path) -> Path:
 
     lost = [
         _session(
-            "thread_lost", "trace_lost", "2026-09-18T12:00:00.000Z", "投教问答", "金融术语与指标释义", "1000000009", "aime-fast-new",
+            "thread_lost", "trace_lost", "2026-09-18T12:00:00.000Z", "知识学习与能力练习", "理解投资概念、规则与产品机制", "1000000009", "aime-fast-new",
             [_problem("召回为空", "P2")],
             question="lost user question",
             session_problems=[_problem("会话级问题", "P2")],
@@ -366,7 +366,7 @@ def build_wencai(root: Path) -> Path:
             "user_type": WENCAI_COHORT,
             "skill_names_text": "finquery-market-data",
             "task_category": "投资标的研究与分析",
-            "subtask_category": "行情事件解读",
+            "subtask_category": "事件影响与异常波动研究",
         })
         for turn in session["turns"]:
             turn["meta"].pop("task", None)
@@ -397,7 +397,7 @@ def build_wencai(root: Path) -> Path:
     ]
     for row in inputs:
         row["meta"]["task_category"] = "投资标的研究与分析"
-        row["meta"]["subtask_category"] = "行情事件解读"
+        row["meta"]["subtask_category"] = "事件影响与异常波动研究"
         row["meta"]["user_type"] = WENCAI_COHORT
         row["meta"]["question_text"] = row["meta"]["question"]
     _write_jsonl(

@@ -377,6 +377,13 @@ def _problem_label(snap: Snapshot, code):
     return None
 
 
+def _intent_label(snap: Snapshot, code):
+    if not code or snap.intent is None:
+        return None
+    node = snap.intent.node(code)
+    return node.label if node is not None else None
+
+
 def _current_problems(snap: Snapshot, trace: Trace, problems=None):
     """Keep each stored code, but add the current tree's code and the retired original."""
     tree = snap.tree_for(trace)
@@ -496,7 +503,7 @@ def _validate_group(group_by, level, filters, allow_empty=False):
                 )
 
 
-def _group_row(keys, count, users, problem_traces, problems, analyzed, problem_label=None):
+def _group_row(keys, count, users, problem_traces, problems, analyzed, problem_label=None, intent_label=None):
     row = {
         "keys": dict(keys),
         "analyzed": analyzed,
@@ -507,6 +514,8 @@ def _group_row(keys, count, users, problem_traces, problems, analyzed, problem_l
     }
     if problem_label is not None:
         row["problem_label"] = problem_label
+    if intent_label is not None:
+        row["intent_label"] = intent_label
     return row
 
 
@@ -607,6 +616,7 @@ def summary(snap: Snapshot, filters: Filters, group_by, level="top", sort=None, 
         label = _problem_label(snap, keys.get("problem")) if "problem" in keys else None
         if label is None and keys.get("problem") is None and "problem" in keys:
             label = config.UNCLUSTERED_LABEL
+        ilabel = _intent_label(snap, keys.get("intent")) if "intent" in keys else None
         rows.append(
             _group_row(
                 combo,
@@ -616,6 +626,7 @@ def summary(snap: Snapshot, filters: Filters, group_by, level="top", sort=None, 
                 bucket["problems"],
                 analyzed,
                 problem_label=label,
+                intent_label=ilabel,
             )
         )
 
@@ -708,6 +719,10 @@ def severity(snap: Snapshot, filters: Filters, group_by=(), level="top", sort=No
                 label = config.UNCLUSTERED_LABEL
             if label is not None:
                 row["problem_label"] = label
+        if "intent" in keys:
+            ilabel = _intent_label(snap, keys.get("intent"))
+            if ilabel is not None:
+                row["intent_label"] = ilabel
         rows.append(row)
 
     filter_key = filters.cache_key() + "|" + ",".join(group_by) + "|" + level + "|" + sort
@@ -872,6 +887,8 @@ def _item(snap: Snapshot, trace: Trace):
         "app_version": trace.app_version,
         "query_preview": preview,
         "intent_code": trace.intent_code,
+        "task": trace.task,
+        "subtask": trace.subtask,
         "is_correct": trace.is_correct,
         "problem_count": trace.problem_count,
         "problem_codes": list(trace.problem_codes),
@@ -941,6 +958,8 @@ def batch(snap: Snapshot, trace_ids, filters: Filters):
                     "app_version": None,
                     "query_preview": None,
                     "intent_code": None,
+                    "task": None,
+                    "subtask": None,
                     "is_correct": None,
                     "problem_count": 0,
                     "problem_codes": [],
@@ -1165,6 +1184,8 @@ def detail(snap: Snapshot, db_path, dataset: str, trace_id: str, day: str | None
         "session_id": trace.session_id,
         "app_version": trace.app_version,
         "intent_code": trace.intent_code,
+        "task": trace.task,
+        "subtask": trace.subtask,
         "is_correct": trace.is_correct,
         "problem_count": trace.problem_count,
         "problem_codes": list(trace.problem_codes),

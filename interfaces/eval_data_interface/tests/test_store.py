@@ -273,7 +273,7 @@ class StoreTest(unittest.TestCase):
 
         # 重跑改内容：同一个 key 再来一条 upsert
         _append(attr, fixtures._session(
-            "thread_a", "trace_alpha", "2026-10-20T12:00:00.000Z", "事件解读", "行情事件解读", "1000000001",
+            "thread_a", "trace_alpha", "2026-10-20T12:00:00.000Z", "投资标的研究与分析", "事件影响与异常波动研究", "1000000001",
             "AIME-Atlas", [fixtures._problem("空查询参数重试", "P0")], question="英伟达今天为什么跌",
         ))
         self.assertEqual(store.build(self.root)["changes_emitted"], 1)
@@ -339,12 +339,60 @@ class StoreTest(unittest.TestCase):
         replay = snapshot.changes(snap, config.db_path(), "aime_eval", since, page_size=3)
         self.assertEqual((replay["items"], replay["deleted"]), ([], []))
 
-    def _snapshot(self):
+    def _snapshot(self, intent_tree=None):
         conn = store.connect(config.db_path())
         try:
-            return snapshot.load(conn, None, {})
+            return snapshot.load(conn, intent_tree, {})
         finally:
             conn.close()
+
+    def test_session_meta_task_category_fallback_and_unknown_label(self):
+        """回填到 session_meta.task_category/subtask_category 时应入库并映射编码；表外标签保留原文。"""
+        from analysis_api.taxonomy import load_intent
+
+        attr = self.aime / "eval_output" / "0_daily_eval" / "aime_expert" / f"aime_expert_attribution-{fixtures.DAY}.jsonl"
+
+        backfilled = fixtures._session(
+            "thread_bf", "trace_bf", "2026-10-20T06:00:00.000Z", None, None, "1000000011", "AIME-Atlas", []
+        )
+        backfilled["turns"][0]["meta"].pop("task", None)
+        backfilled["turns"][0]["meta"].pop("subtask", None)
+        backfilled["session_meta"]["task_category"] = "投资标的研究与分析"
+        backfilled["session_meta"]["subtask_category"] = "事件影响与异常波动研究"
+        _append(attr, backfilled)
+
+        unknown = fixtures._session(
+            "thread_unk", "trace_unk", "2026-10-20T06:30:00.000Z", None, None, "1000000012", "AIME-Atlas", []
+        )
+        unknown["turns"][0]["meta"].pop("task", None)
+        unknown["turns"][0]["meta"].pop("subtask", None)
+        unknown["session_meta"]["task_category"] = "未来新增大类"
+        unknown["session_meta"]["subtask_category"] = "未来新增子类"
+        _append(attr, unknown)
+
+        store.build(self.root)
+        intent_tree = load_intent(config.INTENT_TAXONOMY_FILE)
+        snap = self._snapshot(intent_tree=intent_tree)
+
+        bf_item = snapshot._item(snap, snap.by_id["trace_bf"][0])
+        self.assertEqual(bf_item["intent_code"], "FIN-L2-024")
+        self.assertEqual(bf_item["task"], "投资标的研究与分析")
+        self.assertEqual(bf_item["subtask"], "事件影响与异常波动研究")
+
+        unk_item = snapshot._item(snap, snap.by_id["trace_unk"][0])
+        self.assertIsNone(unk_item["intent_code"])
+        self.assertEqual(unk_item["task"], "未来新增大类")
+        self.assertEqual(unk_item["subtask"], "未来新增子类")
+
+        # /summary 和 /severity 按 intent 分组附带 intent_label
+        filters = snapshot.Filters(dataset="aime_eval")
+        sum_rows = snapshot.summary(snap, filters, ["intent"], level="top")["groups"]
+        by_code = {g["keys"]["intent"]: g for g in sum_rows}
+        self.assertEqual(by_code["FIN-L1-03"]["intent_label"], "投资标的研究与分析")
+
+        sev_rows = snapshot.severity(snap, filters, ["intent"], level="top")["groups"]
+        sev_by_code = {g["keys"]["intent"]: g for g in sev_rows}
+        self.assertEqual(sev_by_code["FIN-L1-03"]["intent_label"], "投资标的研究与分析")
 
     def test_schema_upgrade_rescans_attribution(self):
         store.build(self.root)

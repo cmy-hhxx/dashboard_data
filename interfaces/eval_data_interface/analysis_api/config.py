@@ -79,7 +79,7 @@ SOURCE_TO_SPLIT = {v: k for k, v in SPLIT_TO_SOURCE.items()}
 
 # 模型目录 → app_version 后缀（由 layout 提供）
 
-INTENT_TAXONOMY_FILE = REPO / "taxonomy" / "intent_2026-10.json"
+INTENT_TAXONOMY_FILE = REPO / "taxonomy" / "intent_2026-11.json"
 
 
 def db_path() -> Path:

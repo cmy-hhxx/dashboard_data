@@ -63,14 +63,15 @@ trace 的 `problems` 问题数组与 P0–P4 严重度，并新增 `GET /severit
 | `user_id` | 真实用户名或数字 ID | `turns[].meta.user_id` |
 | `day` | `YYYY-MM-DD`（America/New_York，含夏令时） | `turns[].meta.timestamp` |
 | trace | 一条**单轮**对话 | `turns[]` 的一项，id = `turns[].meta.trace_id` |
-| `intent` | `T01` / `T01.S02` | `turns[].meta.task` / `subtask` |
+| `intent` | `FIN-L1-03` / `FIN-L2-024` | `turns[].meta.task`/`task_category`，兜底 `session_meta.task_category`/`subtask_category` |
 | `problem` | `S9` / `S9.M5` / `S9.M5.1` | cluster 树的节点 id；未聚类问题 `code=null` |
 | `severity` | `P0`–`P4` | `turns[].problem[].severity`（P0 最重） |
 
 ## 分类体系
 
-- **意图**：`taxonomy/intent_2026-10.json`，27 个顶层任务 + 169 个子任务，编码 `T01` → `T01.S02`，
-  label 保留中文原值。版本 `2026-10`。
+- **意图**：`taxonomy/intent_2026-11.json`（金融意图分类体系 v1.9），19 个顶层任务
+  `FIN-L1-01`–`FIN-L1-19` + 123 个子任务 `FIN-L2-001`–`FIN-L2-123`，label 保留中文原值。
+  版本 `2026-11`；旧标签（如 `T01` 时代的 `事件解读`）照常入库但不映射编码，`intent_code=null`。
 - **问题**：直接来自数据的 `cluster_tree.json`，按模型两份：
   `aime_expert` / `aime_fast`，层级为 环节 `S*` → 机制 `S*.M*` → 模式 `S*.M*.x`
   （个别还有第 4 层变体）。`/taxonomy?kind=problem` 用 `app_version` 选树。
@@ -95,7 +96,7 @@ trace 的 `problems` 问题数组与 P0–P4 严重度，并新增 `GET /severit
 6. **`analyzed` 分母**：去掉 `problem` / `severity` 两个筛选项、并忽略分组键里的 `problem` 维度后，
    同一范围的 trace 数。
 7. **`intent` 编码不在数据里**：`task`/`subtask` 是中文自由文本，编码由本仓库的
-   `taxonomy/intent_2026-10.json` 固定；出现表外的新 label 时该 trace 的 `intent_code` 为 `null`。
+   `taxonomy/intent_2026-11.json` 固定；出现表外的新 label 时该 trace 的 `intent_code` 为 `null`。
 8. **trace 与 session**：trace 是统计单位，`trace_id` 取每个 `traces[].meta.trace_id`；外层
    `meta.session_id` 只作 `session_id`。同一 session 的多轮各算一条 trace。
 9. **测试账号不供数**：口径是「真实 userid = 纯数字且 ≤10 位」（业务方 2026-11-17），

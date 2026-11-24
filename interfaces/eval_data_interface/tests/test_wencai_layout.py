@@ -86,6 +86,9 @@ def run_cases(client: Client):
     assert {r["source"] for r in rows} == {fixtures.WENCAI_COHORT}, rows
     assert {r["day"] for r in rows} == {fixtures.WENCAI_DAY}, rows
     assert {r["query_preview"] for r in rows} == {"云南锗业为什么涨停", "今天适合买什么"}, rows
+    assert {r["intent_code"] for r in rows} == {"FIN-L2-024"}, rows
+    assert {r["task"] for r in rows} == {"投资标的研究与分析"}, rows
+    assert {r["subtask"] for r in rows} == {"事件影响与异常波动研究"}, rows
 
     status, sev = client.get(f"{API}/severity", dataset=dataset)
     assert status == 200 and sev["data"]["total"]["analyzed"] == 2, sev

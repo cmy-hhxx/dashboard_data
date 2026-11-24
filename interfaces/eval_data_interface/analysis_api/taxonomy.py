@@ -1,4 +1,4 @@
-"""分类树：意图树来自 taxonomy/intent_2026-10.json，问题树来自数据的 cluster_tree.json。"""
+"""分类树：意图树来自 taxonomy/intent_2026-11.json，问题树来自数据的 cluster_tree.json。"""
 
 import json
 from dataclasses import dataclass

@@ -533,17 +533,21 @@ def _prefix(path: Path, size: int) -> str:
 
 
 def _intent_lookup(intent_tree):
+    by_pair = {}
     by_label = {}
     if intent_tree is None:
-        return by_label
+        return by_pair, by_label
     for node in intent_tree.nodes.values():
         by_label.setdefault((node.level, node.label), node.code)
-    return by_label
+        if node.level == 2 and node.parent and node.parent in intent_tree.nodes:
+            parent_label = intent_tree.nodes[node.parent].label
+            by_pair.setdefault((parent_label, node.label), node.code)
+    return by_pair, by_label
 
 
 def ingest_attribution(conn, product: Path, item_codes_by_model, intent_tree, log):
     """把一个 attribution 文件读进 traces / history；同一 trace 保留行号最大的一行。"""
-    lookup = _intent_lookup(intent_tree)
+    by_pair, by_label = _intent_lookup(intent_tree)
     stats = {"files": 0, "skipped": 0, "traces": 0, "history": 0, "problems": 0, "unclustered": 0, "changes": 0}
     codes_by_model = {k: c for k, (c, _) in item_codes_by_model.items()}
 
@@ -589,11 +593,24 @@ def ingest_attribution(conn, product: Path, item_codes_by_model, intent_tree, lo
                 turn_session_id = session_id or _text(meta.get("session_id"))
                 stamp = timeutil.parse_iso(meta.get("timestamp")) or timeutil.parse_iso(smeta.get("request_time"))
                 day = timeutil.local_day(stamp, config.DAY_TZ) or default_day
-                task = _clean(meta.get("task"))
-                subtask = _clean(meta.get("subtask"))
-                intent_code = lookup.get((2, subtask)) if subtask else None
+                # 意图字段兼容多代布局：优先轮次级 task/task_category，兜底会话级回填字段。
+                task = _clean(
+                    meta.get("task")
+                    or meta.get("task_category")
+                    or smeta.get("task")
+                    or smeta.get("task_category")
+                )
+                subtask = _clean(
+                    meta.get("subtask")
+                    or meta.get("subtask_category")
+                    or smeta.get("subtask")
+                    or smeta.get("subtask_category")
+                )
+                intent_code = by_pair.get((task, subtask)) if (task and subtask) else None
+                if intent_code is None and subtask:
+                    intent_code = by_label.get((2, subtask))
                 if intent_code is None and task:
-                    intent_code = lookup.get((1, task))
+                    intent_code = by_label.get((1, task))
 
                 turn_problems = list(turn.get("problem") or [])
                 problems = list(turn_problems)

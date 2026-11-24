@@ -700,8 +700,8 @@ def run_fixture_cases(workdir: Path):
             lambda: check_big_class(
                 client,
                 dataset,
-                "T01",
-                [node["code"] for node in nodes["intent"] if node["parent_code"] == "T01"],
+                "FIN-L1-03",
+                [node["code"] for node in nodes["intent"] if node["parent_code"] == "FIN-L1-03"],
             ),
         ),
         ("11 未知编码/严重度", lambda: check_unknown_code(client, dataset)),

@@ -1,0 +1,1299 @@
+{
+ "kind": "intent",
+ "version": "2026-11",
+ "status": "current",
+ "released_at": "2026-11-02T00:00:00Z",
+ "source": "wencai_intent_taxonomy_v1.9 (金融意图分类20261102.xlsx, 19 L1 / 123 L2)",
+ "versions": [
+  {
+   "version": "2026-11",
+   "status": "current",
+   "released_at": "2026-11-02T00:00:00Z"
+  },
+  {
+   "version": "2026-10",
+   "status": "retired",
+   "released_at": "2026-10-31T16:00:00Z"
+  }
+ ],
+ "nodes": [
+  {
+   "code": "FIN-L1-01",
+   "label": "知识学习与能力练习",
+   "parent_code": null,
+   "level": 1,
+   "order": 1,
+   "definition": "以投资知识理解和技能掌握为目标，涵盖投资概念、市场规则、产品机制、分析方法、历史案例及观点体系的学习，以及能力练习、测评和学习计划。具体标的研究判断、投资行动选择和账户业务办理归对应分类。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-001",
+   "label": "理解投资概念、规则与产品机制",
+   "parent_code": "FIN-L1-01",
+   "level": 2,
+   "order": 1,
+   "definition": "理解投资术语、收益风险机制、市场制度和交易规则，以及金融产品权利义务与条款机制。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-002",
+   "label": "投资研究与交易方法学习",
+   "parent_code": "FIN-L1-01",
+   "level": 2,
+   "order": 2,
+   "definition": "学习投资分析与交易方法，涵盖步骤示范、假设与适用边界、不同方法比较，以及历史案例和观点体系。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-003",
+   "label": "学习练习与效果评估",
+   "parent_code": "FIN-L1-01",
+   "level": 2,
+   "order": 3,
+   "definition": "开展互动练习和学习测评，识别知识缺口，制定学习、复习与复测计划或补强建议。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L1-02",
+   "label": "数据资料检索与事实核验",
+   "parent_code": null,
+   "level": 1,
+   "order": 2,
+   "definition": "以获取数据、资料或事实核验结果为目标，涵盖行情、财务、估值、主体、产品及公开资料查询，自选集合和成员数据查询，研究材料整理，给定材料信息提取，以及说法、关系和研究证据的真实性、一致性与可靠性核验。经济原因解释、投资价值评价及行动方案制定归研究或决策任务。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-004",
+   "label": "行情与市场数据获取",
+   "parent_code": "FIN-L1-02",
+   "level": 2,
+   "order": 1,
+   "definition": "获取公开行情、成交、盘口和交易状态，资金流向及融资融券数据，已有技术指标数值与形态标签。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-005",
+   "label": "基本面与估值数据获取",
+   "parent_code": "FIN-L1-02",
+   "level": 2,
+   "order": 2,
+   "definition": "获取财务报表字段、已发布估值倍数与分位、股东股本和持股变化，以及分红融资等公司行动的公开数据。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-006",
+   "label": "宏观与行业数据和事实查询",
+   "parent_code": "FIN-L1-02",
+   "level": 2,
+   "order": 3,
+   "definition": "按地区、时间或行业获取宏观与行业指标、统计序列及专题事实，明确频率与统计口径。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-007",
+   "label": "主体与产品事实查询",
+   "parent_code": "FIN-L1-02",
+   "level": 2,
+   "order": 4,
+   "definition": "查询公司、机构和人物公开资料、主体间已披露关系、宏观行业基础事实，以及特定金融产品条款、费用、期限与支持范围。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-008",
+   "label": "新闻公告与研究资料检索",
+   "parent_code": "FIN-L1-02",
+   "level": 2,
+   "order": 5,
+   "definition": "检索公告、财报、新闻资讯、研报、业绩会与电话会议材料、论文书籍，提供原文、来源与日期。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-009",
+   "label": "检索公开观点、原话与官方答复",
+   "parent_code": "FIN-L1-02",
+   "level": 2,
+   "order": 6,
+   "definition": "查找董秘、公司官方问答，以及大V、专家或机构在公开社媒上的观点、原话、时间和上下文。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-010",
+   "label": "检索法律法规与监管文件",
+   "parent_code": "FIN-L1-02",
+   "level": 2,
+   "order": 7,
+   "definition": "检索现行或历史法律法规、监管规则及政策文件原文，明确生效修订时间与适用辖区。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-011",
+   "label": "多模态资料检索",
+   "parent_code": "FIN-L1-02",
+   "level": 2,
+   "order": 8,
+   "definition": "检索投资相关现有图片、图表、照片、音频和视频，提供出处、对象及片段线索。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-012",
+   "label": "数据整理与研究材料构建",
+   "parent_code": "FIN-L1-02",
+   "level": 2,
+   "order": 9,
+   "definition": "整理事件事实与时间线，构建研究数据集或材料包、来源与引用清单，对齐单位币种期间及统计口径，并查询无现有专类的其他结构化记录。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-013",
+   "label": "事实与关系核验",
+   "parent_code": "FIN-L1-02",
+   "level": 2,
+   "order": 10,
+   "definition": "核实说法、传闻和数字真伪，追查来源冲突，验证股权经营关系、主题真实业务关联，以及产品条款功能和支持范围。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-014",
+   "label": "研究证据审查",
+   "parent_code": "FIN-L1-02",
+   "level": 2,
+   "order": 11,
+   "definition": "审查研究表述与引用的对应关系、结论证据充分性、反证和关键假设，以及来源独立性和可追溯性。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-015",
+   "label": "自选信息查询",
+   "parent_code": "FIN-L1-02",
+   "level": 2,
+   "order": 12,
+   "definition": "读取自选列表或分组的名称、成员、数量与关系，并查询自选标的的行情、公告等指定数据。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-016",
+   "label": "给定材料信息提取与核验",
+   "parent_code": "FIN-L1-02",
+   "level": 2,
+   "order": 13,
+   "definition": "从用户给定文本、表格、图片、音频或视频提取事实与字段，定位证据片段，并对齐核验多份材料的一致性。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-017",
+   "label": "综合结构化数据查询",
+   "parent_code": "FIN-L1-02",
+   "level": 2,
+   "order": 14,
+   "definition": "按指定对象集合与跨数据类型字段组合查询结构化信息，以一致对象键组织数据表并列明缺失项。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L1-03",
+   "label": "投资标的研究与分析",
+   "parent_code": null,
+   "level": 1,
+   "order": 3,
+   "definition": "以具体股票、基金、债券、衍生品或数字币等投资标的为研究对象，涵盖产品结构、基本面、估值、技术状态、资金筹码、持仓、公开投资情绪、市场关注、风险收益、事件影响和相对价值。具体标的的看多看空分歧及舆论传播归本类，市场、行业或主题整体情绪归市场研究。资料与原始观点获取归查询，买卖取舍及数量时机判断归决策，所管理账户或组合诊断归组合管理。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-018",
+   "label": "投资标的属性与产品结构研究",
+   "parent_code": "FIN-L1-03",
+   "level": 2,
+   "order": 1,
+   "definition": "解析具体标的的资产类型与收益来源，基金策略持仓和跟踪结构，债券偿付条款、衍生品和结构化产品收益风险条件，以及费用、交易限制、杠杆嵌套和风险约束。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-019",
+   "label": "标的的基本面与经营质量研究",
+   "parent_code": "FIN-L1-03",
+   "level": 2,
+   "order": 2,
+   "definition": "研究收入增长和业务结构、盈利与利润质量、现金转化、竞争地位、商业模式护城河、治理管理、供应链成本，以及发行人信用与偿债能力。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-020",
+   "label": "标的估值、定价与评级研究",
+   "parent_code": "FIN-L1-03",
+   "level": 2,
+   "order": 3,
+   "definition": "评价具体标的合理价值与定价偏离，历史估值位置和折溢价，债券收益率利差、基金净值费用与跟踪误差、衍生品定价、商品外汇期限结构，以及综合评分评级。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-021",
+   "label": "标的的技术研究",
+   "parent_code": "FIN-L1-03",
+   "level": 2,
+   "order": 4,
+   "definition": "基于具体标的图形、K线、技术指标、指定技术流派和量价关系判断当前或历史技术状态。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-022",
+   "label": "盘口/资金/筹码与持仓结构研究",
+   "parent_code": "FIN-L1-03",
+   "level": 2,
+   "order": 5,
+   "definition": "研究具体标的盘口力量、资金流向、筹码集中度，机构和重要股东及公开基金持仓变化，杠杆资金和大额异常交易。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-023",
+   "label": "标的风险收益与可交易性研究",
+   "parent_code": "FIN-L1-03",
+   "level": 2,
+   "order": 6,
+   "definition": "评价具体标的历史收益波动、回撤尾部风险、流动性与交易可达性、风险暴露、收益风险比，以及不同市场状态和阶段下的特征变化。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-024",
+   "label": "事件影响与异常波动研究",
+   "parent_code": "FIN-L1-03",
+   "level": 2,
+   "order": 7,
+   "definition": "解释已发生财报、公告、政策和其他事件对具体标的盈利现金流、估值风险、竞争格局及机会的影响，复盘历史事件表现，并分析单标的行情异动原因。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-025",
+   "label": "标的比较与相对价值分析",
+   "parent_code": "FIN-L1-03",
+   "level": 2,
+   "order": 8,
+   "definition": "比较不同股票、基金、债券、衍生品等标的在估值、收益风险、策略结构、费用跟踪、流动性和交易成本上的差异与相对价值。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-026",
+   "label": "综合标的研究与投资判断",
+   "parent_code": "FIN-L1-03",
+   "level": 2,
+   "order": 9,
+   "definition": "围绕明确标的问题整合多维证据，评价投资价值、主要风险与机会、假设变化下判断稳健性、既定投资条件及研究方案可行性，形成统一研究结论。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-123",
+   "label": "标的投资情绪研究",
+   "parent_code": "FIN-L1-03",
+   "level": 2,
+   "order": 10,
+   "definition": "研究具体投资标的的公开看多看空预期、分歧、关注热度与舆论传播，以及情绪对交易行为的作用。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L1-04",
+   "label": "市场、宏观与行业研究",
+   "parent_code": null,
+   "level": 1,
+   "order": 4,
+   "definition": "以整体市场、宏观经济、政策、行业产业周期、市场结构风格、资金流动和跨资产传导为研究对象，解释当前或历史现象，识别异常与系统性风险，形成环境和趋势判断。市场、行业或主题整体的公开情绪及题材形成归本类；具体标的的基本面、估值、技术、资金筹码、持仓、投资情绪及综合价值评价归标的研究。主题基金、指数产品或数字币与所属行业主题、整体市场按实际对象区分。未知现实未来结果归预测，所管理组合的冲击与承受力归组合管理。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-027",
+   "label": "宏观经济与政策环境研究",
+   "parent_code": "FIN-L1-04",
+   "level": 2,
+   "order": 1,
+   "definition": "研究宏观增长周期、货币财政与利率、流动性信用、通胀、就业消费、地缘政治与制度环境，以及汇率和国际资本流动。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-028",
+   "label": "行业、产业与周期研究",
+   "parent_code": "FIN-L1-04",
+   "level": 2,
+   "order": 2,
+   "definition": "研究行业周期景气、产业链供需与上下游传导、竞争集中度、产能库存价格和盈利周期、政策影响、发展阶段成长空间，并比较行业投资吸引力。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-029",
+   "label": "市场趋势与技术状态研究",
+   "parent_code": "FIN-L1-04",
+   "level": 2,
+   "order": 3,
+   "definition": "识别整体市场和市场指数的现有趋势阶段、技术形态指标、支撑阻力、波动状态、趋势强弱与反转信号，并比较指数走势。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-030",
+   "label": "市场结构、风格与轮动研究",
+   "parent_code": "FIN-L1-04",
+   "level": 2,
+   "order": 4,
+   "definition": "研究市场宽度集中度、行业轮动和风格切换、成长价值红利与大小盘主题风格、投资因子表现、市场主线分化及行业主题相对强弱。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-031",
+   "label": "市场资金、流动性与情绪研究",
+   "parent_code": "FIN-L1-04",
+   "level": 2,
+   "order": 5,
+   "definition": "研究市场资金流向、常态交易流动性、杠杆资金、群体风险偏好、市场行业主题公开情绪与传播、拥挤交易退出承接风险，以及投资者仓位和交易热度。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-032",
+   "label": "事件、政策与跨资产传导研究",
+   "parent_code": "FIN-L1-04",
+   "level": 2,
+   "order": 6,
+   "definition": "研究事件政策对市场、行业、资产类别、资金和风格的影响及传导范围，解释市场反应，并比较股债商品外汇表现、联动与分散对冲价值。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-033",
+   "label": "市场异常与风险状态识别",
+   "parent_code": "FIN-L1-04",
+   "level": 2,
+   "order": 7,
+   "definition": "识别市场异常波动、系统风险、异常流动性、风险集中尾部传染与状态切换，并结合多维证据判断整体过热、过度悲观和总体风险。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-034",
+   "label": "综合市场研究与趋势判断",
+   "parent_code": "FIN-L1-04",
+   "level": 2,
+   "order": 8,
+   "definition": "整合宏观行业、盈利估值、技术资金等多源证据，归纳当前市场驱动、阶段、机会风险和已形成趋势及其稳固程度，评价环境对资产类别的作用。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L1-05",
+   "label": "金融计算、统计与量化分析",
+   "parent_code": null,
+   "level": 1,
+   "order": 5,
+   "definition": "以可复核数值、统计结论、模型、策略规则或验证结果为交付目标，涵盖指标计算、估值、归因、统计与因果检验、模型构建、策略设计回测、情景模拟、阈值反推，以及给定目标函数、参数与约束下的数值优化、可行性和约束冲突求解。组合风险的业务意义解释归组合诊断，可采用的目标配置或保护方案归组合管理，未知现实未来结果归预测，投资行动选择归决策。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-035",
+   "label": "收益、盈亏与历史表现测算",
+   "parent_code": "FIN-L1-05",
+   "level": 2,
+   "order": 1,
+   "definition": "按明确区间与口径计算收益盈亏、波动回撤和绩效指标，比较对象历史收益风险与数值排名，统计已发生事件窗口的表现，包含指定账户和组合。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-036",
+   "label": "统计建模与有效性检验",
+   "parent_code": "FIN-L1-05",
+   "level": 2,
+   "order": 2,
+   "definition": "开展描述统计与分布分析、相关协方差和结构关系分析、分组差异和显著性检验、因子与规律有效性及因果反事实检验，并构建验证可复用金融统计预测模型。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-037",
+   "label": "财务、估值与投资指标测算",
+   "parent_code": "FIN-L1-05",
+   "level": 2,
+   "order": 3,
+   "definition": "按给定数据、公式和假设计算现金流利息复利、估值定价、财务技术信用指标及因子、规则评分评级，以及财务报表和资产负债路径。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-038",
+   "label": "量化策略设计与验证",
+   "parent_code": "FIN-L1-05",
+   "level": 2,
+   "order": 4,
+   "definition": "设计可复用量化策略信号、持仓调仓及验证规则，开展历史交易回测、检查前视幸存者和数据泄漏偏差，检验参数、样本和成本条件下稳健性。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-039",
+   "label": "风险、敏感度与归因测算",
+   "parent_code": "FIN-L1-05",
+   "level": 2,
+   "order": 5,
+   "definition": "按明确模型测算风险损失和回撤，计算敏感度、敞口与风险贡献，并量化分解收益、风险和成本来源，包含指定组合或账户。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-040",
+   "label": "情景模拟与参数反推",
+   "parent_code": "FIN-L1-05",
+   "level": 2,
+   "order": 6,
+   "definition": "在给定模型参数下反推隐含参数、演算普通和极端冲击情景、反推损失或失败阈值及缓冲，并开展随机路径与结果分布模拟。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-041",
+   "label": "交易成本、税费与资金占用测算",
+   "parent_code": "FIN-L1-05",
+   "level": 2,
+   "order": 7,
+   "definition": "计算佣金税费、滑点市场冲击和执行质量、换手保证金资金占用，以及交易盈亏平衡点与账户余额成本影响。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-122",
+   "label": "约束优化与最优方案求解",
+   "parent_code": "FIN-L1-05",
+   "level": 2,
+   "order": 8,
+   "definition": "在目标函数、变量、输入和约束已明确时求投资变量的数值最优解，报告目标值、约束余量与精度，识别不可行、约束冲突及非唯一解。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L1-06",
+   "label": "预测与情景推演",
+   "parent_code": null,
+   "level": 1,
+   "order": 6,
+   "definition": "以分析参考时点尚未确定的现实未来结果为预测对象，涵盖数值、趋势、状态、阶段、等级类别及概率、路径、事件、时间和影响，以及仍含未知响应的条件情景比较、预测偏差复盘及失效条件分析。记录预测对象、基准时点、期限、信息截止、条件和不确定性。机制解释归研究，完整给定假设的演算归金融计算，行动或配置方案归决策及组合管理。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-042",
+   "label": "数值与变化预测",
+   "parent_code": "FIN-L1-06",
+   "level": 2,
+   "order": 1,
+   "definition": "估计参考时点尚未确定的现实未来数值、变化增长收益及结果区间或概率。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-043",
+   "label": "趋势、状态与相对表现预测",
+   "parent_code": "FIN-L1-06",
+   "level": 2,
+   "order": 2,
+   "definition": "预测现实未来方向趋势、状态阶段或等级，以及不同对象未来相对表现和排序。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-044",
+   "label": "路径、结构与关系预测",
+   "parent_code": "FIN-L1-06",
+   "level": 2,
+   "order": 3,
+   "definition": "预测现实未来的多期路径轨迹、形态与结构变化，以及对象之间关联或依赖关系的演变。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-045",
+   "label": "事件、时间与冲击预测",
+   "parent_code": "FIN-L1-06",
+   "level": 2,
+   "order": 4,
+   "definition": "预测事件是否发生及结果、尚未确定的发生时间持续期，以及未来冲击影响与传导。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-046",
+   "label": "条件情景推演",
+   "parent_code": "FIN-L1-06",
+   "level": 2,
+   "order": 5,
+   "definition": "在给定条件下推断仍未知的现实未来结果，比较不同情景，并分析条件变化对预测判断的影响及失效边界。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-047",
+   "label": "预测结果复盘",
+   "parent_code": "FIN-L1-06",
+   "level": 2,
+   "order": 6,
+   "definition": "对照实际结果复盘预测偏差、历史方案准确度与稳定性，分析偏差来源和预测失效条件。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L1-07",
+   "label": "标的筛选与机会发现",
+   "parent_code": null,
+   "level": 1,
+   "order": 7,
+   "definition": "以寻找和缩小投资候选范围为目标，按结构化条件、自然语言投资特征、主题产业链、事件、市场变化，以及人物、机构、产品、技术或地区条件下的业务关联与受益逻辑，筛选标的或发现机会。既有候选的深入评价归标的研究，最终投资选择或买卖行动判断归投资决策。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-048",
+   "label": "按可判定条件筛选标的",
+   "parent_code": "FIN-L1-07",
+   "level": 2,
+   "order": 1,
+   "definition": "按结构化指标阈值、自然语言投资特征，或两者组合寻找并缩小符合条件的标的候选集合。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-049",
+   "label": "主题与产业机会发现",
+   "parent_code": "FIN-L1-07",
+   "level": 2,
+   "order": 2,
+   "definition": "围绕投资主题、产业链环节及上下游，或人物机构产品技术地区条件下的业务关联与受益逻辑寻找候选机会。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-050",
+   "label": "事件驱动机会发现",
+   "parent_code": "FIN-L1-07",
+   "level": 2,
+   "order": 3,
+   "definition": "根据公司事件、行业事件或政策变化发现可能受益、受损或出现投资机会的候选标的。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-051",
+   "label": "市场驱动机会发现",
+   "parent_code": "FIN-L1-07",
+   "level": 2,
+   "order": 4,
+   "definition": "从宏观环境变化、市场风格轮动或行情异动中发现值得研究的候选标的和投资机会。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-052",
+   "label": "候选机会推荐",
+   "parent_code": "FIN-L1-07",
+   "level": 2,
+   "order": 5,
+   "definition": "主动推荐值得进一步研究的候选标的，或结合投资目标、期限和风险等约束提出研究候选。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L1-08",
+   "label": "投资决策与交易建议",
+   "parent_code": null,
+   "level": 1,
+   "order": 8,
+   "definition": "以投资适配、行动或方案取舍为目标，针对明确投资对象或候选方案，判断产品与目标、期限、流动性、经验及风险约束的匹配，比较选择标的、产品与实现方式，确定买入、增持、持有、减持、退出或替换，以及时机、价格、投入、分批节奏和退出条件。正式账户风险测评及产品适当性归账户业务，已确定交易的执行归账户办理，全组合权重构建或结构重配归组合管理。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-053",
+   "label": "投资行动决策",
+   "parent_code": "FIN-L1-08",
+   "level": 2,
+   "order": 1,
+   "definition": "针对明确标的判断是否买入增持、继续持有、减持或退出，形成当下投资行动取舍。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-054",
+   "label": "投资选择决策",
+   "parent_code": "FIN-L1-08",
+   "level": 2,
+   "order": 2,
+   "definition": "在明确标的或产品之间作投资选择，评估单一产品与用户目标期限流动性经验风险条件的非正式适配，或选择投资实现路径。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-055",
+   "label": "交易时机与价格决策",
+   "parent_code": "FIN-L1-08",
+   "level": 2,
+   "order": 3,
+   "definition": "决定具体买卖时机、交易价格或价格区间，形成可供执行的时点和价格取舍。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-056",
+   "label": "交易风险与退出管理",
+   "parent_code": "FIN-L1-08",
+   "level": 2,
+   "order": 4,
+   "definition": "设计止盈、止损及其他未来退出触发条件与管理规则。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-057",
+   "label": "单一标的仓位决策",
+   "parent_code": "FIN-L1-08",
+   "level": 2,
+   "order": 5,
+   "definition": "决定单一标的投入金额和仓位，或制定分批建仓、减仓的交易节奏。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L1-09",
+   "label": "财富规划与财务管理",
+   "parent_code": null,
+   "level": 1,
+   "order": 9,
+   "definition": "以个人或家庭的全口径财务计划为目标，评估目标可达性及资金缺口，规划资产负债、多目标预算、现金流、债务融资、风险保障、财富传承，以及退休和财务自由的积累、过渡与提款，或非退休阶段的长期生活费提款及收入衔接。具体组合配置归组合管理，实际出入金归账户办理。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-058",
+   "label": "财务目标规划",
+   "parent_code": "FIN-L1-09",
+   "level": 2,
+   "order": 1,
+   "definition": "评估个人家庭财务目标可达性和缺口，制定与跟踪资金积累路径，涵盖退休、提前退休或财务自由的积累与过渡衔接。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-059",
+   "label": "多目标与全口径财务规划",
+   "parent_code": "FIN-L1-09",
+   "level": 2,
+   "order": 2,
+   "definition": "整合家庭全口径资产负债和资金承诺，权衡多个目标的资金竞争与预算，并识别资产收入负债的共同风险。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-060",
+   "label": "家庭现金流规划",
+   "parent_code": "FIN-L1-09",
+   "level": 2,
+   "order": 3,
+   "definition": "规划家庭收入支出和现金储备、重大支出的支付来源，评估未来收支缺口。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-061",
+   "label": "债务与融资规划",
+   "parent_code": "FIN-L1-09",
+   "level": 2,
+   "order": 4,
+   "definition": "制定债务偿还计划，权衡还债与投资的资金用途，规划融资渠道与资金来源。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-062",
+   "label": "风险保障规划",
+   "parent_code": "FIN-L1-09",
+   "level": 2,
+   "order": 5,
+   "definition": "评估个人家庭风险保障需求，并规划风险事件发生时的保障资金和应急安排。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-063",
+   "label": "财富传承规划",
+   "parent_code": "FIN-L1-09",
+   "level": 2,
+   "order": 6,
+   "definition": "明确财富传承目标和受益安排，制定传承及信托实施规划。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-064",
+   "label": "长期提款与计划韧性",
+   "parent_code": "FIN-L1-09",
+   "level": 2,
+   "order": 7,
+   "definition": "评估长期生活费提款可持续性和耗尽风险，设计分期提款与收入衔接，并制定压力情景下的调整预案，适用于退休或非退休阶段。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L1-10",
+   "label": "组合、账户与绩效管理",
+   "parent_code": null,
+   "level": 1,
+   "order": 10,
+   "definition": "以用户拥有、机构受托管理或明确指定的新建或已有组合与账户为对象，涵盖投资政策与约束制定、配置及持仓调整、健康诊断、集中风险及约束意义解释、风险与流动性及保证金管理、过程与绩效复盘、投资管理主体任职期间及跨组合业绩评价、多账户资金流和税后安排，以及实际持仓交易台账维护。主体范围依据实际授权及约束确定。账户事实查询和业务执行归账户办理，给定模型数值及最优解归金融计算，持续监测或自动报告归自动化，空白台账模板归内容制作。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-065",
+   "label": "资产配置与组合构建",
+   "parent_code": "FIN-L1-10",
+   "level": 2,
+   "order": 1,
+   "definition": "制定组合投资政策与约束、资产类别比例、具体产品权重和新组合，优化形成符合目标及限制的可采用配置方案。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-066",
+   "label": "持仓调整与再平衡",
+   "parent_code": "FIN-L1-10",
+   "level": 2,
+   "order": 2,
+   "definition": "判断已有组合是否需要调整，并制定整体结构、目标权重和实施量的再平衡方案。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-067",
+   "label": "账户与持仓诊断",
+   "parent_code": "FIN-L1-10",
+   "level": 2,
+   "order": 3,
+   "definition": "综合诊断所管理账户持仓健康度，核对资产成本收益显示与计入口径，评估变现能力及持仓结构和集中度。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-068",
+   "label": "组合风险评估与对冲",
+   "parent_code": "FIN-L1-10",
+   "level": 2,
+   "order": 4,
+   "definition": "评价所管理组合风险损失、集中成因及敏感敞口的投资意义，评估事件压力下承受力，设计对冲保护及风险预算、单笔上限、仓位和回撤规则。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-069",
+   "label": "账户流动性与保证金管理",
+   "parent_code": "FIN-L1-10",
+   "level": 2,
+   "order": 5,
+   "definition": "评估账户流动性、保证金缺口及追保强平风险，制定补缺、降杠杆和风险处置方案。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-070",
+   "label": "投资记录与流程复盘",
+   "parent_code": "FIN-L1-10",
+   "level": 2,
+   "order": 6,
+   "definition": "还原真实投资决策行为，识别偏差与流程问题、制定纪律改进规则，并建立更新核对实际持仓交易台账。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-071",
+   "label": "多组合与资金流管理",
+   "parent_code": "FIN-L1-10",
+   "level": 2,
+   "order": 7,
+   "definition": "规划闲置现金短期流动性、新增资金与定投、跨账户资产放置，统筹申赎派息到期现金流及实施方案，并核查多组合差异与共同暴露。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-072",
+   "label": "组合绩效评价与解释",
+   "parent_code": "FIN-L1-10",
+   "level": 2,
+   "order": 8,
+   "definition": "评价组合相对投资目标基准的历史表现，评价管理主体任职期间和跨组合历史业绩，并结合配置交易过程解释绩效来源。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-073",
+   "label": "组合税务与税后优化",
+   "parent_code": "FIN-L1-10",
+   "level": 2,
+   "order": 9,
+   "definition": "比较账户持有安排的税后结果，制定年度利得亏损实现、税损收割替代持仓、卖出税批次、税务再平衡及税惠账户选择布局转换策略。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L1-11",
+   "label": "监测、触发与自动化执行",
+   "parent_code": null,
+   "level": 1,
+   "order": 11,
+   "definition": "以持续性或周期性规则的创建、管理与执行为目标，对市场、标的、组合、账户或事件进行监测，按条件触发提醒、确认请求或预设动作，并管理配置、授权、风险边界、启停、审批、执行结果、审计记录及异常恢复。一次性查询或交易办理归对应业务，风控或投资策略本身的设计归相应规划任务。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-074",
+   "label": "自动化任务创建",
+   "parent_code": "FIN-L1-11",
+   "level": 2,
+   "order": 1,
+   "definition": "创建持续监测提醒、定期非交易自动执行、自动交易或自动组合再平衡规则与流程。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-075",
+   "label": "自动化任务配置与验证",
+   "parent_code": "FIN-L1-11",
+   "level": 2,
+   "order": 2,
+   "definition": "修改已有自动化任务参数，预览触发和执行影响，验证规则可执行性及冲突。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-076",
+   "label": "自动执行授权与风险控制",
+   "parent_code": "FIN-L1-11",
+   "level": 2,
+   "order": 3,
+   "definition": "设置变更撤销自动执行授权，配置执行限额风险边界、人工确认要求和熔断规则。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-077",
+   "label": "自动化任务启停与生命周期管理",
+   "parent_code": "FIN-L1-11",
+   "level": 2,
+   "order": 4,
+   "definition": "启用暂停恢复、归档或删除自动化任务，管理其生命周期。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-078",
+   "label": "自动化任务触发、审批与执行控制",
+   "parent_code": "FIN-L1-11",
+   "level": 2,
+   "order": 5,
+   "definition": "手动触发已有自动化任务，批准拒绝待执行动作，或取消终止某一次执行实例。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-079",
+   "label": "自动化任务状态与记录查询",
+   "parent_code": "FIN-L1-11",
+   "level": 2,
+   "order": 6,
+   "definition": "查询自动化任务配置状态、触发运行结果、关联订单下游动作状态，以及查询导出审计记录。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-080",
+   "label": "自动化任务异常诊断与恢复",
+   "parent_code": "FIN-L1-11",
+   "level": 2,
+   "order": 7,
+   "definition": "诊断自动任务未触发异常触发、执行失败或结果偏差，重试恢复失败执行，或转交人工处理。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L1-12",
+   "label": "账户连接管理与交易办理",
+   "parent_code": null,
+   "level": 1,
+   "order": 12,
+   "definition": "以金融账户接入、管理、查询或业务办理为目标，涵盖开户选择与申请、资料和凭据安全维护、异常访问处置、账户生命周期、业务权限、正式风险测评及适当性、数据读取授权与导入同步、交易、资金及到账异常、存管、证券及担保品迁移、融资融券、打新、公司行动与权益，以及资产业绩、完整记录、费率规则和办理结果查询。个人或机构账户的读取与办理依据实际授权范围进行。投资取舍、组合风险及长期资金策略归决策规划，真实台账维护归投资记录管理，持续自动化归自动化。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-081",
+   "label": "账户连接管理",
+   "parent_code": "FIN-L1-12",
+   "level": 2,
+   "order": 1,
+   "definition": "添加绑定切换或解绑退出金融账户，完成正常登录并恢复登录会话或账户连接异常。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-082",
+   "label": "金融账户开立与资料维护",
+   "parent_code": "FIN-L1-12",
+   "level": 2,
+   "order": 2,
+   "definition": "选择申请开立真实金融账户，办理身份认证及登记资料更新、销户休眠激活，以及申请开通转签市场业务权限。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-083",
+   "label": "风险测评与适当性办理",
+   "parent_code": "FIN-L1-12",
+   "level": 2,
+   "order": 3,
+   "definition": "办理正式金融账户风险问卷测评、更新账户风险等级，并核对正式产品适当性。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-084",
+   "label": "交易委托办理",
+   "parent_code": "FIN-L1-12",
+   "level": 2,
+   "order": 4,
+   "definition": "提交撤销修改具体交易委托，设置修改规则已确定的券商条件单，并排查下单阶段失败和已发生限制。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-085",
+   "label": "账户业务状态与记录查询",
+   "parent_code": "FIN-L1-12",
+   "level": 2,
+   "order": 5,
+   "definition": "查询账户连接权限授权和申请进度，委托成交完整历史、划转兑换记录，资产持仓与已有盈亏报表，购买力可用可取冻结结算、适用费率利息税费和账户基本属性。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-086",
+   "label": "办理资金划转与现金业务",
+   "parent_code": "FIN-L1-12",
+   "level": 2,
+   "order": 6,
+   "definition": "办理明确资金转入转出及到账异常、货币兑换，以及银行卡和三方存管关系的绑定更换解除。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-087",
+   "label": "证券划转与托管迁移",
+   "parent_code": "FIN-L1-12",
+   "level": 2,
+   "order": 7,
+   "definition": "办理证券和担保品划转、转托管、指定交易迁移。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-088",
+   "label": "融资融券业务办理",
+   "parent_code": "FIN-L1-12",
+   "level": 2,
+   "order": 8,
+   "definition": "办理融资融券款券借入偿还、展期及额度操作。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-089",
+   "label": "打新申购与结果办理",
+   "parent_code": "FIN-L1-12",
+   "level": 2,
+   "order": 9,
+   "definition": "查询打新资格额度和中签结果，办理新股新债等申购中签缴款，以及退款和证券到账结果。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-090",
+   "label": "证券权益与公司行动办理",
+   "parent_code": "FIN-L1-12",
+   "level": 2,
+   "order": 10,
+   "definition": "查询或办理所持证券分红、公司行动和权益，包括配股、转股、行权等账户持有相关事项。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-120",
+   "label": "账户数据授权、导入与同步",
+   "parent_code": "FIN-L1-12",
+   "level": 2,
+   "order": 11,
+   "definition": "设置变更撤销账户数据读取许可，导入刷新同步账户资产持仓数据。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-121",
+   "label": "账户认证、安全与隐私管理",
+   "parent_code": "FIN-L1-12",
+   "level": 2,
+   "order": 12,
+   "definition": "找回修改验证账户凭据及安全隐私设置，处理盗用异常访问和资金安全事件。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L1-13",
+   "label": "客户端与通用应用操作",
+   "parent_code": null,
+   "level": 1,
+   "order": 13,
+   "definition": "以客户端、桌面应用或网页的界面及配置状态变更为目标，涵盖导航、指标图表、自选集合、表头工作台、会话资产、应用窗口和通用网页操作。界面操作作为具体金融业务的执行方式时，按该业务最终目标分类。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-091",
+   "label": "客户端操作与管理",
+   "parent_code": "FIN-L1-13",
+   "level": 2,
+   "order": 1,
+   "definition": "操作金融客户端页面模块视图、指标、图表划线、自选集合、表头字段、工作台个性化和会话资产。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-092",
+   "label": "桌面与通用应用操作",
+   "parent_code": "FIN-L1-13",
+   "level": 2,
+   "order": 2,
+   "definition": "打开关闭切换桌面应用窗口，执行无更明确业务目标的通用界面交互，修改应用设备设置。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-093",
+   "label": "浏览器与网页操作",
+   "parent_code": "FIN-L1-13",
+   "level": 2,
+   "order": 3,
+   "definition": "打开切换定位网页，在网页中输入选择修改内容，以及提交或确认通用外部网页动作。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L1-14",
+   "label": "客户支持与服务办理",
+   "parent_code": null,
+   "level": 1,
+   "order": 14,
+   "definition": "以服务支持或服务请求办理为目标，涵盖产品功能、使用方法、服务规则及办理条件咨询，产品故障、订阅费用与权益处理，账户费用核对、收费争议及退费处理，人工或客户经理联系，服务请求与进度管理，账户证明申请及费率调整。登录、资金或交易阶段的明确业务故障归对应账户业务。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-094",
+   "label": "产品功能及服务咨询",
+   "parent_code": "FIN-L1-14",
+   "level": 2,
+   "order": 1,
+   "definition": "咨询产品功能和服务内容，获取一般操作方法与使用指导。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-095",
+   "label": "产品与服务故障处理",
+   "parent_code": "FIN-L1-14",
+   "level": 2,
+   "order": 2,
+   "definition": "查询产品服务运行状态，诊断并恢复一般产品使用故障。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-096",
+   "label": "订阅、费用与权益管理",
+   "parent_code": "FIN-L1-14",
+   "level": 2,
+   "order": 3,
+   "definition": "查询订阅方案价格权益和到期状态，开通续订变更取消或关闭自动续费，并核对收费账单、申请退款和处理已发生收费异议。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-097",
+   "label": "业务规则与办理条件咨询",
+   "parent_code": "FIN-L1-14",
+   "level": 2,
+   "order": 4,
+   "definition": "咨询未有更具体任务落点的一般业务规则、资格限制、办理流程、材料要求及预计时效。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-098",
+   "label": "人工服务联系与转接",
+   "parent_code": "FIN-L1-14",
+   "level": 2,
+   "order": 5,
+   "definition": "请求接通转接人工客服，或查询账户客服与客户经理联系方式。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-099",
+   "label": "服务请求与进度管理",
+   "parent_code": "FIN-L1-14",
+   "level": 2,
+   "order": 6,
+   "definition": "提交补充修改撤回关闭客服请求，查询工单处理进度，并申请账户资产持有证明。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-100",
+   "label": "账户费用与收费争议办理",
+   "parent_code": "FIN-L1-14",
+   "level": 2,
+   "order": 7,
+   "definition": "申请调整佣金、融资利率、账户服务费及附加收费账户服务。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L1-15",
+   "label": "客户画像管理与查询",
+   "parent_code": null,
+   "level": 1,
+   "order": 15,
+   "definition": "以客户画像信息的维护、评估、查询或授权管理为目标，涵盖信息提供、确认、修正、删除和查询，投资目标、经验、风险意愿、风险承受能力及偏好评估，以及画像来源、状态、历史和服务影响查询。正式账户风险测评及适当性、券商账户数据授权和自动执行授权按各自业务对象分类。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-101",
+   "label": "客户画像信息维护",
+   "parent_code": "FIN-L1-15",
+   "level": 2,
+   "order": 1,
+   "definition": "提供补充更新客户画像，确认修正待确认信息，复核过期冲突信息，或删除指定画像记录。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-102",
+   "label": "客户投资特征评估",
+   "parent_code": "FIN-L1-15",
+   "level": 2,
+   "order": 2,
+   "definition": "评估客户投资目标约束、经验知识、主观风险意愿、客观风险承受能力及投资偏好行为倾向。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-103",
+   "label": "客户画像查询与解释",
+   "parent_code": "FIN-L1-15",
+   "level": 2,
+   "order": 3,
+   "definition": "查询已记录画像内容、来源确认状态与更新时间、变更历史，并解释画像形成依据及对推荐服务的影响。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-104",
+   "label": "客户画像使用授权",
+   "parent_code": "FIN-L1-15",
+   "level": 2,
+   "order": 4,
+   "definition": "设置变更撤回客户画像使用许可，或查询其授权范围和历史记录。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L1-16",
+   "label": "理清诉求与获得陪伴",
+   "parent_code": null,
+   "level": 1,
+   "order": 16,
+   "definition": "以诉求澄清、情绪支持与沟通为目标，涵盖模糊投资诉求、目标优先级及限制条件梳理，投资压力和决策顾虑缓解，情绪约束制定，沟通偏好与陪伴边界约定，以及角色模拟、日常交流和反馈回应。已明确的研究、投资决策或账户办理需求归对应分类。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-105",
+   "label": "理清投资诉求与目标",
+   "parent_code": "FIN-L1-16",
+   "level": 2,
+   "order": 1,
+   "definition": "帮助用户梳理模糊投资诉求，明确目标优先级、限制条件和可接受范围。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-106",
+   "label": "缓解投资情绪与决策困扰",
+   "parent_code": "FIN-L1-16",
+   "level": 2,
+   "order": 2,
+   "definition": "疏解用户投资压力与负面情绪，理清决策顾虑，制定约束情绪驱动交易的自我管理办法。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-107",
+   "label": "沟通偏好与服务边界",
+   "parent_code": "FIN-L1-16",
+   "level": 2,
+   "order": 3,
+   "definition": "约定或调整投资沟通风格、讨论范围节奏、讨论边界及持续陪伴服务范围。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-108",
+   "label": "通用交流与反馈响应",
+   "parent_code": "FIN-L1-16",
+   "level": 2,
+   "order": 4,
+   "definition": "开展角色扮演模拟对话、日常闲聊陪伴，以及回应感谢认同和一般不满反馈。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L1-17",
+   "label": "内容制作与工具开发",
+   "parent_code": null,
+   "level": 1,
+   "order": 17,
+   "definition": "以内容制作或工具实现为交付目标，涵盖文档、表格、图表、网页、图像、音视频、播客、翻译、摘要、改写、格式转换、文案脚本、执行计划、试算工具、数据看板及程序功能的新建或修改。以研究判断或计算结果为核心目标时，按相应分析任务分类，输出载体作为属性记录。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-109",
+   "label": "研究文档与表格制作",
+   "parent_code": "FIN-L1-17",
+   "level": 2,
+   "order": 1,
+   "definition": "新建文档汇报材料或表格，修订既有文档内容与版式，制作空白记录模板等成果。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-110",
+   "label": "图表与HTML页面制作",
+   "parent_code": "FIN-L1-17",
+   "level": 2,
+   "order": 2,
+   "definition": "制作静态图表信息图或HTML网页，以视觉呈现和页面内容为核心交付。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-111",
+   "label": "图像、音视频与播客创作",
+   "parent_code": "FIN-L1-17",
+   "level": 2,
+   "order": 3,
+   "definition": "生成编辑图片、音频和视频，并策划制作完整播客节目。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-112",
+   "label": "翻译、摘要与改写",
+   "parent_code": "FIN-L1-17",
+   "level": 2,
+   "order": 4,
+   "definition": "对给定材料进行保真翻译、摘要提炼，或按用途风格等约束改写。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-113",
+   "label": "格式与载体转换",
+   "parent_code": "FIN-L1-17",
+   "level": 2,
+   "order": 5,
+   "definition": "将既有成果转换为其他文件格式或载体，并保持其内容与结构。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-114",
+   "label": "约束文本创作",
+   "parent_code": "FIN-L1-17",
+   "level": 2,
+   "order": 6,
+   "definition": "按主题受众长度风格等限制创作文案叙事，或编写情境对话和内容脚本。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-115",
+   "label": "任务与流程规划",
+   "parent_code": "FIN-L1-17",
+   "level": 2,
+   "order": 7,
+   "definition": "独立制定或维护复合任务的执行计划，组织步骤依赖、条件、进度与验收安排。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-116",
+   "label": "构建软件与交互工具",
+   "parent_code": "FIN-L1-17",
+   "level": 2,
+   "order": 8,
+   "definition": "构建可复用参数化试算工具、交互数据看板，实现扩展程序功能，修复程序缺陷和运行故障。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L1-18",
+   "label": "管理与交付成果资产",
+   "parent_code": null,
+   "level": 1,
+   "order": 18,
+   "definition": "以既有成果资产的存取和交付为目标，涵盖保存、版本维护、归档、恢复、导出、发送、分享和发布。内容新建、内容修改或重新开展研究计算归相应制作或分析任务；交付对象、成果版本及授权要求作为办理条件记录。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-117",
+   "label": "保存、归档和维护研究版本",
+   "parent_code": "FIN-L1-18",
+   "level": 2,
+   "order": 1,
+   "definition": "保存指定既有成果及版本，将成果归档，或恢复成果和历史版本。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-118",
+   "label": "导出、分享或交付确认成果",
+   "parent_code": "FIN-L1-18",
+   "level": 2,
+   "order": 2,
+   "definition": "导出已有成果，向指定对象发送，创建访问分享入口，或发布成果页面。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L1-19",
+   "label": "其他待归类任务",
+   "parent_code": null,
+   "level": 1,
+   "order": 19,
+   "definition": "任务目标已明确，且现有一级、二级和三级分类均无对应类别时，归本类暂存并记录分类缺口。已有明确类别的任务应归对应类别；仅提供材料、诉求含糊或缺少上下文的情形应先澄清目标。",
+   "counts_as_error": null
+  },
+  {
+   "code": "FIN-L2-119",
+   "label": "其他待归类任务",
+   "parent_code": "FIN-L1-19",
+   "level": 2,
+   "order": 1,
+   "definition": "暂存目标已明确且检查全部现有一级二级及其纳入范围后仍无对应落点的任务，并记录分类缺口。",
+   "counts_as_error": null
+  }
+ ]
+}
