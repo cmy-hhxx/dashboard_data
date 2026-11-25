@@ -41,16 +41,27 @@ AIME 的评测数据、看板（5001）、页面接口（5002）与供数/内部
 - **压缩与聚类**：`compact` 的 `evidence_id` 为整场扁平全局消息下标；`cluster_tree.json` 为阶段 → 环节 → 机制 → 模式四层树，`item_index.jsonl` 用 `turn_index/problem_index` 关联。
 - **配对口径**：输入与归因按 `(session_id, request_time)` 配对，缺失时按 `trace_id` 回退；不补造缺失内容。
 
-### 补 `task_category` / `subtask_category`（手动按需执行）
+### 补 `task_category` / `subtask_category`（接口，常驻自动跑）
 
-上游埋点位于 `0_litefusion_data/online_data/<Y>/<M>/<D>/category_meta.json`，需要回填时手动执行（幂等，按内容哈希跳过未变文件）：
+分类以**上游埋点接口**为准（`category_meta.json` 只是它的不完整快照，实测只覆盖 43%~76%）。接口只有容器能直连：
 
-```bash
-ssh aime_rsi_data 'python3 /mnt/aime_eval_ssd/code/3_scripts/backfill_category.py --local'
-# 本机触发：python3 scripts/aime_backfill_category.py [--dry-run | --force]
+```text
+POST http://10.217.216.85:8888/api/v1/proxy/investment-plan/harness/v1/dialog/agent/run/page_list/
+{"run_started_at":["<ET 起>","<ET 止>"],"page_num":0,"page_size":1000,"trace_id":[...]}
 ```
 
-关键口径：索引取全日期并集；输入侧取顶层 `trace_id`（旧行 `meta.trace_id` 为 `thread_xxx`）；归因侧只按本行 `turns` 覆盖的 trace 判定，查不到保持 `null`；写完须同步更新 `1_slim_publish/state/state.sqlite3` 中对应文件的 `(size, mtime, offset)`，避免重复扫描。
+- 时间窗按 **America/New_York 墙钟**（9/10 月 −4、11 月 −5），**必填**、跨度 ≤31 天；`page_size` ≤1000；`count` 是整窗命中数而 `page_size` 会静默截断；HTTP 恒 200，判 body 的 `status_code`。
+- 整日翻页因排序不稳定会丢/重 ~0.03% → 一律**按 `trace_id` 分批（≤1000/次）**拉，窗口只用来兜住时间范围。
+- **只补空值、不覆盖已有值**（接口约 10% 的行返回空）；字段名就是 `task_category`/`subtask_category`，没有 `difficulty_level_name`。
+- 32 位 hex 老 trace_id 接口 69% 查不到，**跳过**；一 trace 多行时 `turn_index` 相同优先、否则取最大；9 月是旧标签体系，写入时打 `taxonomy_version`（v1=旧 / v1.9=新）。
+
+```bash
+# 常驻循环：近 2 天每 8h、近 8 天每天一次；只写日志不发消息
+nohup bash /mnt/aime_eval_ssd/code/3_scripts/aime_backfill_category_loop.sh >> <cache>/api_loop.log 2>&1 &
+python3 scripts/aime_backfill_category_api.py --local --dry-run   # 手工看一眼
+```
+
+产出记在 `code/3_scripts/cache/aime_backfill_category/api_yield.jsonl`；写完 `eval_input` 须同步 `1_slim_publish/state/state.sqlite3` 的 `(size, mtime, offset)`（脚本已做）。
 
 ## 4. 构建缓存与运维约定
 

@@ -203,15 +203,123 @@ class SampleCacheShapeTests(unittest.TestCase):
 
     def test_slim_parts_drops_only_unread_fields(self):
         import build
-        brief = {"question": "q", "ids": {"trace": "t"}, "compact": {"turns": []},
-                 "session_meta": {"app": "x"}, "attribution": {"problems": []}}
+        brief = {
+            "product": "aime", "model": "aime_expert", "question": "long q", "question_zh": "中文",
+            "lang": "en", "date": "2026-11-25", "split": "daily",
+            "ids": {"trace": "t1", "session": "s1"},
+            "meta": {"task": "行情分析", "subtask": "个股", "request_time": "2026-11-25 10:00:00",
+                     "tokens_in": 100, "tokens_out": None, "app": "unused", "skill": "unused"},
+            "compact": {"turns": []},
+            "session_meta": {"app": "x"},
+            "input": {"traces": [], "missing": False},
+            "attribution": {
+                "summary": "long session summary",
+                "turns": [{"summary": "turn prose", "correct": False, "correct_reason": "why",
+                           "problems": [0, 1], "trace_id": "t1", "agent": "a", "model": "m"}],
+                "session_problems": [],
+                "problems": [
+                    {"id": 0, "turn": 0, "sev": "P1", "label": "短标签", "def": "prose",
+                     "ph": "prose", "why": "prose", "sevr": "简短原因", "calc": ["1+1"],
+                     "comp": "tool:search", "fam": "search", "role": "tool",
+                     "ev": [0, 1], "cl": {"path": "S1.M1.1", "edge": True, "tags": ["时效"]}},
+                    {"id": 1, "turn": 0, "sev": "P2", "label": "另一个标签", "def": "prose",
+                     "sevr": "x" * 200, "comp": "llm", "fam": "llm", "role": "llm",
+                     "ev": [], "cl": None},
+                ],
+            },
+            # Includes unreferenced compact evidence (index 2, 3) that must be dropped.
+            "evidence": [
+                {"c": "tool:search", "m": 2, "o": True},
+                {"c": "llm:plan", "m": 5},
+                {"m": 1, "o": True},
+                {},
+            ],
+        }
         facts = {"tokens": 7, "compact": json.loads(json.dumps(self.COMPACT))}
-        build.slim_parts(brief, facts)
-        build.slim_parts(brief, facts)
-        self.assertEqual(set(brief), {"question", "ids", "attribution"})
+        self.assertTrue(build.slim_parts(brief, facts))
+        self.assertFalse(build.slim_parts(brief, facts))  # idempotent
+        self.assertEqual(set(brief), {"product", "model", "ids", "meta", "attribution", "ev_stats"})
+        self.assertEqual(brief["ev_stats"], [4, 2])
+        self.assertEqual(brief["meta"], {"task": "行情分析", "subtask": "个股",
+                                         "request_time": "2026-11-25 10:00:00", "tokens_in": 100})
+        self.assertNotIn("summary", brief["attribution"])
+        self.assertEqual(brief["attribution"]["turns"], [{"problems": [0, 1], "trace_id": "t1"}])
+        p0, p1 = brief["attribution"]["problems"]
+        for dropped in ("def", "ph", "why", "calc", "ev"):
+            self.assertNotIn(dropped, p0)
+        self.assertEqual(p0["sevr"], "简短原因")
+        self.assertEqual(p0["ev_s"], [2, 1, ["tool", "llm"]])
+        self.assertEqual(p0["cl"], {"path": "S1.M1.1", "tags": ["时效"]})
+        self.assertNotIn("sevr", p1)
+        self.assertNotIn("ev_s", p1)
         self.assertEqual(facts["tokens"], 7)
         self.assertTrue(facts["compact"]["summary"])
         self.assertEqual(facts["compact"]["counts"]["components"], 3)
+
+    def test_slimmed_brief_matches_raw_aggregate_and_system_facts(self):
+        import build
+        raw_detail = {
+            "product": "aime", "model": "aime_expert", "question": "q",
+            "ids": {"trace": "t1", "session": "s1", "case": None},
+            "meta": {"task": "行情分析", "subtask": "个股", "tokens_in": 10, "tokens_out": 20},
+            "attribution": {
+                "summary": "s",
+                "turns": [{"problems": [0], "trace_id": "t1"}],
+                "session_problems": [],
+                "problems": [{
+                    "id": 0, "turn": 0, "sev": "P1", "label": "短标签",
+                    "def": "d", "ph": "p", "why": "w", "sevr": "原因简短",
+                    "comp": "tool:search", "fam": "search", "role": "tool",
+                    "calc": [], "ev": [0, 1],
+                    "cl": {"path": "S1.M1.1", "edge": False, "tags": ["时效"]},
+                }],
+            },
+            "evidence": [
+                {"c": "tool:search", "o": True},
+                {"c": "llm:answer"},
+                {"c": "compact:orphan", "o": True},
+            ],
+        }
+        row = {"s": "abc1234567", "q": "q", "m": "aime_expert", "sp": "daily", "d": "2026-11-25",
+               "sid": "s1", "tid": "t1", "w": "P1", "n": 1, "sv": [0, 1, 0, 0, 0],
+               "r": ["tool"], "st": ["S1"], "pt": ["S1.M1.1"], "tg": ["时效"],
+               "lb": "短标签", "tr": 1, "mc": 10, "tc": 2, "lang": "zh"}
+        facts = {"messages": 10, "tool_calls": 2, "traces": 1, "kinds": {"llm": 5},
+                 "tokens": 30, "finish_ms": 1000, "question_len": 1, "mode": "expert",
+                 "comefrom": "app", "source": "web", "has_visual": False,
+                 "compact": build.compact_summary(json.loads(json.dumps(self.COMPACT))),
+                 "correct": False}
+        taxonomy = {"stages": {}, "mechanisms": {}, "l2": {}, "patterns": {}, "tags": {}, "meta": {}}
+        slimmed = json.loads(json.dumps(raw_detail))
+        build.slim_parts(slimmed, facts)
+
+        agg_raw = build.aggregate("aime", [("abc1234567", raw_detail, row, facts)], taxonomy)
+        agg_slim = build.aggregate("aime", [("abc1234567", slimmed, row, facts)], taxonomy)
+        self.assertEqual(agg_raw["kpi"], agg_slim["kpi"])
+        self.assertEqual(agg_raw["patterns"], agg_slim["patterns"])
+
+        sys_raw = build.system_facts([("abc1234567", raw_detail, row, facts)], {})
+        sys_slim = build.system_facts([("abc1234567", slimmed, row, facts)], {})
+        self.assertEqual(sys_raw, sys_slim)
+
+    def test_load_sample_pickle_slims_legacy_chunks_on_read(self):
+        import build
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "samples.pkl"
+            legacy_rows = {
+                "slug1": {
+                    "slug": "slug1",
+                    "brief": {"product": "aime", "question": "big", "evidence": [{}, {"o": True}],
+                              "attribution": {"summary": "drop", "problems": []}},
+                    "facts": {"tokens": 1},
+                }
+            }
+            build.write_sample_pickle(path, legacy_rows)
+            loaded, slimmed = build._load_sample_pickle(path, slim=True)
+            self.assertTrue(slimmed)
+            self.assertNotIn("evidence", loaded["slug1"]["brief"])
+            self.assertNotIn("question", loaded["slug1"]["brief"])
+            self.assertEqual(loaded["slug1"]["brief"]["ev_stats"], [2, 1])
 
 
 if __name__ == "__main__":

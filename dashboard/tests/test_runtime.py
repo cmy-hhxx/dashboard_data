@@ -219,6 +219,35 @@ class SampleWorkerMemoryTests(unittest.TestCase):
         self.assertEqual(build.capped_workers(4, headroom=5_000 * self.MB, rss=2_000 * self.MB), 3)
         self.assertEqual(build.capped_workers(4, headroom=4_100 * self.MB, rss=2_000 * self.MB), 2)
 
+    def test_server_headroom_guard_skips_when_low(self):
+        import server
+        self.assertIsNone(server._check_build_headroom(min_mb=4096, headroom_bytes=None))
+        self.assertIsNone(server._check_build_headroom(min_mb=0, headroom_bytes=100 * self.MB))
+        self.assertIsNone(server._check_build_headroom(min_mb=4096, headroom_bytes=5000 * self.MB))
+        reason = server._check_build_headroom(min_mb=4096, headroom_bytes=2048 * self.MB)
+        self.assertIn("2048MB", reason)
+        self.assertIn("4096MB", reason)
+
+    def test_build_store_uses_file_temp_store_and_lightweight_trace_ids(self):
+        import build_store as bs
+        with tempfile.TemporaryDirectory() as tmp:
+            store = bs.BuildStore(Path(tmp) / "build.sqlite3")
+            try:
+                self.assertEqual(store.db.execute("PRAGMA temp_store").fetchone()[0], 1)
+                store.put_file({
+                    "path": "1_aime/eval_input/0_daily_eval_input/aime_expert/2026-11-25.jsonl",
+                    "size": 10, "mtime_ns": 1, "prefix": "p", "lines": 2, "committed": 10,
+                    "ends_nl": True, "offsets": [0, 5, 10], "keys": ["k1", "k2"],
+                    "tids": [["tr1", "tr2"], ["tr3"]], "hashes": [1, 2],
+                    "stats": bs.empty_stats(), "product": "aime", "model": "aime_expert",
+                    "split": "daily", "tail": "t",
+                })
+                store.commit()
+                self.assertEqual(store.input_trace_ids(), {"tr1", "tr2", "tr3"})
+                self.assertEqual(store.input_trace_ids(), set(store.input_locations()))
+            finally:
+                store.close()
+
 
 if __name__ == "__main__":
     unittest.main()

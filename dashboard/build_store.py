@@ -337,13 +337,13 @@ class BuildStore:
             self.db = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True, timeout=30,
                                       check_same_thread=False)
             self.db.execute("PRAGMA query_only=ON")
-            self.db.execute("PRAGMA temp_store=MEMORY")
+            self.db.execute("PRAGMA temp_store=FILE")
             return
         path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(str(path), timeout=30)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=NORMAL")
-        self.db.execute("PRAGMA temp_store=MEMORY")
+        self.db.execute("PRAGMA temp_store=FILE")
         self.db.execute("PRAGMA cache_size=-64000")
         self._init()
 
@@ -447,6 +447,19 @@ class BuildStore:
             for i, arr in enumerate(json.loads(tids)):
                 for tid in arr or []:
                     out.setdefault(str(tid), (path, offs[i]))
+        return out
+
+    def input_trace_ids(self) -> set[str]:
+        """All indexed input trace_ids without decoding byte-offset blobs."""
+        out = set()
+        rows = self.db.execute(
+            "SELECT tids FROM files "
+            "WHERE path LIKE '%/eval_input/%' OR path LIKE '%/.archive/%'")
+        for (tids,) in rows:
+            for arr in json.loads(tids):
+                for tid in arr or []:
+                    if tid:
+                        out.add(str(tid))
         return out
 
     def get_file(self, rel: str) -> dict | None:
@@ -608,8 +621,12 @@ class BuildStore:
 
     def checkpoint(self) -> None:
         """Fold committed WAL pages back into the main DB without blocking readers."""
+        if self.readonly:
+            return
         try:
-            self.db.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            wal = Path(f"{self.path}-wal")
+            mode = "TRUNCATE" if (wal.exists() and wal.stat().st_size > 64 << 20) else "PASSIVE"
+            self.db.execute(f"PRAGMA wal_checkpoint({mode})")
         except Exception:  # noqa: BLE001 - a busy checkpoint must not fail the build
             pass
 

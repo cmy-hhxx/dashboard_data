@@ -28,6 +28,9 @@ OUTPUTS = [os.path.join(STATIC, n) for n in ("data.json", "samples.json", "sampl
 PORT = int(os.environ.get("PORT", "5001"))
 # 10 minutes plus the ~1 minute incremental build keeps the board well inside 30 minutes of the data.
 REFRESH = int(os.environ.get("REFRESH_SECONDS", "600"))
+# Skip a scheduled build when container memory headroom (excluding reclaimable page cache)
+# falls below this threshold so build.py never pushes the cgroup into OOM.  0 disables.
+MIN_BUILD_HEADROOM_MB = int(os.environ.get("EVAL_MIN_BUILD_HEADROOM_MB", "4096"))
 
 # Where each product's board lives; the page sends a product that is not built here to its site.
 SITES_FILE = os.environ.get("EVAL_SITES_FILE") or os.path.join(HERE, "config", "sites.json")
@@ -37,7 +40,7 @@ ASSET_DIRS = ("js", "css", "vendor")
 ASSET_RE = re.compile(r"^/v/([0-9a-f]{10})/((?:js|css|vendor)/[^?]+)$")
 ASSET_REF_RE = re.compile(r'(href|src)="((?:js|css|vendor)/)')
 
-_state = {"last_run": 0, "running": False, "error": "", "seconds": 0, "build": None}
+_state = {"last_run": 0, "running": False, "error": "", "skipped": "", "seconds": 0, "build": None}
 _lock = threading.Lock()
 _builder = None
 _ab_builder = None
@@ -191,12 +194,34 @@ def warm_input_lister():
         print(f"[serve] input lister warm failed: {exc}", flush=True)
 
 
+def _check_build_headroom(min_mb=None, headroom_bytes=None):
+    """Return a skip reason when container memory headroom is too low for a build."""
+    limit_mb = MIN_BUILD_HEADROOM_MB if min_mb is None else int(min_mb)
+    if limit_mb <= 0:
+        return None
+    if headroom_bytes is None:
+        import build as _build
+        headroom_bytes = _build.cgroup_headroom()
+    if headroom_bytes is None:
+        return None
+    headroom_mb = headroom_bytes >> 20
+    if headroom_mb < limit_mb:
+        return f"low memory headroom ({headroom_mb}MB < {limit_mb}MB)"
+    return None
+
+
 def refresh_once():
     """Rebuild data.json, samples.json and samples/ from the datasets in one pass."""
+    skip_reason = _check_build_headroom()
+    if skip_reason:
+        _state["skipped"] = skip_reason
+        print(f"[refresh] skipped: {skip_reason}", flush=True)
+        return
     with _lock:
         if _state["running"]:
             return
         _state["running"] = True
+        _state["skipped"] = ""
     started = time.time()
     try:
         # A data-changing rebuild takes 30-60s.  Keep it below the HTTP request
@@ -1083,14 +1108,17 @@ class Handler(SimpleHTTPRequestHandler):
             self.wfile.write(body)
             return
         if self.path.startswith("/healthz"):
-            body = json.dumps({
+            health = {
                 "ok": _state["error"] == "",
                 "running": _state["running"],
                 "last_refresh": _state["last_run"],
                 "refresh_seconds": _state["seconds"],
                 "error": _state["error"],
                 "build": _state["build"],
-            }).encode()
+            }
+            if _state.get("skipped"):
+                health["skipped"] = _state["skipped"]
+            body = json.dumps(health).encode()
             self._send_body(200, body, "application/json")
             return
         if path_only in ("/speed.json", "/api/metrics"):

@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import fcntl
+import gc
 import gzip
 import hashlib
 import json_compat as json
@@ -2072,6 +2073,32 @@ def scene_of(brief):
     return brief["meta"].get("task") or NO_SCENE
 
 
+def _problem_ev_summary(p, evidence=None):
+    """Return ``(count, located, component_prefixes)`` for one problem.
+
+    Accepts both slimmed summaries (``p["ev_s"]``) and raw un-slimmed details
+    (``p["ev"]`` indexing into ``detail["evidence"]``).
+    """
+    summary = p.get("ev_s")
+    if summary is not None:
+        return summary[0], summary[1], summary[2]
+    raw_ev = p.get("ev")
+    if not raw_ev:
+        return 0, 0, ()
+    ev_list = evidence or ()
+    n = len(raw_ev)
+    loc = 0
+    comps = []
+    for e in raw_ev:
+        if isinstance(e, int) and 0 <= e < len(ev_list):
+            item = ev_list[e]
+            if isinstance(item, dict):
+                if "o" in item:
+                    loc += 1
+                comps.append((item.get("c") or "").split(":")[0].strip() or "—")
+    return n, loc, comps
+
+
 def aggregate(product, samples, taxonomy):
     """``samples`` = list of (slug, detail, row, facts) for one product."""
     total = len(samples)
@@ -2085,12 +2112,14 @@ def aggregate(product, samples, taxonomy):
     problems_all = []
     for slug, detail, row, facts in samples:
         worst[row["w"]] += 1
+        ev_list = detail.get("evidence")
         for p in detail["attribution"]["problems"]:
             problems_all.append((slug, row, p))
             if p["sev"]:
                 severity[p["sev"]] += 1
-            evidence_n += len(p["ev"])
-            located += sum(1 for e in p["ev"] if "o" in detail["evidence"][e])
+            ev_n, ev_loc, _ = _problem_ev_summary(p, ev_list)
+            evidence_n += ev_n
+            located += ev_loc
 
     def group_stats(rows):
         sev, wst = sev_counter(), {k: 0 for k in WORST_KEYS}
@@ -2711,13 +2740,15 @@ def system_facts(all_samples, pool):
     ev_per_problem = Counter()
     ev_component = Counter()
     for slug, detail, row, facts in all_samples:
+        ev_list = detail.get("evidence")
         for p in detail["attribution"]["problems"]:
-            ev_per_problem[min(len(p["ev"]), 10)] += 1
-            for e in p["ev"]:
-                c = (detail["evidence"][e].get("c") or "").split(":")[0].strip() or "—"
+            ev_n, _, ev_cs = _problem_ev_summary(p, ev_list)
+            ev_per_problem[min(ev_n, 10)] += 1
+            for c in ev_cs:
                 ev_component[c] += 1
-            if p["sev"] and p["sevr"] and len(p["sevr"]) < 150 and len(p["label"] or "") < 26:
-                examples[p["sev"]].append((len(p["sevr"]), slug, detail["product"], p["id"], p["label"], p["sevr"], p["comp"]))
+            sevr = p.get("sevr")
+            if p["sev"] and sevr and len(sevr) < 150 and len(p["label"] or "") < 26:
+                examples[p["sev"]].append((len(sevr), slug, detail["product"], p["id"], p["label"], sevr, p["comp"]))
     picked = {}
     for s, xs in examples.items():
         xs.sort()
@@ -2941,23 +2972,12 @@ def empty_payloads(reason):
 def slim_detail(detail):
     """Drop the parts of a sample that only the on-disk copy needs.
 
-    The dashboard detail file is written before this runs; aggregates only need
-    problem structure, evidence anchors and compact counts, not the transcript
-    itself or the evidence quote strings.
+    The dashboard detail file is regenerated lazily by ``detail_builder`` from
+    the raw JSONL; aggregates only need problem structure, folded evidence
+    counts and precomputed trace severity.
     """
     detail["trace_severity"] = trace_severity(detail, include_refs=True)
-    detail["input"] = {"traces": [], "missing": detail["input"].get("missing", True)}
-    evidence = []
-    for e in detail["evidence"]:
-        item = {}
-        if e.get("c") is not None:
-            item["c"] = e["c"]
-        if "m" in e:
-            item["m"] = e["m"]
-        if "o" in e:
-            item["o"] = True
-        evidence.append(item)
-    detail["evidence"] = evidence
+    slim_parts(detail, None)
     return detail
 
 
@@ -3109,8 +3129,10 @@ def remap_clusters(brief, row, cluster_index):
                              or cluster_index.get((product, model, ident, "pix", str(pi))))
                     if found:
                         break
-        problem["cl"] = ({"path": found["path"], "edge": found["edge"], "tags": found["tags"]}
-                         if found and found.get("path") else None)
+        problem["cl"] = (
+            {"path": sys.intern(found["path"]), "tags": [sys.intern(t) for t in (found.get("tags") or ()) if isinstance(t, str)]}
+            if found and found.get("path") else None
+        )
         if problem["cl"]:
             paths.add(problem["cl"]["path"])
             stages.add(problem["cl"]["path"].split(".")[0])
@@ -3194,6 +3216,7 @@ def _sample_batch(task):
         try:
             detail, row, facts = build_sample(pair, inp, attr, comp, cluster_index, Counter())
             detail["slug"] = row["s"] = slug
+            sample_date = detail["date"]
             candidate = golden_candidate(detail)
             golden = {"score": candidate[0], "case": candidate[1]} if candidate else None
             brief = slim_detail(detail)
@@ -3201,7 +3224,7 @@ def _sample_batch(task):
             return {"error": f"build: {exc}", "pair": pair["output"]}
         return {
             "slug": slug, "fp": fp, "oh": pair.get("oh"), "ih": pair.get("ih"), "ch": pair.get("ch"),
-            "product": pair["product"], "model": pair["model"], "date": detail["date"],
+            "product": pair["product"], "model": pair["model"], "date": sample_date,
             "split": pair["split"], "output": pair["output"][0], "output_line": pair["output"][1],
             "row": row, "facts": facts, "brief": brief, "golden": golden,
             "im": pair.get("im"), "isp": pair.get("isp"),
@@ -3355,35 +3378,141 @@ def compact_summary(compact):
             "kinds": dict(kinds), "names": dict(names)}
 
 
-def slim_parts(brief, facts):
-    """Drop cache fields no payload stage reads, so the cache can stay resident.
+BRIEF_KEYS = frozenset(("product", "model", "ids", "meta", "attribution", "trace_severity", "ev_stats"))
+BRIEF_META_KEYS = frozenset(("task", "subtask", "request_time", "tokens_in", "tokens_out"))
+PROBLEM_DROP_KEYS = ("def", "ph", "why", "calc")
 
-    ``brief.compact`` / ``brief.session_meta`` are never consumed (details are
-    regenerated from the raw input by ``detail_builder``) and ``facts.compact``
-    only feeds the compact profile.  Idempotent: already-slim rows pass through.
+
+def _intern(value):
+    return sys.intern(value) if isinstance(value, str) else value
+
+
+def slim_parts(brief, facts) -> bool:
+    """Drop cache fields no payload stage reads, so the cache stays compact in RAM.
+
+    Returns ``True`` if any field was pruned or folded (used to trigger a one-time
+    compact rewrite of legacy ``samples.pkl``).  Idempotent: already-slim rows
+    return ``False`` untouched.
     """
+    changed = False
     if isinstance(brief, dict):
-        brief.pop("compact", None)
-        brief.pop("session_meta", None)
-    if isinstance(facts, dict) and facts.get("compact"):
+        ev_list = brief.get("evidence")
+        if isinstance(ev_list, list):
+            if "ev_stats" not in brief:
+                brief["ev_stats"] = [
+                    len(ev_list),
+                    sum(1 for item in ev_list if isinstance(item, dict) and "o" in item),
+                ]
+            attr = brief.get("attribution")
+            if isinstance(attr, dict):
+                for p in attr.get("problems") or ():
+                    if isinstance(p, dict) and "ev" in p:
+                        raw_ev = p.pop("ev")
+                        if isinstance(raw_ev, list) and raw_ev:
+                            ev_loc = 0
+                            ev_cs = []
+                            for e in raw_ev:
+                                if isinstance(e, int) and 0 <= e < len(ev_list):
+                                    item = ev_list[e]
+                                    if isinstance(item, dict):
+                                        if "o" in item:
+                                            ev_loc += 1
+                                        ev_cs.append(sys.intern((item.get("c") or "").split(":")[0].strip() or "—"))
+                            p["ev_s"] = [len(raw_ev), ev_loc, ev_cs]
+            brief.pop("evidence", None)
+            changed = True
+
+        for key in list(brief):
+            if key not in BRIEF_KEYS:
+                brief.pop(key, None)
+                changed = True
+
+        if isinstance(brief.get("product"), str):
+            brief["product"] = sys.intern(brief["product"])
+        if isinstance(brief.get("model"), str):
+            brief["model"] = sys.intern(brief["model"])
+
+        meta = brief.get("meta")
+        if isinstance(meta, dict):
+            for key in list(meta):
+                if key not in BRIEF_META_KEYS or meta[key] is None:
+                    meta.pop(key, None)
+                    changed = True
+            for key in ("task", "subtask"):
+                if isinstance(meta.get(key), str):
+                    meta[key] = sys.intern(meta[key])
+
+        attr = brief.get("attribution")
+        if isinstance(attr, dict):
+            if "summary" in attr:
+                attr.pop("summary", None)
+                changed = True
+            turns = attr.get("turns")
+            if isinstance(turns, list):
+                for i, turn in enumerate(turns):
+                    if isinstance(turn, dict):
+                        extra = [k for k in turn if k not in ("problems", "trace_id")]
+                        if extra or ("trace_id" in turn and not turn["trace_id"]):
+                            slim_turn = {"problems": turn.get("problems") or []}
+                            if turn.get("trace_id"):
+                                slim_turn["trace_id"] = turn["trace_id"]
+                            turns[i] = slim_turn
+                            changed = True
+            for p in attr.get("problems") or ():
+                if not isinstance(p, dict):
+                    continue
+                for key in PROBLEM_DROP_KEYS:
+                    if key in p:
+                        p.pop(key, None)
+                        changed = True
+                if "sevr" in p:
+                    sevr = p["sevr"]
+                    if not (p.get("sev") and isinstance(sevr, str) and sevr
+                            and len(sevr) < 150 and len(p.get("label") or "") < 26):
+                        p.pop("sevr", None)
+                        changed = True
+                if "ev" in p and not p["ev"]:
+                    p.pop("ev", None)
+                    changed = True
+                cl = p.get("cl")
+                if isinstance(cl, dict):
+                    if "edge" in cl:
+                        cl.pop("edge", None)
+                        changed = True
+                    if isinstance(cl.get("path"), str):
+                        cl["path"] = sys.intern(cl["path"])
+                    if isinstance(cl.get("tags"), list):
+                        cl["tags"] = [_intern(t) for t in cl["tags"]]
+                for key in ("sev", "role", "comp", "fam"):
+                    if isinstance(p.get(key), str):
+                        p[key] = sys.intern(p[key])
+
+    if isinstance(facts, dict) and facts.get("compact") and not facts["compact"].get("summary"):
         facts["compact"] = compact_summary(facts["compact"])
+        changed = True
+    return changed
 
 
-def slim_entry(entry):
-    slim_parts(entry.get("brief"), entry.get("facts"))
-    return entry
+def slim_entry(entry) -> bool:
+    return slim_parts(entry.get("brief"), entry.get("facts"))
 
 
-def load_sample_pickle(path: Path):
+def _load_sample_pickle(path: Path, slim: bool = False):
     try:
         with open(path, "rb") as fh:
             data = pickle.load(fh)
             if not isinstance(data, dict):
-                return {}
+                return {}, False
             if data.get("version") != SAMPLE_CACHE_VERSION or data.get("build") != bs.BUILD_VERSION:
-                return {}
+                return {}, False
+            slimmed = False
             if data.get("format") != SAMPLE_STREAM:
-                return data.get("rows") or {}
+                rows = data.get("rows") or {}
+                if slim:
+                    for entry in rows.values():
+                        if slim_entry(entry):
+                            slimmed = True
+                return rows, slimmed
             rows = {}
             while True:
                 try:
@@ -3392,20 +3521,31 @@ def load_sample_pickle(path: Path):
                     break
                 if not isinstance(chunk, dict):
                     break
+                if slim:
+                    for entry in chunk.values():
+                        if slim_entry(entry):
+                            slimmed = True
                 rows.update(chunk)
-            return rows
+            return rows, slimmed
     except (OSError, EOFError, pickle.PickleError, ValueError):
-        return {}
+        return {}, False
+
+
+def load_sample_pickle(path: Path):
+    rows, _ = _load_sample_pickle(path, slim=False)
+    return rows
+
+
+def _load_sample_cache(cache_dir: Path):
+    """Merge the stable baseline with the delta written by recent builds."""
+    rows, base_slimmed = _load_sample_pickle(cache_dir / "samples.pkl", slim=True)
+    delta, delta_slimmed = _load_sample_pickle(cache_dir / SAMPLE_DELTA, slim=True)
+    rows.update(delta)
+    return rows, delta, (base_slimmed or delta_slimmed)
 
 
 def load_sample_cache(cache_dir: Path):
-    """Merge the stable baseline with the delta written by recent builds."""
-    base = load_sample_pickle(cache_dir / "samples.pkl")
-    delta = load_sample_pickle(cache_dir / SAMPLE_DELTA)
-    rows = dict(base)
-    rows.update(delta)
-    for entry in rows.values():
-        slim_entry(entry)
+    rows, delta, _ = _load_sample_cache(cache_dir)
     return rows, delta
 
 
@@ -3452,9 +3592,10 @@ def build_samples(pairs, root, out_dir, store, reader, cluster_index, cluster_si
     # fallback load, never a wrong hit.
     cache_dir = cache_root(out_dir)
     debug("rss %dMB before sample cache load" % (rss_bytes() >> 20))
-    pickled, sample_delta = load_sample_cache(cache_dir)
-    debug("rss %dMB after sample cache load (%d+%d rows)" % (
-        rss_bytes() >> 20, len(pickled) - len(sample_delta), len(sample_delta)))
+    pickled, sample_delta, slim_upgraded = _load_sample_cache(cache_dir)
+    debug("rss %dMB after sample cache load (%d+%d rows%s)" % (
+        rss_bytes() >> 20, len(pickled) - len(sample_delta), len(sample_delta),
+        " slimmed" if slim_upgraded else ""))
     meta = store.sample_meta(slugs)
     debug("rss %dMB after sample meta (%d rows)" % (rss_bytes() >> 20, len(meta)))
     cached, need = {}, []
@@ -3467,10 +3608,13 @@ def build_samples(pairs, root, out_dir, store, reader, cluster_index, cluster_si
             cached[slug] = entry
         else:
             need.append(slug)
+    del pickled, meta
     if need:
-        cached.update(store.load_samples(need))
-        for entry in cached.values():
+        loaded_rows = store.load_samples(need)
+        for entry in loaded_rows.values():
             slim_entry(entry)
+        cached.update(loaded_rows)
+        del loaded_rows
     debug("rss %dMB after sample rows (%d need)" % (rss_bytes() >> 20, len(need)))
     loaded = set(need)
     hits, misses = [], []
@@ -3523,6 +3667,7 @@ def build_samples(pairs, root, out_dir, store, reader, cluster_index, cluster_si
             # cache from now on, or every later build pays for them again.
             changed_samples[pair["_slug"]] = hit
         stats["sample_hits"] += 1
+    del hits
 
     if misses:
         # A changed sample must not keep serving the previous transcript.
@@ -3606,9 +3751,10 @@ def build_samples(pairs, root, out_dir, store, reader, cluster_index, cluster_si
         merged_delta.update(changed_samples)
         debug("rss %dMB before sample cache write (+%d delta)" % (
             rss_bytes() >> 20, len(merged_delta)))
-        if not baseline_path.exists() or len(merged_delta) > SAMPLE_COMPACT_ROWS:
+        if not baseline_path.exists() or slim_upgraded or len(merged_delta) > SAMPLE_COMPACT_ROWS:
             compacted = {slug: cached[slug] for slug in slugs if slug in cached}
             write_sample_pickle(baseline_path, compacted)
+            del compacted
             (cache_dir / SAMPLE_DELTA).unlink(missing_ok=True)
             stats["sample_cache"] = "compact"
         elif changed_samples:
@@ -3618,14 +3764,22 @@ def build_samples(pairs, root, out_dir, store, reader, cluster_index, cluster_si
             stats["sample_cache"] = "reuse"
     except OSError as exc:
         debug(f"sample cache write failed: {exc}")
+    finally:
+        del cached, changed_samples, sample_delta
+        gc.collect()
 
     evidence = Counter()
     for rows in samples.values():
         for _, brief, _, _ in rows:
-            for item in brief["evidence"]:
-                evidence["ev_total"] += 1
-                if "o" in item:
-                    evidence["ev_located_brief"] += 1
+            ev_stats = brief.get("ev_stats")
+            if ev_stats:
+                evidence["ev_total"] += ev_stats[0]
+                evidence["ev_located_brief"] += ev_stats[1]
+            else:
+                for item in brief.get("evidence") or ():
+                    evidence["ev_total"] += 1
+                    if "o" in item:
+                        evidence["ev_located_brief"] += 1
     stats.update(evidence)
     stats["details_mb"] = round(detail_bytes / 1e6, 1)
     debug(f"built samples {sum(len(v) for v in samples.values())}, "
@@ -3971,8 +4125,11 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
         timers["cluster"] = round(time.time() - t0, 1)
 
         t0 = time.time()
+        n_pairs = len(pairs)
         samples, golden_pool, stats = build_samples(
             pairs, datasets, out_dir, store, reader, cluster_index, cluster_sig, log, jobs)
+        del pairs, cluster_index
+        gc.collect()
         timers["samples"] = round(time.time() - t0, 1)
 
         # 用户类型在样本缓存之后统一打标：规则/名单变了不用重读输入，也能让每个样本拿到新类型。
@@ -4018,7 +4175,7 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
         shared = {
             "schema": 2, "generated_at": generated,
             "source": {
-                **pairing_info, "pairs": len(pairs), "root": datasets.name,
+                **pairing_info, "pairs": n_pairs, "root": datasets.name,
                 "cache": {
                     "pair_hits": pairing_info.get("pair_hits", 0),
                     "pair_misses": pairing_info.get("pair_misses", 0),
@@ -4072,7 +4229,7 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
 
         t0 = time.time()
         ab_bytes = 0
-        input_traces = set(store.input_locations())
+        input_traces = store.input_trace_ids() if ab_expected else set()
         for product in products:
             payload = ab_test.ab_payload(datasets, product, generated, samples[product],
                                          input_traces=input_traces)
@@ -4185,7 +4342,7 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
             shutil.rmtree(stale, ignore_errors=True)
         store.delete_samples_not(slugs)
         store.set_meta("complete", {
-            "build": bs.BUILD_VERSION, "payload": PAYLOAD_VERSION, "pairs": len(pairs),
+            "build": bs.BUILD_VERSION, "payload": PAYLOAD_VERSION, "pairs": n_pairs,
             "rules": rules_sig, "datasets": str(datasets),
             "pairs_sig": pairs_sig, "unmatched": pairing_info.get("unmatched_sig") or "",
             "cluster": cluster_sig, "feed": feed_sig,
@@ -4196,7 +4353,7 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
 
         summary = Counter(stats)
         summary.update({
-            "pairs": len(pairs), "unmatched": pairing_info.get("unmatched_files", 0),
+            "pairs": n_pairs, "unmatched": pairing_info.get("unmatched_files", 0),
             "data_kb": round(data_bytes / 1024),
             "trend_kb": round(trend_bytes / 1024),
             "ab_kb": round(ab_bytes / 1024),
@@ -4488,7 +4645,36 @@ def write_data_absence(datasets: Path, product: str, out_dir: Path):
     return target
 
 
+def _apply_build_limits():
+    """Make the build process the first OOM candidate and honor optional memory caps.
+
+    Runs inside ``build.py`` at startup rather than ``preexec_fn`` in the
+    multithreaded server, avoiding fork-deadlock risks.
+    """
+    oom_raw = os.environ.get("EVAL_BUILD_OOM_SCORE_ADJ", "500").strip()
+    if oom_raw:
+        try:
+            score = max(-1000, min(1000, int(oom_raw)))
+            Path("/proc/self/oom_score_adj").write_text(f"{score}\n", encoding="ascii")
+        except (OSError, ValueError):
+            pass
+    cap_raw = os.environ.get("EVAL_BUILD_RLIMIT_AS_GB", "").strip()
+    if cap_raw:
+        try:
+            cap_gb = float(cap_raw)
+            if cap_gb > 0:
+                import resource
+                limit = int(cap_gb * (1 << 30))
+                soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+                if hard != resource.RLIM_INFINITY:
+                    limit = min(limit, hard)
+                resource.setrlimit(resource.RLIMIT_AS, (limit, hard))
+        except (ImportError, OSError, ValueError):
+            pass
+
+
 def main(argv=None):
+    _apply_build_limits()
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--datasets", type=Path,
                     default=None, help="datasets root (default: EVAL_DATASETS, the production mount, or <repo>/datasets)")
