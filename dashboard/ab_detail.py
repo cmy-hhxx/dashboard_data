@@ -36,7 +36,7 @@ import build_store as bs
 import human_read_overlay as hro
 from keylocks import KeyedLocks
 
-INDEX_VERSION = 3
+INDEX_VERSION = 4
 
 ATTRIBUTION_DIR = ab_test.SCOPE_AFTER + "/attribution"
 BEFORE_ATTRIBUTION_DIR = ab_test.SCOPE_BEFORE + "/attribution"

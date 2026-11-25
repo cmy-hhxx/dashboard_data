@@ -873,9 +873,9 @@ class InputLister:
         rel, path = files[fi]
         key = hashlib.sha256(f"{rel}#{number}".encode()).hexdigest()[:12]
         out = self.cache / f"detail-{key}.json"
-        stamp = 0.0
+        stamp = ""
         try:
-            stamp = path.stat().st_mtime
+            stamp = f"full-v1:{path.stat().st_mtime}"
         except OSError:
             return None
         try:

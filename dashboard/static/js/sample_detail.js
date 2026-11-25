@@ -15,6 +15,85 @@ const TABS_PER_PAGE = 20;
 const LAZY_ROUND_THRESHOLD = 12;
 const DETAIL_CACHE_LIMIT = 128;
 
+/* 长消息块分页：后端保留完整文本，前端按字符窗口（就近贴合换行）分页，不再省略中间内容。 */
+const BLOCK_PAGE_LIMIT = {
+  user: 4000,
+  answer: 14000,
+  system: 2400,
+  llm: 3200,
+  think: 3200,
+  call: 3200,
+  result: 3200,
+  other: 3200,
+};
+
+export function blockPageLimit(kind, label = "") {
+  return BLOCK_PAGE_LIMIT[label === "think" ? "think" : kind] || 3200;
+}
+
+export function splitBlockPages(text, pageSize = 3200) {
+  const s = String(text ?? "");
+  const n = s.length;
+  if (!n) return [];
+  const size = Math.max(200, Number(pageSize) || 3200);
+  const absorb = Math.round(size * 1.2);
+  if (n <= absorb) return [{ start: 0, end: n, text: s }];
+  const pages = [];
+  let start = 0;
+  const backWindow = Math.min(320, Math.floor(size * 0.2));
+  const minCut = Math.floor(size * 0.5);
+  while (start < n) {
+    if (n - start <= absorb) {
+      pages.push({ start, end: n, text: s.slice(start) });
+      break;
+    }
+    let end = start + size;
+    const nlBack = s.lastIndexOf("\n", end);
+    if (nlBack >= start + minCut && end - nlBack <= backWindow) {
+      end = nlBack + 1;
+    } else {
+      const nlFwd = s.indexOf("\n", end);
+      if (nlFwd >= 0 && nlFwd - end <= 180) {
+        end = nlFwd + 1;
+      } else if (end < n) {
+        const code = s.charCodeAt(end - 1);
+        if (code >= 0xd800 && code <= 0xdbff) end += 1;
+      }
+    }
+    if (end <= start) end = Math.min(n, start + size);
+    pages.push({ start, end, text: s.slice(start, end) });
+    start = end;
+  }
+  return pages;
+}
+
+export function pageIndexForOffset(pages, offset) {
+  if (!Array.isArray(pages) || !pages.length) return 0;
+  const pos = Number(offset) || 0;
+  for (let i = 0; i < pages.length; i += 1) {
+    if (pos < pages[i].end) return i;
+  }
+  return pages.length - 1;
+}
+
+export function pageWindow(current, total) {
+  const n = Math.max(1, Number(total) || 1);
+  const cur = Math.max(0, Math.min(n - 1, Number(current) || 0));
+  if (n <= 7) return Array.from({ length: n }, (_, i) => i);
+  const keep = new Set([0, n - 1, cur]);
+  if (cur > 0) keep.add(cur - 1);
+  if (cur < n - 1) keep.add(cur + 1);
+  if (cur <= 2) { keep.add(1); keep.add(2); keep.add(3); }
+  if (cur >= n - 3) { keep.add(n - 2); keep.add(n - 3); keep.add(n - 4); }
+  const sorted = [...keep].filter((p) => p >= 0 && p < n).sort((a, b) => a - b);
+  const out = [];
+  for (let i = 0; i < sorted.length; i += 1) {
+    if (i > 0 && sorted[i] - sorted[i - 1] > 1) out.push("…");
+    out.push(sorted[i]);
+  }
+  return out;
+}
+
 /* 用户类型：构建时按 dashboard/user_rules.py 的规则写进样本行的 ut（real / test / internal / unknown），
    流失是独立标记 ul（流失目录或流失 uid 名单）。 */
 export const USER_TYPES = [["real", "真实用户"], ["test", "测试用户"], ["internal", "内部用户"], ["unknown", "未知"]];
@@ -311,7 +390,7 @@ export function createSampleDetail(host, ctxArg, opts = {}) {
   const S = {
     product: opts.product, prod: opts.prod, all: opts.sessions || [],
     cache: new Map(), loadSeq: 0, roundSeq: 0, D: null, sessionKey: null, session: null,
-    round: 0, trace: 0, turn: 0, cturn: 0, sessionView: false, tabPage: 0, open: new Set(),
+    round: 0, trace: 0, turn: 0, cturn: 0, sessionView: false, tabPage: 0, open: new Set(), blockPages: new Map(),
     folds: { traj: true, chain: false, ...(opts.folds || {}) }, closedAnswers: new Set(),
     active: null, bandOpen: false, traceMiss: null,
   };
@@ -428,6 +507,7 @@ async function loadSession(session, focusSlug, focusTrace, sev) {
     S.turn = 0;
     S.cturn = 0;
     S.open = new Set();
+    S.blockPages = new Map();
     S.active = null;
     renderIn();
     renderOut();
@@ -485,6 +565,7 @@ async function loadSession(session, focusSlug, focusTrace, sev) {
   S.turn = init?.turn ?? S.round;
   S.cturn = init?.compact ?? S.round;
   S.open = new Set();
+  S.blockPages = new Map();
   S.active = null;
   renderIn();
   renderOut();
@@ -559,6 +640,7 @@ function selectRound(i, { scroll = true } = {}) {
       S.turn = 0;
       S.cturn = 0;
       S.open = new Set();
+      S.blockPages = new Map();
       S.active = null;
       syncTraceParam();
       renderIn();
@@ -945,8 +1027,8 @@ function blockHTML(t, mi, m) {
   return blocks
     .map(({ b, bi }) => {
       const lab = b.l === "think" ? "思考" : b.l && b.l.startsWith("call:") ? `→ ${b.l.slice(5)}` : "";
-      const body = pieceHTML(t, mi, bi, b, m.k === "answer");
-      return `${lab ? `<span class="blk-label">${esc(lab)}</span>` : ""}<div class="blk${b.f === "json" ? " is-json" : ""}">${body}</div>`;
+      const body = pieceHTML(t, mi, bi, b, m.k);
+      return `${lab ? `<span class="blk-label">${esc(lab)}</span>` : ""}<div class="blk${b.f === "json" ? " is-json" : ""}" data-blk="${t}:${mi}:${bi}">${body}</div>`;
     })
     .join("");
 }
@@ -959,8 +1041,28 @@ function markHTML(cover, body) {
   return `<mark class="ev" data-e="${e.join(" ")}" style="--c:${sevColor(S.D._ix.sev.get(e[0]))}">${body}</mark>`;
 }
 
-function pieceHTML(t, mi, bi, b, plain = false) {
+function blockPagerHTML(blkKey, pageIdx, totalPages, totalChars, evPages, pos) {
+  const nav = pageWindow(pageIdx, totalPages)
+    .map((item) => {
+      if (item === "…") return `<span class="blk-pager-gap" aria-hidden="true">…</span>`;
+      const cur = item === pageIdx;
+      const hasEv = evPages.has(item);
+      return `<button type="button" class="${cur ? "is-current" : ""}${hasEv ? " has-ev" : ""}" data-blk="${blkKey}" data-blk-page="${item}"${cur ? ' aria-current="page"' : ""}${hasEv ? ' title="此页含归因证据"' : ""}>${item + 1}</button>`;
+    })
+    .join("");
+  return `<div class="blk-pager is-${pos}">
+    <span class="blk-pager-info">共 ${fmt(totalChars)} 字 · 第 ${pageIdx + 1}/${totalPages} 页</span>
+    <span class="blk-pager-nav">
+      <button type="button" data-blk="${blkKey}" data-blk-page="${Math.max(0, pageIdx - 1)}" aria-label="上一页"${pageIdx === 0 ? " disabled" : ""}>‹</button>
+      ${nav}
+      <button type="button" data-blk="${blkKey}" data-blk-page="${Math.min(totalPages - 1, pageIdx + 1)}" aria-label="下一页"${pageIdx >= totalPages - 1 ? " disabled" : ""}>›</button>
+    </span>
+  </div>`;
+}
+
+function pieceHTML(t, mi, bi, b, kind = "") {
   const D = S.D;
+  const plain = kind === "answer";
   const gaps = b.x.some((x) => typeof x !== "string");
   // The final answer is prose we want to read: give Markdown precedence over
   // per-character evidence highlighting, which would otherwise leave raw
@@ -969,27 +1071,60 @@ function pieceHTML(t, mi, bi, b, plain = false) {
   const marks = ids
     .filter((e) => D.evidence[e].o)
     .map((e) => ({ e: [e], src: D.evidence[e].src, s: D.evidence[e].o[0], z: D.evidence[e].o[1] }));
-  if (plain && !gaps) {
-    const html = renderContent(b.x.join(""), b.f);
-    const attr = marks.filter((k) => k.src === "attr");
-    return attr.length ? `<div class="md-find" data-src="${t}:${mi}:${bi}" data-ev="${attr.map((k) => k.e[0]).join(" ")}">${html}</div>` : html;
+
+  if (!gaps) {
+    const fullText = b.x.join("");
+    const pages = splitBlockPages(fullText, blockPageLimit(kind, b.l));
+    if (pages.length <= 1) {
+      if (plain) {
+        const html = renderContent(fullText, b.f);
+        const attr = marks.filter((k) => k.src === "attr");
+        return attr.length ? `<div class="md-find" data-src="${t}:${mi}:${bi}" data-ev="${attr.map((k) => k.e[0]).join(" ")}">${html}</div>` : html;
+      }
+      if (!marks.length) return renderContent(fullText, b.f);
+      return segment(fullText, marks, markHTML, b.f === "json" ? "plain" : "inline");
+    }
+    const blkKey = `${t}:${mi}:${bi}`;
+    const pageIdx = Math.max(0, Math.min(pages.length - 1, S.blockPages.get(blkKey) ?? 0));
+    const pg = pages[pageIdx];
+    const local = marks
+      .filter((k) => k.s < pg.end && k.z > pg.start)
+      .map((k) => ({
+        s: Math.max(0, k.s - pg.start),
+        z: Math.min(pg.text.length, k.z - pg.start),
+        e: k.e,
+        src: k.src,
+      }));
+    const evPages = new Set();
+    marks.forEach((k) => {
+      if (k.src !== "attr") return;
+      const p0 = pageIndexForOffset(pages, k.s);
+      const p1 = pageIndexForOffset(pages, Math.max(k.s, k.z - 1));
+      for (let p = p0; p <= p1; p += 1) evPages.add(p);
+    });
+    let pageBody;
+    if (plain) {
+      const html = renderContent(pg.text, b.f);
+      const attr = local.filter((k) => k.src === "attr");
+      pageBody = attr.length
+        ? `<div class="md-find" data-src="${blkKey}" data-page-start="${pg.start}" data-page-end="${pg.end}" data-ev="${attr.map((k) => k.e[0]).join(" ")}">${html}</div>`
+        : html;
+    } else if (local.length) {
+      pageBody = segment(pg.text, local, markHTML, b.f === "json" ? "plain" : "inline");
+    } else {
+      pageBody = renderContent(pg.text, b.f);
+    }
+    const topPager = blockPagerHTML(blkKey, pageIdx, pages.length, fullText.length, evPages, "top");
+    const bottomPager = blockPagerHTML(blkKey, pageIdx, pages.length, fullText.length, evPages, "bottom");
+    return `${topPager}${pageBody}${bottomPager}`;
   }
 
-  if (!marks.length && !gaps) return renderContent(b.x.join(""), b.f);
+  // Legacy fallback for pre-pagination cached detail payloads that still contain `{g}` gaps.
   if (!marks.length) {
-    let pos = 0;
     return b.x
-      .map((x) => {
-        if (typeof x !== "string") {
-          pos += x.g;
-          return `<span class="gap">··· 省略 ${fmt(x.g)} 字 ···</span>`;
-        }
-        pos += x.length;
-        return `<span class="piece">${esc(x)}</span>`;
-      })
+      .map((x) => (typeof x === "string" ? `<span class="piece">${esc(x)}</span>` : `<span class="gap">··· 省略 ${fmt(x.g)} 字 ···</span>`))
       .join("");
   }
-  // Marks demand the original characters, so formatting stays inline-only.
   let pos = 0;
   return b.x
     .map((x) => {
@@ -1001,7 +1136,7 @@ function pieceHTML(t, mi, bi, b, plain = false) {
         .filter((k) => k.s < pos + x.length && k.z > pos)
         .map((k) => ({ s: Math.max(0, k.s - pos), z: Math.min(x.length, k.z - pos), e: k.e, src: k.src }));
       pos += x.length;
-      return segment(x, local, markHTML, "inline");
+      return segment(x, local, markHTML, b.f === "json" ? "plain" : "inline");
     })
     .join("");
 }
@@ -1017,6 +1152,8 @@ function markProse(scope) {
     const block = S.D.input.traces[t]?.messages[mi]?.blocks[bi];
     if (!block) return;
     const text = block.x.join("");
+    const pStart = host.dataset.pageStart != null ? Number(host.dataset.pageStart) : 0;
+    const pEnd = host.dataset.pageEnd != null ? Number(host.dataset.pageEnd) : text.length;
     const nodes = [];
     const walk = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
     let flat = "";
@@ -1033,7 +1170,10 @@ function markProse(scope) {
     const spans = new Map();   // "node:start:end" → [node index, start, end, [eid…]]
     host.dataset.ev.split(" ").map(Number).forEach((e) => {
       const ev = S.D.evidence[e];
-      const want = text.slice(ev.o[0], ev.o[1]).replace(/^\s*\d+\.\s/gm, "").split("").filter((c) => !MD_NOISE.test(c)).join("");
+      const s0 = Math.max(pStart, ev.o[0]);
+      const s1 = Math.min(pEnd, ev.o[1]);
+      if (s1 <= s0) return;
+      const want = text.slice(s0, s1).replace(/^\s*\d+\.\s/gm, "").split("").filter((c) => !MD_NOISE.test(c)).join("");
       if (want.length < 2) return;
       let p = flat.indexOf(want);
       let len = want.length;
@@ -1160,6 +1300,21 @@ function onInputClick(e) {
     restore();
     return;
   }
+  const blkPage = e.target.closest("[data-blk-page]");
+  if (blkPage && !blkPage.disabled) {
+    const blkKey = blkPage.dataset.blk || "";
+    const [t, mi] = blkKey.split(":").map(Number);
+    const nextPage = Number(blkPage.dataset.blkPage);
+    if (!Number.isFinite(t) || !Number.isFinite(mi) || !Number.isFinite(nextPage)) return;
+    const fromBottom = !!blkPage.closest(".blk-pager.is-bottom");
+    S.blockPages.set(blkKey, nextPage);
+    rerenderMsg(t, mi);
+    if (fromBottom) {
+      const blkEl = $(`#${prefix}m-${t}-${mi} .blk[data-blk="${blkKey}"]`, root);
+      blkEl?.scrollIntoView({ block: "nearest", behavior: REDUCED ? "auto" : "smooth" });
+    }
+    return;
+  }
   const fold = e.target.closest("[data-fold]");
   if (fold) {
     const [t, i] = fold.dataset.fold.split(":").map(Number);
@@ -1204,6 +1359,20 @@ function onInputClick(e) {
   }
 }
 
+function focusEvidencePage(ev) {
+  if (!ev || ev.b == null || !ev.o) return false;
+  const msg = S.D?.input?.traces?.[ev.t]?.messages?.[ev.m];
+  const blk = msg?.blocks?.[ev.b];
+  if (!blk || blk.x.some((x) => typeof x !== "string")) return false;
+  const pages = splitBlockPages(blk.x.join(""), blockPageLimit(msg.k, blk.l));
+  if (pages.length <= 1) return false;
+  const target = pageIndexForOffset(pages, ev.o[0]);
+  const key = `${ev.t}:${ev.m}:${ev.b}`;
+  const prev = S.blockPages.get(key) ?? 0;
+  S.blockPages.set(key, target);
+  return prev !== target;
+}
+
 function jump(eid) {
   const ev = S.D.evidence[eid];
   if (!ev || ev.m == null) return;
@@ -1230,6 +1399,7 @@ function jump(eid) {
   if (compareFolds && S.D.input?.traces?.[ev.t]?.messages?.[ev.m]?.k === "answer") {
     S.closedAnswers.delete(`${ev.t}:${ev.m}`);
   }
+  focusEvidencePage(ev);
   rerenderMsg(ev.t, ev.m);
   const el = $(`#${prefix}m-${ev.t}-${ev.m}`, root);
   if (!el) { threadFocus?.(hoverPid); return; }   // 数据里点到一条这一轮没渲染出来的消息
@@ -1260,10 +1430,11 @@ function underClip(el) {
 /* session 总评里点证据：只在这一页里定位。总评只铺了问答消息，证据落在中间步骤时
    退到同一轮最近的那条问答，至少让人知道是哪一轮。 */
 function jumpInSession(eid, ev) {
+  if (focusEvidencePage(ev)) rerenderMsg(ev.t, ev.m);
   const msgs = S.D.input.traces?.[ev.t]?.messages || [];
   const pick = (i) => {
     const m = msgs[i];
-    return m && (m.k === "user" || m.k === "answer") ? $(`#m-${ev.t}-${i}`, root) : null;
+    return m && (m.k === "user" || m.k === "answer") ? $(`#${prefix}m-${ev.t}-${i}`, root) : null;
   };
   let el = pick(ev.m);
   for (let i = ev.m - 1; i >= 0 && !el; i -= 1) el = pick(i);

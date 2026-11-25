@@ -13,6 +13,7 @@ const {
   detailPaneHTML, detailIds, utOf, isLostRow, USER_TYPE_SHORT,
   mergeSessionDetails, dropSubsetParts, hasSessionComment, roundQuestionOf,
   sortSessionRows, canLazyLoadSession, pickLazyRound, buildLazyRoundDetail,
+  blockPageLimit, splitBlockPages, pageIndexForOffset, pageWindow,
 } = await import("../static/js/sample_detail.js");
 const { sessionRows } = await import("../static/js/compare.js");
 
@@ -179,4 +180,49 @@ test("large per-trace sessions use lazy round loading with deterministic orderin
   assert.equal(D.rounds[24].trace, 0);
   assert.equal(D.rounds[0].loaded, false);
   assert.equal(D.rounds[0].trace, -1);
+});
+
+test("splitBlockPages preserves every character without elision and snaps to line breaks", () => {
+  assert.deepEqual(splitBlockPages("", 1000), []);
+  assert.equal(splitBlockPages("short text", 1000).length, 1);
+  // Slightly over pageSize (<= 1.2x) stays on one page to avoid a tiny trailing page.
+  assert.equal(splitBlockPages("a".repeat(1150), 1000).length, 1);
+
+  const lines = Array.from({ length: 200 }, (_, i) => `line-${String(i).padStart(3, "0")}: ${"x".repeat(40)}\n`).join("");
+  const pages = splitBlockPages(lines, 1000);
+  assert.ok(pages.length > 5);
+  assert.equal(pages.map((p) => p.text).join(""), lines, "concatenation must recover the exact original text");
+  assert.equal(pages[0].start, 0);
+  assert.equal(pages[pages.length - 1].end, lines.length);
+  for (let i = 1; i < pages.length; i += 1) {
+    assert.equal(pages[i].start, pages[i - 1].end, "pages must be contiguous");
+    assert.ok(pages[i - 1].text.endsWith("\n"), "page cuts should snap to newline boundaries when nearby");
+  }
+  assert.equal(pageIndexForOffset(pages, 0), 0);
+  assert.equal(pageIndexForOffset(pages, lines.length - 1), pages.length - 1);
+  const mid = Math.floor(lines.length / 2);
+  const midPage = pageIndexForOffset(pages, mid);
+  assert.ok(mid >= pages[midPage].start && mid < pages[midPage].end);
+});
+
+test("splitBlockPages handles long single-line JSON and UTF-16 surrogate pairs safely", () => {
+  const raw = "A".repeat(999) + "😀" + "B".repeat(2500);
+  const pages = splitBlockPages(raw, 1000);
+  assert.ok(pages.length >= 3);
+  assert.equal(pages.map((p) => p.text).join(""), raw);
+  // Ensure no page ends with an unpaired high surrogate.
+  for (const p of pages) {
+    const last = p.text.charCodeAt(p.text.length - 1);
+    assert.ok(!(last >= 0xd800 && last <= 0xdbff), "must not split a surrogate pair");
+  }
+  assert.equal(blockPageLimit("result"), 3200);
+  assert.equal(blockPageLimit("answer"), 14000);
+  assert.equal(blockPageLimit("llm", "think"), 3200);
+});
+
+test("pageWindow keeps page navigation compact for large blocks", () => {
+  assert.deepEqual(pageWindow(0, 5), [0, 1, 2, 3, 4]);
+  assert.deepEqual(pageWindow(0, 12), [0, 1, 2, 3, "…", 11]);
+  assert.deepEqual(pageWindow(5, 12), [0, "…", 4, 5, 6, "…", 11]);
+  assert.deepEqual(pageWindow(11, 12), [0, "…", 8, 9, 10, 11]);
 });

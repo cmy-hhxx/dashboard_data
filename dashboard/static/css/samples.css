@@ -376,6 +376,30 @@
 .msg.is-folded .blk, .msg.is-folded .blk-label, .msg.is-folded .msg-zh { display: none; }
 .msg-zh { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--t4); color: var(--muted); font-size: var(--fs-small); line-height: 1.65; white-space: pre-wrap; }
 .gap { display: block; margin: 6px 0; color: var(--muted); font-size: var(--fs-meta); font-family: var(--font); text-align: center; letter-spacing: 0.03em; }
+.blk-pager {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px;
+  padding: 5px 8px; border-radius: 8px; background: var(--well-2);
+  font-family: var(--font); font-size: var(--fs-meta); line-height: 1.2; color: var(--muted);
+  white-space: normal;
+}
+.blk-pager.is-top { margin-bottom: 6px; }
+.blk-pager.is-bottom { margin-top: 6px; }
+.blk-pager-info { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.blk-pager-nav { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 3px; }
+.blk-pager button {
+  position: relative; display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px;
+  border-radius: 6px; background: transparent; color: var(--ink-2); font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums; transition: background var(--snap), color var(--snap);
+}
+.blk-pager button:hover:not(:disabled) { background: var(--card); color: var(--ink); }
+.blk-pager button:disabled { opacity: 0.32; cursor: default; }
+.blk-pager button.is-current { background: var(--ink); color: var(--card); font-weight: var(--w-medium); }
+.blk-pager button.has-ev::after {
+  content: ""; position: absolute; top: 2px; right: 2px; width: 4px; height: 4px; border-radius: 50%;
+  background: var(--accent);
+}
+.blk-pager button.is-current.has-ev::after { background: var(--card); }
+.blk-pager-gap { padding: 0 2px; color: var(--faint); user-select: none; }
 
 /* The think / call / result chain between a question and its answer scrolls in its own box,
    so hundreds of steps never push the answer off screen. */

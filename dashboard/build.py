@@ -1926,10 +1926,11 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
             raw, kind = row["raw"], row["kind"]
             blocks = []
             for b in row["blocks"]:
-                limit = BLOCK_LIMIT.get("think" if b.label == "think" else kind, 1600)
                 blocks.append({
                     "p": b.path, "f": b.fmt, "l": b.label, "n": len(b.text),
-                    "x": trim_pieces(b, limit),
+                    # Keep the full block text so the detail page can paginate long
+                    # blocks on the client instead of dropping middle chunks ("省略 N 字").
+                    "x": [b.text] if b.text else [],
                 })
             msg = {"k": kind, "blocks": blocks}
             if row["name"]:

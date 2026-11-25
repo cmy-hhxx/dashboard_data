@@ -20,8 +20,8 @@ import human_read_overlay as hro
 from keylocks import KeyedLocks
 
 SLUG = re.compile(r"^[0-9a-f]{10}$")
-# 详情文件单独失效：配对修正后要给旧样本补输入，但不能连带让 116k 样本缓存全量重建。
-DETAIL_VERSION = "2026-11-24.3"
+# 详情文件单独失效：配对修正 / 长文本全量保留后要刷新旧缓存，但不能连带让样本索引全量重建。
+DETAIL_VERSION = "2026-11-25.1"
 
 
 class ForecastIndex:

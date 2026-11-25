@@ -166,10 +166,8 @@ function prettyJSON(text) {
   }
 }
 
-function jsonHTML(text) {
-  const pretty = prettyJSON(text);
-  if (pretty == null) return null;
-  return pretty
+function highlightJSONLines(text) {
+  return text
     .split("\n")
     .map((line) =>
       esc(line)
@@ -181,11 +179,17 @@ function jsonHTML(text) {
     .join("\n");
 }
 
+function jsonHTML(text) {
+  const pretty = prettyJSON(text);
+  if (pretty == null) return null;
+  return highlightJSONLines(pretty);
+}
+
 /* ---------------------------------------------------------------- public entry */
 
 /**
  * renderContent(text, format, segs, mark)
- *   text   original (possibly trimmed) string
+ *   text   original (possibly paginated) string
  *   format "json" | "text" | "image"
  *   segs   evidence ranges with offsets relative to `text`
  *   mark   (coveringRanges, escapedBody) → HTML
@@ -202,7 +206,9 @@ export function renderContent(text, format, segs, mark) {
   if (format === "json") {
     const html = jsonHTML(t);
     if (html != null) return `<pre class="json-view">${html}</pre>`;
-    return `<pre class="json-view raw">${esc(t)}</pre>`;
+    // Paginated slices of a pretty-printed JSON block are not standalone JSON,
+    // so highlight their lines directly instead of dropping syntax styling.
+    return `<pre class="json-view raw">${highlightJSONLines(t)}</pre>`;
   }
 
   // Heuristic: providers often hand back JSON as text.
