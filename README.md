@@ -20,7 +20,7 @@
 | `page_service/` | 5002 只读页面服务（样本详情 `/`、聚类矩阵 `/matrix/`、版本对比 `/compare/`） | [page_service/sample_details/README.md](page_service/sample_details/README.md) |
 | `interfaces/eval_data_interface/` | 5003 对话分析供数接口 v2（`/api/v1/analysis/*`，零第三方依赖） | [interfaces/eval_data_interface/README.md](interfaces/eval_data_interface/README.md) |
 | `interfaces/internal_eval_service_interface/` | 挂载于弗吉尼亚 5003 的内部评测与聚类接口（`/api/v1/internal-eval/*`） | [interfaces/internal_eval_service_interface/README.md](interfaces/internal_eval_service_interface/README.md) |
-| `human_read_module/` | AIME 评测输出的人话同义翻译镜像层（零侵入原文件） | [human_read_module/README.md](human_read_module/README.md) |
+| `human_read_module/` | 人话翻译源码（弗吉尼亚已停用；译文数据由外部服务维护，看板只读展示） | [human_read_module/README.md](human_read_module/README.md) |
 | `scripts/` | 打包、守护、容器恢复、KYC 库同步、全仓测试 | [docs/dashboard-deployment.md](docs/dashboard-deployment.md) |
 
 ## 看板视图与核心口径

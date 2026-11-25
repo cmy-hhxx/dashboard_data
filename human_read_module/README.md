@@ -1,5 +1,9 @@
 # human_read_module
 
+> **弗吉尼亚已不再运行本模块**：翻译服务由其他同事维护，本目录仅保留源码参考。
+> 译文数据仍在 `/mnt/aime_eval_ssd/1_aime/eval_output/human_read/`，由外部服务持续更新；
+> 看板 5001 只读叠层展示，**禁止删除或清理该目录**。以下命令仅适用于其他部署环境。
+
 AIME 评测输出（`attribution.jsonl` 与 `compact.jsonl`）的**人话同义翻译层**与定时增量回刷服务。
 
 ## 设计原则
@@ -28,21 +32,20 @@ AIME 评测输出（`attribution.jsonl` 与 `compact.jsonl`）的**人话同义�
 - `paused`：设为 `true` 立即暂停发请求，改回 `false` 自动恢复；
 - `workers`：线程上限，在切换到下一个文件时自动生效。
 
-## 常用命令（弗吉尼亚 `/opt/human_read_service`）
+## 常用命令（仅其他部署环境；弗吉尼亚不适用）
 
 ```bash
+# 以下 <部署根目录> 指实际的 human_read_module 上级目录
 # 查看当前翻译进度
-cd /opt/human_read_service && python3 -m human_read_module.runner --status
+cd <部署根目录> && python3 -m human_read_module.runner --status
 
 # 单次小批量试跑（例如最新日期前 20 条）
-cd /opt/human_read_service && python3 -m human_read_module.runner --workers 8 --limit 20
+cd <部署根目录> && python3 -m human_read_module.runner --workers 8 --limit 20
 
-# 启动后台守护回刷（默认 8 并发，每 600s 复扫增量，含 ab_test）
-/opt/human_read_service/human_read_module/start.sh
-
-# 停止后台守护
-/opt/human_read_service/human_read_module/stop.sh
+# 启动/停止后台守护回刷（默认 8 并发，每 600s 复扫增量，含 ab_test）
+<部署根目录>/human_read_module/start.sh
+<部署根目录>/human_read_module/stop.sh
 ```
 
-网关 key 不进仓库：放在服务器 `/opt/human_read_service/human_read.env`（`chmod 600`），
+网关 key 不进仓库：放在部署根目录的 `human_read.env`（`chmod 600`），
 `start.sh` 启动前自动 source；本地手动跑 `runner.py` 时设置 `HUMAN_READ_API_KEY` 环境变量。

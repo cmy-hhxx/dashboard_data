@@ -20,7 +20,7 @@ AIME 的评测数据、看板（5001）、页面接口（5002）与供数/内部
 │   │   ├── 0_daily_eval/<model>/<model>_attribution-<date>.jsonl       # 归因输出
 │   │   ├── 0_daily_eval/<model>/compact/<model>_compact-<date>.jsonl   # 压缩轨迹
 │   │   ├── cluster/<model>/{cluster_tree.json,item_index.jsonl,...}    # 聚类树（4.4+）
-│   │   └── human_read/                                                 # 人话翻译镜像（见 human_read_module/README.md）
+│   │   └── human_read/                      # 人话译文镜像；外部服务维护，看板只读叠层（勿删）
 │   ├── ab_test/<n>_version<MMDD>_test/   # A/B 轮次（round.json / 00_manifest / 01_targets / 02~07 / 99_provenance）
 │   ├── user_kyc/                         # 用户 KYC SQLite 库（见 用户KYC库.md）
 │   └── stats/<UTC>/                      # backup_stats.py 每小时快照（保留 12 份）
@@ -31,6 +31,8 @@ AIME 的评测数据、看板（5001）、页面接口（5002）与供数/内部
 ```
 
 > 扫描必须跳过非业务目录：`eval_output/0_daily_eval-pre-split-*`、`.archive`、`.runs`、`.delivery`、`.parts`、`.merge`。
+
+> **人话译文**：翻译服务已迁出弗吉尼亚，不再部署 `/opt/human_read_service`；`eval_output/human_read/` 由外部同事的服务持续写入维护。看板 5001 只读该目录（`human_read_overlay.py`），按 sqlite/文件 mtime 自动叠加新译文，无需重启或重新部署。**禁止删除或清理该目录**。
 
 ## 3. 核心字段与分类回填
 

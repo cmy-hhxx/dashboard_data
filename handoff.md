@@ -27,6 +27,7 @@ server.py (:5001，定时刷新) ──> 静态服务 + /samples/<slug>.json & /
 ```
 
 - **数据源分工**：问财（乌兰）只读 `0_wencai/eval_input/2_rsi_input` 与 `eval_output/2_rsi_eval`（聚类取 `cluster/<model>/total/`，日期按 `Asia/Shanghai`）；AIME（弗吉尼亚）只读 `/mnt/aime_eval_ssd/1_aime`（日期按 `America/New_York`）。
+- **人话译文**：翻译服务已迁出弗吉尼亚，`1_aime/eval_output/human_read/` 由外部服务持续维护；看板只读叠层（`human_read_overlay.py`），按 sqlite/文件 mtime 自动刷新，**不要删除该数据目录**。
 - **增量与缓存**：输入/输出/compact 按 `(size, mtime_ns)` + `files.tail`（旧 committed 前 64 KB 哈希）区分追加与原地重写；样本摘要按行哈希缓存于 `cache/build.sqlite3` + `cache/samples.pkl`（分块写出），cluster 变化只重映射 `cl` 不重读输入；全量无变化走亚秒复用路径。
 - **内存保护**：`build.py` 的 `capped_workers` 按容器 cgroup 剩余内存自动降级并发（16 GiB 容器中自动退回串行，避免 fork OOM 卡死 `build.lock`）；摘要仅保留 payload 消费字段（`slim_parts`）。
 - **版本升级**：改 detail 结构必须 bump `build_store.BUILD_VERSION`；改聚合结构必须 bump `build.py` 的 `PAYLOAD_VERSION`；改配对/聚类缓存口径同步 bump 对应 `*_VERSION`。
@@ -36,7 +37,7 @@ server.py (:5001，定时刷新) ──> 静态服务 + /samples/<slug>.json & /
 | 模块 | 路径 | 职责 |
 |---|---|---|
 | 构建与索引 | `build.py`, `build_store.py`, `filelist.py`, `json_compat.py` | 扫描、配对、聚合、增量 SQLite 索引、payload 生成 |
-| 懒详情与监控 | `detail_builder.py`, `ab_detail.py`, `human_read_overlay.py`, `speed_monitor.py` | 样本/AB 详情按需生成、人话翻译叠层、AIME 评测速度采集 |
+| 懒详情与监控 | `detail_builder.py`, `ab_detail.py`, `human_read_overlay.py`, `speed_monitor.py` | 样本/AB 详情按需生成、外部人话译文只读叠层、AIME 评测速度采集 |
 | 服务与旁路 | `server.py`, `stats_worker.py`, `backup_stats.py`, `user_rules.py` | HTTP 服务、定时刷新、输入统计旁路、备份、用户规则 |
 | 前端入口与通用 | `static/js/app.js`, `core.js`, `render.js`, `pixel_toggle.js` | 路由、站点切换、条件刷新、Markdown/JSON 渲染、主题切换 |
 | 数据与趋势 | `static/js/data.js`, `sunburst.js`, `galaxy.js`, `kline_data.js`, `kline_chart.js`, `trend_chart.js` | 2+3 Bento、推拉布局、聚类矩阵、K 线/多线趋势、星图 |

@@ -42,4 +42,5 @@ ssh aime_rsi_data 'nohup bash /mnt/aime_eval_ssd/.service_backup/snapshot_loop.s
 - **5003 变更位点**：必须恢复 `state/cursor.key` 与索引，否则 `latest_seq` 归零导致消费方收到 `409 SYNC_RESET`。
 - **SSH 不通或外网端口间歇失败**：先检查平台是否变更了端口映射；弗吉尼亚外网 TCP 新连接存在边缘抖动，判断服务死活一律以容器内 `127.0.0.1` 为准。
 - **免手工开机自启**：需在平台实例启动命令末尾追加 `nohup bash /opt/eval_boot.sh >/dev/null 2>&1 &`。
-- **附带恢复**：用户 KYC 同步循环需手动补跑 `ssh aime_rsi_data 'bash /mnt/aime_eval_ssd/1_aime/user_kyc/start_sync.sh'`；人话翻译服务按需跑 `/opt/human_read_service/human_read_module/start.sh`。
+- **附带恢复**：用户 KYC 同步循环需手动补跑 `ssh aime_rsi_data 'bash /mnt/aime_eval_ssd/1_aime/user_kyc/start_sync.sh'`。
+- **人话服务与数据**：人话翻译服务已迁出弗吉尼亚（不再部署 `/opt/human_read_service`，也不随容器恢复）；译文数据仍在 `/mnt/aime_eval_ssd/1_aime/eval_output/human_read/`，由外部服务持续更新。看板 5001 只读叠层，**禁止删除该目录**。
