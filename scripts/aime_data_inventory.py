@@ -9,7 +9,7 @@
   待评测  /mnt/aime_eval_ssd/1_aime/eval_input/0_daily_eval_input/<model>/<date>.jsonl
   已评测  /mnt/aime_eval_ssd/1_aime/eval_output/0_daily_eval/.keys/<model>/*.keys
 
-口径（先对齐再统计，详见 docs/aime-data-inventory-sop.md）：
+口径（先对齐再统计）：
 
   * 待瘦身 = 原始文件 offset 之后的行数（2026-11-13 起 1 行 = 1 个 trace；更早的行可能含多条）
   * 待评测 / 已评测 = 按 trace_id 去重的记录数；评测流水线本身就是按 trace 去重

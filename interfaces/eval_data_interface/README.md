@@ -1,219 +1,59 @@
-# eval_data_interface — 对话分析查询接口 v2.0
+# eval_data_interface — 对话分析供数接口 v2.0
 
-RSI 看板「对话分析」查询接口的服务端实现。只读、零第三方依赖（Python 3.12 标准库），
-独立进程，不与仓库内任何其他代码耦合。
+只读、零第三方依赖（Python 3.12 标准库）的独立进程，提供 `/api/v1/analysis/*` 查询与增量同步，直接输出 trace 的 `problems` 与 P0–P4 严重度（不做对错判定，`is_correct` 恒 `null`）。
 
-v2 不再输出 `is_error` / `has_error` 这类对错判定（数据里没有标准答案），改为直接返回
-trace 的 `problems` 问题数组与 P0–P4 严重度，并新增 `GET /severity` 统计接口。
-
-- 接入说明（AIME）：[docs/接入说明.md](docs/接入说明.md)
-- 接入说明（问财）：[docs_wencai/接入说明.md](docs_wencai/接入说明.md)
-- 与 5002 页面接口一起使用的完整指南：[../../docs/接口使用指南.md](../../docs/接口使用指南.md)
+- 消费方接入：[docs/接入说明.md](docs/接入说明.md)（AIME）、[docs_wencai/接入说明.md](docs_wencai/接入说明.md)（问财）
 - 增量同步：[docs/incremental.md](docs/incremental.md)、[docs_wencai/incremental.md](docs_wencai/incremental.md)
+- 与 5002 联动指南：[../../docs/接口使用指南.md](../../docs/接口使用指南.md)
 
-## 地址
+## 1. 部署与数据源
 
-| 部署 | 对外 | 集群内 | 数据 / `dataset` |
+| 部署 | 对外 / 集群内 | `ANALYSIS_DATASET` | 数据根与归因路径 |
 |---|---|---|---|
-| 弗吉尼亚 | `http://10.217.219.2:2477` | `http://interactive-s3ynzadcvm9c:5003` | AIME / `aime_eval` |
-| 乌兰察布 | 平台映射的 5003 端口 | `http://interactive-i6piqwvlnsr5:5003` | 问财 / `wencai_eval` |
+| **弗吉尼亚（AIME）** | `10.217.219.2:2477` / `interactive-s3ynzadcvm9c:5003` | `aime_eval` | `/mnt/aime_eval_ssd/1_aime/eval_output/{0_daily_eval,1_lost_user_eval}/{aime_expert,aime_fast}/*_attribution-*.jsonl`；聚类 `cluster/<model>/`；输入 `eval_input/0_daily_eval_input/` |
+| **乌兰察布（问财）** | 平台映射 / `interactive-i6piqwvlnsr5:5003` | `wencai_eval` | `.../datasets/0_wencai/eval_output/2_rsi_eval/{b_expert,b_fast}/<cohort>/*_attribution-*.jsonl`；聚类 `cluster/<model>/total/`；输入 `eval_input/2_rsi_input/` |
 
-接口前缀 `/api/v1/analysis`，健康检查 `GET /healthz`。对外端口由平台侧映射到 pod 的 5003
-（`5003` 即固定的**供数端口**）。不做认证。一次部署只服务一份数据，`ANALYSIS_DATASET`
-选 `aime_eval` 或 `wencai_eval`；地址、端口映射与容器名见
-[docs/接口使用指南.md](../../docs/接口使用指南.md) 第零节；端口角色见 `docs/dashboard-deployment.md`。
+- 每次部署只服务单一 `dataset`，在线文档 `/api/v1/analysis/docs` 自动下发对应目录（`docs/` 或 `docs_wencai/`）。
+- **维度差异**：AIME `source`=`prelaunch|feedback`、`day`=`America/New_York`、意图走 v1.9（`taxonomy/intent_2026-11.json`，优先按 `trace_id` 关联 `category_meta.json`）；问财 `source`=用户分层 cohort、`day`=`Asia/Shanghai`、无 compact、意图通常为 `null`。
 
-## 数据来源（AIME）
+## 2. 核心口径
 
-弗吉尼亚远端只读挂载：`/mnt/aime_eval_ssd/1_aime`（`EVAL_DATASETS=/mnt/aime_eval_ssd`）
+1. **仅统计已分析 trace**：同文件同 `trace_id` 取行号最大者，旧版进 `analysis.history`。
+2. **`problems` 是唯一真相**：聚类只决定 `code`（未聚类 `code=null`，进 `"未聚类"` 组），不影响问题数与 P0–P4。
+3. **分母 `analyzed`**：去掉 `problem` / `severity` 筛选并忽略 `problem` 分组维度后的 trace 数；`problems` 跨组不重、`traces` 可跨组。
+4. **测试账号不供数**：仅纯 ASCII 数字且 ≤ 10 位为真实用户（规则见 `<EVAL_DATASETS>/user_rules.json`），其余整条排除；`/healthz` 的 `build.test_excluded` 显示排除量。
+5. **编码升版**：旧编码保留在 `code`/`legacy_code`，当前树最近祖先给 `current_code`/`problem_label`。
 
-| 内容 | 路径 |
+## 3. 接口与运行特性
+
+| 端点 | 作用 |
 |---|---|
-| 逐 trace 分析结果 | `eval_output/{0_daily_eval,1_lost_user_eval}/{aime_expert,aime_fast}/*_attribution-YYYY-MM-DD.jsonl` |
-| 问题聚类树 | `eval_output/cluster/{aime_expert,aime_fast}/cluster_tree.json` |
-| 问题条目 → 聚类编码 | `eval_output/cluster/{aime_expert,aime_fast}/item_index.jsonl` |
-| 对话原始结构体 | `eval_input/0_daily_eval_input/{model}/<date>.jsonl`、`.archive/1_lost_user_input/{model}/*_input.jsonl` |
-| 测试用户规则（可选） | `<EVAL_DATASETS>/user_rules.json`（`EVAL_USER_RULES` 可覆盖） |
+| `GET /healthz` | 存活、构建状态、`traces`/`problems`/`latest_seq`/`data_updated_at` |
+| `GET /taxonomy` | `kind=intent\|problem\|severity`（`problem` 按 `app_version` 选树） |
+| `GET\|POST /summary` · `/severity` | 多维聚合与 P0–P4 统计 |
+| `GET\|POST /traces` · `/users` | trace 列表（cursor 翻页）与按用户聚合 |
+| `POST /traces/batch` · `GET /traces/{id}` | 批量摘要（≤1000）与单条完整详情（`day` 必填） |
+| `GET\|POST /changes` | 基于单调 `seq` 的全量与增量变更流（含 `deleted` 墓碑） |
+| `GET /docs[/{name}]` | 在线 Markdown 文档索引与正文 |
 
-每个部署只服务一份数据：AIME 是 `dataset=aime_eval`，问财是 `dataset=wencai_eval`
-（由 `ANALYSIS_DATASET` 选择）。
+- 无状态 HMAC cursor（30 分钟过期返回 410）；**多机部署必须共享 `ANALYSIS_CURSOR_KEY`**。
+- 支持 `Accept-Encoding: gzip`（≥1 KB）、快照级聚合缓存（`ANALYSIS_RESULT_CACHE*`）与并发保护（`ANALYSIS_MAX_INFLIGHT=32`，超限 429）。
 
-## 数据来源（问财）
-
-乌兰远端只读挂载：`/mnt/fin_bench/code_and_clean_data/datasets/0_wencai`
-
-| 内容 | 路径 |
-|---|---|
-| 逐 trace 分析结果 | `eval_output/2_rsi_eval/{b_expert,b_fast}/<cohort>/*_attribution-YYYY-MM-DD.jsonl` |
-| 问题聚类树 / 条目编码 | `eval_output/2_rsi_eval/cluster/{b_expert,b_fast}/total/{cluster_tree.json,item_index.jsonl}` |
-| 对话原始结构体 | `eval_input/2_rsi_input/{b_expert,b_fast}/<cohort>/data_YYYYMMDD.jsonl` |
-| 测试用户规则（可选） | `<EVAL_DATASETS>/user_rules.json` |
-
-问财没有 compact；`source` 是 cohort（`新用户W1-3` 等），`app_version` 是模型目录
-（`b_expert` / `b_fast`），`day` 按 Asia/Shanghai。详见
-[docs_wencai/接入说明.md](docs_wencai/接入说明.md)。
-
-## 维度映射（AIME）
-
-| 协议字段 | 实际取值 | 来源 |
-|---|---|---|
-| `dataset` | `aime_eval`（唯一取值） | 配置 |
-| `source` | `prelaunch` / `feedback` | 目录 `0_daily_eval` / `1_lost_user_eval` |
-| `app_version` | `AIME-Atlas_expert`、`aime-fast-new_fast` | `turns[].meta.model` + 模型目录后缀 |
-| `user_id` | 真实用户名或数字 ID | `turns[].meta.user_id` |
-| `day` | `YYYY-MM-DD`（America/New_York，含夏令时） | `turns[].meta.timestamp` |
-| trace | 一条**单轮**对话 | `turns[]` 的一项，id = `turns[].meta.trace_id` |
-| `intent` | `FIN-L1-03` / `FIN-L2-024` | `turns[].meta.task`/`task_category`，兜底 `session_meta.task_category`/`subtask_category` |
-| `problem` | `S9` / `S9.M5` / `S9.M5.1` | cluster 树的节点 id；未聚类问题 `code=null` |
-| `severity` | `P0`–`P4` | `turns[].problem[].severity`（P0 最重） |
-
-## 分类体系
-
-- **意图**：`taxonomy/intent_2026-11.json`（金融意图分类体系 v1.9），19 个顶层任务
-  `FIN-L1-01`–`FIN-L1-19` + 123 个子任务 `FIN-L2-001`–`FIN-L2-123`，label 保留中文原值。
-  版本 `2026-11`；旧标签（如 `T01` 时代的 `事件解读`）照常入库但不映射编码，`intent_code=null`。
-- **问题**：直接来自数据的 `cluster_tree.json`，按模型两份：
-  `aime_expert` / `aime_fast`，层级为 环节 `S*` → 机制 `S*.M*` → 模式 `S*.M*.x`
-  （个别还有第 4 层变体）。`/taxonomy?kind=problem` 用 `app_version` 选树。
-  树升版后，旧分析里的退役编码按当前树**最近祖先**解释：`code` 原样保留，另给
-  `current_code` / `legacy_code`，分组另给 `problem_label`。
-- **严重度**：`/taxonomy?kind=severity` 返回固定的 P0–P4 定义；P4 是「过程缺陷已恢复、未进入交付」，
-  v2 不做“是否算错误”的判定，全部按严重度原样统计。
-
-## 口径与取舍
-
-1. **只算分析过的 trace**；未分析的 trace 不出现在任何结果里。
-2. **每条 trace 只取最新一版**：同一文件里同一 `trace_id` 出现多行时取行号最大的，更早的行进
-   `analysis.history`。数据里没有 `analysis_id` / `analyzed_at` 字段，
-   `analysis_id` 用 `文件 + 行号` 的 SHA-1 前 16 位，`analyzed_at` 取文件 mtime。
-3. **问题数组是真相**：`problems` 全量来自 attribution 的 `turns[].problem[]`；聚类只决定
-   `code` 有没有，不影响问题数、严重度与 P0–P4 统计。未聚类问题 `code=null`，
-   在按 `problem` 编码分组时进 `null` 组。
-4. **一条 trace 可命中多个问题**：按 `problem` 分组时在各编码组各计一次；按大类分组时同一大类只计一次；
-   `problems` 是条目数，`problem_traces` 是至少一条问题的 trace 数（同一等级同理，
-   见 `/severity` 的 `severity.Pn.problems` / `.traces`）。
-5. **意图互斥**：`subtask` 存在时用子类编码，否则回退到 `task` 编码；都没有则 `intent_code=null`。
-6. **`analyzed` 分母**：去掉 `problem` / `severity` 两个筛选项、并忽略分组键里的 `problem` 维度后，
-   同一范围的 trace 数。
-7. **`intent` 编码不在数据里**：`task`/`subtask` 是中文自由文本，编码由本仓库的
-   `taxonomy/intent_2026-11.json` 固定；出现表外的新 label 时该 trace 的 `intent_code` 为 `null`。
-8. **trace 与 session**：trace 是统计单位，`trace_id` 取每个 `traces[].meta.trace_id`；外层
-   `meta.session_id` 只作 `session_id`。同一 session 的多轮各算一条 trace。
-9. **测试账号不供数**：口径是「真实 userid = 纯数字且 ≤10 位」（业务方 2026-11-17），
-   其余（英文名、内部号、≥11 位数字）整条不进 5003 快照，问句 / 详情 / 证据都不会返回；
-   位数上限在 `<datasets>/user_rules.json` 的 `heuristics.real_user_id_max_digits`，
-   `test.ids`/`test.patterns` 可显式指定、`real.ids`/`real.patterns` 可捞回。
-   `/healthz` 的 `build.test_excluded` 给出本轮排除条数。
-
-## 自检
-
-发布后跑一遍 `scripts/audit_analysis_api.py <base>`：把每个端点、参数上下限、错误码、
-`/users` 与 `/traces`、`/severity` 的计数一致性、测试账号不可见、gzip、cursor 翻页都检查一遍，
-只读、退出码非 0 即有失败项。
-
-## 接口
-
-| 接口 | 说明 |
-|---|---|
-| `GET /taxonomy?kind=intent\|problem\|severity[&app_version=…]` | 分类树 / 严重度定义 |
-| `GET\|POST /summary` | 聚合，`group_by` 支持 1–2 个维度（`intent`、`problem`、`day`、`user`、`app_version`、`source`） |
-| `GET\|POST /severity` | P0–P4 统计：问题条目数 + trace 数，可分组；`group_by` 可省略 |
-| `GET\|POST /traces` | trace 列表，固定 `(asked_at DESC, trace_id DESC)`，cursor 翻页；`severity` 筛选 |
-| `GET\|POST /users` | **按用户聚合**：谁有 Px 问题、每人的 P0–P4 明细、`analyzed` 分母、`sample_trace_id`；cursor 翻页 |
-| `POST /traces/batch` | 按一批 trace_id 取摘要（≤1000） |
-| `GET\|POST /changes?dataset=…[&since=…]` | **增量同步**：按服务端变更序号发新增/变更/删除；不传 `since` 即全量。见 `docs/incremental.md` |
-| `GET /traces/{trace_id}?dataset=…&day=…` | 单条 trace：`eval_input` 整行 + trace 对象 + 完整问题条目 + 历史版本 |
-| `GET /docs` `/docs/{name}` | 接口文档索引与 Markdown 原文（业务方无需仓库即可读取） |
-
-所有 200 响应统一为 `{request_id, schema_version, data, meta}`；错误为
-`{request_id, error:{code, message, details}}`，错误码见 [接入说明](docs/接入说明.md) 的错误码表。`meta` 另含
-`data_updated_at`（数据产物时间）、`built_at`（快照构建时间）、`latest_seq`（变更流最新位点）。
-
-`cursor` 是无状态签名串（HMAC-SHA256），绑定筛选条件与页大小，30 分钟过期返回 410。
-签名密钥取 `ANALYSIS_CURSOR_KEY`；未设置时每台机器在 `state/cursor.key` 自建一把（重启不失效）。
-**多机部署（同一入口后有多台）必须设同一个 `ANALYSIS_CURSOR_KEY`**，否则 A 机签发的 cursor 到 B 机会报签名不匹配。
-
-响应体 ≥ 1 KB 且请求带 `Accept-Encoding: gzip` 时 gzip 压缩。`/summary`、`/severity`、`/taxonomy` 的结果按快照缓存
-（快照更新即失效，单条最长 `ANALYSIS_RESULT_CACHE_TTL` 秒），新快照上线后预算常用聚合。
-同时处理的请求超过 `ANALYSIS_MAX_INFLIGHT`（默认 32）时立即返回 429 `RATE_LIMITED` + `Retry-After`。
-
-## 本地跑
+## 4. 本地运行、部署与验证
 
 ```bash
-# 用 fixture 自建一个小数据集并跑完整验收
-python3 tests/test_acceptance.py
-
-# 直接指向真实挂载（远端机器上）
-EVAL_DATASETS=/mnt/aime_eval_ssd ANALYSIS_DATASET=aime_eval python3 run.py serve       # AIME
-EVAL_DATASETS=/mnt/fin_bench/code_and_clean_data/datasets ANALYSIS_DATASET=wencai_eval python3 run.py serve  # 问财
-
-# 只建索引 / 看索引摘要
-python3 run.py build
-python3 run.py status
-```
-
-环境变量：`EVAL_DATASETS`（数据集根）、`ANALYSIS_DATASET`（`aime_eval` / `wencai_eval`，默认 `aime_eval`）、
-`ANALYSIS_STATE`（索引与密钥目录，默认 `./state`）、
-`PORT`（默认 5003）、`HOST`、`REFRESH_SECONDS`（默认 600；线上 deploy.env 设为 3600）、`CURSOR_TTL`（默认 1800）、
-`ANALYSIS_CURSOR_KEY`（多机共享的 cursor 签名密钥）、`ANALYSIS_MAX_INFLIGHT`（默认 32）、
-`ANALYSIS_RESULT_CACHE` / `ANALYSIS_RESULT_CACHE_TTL`（聚合缓存条数 / 秒，默认 256 / 600）。
-
-## 部署与运维
-
-```bash
-# AIME（弗吉尼亚）
+# 本地 / 远端 CLI
+EVAL_DATASETS=/mnt/aime_eval_ssd ANALYSIS_DATASET=aime_eval python3 run.py serve  # build / status
+# 部署（AIME 弗吉尼亚 / 问财 乌兰）
 EVAL_DEPLOY_HOST=aime_rsi_data EVAL_DATASETS=/mnt/aime_eval_ssd ANALYSIS_DATASET=aime_eval ./deploy.sh
-# 问财（乌兰）
 EVAL_DATASETS=/mnt/fin_bench/code_and_clean_data/datasets ANALYSIS_DATASET=wencai_eval ./deploy.sh
-ssh eval_data 'cd /opt/eval_analysis && ./start.sh'
-ssh eval_data 'cd /opt/eval_analysis && ./stop.sh'
-curl -s http://127.0.0.1:5003/healthz              # 容器内自检
+# 验收与只读接口自检
+python3 tests/test_acceptance.py && python3 tests/test_store.py && python3 tests/test_taxonomy.py
+python3 ../../scripts/audit_analysis_api.py http://127.0.0.1:5003
 ```
 
-`deploy.sh` 默认 `EVAL_DEPLOY_HOST=eval_data`（乌兰）、`REMOTE=/opt/eval_analysis`、`PORT=5003`；
-弗吉尼亚用 `EVAL_DEPLOY_HOST=aime_rsi_data`。`ANALYSIS_DATASET` / `EVAL_DATASETS` /
-`REFRESH_SECONDS` 会写进远端 `deploy.env`，之后手动重启沿用。
+关键环境变量：`EVAL_DATASETS`、`ANALYSIS_DATASET`、`ANALYSIS_STATE`（默认 `./state`）、`PORT`（5003）、`REFRESH_SECONDS`（线上 3600）、`CURSOR_TTL`（1800）、`ANALYSIS_CURSOR_KEY`。
 
-`start.sh` 会等到 `/healthz` 返回 `ok:true`（首次构建实测 341 秒（扫 11.4 GB 输入）；
-之后按 `(size, mtime)` 增量，未变文件直接跳过）。重启时先用 `state/index.sqlite` 里已有的索引对外服务，
-几秒内即 `ok:true`，增量重建在后台跑完后替换快照；`eval_input` 只是追加时从上次最后一个完整换行续扫。
-周期重建只有一个循环（`REFRESH_SECONDS`），上一轮未结束时下一轮跳过。
+## 5. 目录
 
-`/healthz` 字段：`ok`、`building`、`traces`、`problems`、`data_updated_at`、`built_at`、
-`build`（最近一次构建摘要与耗时，含 `severity` 各等级条目数）。
-
-验收（全仓一次跑完：`scripts/run_tests.sh interfaces`）：
-
-```bash
-python3 tests/test_acceptance.py                       # fixture，20 条
-python3 tests/test_store.py                            # store 层：脏字段入库、输入追加续扫
-python3 tests/test_taxonomy.py                         # 分类树加载与编码升版
-python3 tests/test_acceptance.py --real --base-url http://127.0.0.1:5003   # 真实数据
-```
-
-## 验证结果（历史基线：2026-11-03，v2.0 部署在乌兰 `interactive-i6piqwvlnsr5`；2026-11-19 已按 `0_wencai/2_rsi_eval` 重新恢复）
-
-- v1 → v2 首次迁移：清归因派生行后全量重扫 44 个 attribution 文件，151 秒；之后重启/增量重建 3–4 秒。
-- 索引快照（部署后 14:48，数据仍在增长）：18,574 条 trace / 724 条历史版本 / 51,190 个问题条目；
-  严重度 P0 225、P1 3,154、P2 12,235、P3 6,901、P4 28,675（各等级 `traces` 见 `/severity`）。
-- `tests/test_acceptance.py`：fixture 20 条全过；真实数据 17 条全过（含问题数组一致性、P0–P4 总量与
-  分组、`/summary` 与 `/traces` 一致、分母规则、多问题计数、大类展开、导出、5000 个 user_ids、详情、测试用户不供数）。
-- 容器内实测：`/summary` 0.05s、`/severity` 0.06s（`group_by=problem&level=leaf` 0.15s）、
-  `/traces` 0.004s（`severity=P0` 0.02s）、`/traces/{id}` 约 0.6s。
-
-## 目录
-
-```
-analysis_api/
-  config.py     环境变量、路径、常量、严重度等级
-  taxonomy.py   分类树（意图 JSON / 聚类树 / P0–P4 定义）
-  store.py      SQLite 增量索引（attribution、问题条目与严重度、input 偏移、历史版本）
-  users.py      测试用户判定（与看板 user_rules.json 同口径）
-  snapshot.py   内存快照、筛选、/summary、/severity、/traces、/changes 与详情拼装
-  cursors.py    无状态签名 cursor 与同步位点 token
-  server.py     HTTP 路由、文档下发与后台重建
-run.py          CLI：build / serve / status
-taxonomy/       意图分类体系（版本化 JSON）
-docs/           接口文档；`/api/v1/analysis/docs` 直接下发这里的 Markdown
-tests/          fixture + 验收用例
-```
+`analysis_api/{config,taxonomy,store,users,snapshot,cursors,server}.py` · `run.py` · `taxonomy/` · `docs/` · `docs_wencai/` · `tests/`。

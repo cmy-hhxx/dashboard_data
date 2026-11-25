@@ -1,149 +1,50 @@
-# 评测样本详情服务 · 接口说明
+# 评测样本详情服务 · 接口说明（5002）
 
-把单个评测样本的完整输入 / 输出、轨迹、对话、归因和证据定位做成可单独打开的详情页，
-并提供一组只读 JSON 接口，方便直接跳转查看或接入自己的系统。
+只读、无鉴权（仅内网使用），提供单样本完整输入/输出详情页与 JSON 出口。每套部署仅服务自身产品（请求另一产品返回 404）。
 
-两套部署，接口形态一致（完整 IP / 端口映射 / 容器名见 [接口使用指南](../../../docs/接口使用指南.md) 第零节）：
+| 部署 | 直连地址 | DSW 代理基址（`$BASE`） | 产品 |
+|---|---|---|---|
+| **乌兰察布** | `http://117.50.195.94:2833` | `https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail` | `wencai` |
+| **弗吉尼亚** | `http://10.217.219.2:2476` | `https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail-oversea` | `aime` |
 
-| 部署 | 主机 | 容器名 | 数据 | 5002 对外 |
-|---|---|---|---|---|
-| 乌兰察布 | `117.50.195.94` | `interactive-i6piqwvlnsr5` | 问财（看板 wencai-only，页面接口沿用） | `2833` |
-| 弗吉尼亚 | `10.217.219.2` | `interactive-s3ynzadcvm9c` | AIME | `2476` |
+集群内跨容器用 `http://interactive-i6piqwvlnsr5:5002`（问财）、`http://interactive-s3ynzadcvm9c:5002`（AIME）。端口总表见 [docs/接口使用指南.md](../../../docs/接口使用指南.md)。
 
-- DSW 代理（平台剥掉路径前缀，转发到对应容器的 5002）：
-  - 乌兰（问财）：`https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail/`
-  - 弗吉尼亚（AIME）：`https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail-oversea/`
-  - 未配代理时可用直连：乌兰 `117.50.195.94:2833`、弗吉尼亚 `10.217.219.2:2476`
-- 每套部署只服务自己产品：乌兰只有 `wencai`，弗吉尼亚只有 `aime`；另一个产品会 404
-- 只读、无鉴权；仅内部使用，请勿公开传播
-- 数据随看板重建更新（看板 `REFRESH_SECONDS` 默认 600 s；5003 供数服务自身按 3600 s 重建）
-
-## 1. 页面
-
-看板地址见 [接口使用指南](../../../docs/接口使用指南.md) 第零节（乌兰察布 `http://117.50.195.94:2768/`、
-弗吉尼亚 `http://10.217.219.2:2475/`）。在「具体数据」选中样本后，把地址栏的看板端口换成详情页端口
-（`view` 参数会被忽略）：
-
-```
-https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail/?product=wencai&case=daily%7Cb_fast%7Cthread_9d238e0db12e4d2d96efdebda331bef2
-https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail-oversea/?product=aime&slug=ba6ba417f2
-```
-
-直连等价地址：`http://<外部IP>:<5002 对外端口>/?product=…`（乌兰 `117.50.195.94:2833`、
-弗吉尼亚 `10.217.219.2:2476`）。
-
-`case`（历史参数名，值为会话键）是 `split|model|session_id`，也可以直接传 10 位小写 slug。AIME 一个会话的多轮评测会合并成一页，
-默认停在最后一轮。
-
-**定位到会话里的某一轮**：加 `&trace=<trace_id>`（5003 `/traces` 的 `trace_id`，也就是详情里
-`attribution.turns[].trace_id` 的那套 ID）：
+## 1. 详情页 URL
 
 ```text
-https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail-oversea/?product=aime&case=daily%7Caime_fast%7Cthread_19de…&trace=20003020179337992707500000000286
+$BASE/?product=aime&case=<split>%7C<model>%7C<session_id>&trace=<trace_id>
+$BASE/?product=aime&slug=<10位小写hex>
 ```
 
-- 找到 → 选中并滚动到该轮，归因区显示该轮的问题；URL 保留 `trace`，刷新仍定位同一轮。
-- 找不到 → 页面明确提示“trace 不在这个会话里”，不会静默停在别的轮。
-- `trace` 必须和 `case`（或 `slug`）一起用；单独给 `trace` 无法定位会话。
+- `case` 为 `split|model|session_id`（`|` 须编码为 `%7C`），多轮会话自动合并、默认停在最后一轮。
+- 加 `&trace=<trace_id>`（同 5003 `/traces` 的 `trace_id`）直接定位并滚动到该轮；必须与 `case` 或 `slug` 同传，未找到时明确报错。
+- 附加独立展示页：`/matrix/?matrix=1`（聚类矩阵）、`/compare/?compare=1&product=&round=&pair=`（版本对比）。
 
-## 2. 接口
+## 2. 只读 JSON 接口
 
-> 下面示例里的 `$BASE` 按产品选代理基址：问财 `https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail`、
-> AIME `https://rtahz.10jqka.com.cn/bmtp/proxy/dsw/trace-detail-oversea`；
-> 直连时换成目标环境的 `http://<外部IP>:<5002 对外端口>`（见第零节）。
-
-| 方法 | 路径 | 用途 |
-|---|---|---|
-| GET | `/api/context?product=…&case=…`（或 `&slug=…`） | 推荐入口：会话的召回索引行 + taxonomy，不含轨迹 |
-| GET | `/samples/<slug>.json` | 单条样本完整详情（轨迹、归因、证据） |
-| GET | `/samples-<product>.json` | 该产品全量召回索引，支持 gzip |
-| GET | `/healthz` | 存活检查 + 上游看板探活 |
-
-### 2.1 `/api/context`
-
-参数二选一（`case` 优先）：
-
-| 参数 | 必填 | 说明 |
-|---|---|---|
-| `product` | 否 | `wencai` / `aime`；省略时两个产品都会尝试 |
-| `case` | 二选一 | `split\|model\|session_id`（即索引行的 `sp\|m\|sid`），需 URL 编码 |
-| `slug` | 二选一 | 10 位小写十六进制 |
-| `trace` | 否 | trace_id；仅回显，用于页面定位。轮次匹配在前端按详情 `attribution.turns[].trace_id` 做 |
-
-```bash
-curl -sG "$BASE/api/context" \
-  --data-urlencode 'product=aime' \
-  --data-urlencode 'case=daily|aime_expert|thread_1f9a49fdcdf041b39e84f12e6a3b147e'
-```
-
-响应结构 `{product, index:{rows, models, splits, …}, taxonomy, trace}`；`rows[0].s` 就是详情接口的 slug，
-`trace` 是请求里带的 trace_id（未带为 `null`）。
-
-| 字段 | 含义 |
+| 路径 | 说明 |
 |---|---|
-| `s` | slug（详情接口用） |
-| `q` / `m` / `sp` / `d` | 问题 / 模型 / 分组（`daily`、`lost`）/ 日期 |
-| `sid` / `tid` | 会话 ID / trace ID |
-| `tr` / `n` | 轮数 / 问题数 |
-| `w` | 最严重等级（P0…）；问题标签已拆到 `/labels-<product>.json`（与 `rows[]` 同序） |
-| `r` / `st` / `pt` | 归因环节 / 阶段 / 模式（编码，映射见 `taxonomy`） |
-| `sc` | 场景（问财） |
-
-### 2.2 `/samples/<slug>.json`
+| `GET /api/context?product=&case=`（或 `&slug=`，可选 `&trace=`） | **推荐入口**：返回该会话的索引行 + `taxonomy` + 回显 `trace`（`case` 优先） |
+| `GET /samples/<slug>.json` | 单条完整详情（`input.traces[]`、`attribution.{problems,turns}`、`compact`、`evidence[]`） |
+| `GET /samples-<product>.json` | 该产品全量召回索引（不含 `lb`，建议 `curl --compressed`） |
+| `GET /labels-<product>.json` | 问题标签 `{schema, product, labels:[…]}`，按行号与全量 `rows[]` 一一对应 |
+| `GET /healthz` | 服务存活与上游 5001 看板探活状态 |
 
 ```bash
+curl -sG "$BASE/api/context" --data-urlencode 'product=aime' \
+  --data-urlencode 'case=daily|aime_expert|thread_1f9a49fdcdf041b39e84f12e6a3b147e'
 curl -s "$BASE/samples/ba6ba417f2.json" -o sample.json
 ```
 
-| 字段 | 内容 |
-|---|---|
-| `product` / `split` / `model` / `date` / `question` / `lang` | 样本基本信息 |
-| `ids` / `meta` | 会话、trace、case；模型、token、耗时等元信息 |
-| `input.traces[]` | 完整输入轨迹（按轮） |
-| `attribution.problems[]` / `turns[]` | 归因问题 / 逐轮归因 |
-| `compact` / `evidence[]` | 压缩概览 / 证据定位（`t` trace、`m` 消息、`b` block、`o` 偏移） |
+### 关键字段速查
 
-### 2.3 `/samples-<product>.json`
+- **索引行（`rows[]`）**：`s` slug、`q` 问句、`m` 模型、`sp` 分组（`daily/lost`）、`d` 日期、`sid`/`tid` 会话/trace ID、`tr` 轮数、`n` 问题数、`w` 最严重等级、`r/st/pt` 环节/阶段/模式编码、`sc` 场景。
+- **详情（`/samples/<slug>.json`）**：`ids`、`meta`、`input.traces[]`、`attribution.problems[]`、`attribution.turns[]`（含每轮 `trace_id`）、`compact`、`evidence[]`（`t` trace / `m` 消息 / `b` block / `o` 偏移）。
 
-全量召回索引（问财约 2 MB、AIME 约 9 MB，随数据增长），建议开 gzip：
+## 3. 约定与限制
 
-```bash
-curl -s --compressed "$BASE/samples-wencai.json" -o index.json
-```
-
-### 2.4 `/labels-<product>.json`
-
-`{schema, product, labels:["…",…]}`：每行的问题标签，与 `samples-<product>.json` 的 `rows[]` 同长度、同顺序（按行号配对）；
-与索引一样已去掉测试用户行。
-
-### 2.5 `/healthz`
-
-```json
-{"ok": true, "port": 5002, "upstream": "http://127.0.0.1:5001", "upstream_ok": true, "upstream_last_refresh": 1793702589.56}
-```
-
-## 3. 约定与注意
-
-- UTF-8 JSON；≥ 1 KB 且客户端支持时自动 gzip；`/healthz` 为 `no-store`，其余 `no-cache`
-- 状态码：`200` 成功、`400` 参数错误、`404` 样本不存在、`502` 上游看板异常；错误统一 `{"ok": false, "error": "…"}`
-- 首次打开慢：详情按需生成，未访问过的样本约 0.5–4 秒，之后走磁盘缓存；AIME 多轮会话首次更久
-- `/api/context` 索引有 120 秒进程内缓存，看板刚重建完最多约 2 分钟后才跟上
-- 无鉴权，仅内部使用；只读，避免高频批量拉取；建议先 `/api/context` 定位会话，再取详情
-- **测试用户不供数**：索引 / context / 详情均剔除看板样本行 `ut=test` 的记录；看板本身仍展示全部用户
-- 想看某一轮：`?case=…&trace=<trace_id>`；轮次位置在详情 `attribution.turns[].trace_id` 里自行匹配
-- 不支持列表搜索、批量导出
-
-## 4. 部署与端口（维护者）
-
-| 容器端口 | 角色 | 乌兰察布对外 | 弗吉尼亚对外 |
-|---|---|---|---|
-| `5001` | 展示（看板生产） | `2768` | `2475` |
-| `5002` | 页面接口（本服务） | `2833` | `2476` |
-| `5003` | 供数（数据接口） | 已停用 | `2477` |
-| `5004` | 开发调试 | `3336` | `2478` |
-| `5005` | 备用 | `3337` | `2479` |
-
-- 外部同事用 DSW 代理地址或「IP + 对外端口」；集群内跨容器用容器名 + 容器端口
-  （乌兰 `interactive-i6piqwvlnsr5:5002`、弗吉尼亚 `interactive-s3ynzadcvm9c:5002`），同容器内用 `127.0.0.1`
-- 生产入口固定，不在其上调试；页面 / 接口的迭代在 `5004` 验证后再发布到 `5002`
-- 代理会剥掉路径前缀，前端 URL 必须用相对路径（不带前导 `/`），否则在代理下会 404
+- **编码与压缩**：UTF-8 JSON；≥ 1 KB 自动 gzip；`/healthz` 为 `no-store`，其余 `no-cache`。
+- **状态码**：`200` 成功、`400` 参数错误、`404` 样本不存在或测试用户被剔除、`502` 上游看板异常；错误体 `{"ok": false, "error": "…"}`。
+- **测试账号不供数**：索引 / context / 详情均剔除 `ut=test` 样本（看板本身仍展示全部用户）。
+- **时效与性能**：`/api/context` 索引缓存 120s；未访问过的详情首次由 5001 按需生成（0.5–4s，多轮会话更久），之后走磁盘缓存。
+- **代理注意**：DSW 代理会剥离路径前缀，页面内所有请求必须使用相对路径；本服务不支持搜索与批量导出。

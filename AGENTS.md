@@ -1,18 +1,22 @@
-# eval_data_dashboard 工作区说明
+# eval_data_server 工作区说明
 
-当前部署：**问财 → 乌兰察布**（5001 看板、5002 页面接口）；**AIME → 弗吉尼亚**（5001 看板、5002 页面接口、5003 供数）；
-乌兰 5003 已停用（问财供数接口尚未实现）。地址与用法见 `docs/接口使用指南.md`。
+## 部署拓扑
 
-入口：
+- **乌兰察布（问财）**：5001 看板（对外 `2768`）、5002 页面接口（`2833`）、5003 供数（`dataset=wencai_eval`），数据根 `/mnt/fin_bench/code_and_clean_data/datasets`。
+- **弗吉尼亚（AIME）**：5001 看板（对外 `2475`）、5002 页面接口（`2476`）、5003 供数与内部评测（`2477`，`dataset=aime_eval` + `/api/v1/internal-eval/*`），数据根 `/mnt/aime_eval_ssd`。
 
-- 两个接口怎么用、两套部署的 IP / 端口 / 容器名：`docs/接口使用指南.md`
-- 看板交接、数据流与常见坑：`handoff.md`
-- 页面打不开 / ERR_CONNECTION_REFUSED 的根因与排查：`docs/connection-refused.md`
-- 弗吉尼亚数据服务器的目录、字段、构建刷新与常见坑：`docs/data-server.md`
-- AIME 数据存量盘点（待瘦身 / 待评测 / 已评测）的口径与一条命令：`docs/aime-data-inventory-sop.md`
-- 用户 KYC 库（daily eval input → SQLite，同步与查询）：`docs/用户KYC库.md`
-- 弗吉尼亚容器重建后拉齐三个服务：`scripts/virginia/bringup.sh`，说明见 `docs/virginia-restart.md`
-- 内部评测与聚类触发接口（挂载于弗吉尼亚 5003 `/api/v1/internal-eval/*`）：`interfaces/internal_eval_service_interface/README.md`、`interfaces/internal_eval_service_interface/docs/接入说明.md`
-- 跑全部测试：`scripts/run_tests.sh`（在服务器上跑）
-- 各服务的发布脚本：`interfaces/eval_data_interface/deploy.sh`、`interfaces/internal_eval_service_interface/deploy.sh`、`page_service/sample_details/deploy.sh`、
-  `dashboard/deploy.sh`
+## 文档规范（硬约束）
+
+- **单篇文档严格 ≤ 100 行**（新增或修改任何 `.md` 文档前必须核对行数，超限即精简或拆分）。
+- **言简意赅、逻辑严谨**：只写当前生效的架构、接口、口径与操作；**禁止**保留巡检流水账、一次性故障实录或过期数据快照。
+
+## 文档入口
+
+- 接口与端口速查：`docs/接口使用指南.md`
+- 看板交接与开发：`handoff.md`
+- 部署、守护与排错：`docs/dashboard-deployment.md`
+- 弗吉尼亚数据根、字段与构建：`docs/data-server.md`
+- 弗吉尼亚容器重建恢复：`docs/virginia-restart.md`（脚本 `scripts/virginia/bringup.sh`）
+- 内部评测服务：`interfaces/internal_eval_service_interface/README.md`、`docs/数据推理.md`
+- 用户 KYC 库：`docs/用户KYC库.md`
+- 测试与发布：`scripts/run_tests.sh`（服务器上跑）；各服务发布用对应目录 `deploy.sh`。
