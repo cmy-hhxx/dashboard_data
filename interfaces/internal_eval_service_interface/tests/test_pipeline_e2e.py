@@ -265,6 +265,12 @@ class PipelineE2ETests(unittest.TestCase):
         *,
         engine: EngineBackend | None = None,
         api_write_token: str = "",
+        api_tokens: tuple[tuple[str, str], ...] = (),
+        auth_mode: str = "all",
+        max_concurrent_runs: int = 1,
+        max_queued_runs: int = 0,
+        max_inflight_per_caller: int = 4,
+        rate_limit_per_minute: int = 0,
         silence_timeout: float = 30.0,
     ) -> tuple[str, InternalEvalApp, ThreadingHTTPServer]:
         _write_fake_bench(tmp / "3_dynamic_bench", count=5)
@@ -282,6 +288,12 @@ class PipelineE2ETests(unittest.TestCase):
             cluster_microbatch_interval_sec=0.2,
             allow_custom_tier=True,
             api_write_token=api_write_token,
+            api_tokens=api_tokens,
+            auth_mode=auth_mode,
+            max_concurrent_runs=max_concurrent_runs,
+            max_queued_runs=max_queued_runs,
+            max_inflight_per_caller=max_inflight_per_caller,
+            rate_limit_per_minute=rate_limit_per_minute,
             page_base_url="http://10.217.219.2:2476",
         )
         store = StateStore(cfg.state_db_path)
@@ -502,11 +514,31 @@ class PipelineE2ETests(unittest.TestCase):
 
     def test_file_drop_and_cancel_and_write_auth(self) -> None:
         with tempfile.TemporaryDirectory() as td:
-            base_url, app, srv = self._start_test_server(Path(td), api_write_token="secret-tok-123")
+            base_url, app, srv = self._start_test_server(
+                Path(td),
+                api_tokens=(("alice", "secret-tok-123"), ("bob", "secret-bob-456")),
+            )
             try:
-                # Write without token rejected with 401; GET allowed without token
-                st, _ = _http_json(f"{base_url}/runs")
-                self.assertEqual(st, 200)
+                # Default auth_mode="all": /healthz stays open, GET & POST require valid token
+                st_h, health = _http_json(f"{base_url}/healthz")
+                self.assertEqual(st_h, 200)
+                self.assertTrue(health["data"]["config"]["auth_enabled"])
+                self.assertEqual(health["data"]["config"]["auth_token_count"], 2)
+
+                st_unauth_get, _ = _http_json(f"{base_url}/runs")
+                self.assertEqual(st_unauth_get, 401)
+                with self.assertRaises(urllib.error.HTTPError) as ctx_401:
+                    urllib.request.urlopen(f"{base_url}/docs", timeout=5)
+                self.assertEqual(ctx_401.exception.code, 401)
+                self.assertIn("Bearer", ctx_401.exception.headers.get("WWW-Authenticate", ""))
+                ctx_401.exception.close()
+
+                st_bad_tok, _ = _http_json(
+                    f"{base_url}/runs",
+                    headers={"Authorization": "Bearer wrong-token"},
+                )
+                self.assertEqual(st_bad_tok, 401)
+
                 st, _ = _http_json(
                     f"{base_url}/runs",
                     method="POST",
@@ -514,7 +546,12 @@ class PipelineE2ETests(unittest.TestCase):
                 )
                 self.assertEqual(st, 401)
 
+                # Both Bearer and X-API-Key are accepted
                 auth_hdr = {"Authorization": "Bearer secret-tok-123"}
+                bob_hdr = {"X-API-Key": "secret-bob-456"}
+                st_get_ok, _ = _http_json(f"{base_url}/versions", headers=bob_hdr)
+                self.assertEqual(st_get_ok, 200)
+
                 st, created = _http_json(
                     f"{base_url}/runs",
                     method="POST",
@@ -530,9 +567,9 @@ class PipelineE2ETests(unittest.TestCase):
                 run_id = created["data"]["run_id"]
 
                 self.assertTrue(
-                    _wait_until(lambda: _http_json(f"{base_url}/runs/{run_id}")[1]["data"]["status"] == "running")
+                    _wait_until(lambda: _http_json(f"{base_url}/runs/{run_id}", headers=auth_hdr)[1]["data"]["status"] == "running")
                 )
-                run_data = _http_json(f"{base_url}/runs/{run_id}")[1]["data"]
+                run_data = _http_json(f"{base_url}/runs/{run_id}", headers=auth_hdr)[1]["data"]
                 # Historical before should already have 3 ready traces!
                 self.assertEqual(run_data["sides_detail"]["before"]["ready"], 3)
 
@@ -544,7 +581,7 @@ class PipelineE2ETests(unittest.TestCase):
                 )
                 self.assertTrue(
                     _wait_until(
-                        lambda: _http_json(f"{base_url}/runs/{run_id}")[1]["data"]["sides_detail"]["after"]["ready"] == 1
+                        lambda: _http_json(f"{base_url}/runs/{run_id}", headers=auth_hdr)[1]["data"]["sides_detail"]["after"]["ready"] == 1
                     )
                 )
 
@@ -552,12 +589,163 @@ class PipelineE2ETests(unittest.TestCase):
                 st, _ = _http_json(f"{base_url}/runs/{run_id}/cancel", method="POST", headers=auth_hdr)
                 self.assertEqual(st, 200)
                 self.assertTrue(
-                    _wait_until(lambda: _http_json(f"{base_url}/runs/{run_id}")[1]["data"]["status"] == "cancelled")
+                    _wait_until(lambda: _http_json(f"{base_url}/runs/{run_id}", headers=auth_hdr)[1]["data"]["status"] == "cancelled")
                 )
-                res_after = _http_json(f"{base_url}/runs/{run_id}/results?side=after")[1]["data"]
+                res_after = _http_json(f"{base_url}/runs/{run_id}/results?side=after", headers=auth_hdr)[1]["data"]
                 self.assertEqual(res_after["total"], 1)
                 self.assertEqual(res_after["items"][0]["case_key"], "eq_00001")
             finally:
+                app.pipeline.stop()
+                srv.shutdown()
+                srv.server_close()
+
+    def test_run_concurrency_no_queue_and_caller_limits(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            base_url, app, srv = self._start_test_server(
+                tmp,
+                api_tokens=(("alice", "tok-alice-a"), ("bob", "tok-bob-b"), ("poll", "tok-poll-p")),
+                max_concurrent_runs=1,
+                max_queued_runs=0,
+                max_inflight_per_caller=2,
+                rate_limit_per_minute=3,
+            )
+            alice_hdr = {"Authorization": "Bearer tok-alice-a"}
+            bob_hdr = {"X-API-Key": "tok-bob-b"}
+            poll_hdr = {"Authorization": "Bearer tok-poll-p"}
+            try:
+                # 1) Active run 1 (POST #1 counts as 1 request from alice)
+                st1, c1 = _http_json(
+                    f"{base_url}/runs",
+                    method="POST",
+                    headers=alice_hdr,
+                    body={
+                        "version": "1125",
+                        "tier": 3,
+                        "before_agent": "old",
+                        "after_agent": "new",
+                        "idempotency_key": "idem-conc-1",
+                    },
+                )
+                self.assertEqual(st1, 201)
+                run1 = c1["data"]["run_id"]
+                self.assertTrue(_wait_until(lambda: (app.store.get_run(run1) or {}).get("status") == "running"))
+
+                # 2) Same idempotency_key replays 200 cleanly even while active (check via bob so alice rate window keeps room)
+                st_replay, r_replay = _http_json(
+                    f"{base_url}/runs",
+                    method="POST",
+                    headers=bob_hdr,
+                    body={
+                        "version": "1125",
+                        "tier": 3,
+                        "before_agent": "old",
+                        "after_agent": "new",
+                        "idempotency_key": "idem-conc-1",
+                    },
+                )
+                self.assertEqual(st_replay, 200)
+                self.assertEqual(r_replay["data"]["run_id"], run1)
+
+                # 3) Same-day duplicate still returns 409 Conflict
+                st_dup, _ = _http_json(
+                    f"{base_url}/runs",
+                    method="POST",
+                    headers=bob_hdr,
+                    body={"version": "1125", "tier": 3, "before_agent": "old", "after_agent": "new"},
+                )
+                self.assertEqual(st_dup, 409)
+
+                # 4) Different date while run1 active returns 429 (strict 1-run no-queue) and leaves NO dir on disk
+                req_conc = urllib.request.Request(
+                    f"{base_url}/runs",
+                    data=json.dumps({"version": "1126", "tier": 3, "before_agent": "old", "after_agent": "new"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json", **alice_hdr},
+                    method="POST",
+                )
+                with self.assertRaises(urllib.error.HTTPError) as ctx_conc:
+                    urllib.request.urlopen(req_conc, timeout=5)
+                self.assertEqual(ctx_conc.exception.code, 429)
+                self.assertTrue(int(ctx_conc.exception.headers.get("Retry-After", "0")) >= 1)
+                conc_body = json.loads(ctx_conc.exception.read().decode("utf-8"))
+                ctx_conc.exception.close()
+                self.assertEqual(conc_body["error"]["details"]["limit_type"], "run_concurrency")
+                self.assertFalse(any(p.name.endswith("1126_aime_expert") for p in (tmp / "1_aime" / "ab_test").iterdir()))
+
+                # 5) Rate limit per caller (alice already made 2 calls; 3rd succeeds, 4th trips 429)
+                st_a3, _ = _http_json(f"{base_url}/versions", headers=alice_hdr)
+                self.assertEqual(st_a3, 200)
+                st_a4, body_a4 = _http_json(f"{base_url}/versions", headers=alice_hdr)
+                self.assertEqual(st_a4, 429)
+                self.assertEqual(body_a4["error"]["details"]["limit_type"], "caller_rate_limit")
+
+                # Cancel run1 cleanly via bob, then check run2 can now be submitted once cancelled
+                st_cancel, _ = _http_json(f"{base_url}/runs/{run1}/cancel", method="POST", headers=bob_hdr)
+                self.assertEqual(st_cancel, 200)
+                self.assertTrue(_wait_until(lambda: (app.store.get_run(run1) or {}).get("status") == "cancelled"))
+
+                st2, c2 = _http_json(
+                    f"{base_url}/runs",
+                    method="POST",
+                    headers=poll_hdr,
+                    body={"version": "1126", "tier": 3, "before_agent": "old", "after_agent": "new"},
+                )
+                self.assertEqual(st2, 201)
+                run2 = c2["data"]["run_id"]
+                _http_json(f"{base_url}/runs/{run2}/cancel", method="POST", headers=poll_hdr)
+                self.assertTrue(_wait_until(lambda: (app.store.get_run(run2) or {}).get("status") == "cancelled"))
+            finally:
+                app.pipeline.stop()
+                srv.shutdown()
+                srv.server_close()
+
+        # 6) Verify per-caller inflight concurrency limit (max_inflight_per_caller=2) + write_only auth mode
+        with tempfile.TemporaryDirectory() as td2:
+            base_url, app, srv = self._start_test_server(
+                Path(td2),
+                api_tokens=(("alice", "tok-a"), ("bob", "tok-b")),
+                auth_mode="write_only",
+                max_inflight_per_caller=2,
+                rate_limit_per_minute=0,
+            )
+            alice_hdr = {"Authorization": "Bearer tok-a"}
+            bob_hdr = {"Authorization": "Bearer tok-b"}
+            release_ev = threading.Event()
+            entered_lock = threading.Lock()
+            entered = 0
+            orig_dispatch = app._dispatch
+
+            def slow_dispatch(method: str, raw_path: str, query: dict[str, list[str]], handler: Any) -> Any:
+                nonlocal entered
+                if raw_path.endswith("/versions") and query.get("hold") == ["1"]:
+                    with entered_lock:
+                        entered += 1
+                    release_ev.wait(timeout=5.0)
+                return orig_dispatch(method, raw_path, query, handler)
+
+            app._dispatch = slow_dispatch  # type: ignore[method-assign]
+            try:
+                # write_only mode: GET allowed without token, POST still requires token
+                self.assertEqual(_http_json(f"{base_url}/versions")[0], 200)
+                self.assertEqual(
+                    _http_json(f"{base_url}/runs", method="POST", body={"tier": 3, "before_agent": "a", "after_agent": "b"})[0],
+                    401,
+                )
+
+                t1 = threading.Thread(target=_http_json, args=(f"{base_url}/versions?hold=1",), kwargs={"headers": alice_hdr}, daemon=True)
+                t2 = threading.Thread(target=_http_json, args=(f"{base_url}/versions?hold=1",), kwargs={"headers": alice_hdr}, daemon=True)
+                t1.start()
+                t2.start()
+                self.assertTrue(_wait_until(lambda: entered == 2, timeout=5.0))
+
+                # 3rd concurrent request from alice must hit 429 caller_inflight; bob succeeds immediately
+                st_a3, body_a3 = _http_json(f"{base_url}/versions", headers=alice_hdr)
+                self.assertEqual(st_a3, 429)
+                self.assertEqual(body_a3["error"]["details"]["limit_type"], "caller_inflight")
+                st_b, _ = _http_json(f"{base_url}/versions", headers=bob_hdr)
+                self.assertEqual(st_b, 200)
+            finally:
+                release_ev.set()
                 app.pipeline.stop()
                 srv.shutdown()
                 srv.server_close()

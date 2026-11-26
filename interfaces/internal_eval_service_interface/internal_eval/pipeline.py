@@ -30,6 +30,7 @@ from .ab_layout import (
     SIDE_DIR,
     allocate_round_dir,
     init_round_layout,
+    resolve_round_dir_name,
     sync_round_manifests,
 )
 from .bench_sampler import sample_bench_targets, write_targets_and_dispatch_files
@@ -64,6 +65,26 @@ def _generate_run_id() -> str:
     return f"run_{stamp}_{secrets.token_hex(3)}"
 
 
+class RunConcurrencyLimitError(RuntimeError):
+    """Raised when active/queued runs already hit `max_concurrent_runs + max_queued_runs`."""
+
+    def __init__(
+        self,
+        *,
+        active_run_ids: list[str],
+        max_concurrent_runs: int,
+        max_queued_runs: int,
+        retry_after: int = 60,
+    ):
+        self.active_run_ids = list(active_run_ids)
+        self.max_concurrent_runs = max_concurrent_runs
+        self.max_queued_runs = max_queued_runs
+        self.retry_after = retry_after
+        super().__init__(
+            f"已有任务正在运行（active={self.active_run_ids}，上限 concurrent={max_concurrent_runs}, queued={max_queued_runs}），请等待完成后再提交"
+        )
+
+
 class PipelineManager:
     """Manages queued/active runs, trace ingestion, streaming eval/cluster, and recovery."""
 
@@ -83,6 +104,7 @@ class PipelineManager:
 
         self._stop = threading.Event()
         self._wake = threading.Event()
+        self._submit_lock = threading.Lock()
         self._active_lock = threading.Lock()
         self._active_runs: dict[str, threading.Thread] = {}
         self._ingest_locks: dict[str, threading.Lock] = {}
@@ -161,95 +183,109 @@ class PipelineManager:
         """Validate request and enqueue a new internal eval run.
         Returns `(run_dict, created_bool)` (created=False on idempotency replay).
         """
-        idem_key = str(payload.get("idempotency_key") or "").strip()
-        if idem_key:
-            existing = self.store.get_run_by_idempotency_key(idem_key)
-            if existing:
-                return existing, False
+        with self._submit_lock:
+            idem_key = str(payload.get("idempotency_key") or "").strip()
+            if idem_key:
+                existing = self.store.get_run_by_idempotency_key(idem_key)
+                if existing:
+                    return existing, False
 
-        # Validate tier
-        raw_tier = payload.get("tier", payload.get("count", payload.get("question_count")))
-        if raw_tier is None or isinstance(raw_tier, bool):
-            raise ValueError("缺少必填参数 tier（允许值：500、1000、5000、10000）")
-        try:
-            tier = int(raw_tier)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"tier 必须是整数，收到：{raw_tier!r}") from exc
-        if tier not in self.cfg.allowed_tiers:
-            if not (self.cfg.allow_custom_tier and tier >= 1):
-                raise ValueError(f"tier={tier} 不在允许范围 {list(self.cfg.allowed_tiers)} 内")
+            # Validate tier
+            raw_tier = payload.get("tier", payload.get("count", payload.get("question_count")))
+            if raw_tier is None or isinstance(raw_tier, bool):
+                raise ValueError("缺少必填参数 tier（允许值：500、1000、5000、10000）")
+            try:
+                tier = int(raw_tier)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"tier 必须是整数，收到：{raw_tier!r}") from exc
+            if tier not in self.cfg.allowed_tiers:
+                if not (self.cfg.allow_custom_tier and tier >= 1):
+                    raise ValueError(f"tier={tier} 不在允许范围 {list(self.cfg.allowed_tiers)} 内")
 
-        # Validate model
-        model = str(payload.get("model") or "aime_expert").strip()
-        if model not in ALLOWED_MODELS:
-            raise ValueError(f"model={model!r} 不在允许范围 {list(ALLOWED_MODELS)} 内")
+            # Validate model
+            model = str(payload.get("model") or "aime_expert").strip()
+            if model not in ALLOWED_MODELS:
+                raise ValueError(f"model={model!r} 不在允许范围 {list(ALLOWED_MODELS)} 内")
 
-        # Validate sides
-        raw_sides = payload.get("sides")
-        if raw_sides is None:
-            sides = ["before", "after"]
-        elif isinstance(raw_sides, str):
-            sides = [s.strip() for s in raw_sides.split(",") if s.strip()]
-        elif isinstance(raw_sides, list):
-            sides = [str(s).strip() for s in raw_sides if str(s).strip()]
-        else:
-            raise ValueError("sides 必须是字符串列表（例如 [\"before\", \"after\"]）")
-        if not sides or any(s not in ALLOWED_SIDES for s in sides):
-            raise ValueError(f"sides 只能包含 {list(ALLOWED_SIDES)}，收到：{sides!r}")
-        # Deduplicate preserving order
-        sides = list(dict.fromkeys(sides))
+            # Validate sides
+            raw_sides = payload.get("sides")
+            if raw_sides is None:
+                sides = ["before", "after"]
+            elif isinstance(raw_sides, str):
+                sides = [s.strip() for s in raw_sides.split(",") if s.strip()]
+            elif isinstance(raw_sides, list):
+                sides = [str(s).strip() for s in raw_sides if str(s).strip()]
+            else:
+                raise ValueError("sides 必须是字符串列表（例如 [\"before\", \"after\"]）")
+            if not sides or any(s not in ALLOWED_SIDES for s in sides):
+                raise ValueError(f"sides 只能包含 {list(ALLOWED_SIDES)}，收到：{sides!r}")
+            # Deduplicate preserving order
+            sides = list(dict.fromkeys(sides))
 
-        before_mode = str(payload.get("before_mode") or "live").strip().lower()
-        if before_mode not in ("live", "historical"):
-            raise ValueError("before_mode 只能是 'live' 或 'historical'")
+            before_mode = str(payload.get("before_mode") or "live").strip().lower()
+            if before_mode not in ("live", "historical"):
+                raise ValueError("before_mode 只能是 'live' 或 'historical'")
 
-        if "before" in sides and payload.get("before_agent") is None and before_mode == "live":
-            raise ValueError("缺少必填参数 before_agent（发版前 agent 标识）")
-        if "after" in sides and payload.get("after_agent") is None:
-            raise ValueError("缺少必填参数 after_agent（改版后 agent 标识）")
+            if "before" in sides and payload.get("before_agent") is None and before_mode == "live":
+                raise ValueError("缺少必填参数 before_agent（发版前 agent 标识）")
+            if "after" in sides and payload.get("after_agent") is None:
+                raise ValueError("缺少必填参数 after_agent（改版后 agent 标识）")
 
-        before_agent, before_label = _normalize_agent_spec(
-            payload.get("before_agent"), "before_release_agent"
-        )
-        after_agent, after_label = _normalize_agent_spec(
-            payload.get("after_agent"), "after_release_agent"
-        )
+            before_agent, before_label = _normalize_agent_spec(
+                payload.get("before_agent"), "before_release_agent"
+            )
+            after_agent, after_label = _normalize_agent_spec(
+                payload.get("after_agent"), "after_release_agent"
+            )
 
-        version = str(payload.get("version") or today_mmdd()).strip()
-        callback_url = str(payload.get("callback_url") or "").strip() or None
-        if callback_url and not (callback_url.startswith("http://") or callback_url.startswith("https://")):
-            raise ValueError("callback_url 必须是有效的 http(s) URL")
+            version = str(payload.get("version") or today_mmdd()).strip()
+            callback_url = str(payload.get("callback_url") or "").strip() or None
+            if callback_url and not (callback_url.startswith("http://") or callback_url.startswith("https://")):
+                raise ValueError("callback_url 必须是有效的 http(s) URL")
 
-        run_id = _generate_run_id()
-        round_order, round_dir_name, round_dir = allocate_round_dir(self.cfg.ab_test_root, version, model)
+            expected_dir_name = resolve_round_dir_name(version, model)
+            if (self.cfg.ab_test_root / expected_dir_name).exists():
+                raise FileExistsError(f"轮次目录已存在：{expected_dir_name}，请先归档或更换日期版本")
 
-        meta_payload = dict(payload["meta"]) if isinstance(payload.get("meta"), dict) else {}
-        if isinstance(payload.get("task_manager"), dict):
-            existing_tm = dict(meta_payload["task_manager"]) if isinstance(meta_payload.get("task_manager"), dict) else {}
-            merged_tm = {**payload["task_manager"], **existing_tm}
-            meta_payload["task_manager"] = merged_tm
+            active = self.store.list_runs_by_statuses(tuple(ACTIVE_RUN_STATUSES))
+            max_allowed = self.cfg.max_concurrent_runs + self.cfg.max_queued_runs
+            if len(active) >= max_allowed:
+                raise RunConcurrencyLimitError(
+                    active_run_ids=[r["run_id"] for r in active],
+                    max_concurrent_runs=self.cfg.max_concurrent_runs,
+                    max_queued_runs=self.cfg.max_queued_runs,
+                )
 
-        run = self.store.create_run(
-            {
-                "run_id": run_id,
-                "idempotency_key": idem_key or None,
-                "version": version,
-                "round_order": round_order,
-                "round_dir_name": round_dir_name,
-                "round_dir_path": str(round_dir),
-                "model": model,
-                "tier": tier,
-                "requested_count": tier,
-                "sides": sides,
-                "before_mode": before_mode,
-                "before_agent": before_agent,
-                "after_agent": after_agent,
-                "before_agent_label": before_label,
-                "after_agent_label": after_label,
-                "callback_url": callback_url,
-                "meta": meta_payload,
-            }
-        )
+            run_id = _generate_run_id()
+            round_order, round_dir_name, round_dir = allocate_round_dir(self.cfg.ab_test_root, version, model)
+
+            meta_payload = dict(payload["meta"]) if isinstance(payload.get("meta"), dict) else {}
+            if isinstance(payload.get("task_manager"), dict):
+                existing_tm = dict(meta_payload["task_manager"]) if isinstance(meta_payload.get("task_manager"), dict) else {}
+                merged_tm = {**payload["task_manager"], **existing_tm}
+                meta_payload["task_manager"] = merged_tm
+
+            run = self.store.create_run(
+                {
+                    "run_id": run_id,
+                    "idempotency_key": idem_key or None,
+                    "version": version,
+                    "round_order": round_order,
+                    "round_dir_name": round_dir_name,
+                    "round_dir_path": str(round_dir),
+                    "model": model,
+                    "tier": tier,
+                    "requested_count": tier,
+                    "sides": sides,
+                    "before_mode": before_mode,
+                    "before_agent": before_agent,
+                    "after_agent": after_agent,
+                    "before_agent_label": before_label,
+                    "after_agent_label": after_label,
+                    "callback_url": callback_url,
+                    "meta": meta_payload,
+                }
+            )
         self._wake.set()
         return run, True
 
@@ -270,12 +306,25 @@ class PipelineManager:
         stages: list[str] | None = None,
         sides: list[str] | None = None,
     ) -> dict[str, Any]:
-        run = self.store.get_run(run_id)
-        if not run:
-            raise KeyError(run_id)
-        if run["status"] in ACTIVE_RUN_STATUSES:
-            raise RuntimeError(f"任务当前处于 {run['status']} 状态，请等待结束或先取消后再补跑")
-        result = self.store.reset_failed_cases_for_retry(run_id, stages=stages, sides=sides)
+        with self._submit_lock:
+            run = self.store.get_run(run_id)
+            if not run:
+                raise KeyError(run_id)
+            if run["status"] in ACTIVE_RUN_STATUSES:
+                raise RuntimeError(f"任务当前处于 {run['status']} 状态，请等待结束或先取消后再补跑")
+            active_others = [
+                r["run_id"]
+                for r in self.store.list_runs_by_statuses(tuple(ACTIVE_RUN_STATUSES))
+                if r["run_id"] != run_id
+            ]
+            max_allowed = self.cfg.max_concurrent_runs + self.cfg.max_queued_runs
+            if len(active_others) >= max_allowed:
+                raise RunConcurrencyLimitError(
+                    active_run_ids=active_others,
+                    max_concurrent_runs=self.cfg.max_concurrent_runs,
+                    max_queued_runs=self.cfg.max_queued_runs,
+                )
+            result = self.store.reset_failed_cases_for_retry(run_id, stages=stages, sides=sides)
         if result["reset_total"] > 0:
             self._wake.set()
         return result

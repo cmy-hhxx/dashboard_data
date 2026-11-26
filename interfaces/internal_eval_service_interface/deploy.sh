@@ -44,11 +44,64 @@ echo "==> 3) 重启 5003 服务并等待就绪"
 ssh "$HOST_ALIAS" "cd '${ANALYSIS_REMOTE}' && { [ ! -f deploy.env ] || . ./deploy.env; } && export INTERNAL_EVAL_SERVICE_DIR='${REMOTE}' && chmod +x start.sh stop.sh && ./stop.sh && PORT=${PORT} WAIT_SECONDS=${WAIT_SECONDS:-1800} ./start.sh"
 
 echo "==> 4) 冒烟验收：既有 /api/v1/analysis + 新建 /api/v1/internal-eval"
-ssh "$HOST_ALIAS" "set -e
-  curl -fsS 'http://127.0.0.1:${PORT}/healthz' | python3 -c 'import json,sys; d=json.load(sys.stdin); print(\"analysis healthz ok:\", d[\"ok\"], \"traces:\", d[\"traces\"])'
-  curl -fsS 'http://127.0.0.1:${PORT}/api/v1/internal-eval/healthz' | python3 -c 'import json,sys; d=json.load(sys.stdin)[\"data\"]; print(\"internal-eval healthz ok:\", d[\"ok\"], \"gateway_configured:\", d[\"config\"][\"gateway_configured\"])'
-  curl -fsS 'http://127.0.0.1:${PORT}/api/v1/internal-eval/docs' | python3 -c 'import json,sys; d=json.load(sys.stdin)[\"data\"]; print(\"internal-eval docs:\", [x[\"name\"] for x in d[\"docs\"]])'
-  curl -fsS 'http://127.0.0.1:${PORT}/api/v1/internal-eval/versions' | python3 -c 'import json,sys; d=json.load(sys.stdin)[\"data\"]; print(\"internal-eval versions:\", d[\"total\"])'
-"
+ssh "$HOST_ALIAS" "REMOTE_DIR='${REMOTE}' PORT='${PORT}' python3 - <<'PY'
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+base = 'http://127.0.0.1:' + os.environ['PORT']
+remote_dir = Path(os.environ['REMOTE_DIR'])
+sys.path.insert(0, str(remote_dir))
+from internal_eval.config import load_config
+
+def fetch(path, token=''):
+    headers = {'Authorization': 'Bearer ' + token} if token else {}
+    req = urllib.request.Request(base + path, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status, json.loads(resp.read().decode('utf-8'))
+    except urllib.error.HTTPError as exc:
+        try:
+            body = json.loads(exc.read().decode('utf-8'))
+        except Exception:
+            body = {}
+        finally:
+            exc.close()
+        return exc.code, body
+
+st, h = fetch('/healthz')
+assert st == 200 and h.get('ok'), (st, h)
+print('analysis healthz ok:', h['ok'], 'traces:', h['traces'])
+
+st, ad = fetch('/api/v1/analysis/docs')
+assert st == 200 and 'docs' in ad.get('data', {}), st
+print('analysis docs ok (no token required)')
+
+st, ih = fetch('/api/v1/internal-eval/healthz')
+assert st == 200 and ih['data']['ok'], (st, ih)
+icfg = ih['data']['config']
+print('internal-eval healthz ok:', ih['data']['ok'], 'auth_enabled:', icfg.get('auth_enabled'), 'auth_mode:', icfg.get('auth_mode'))
+
+env_file = remote_dir / 'internal_eval.env'
+cfg = load_config(env={}, env_file=env_file if env_file.is_file() else None)
+tokens = cfg.resolved_api_tokens()
+tok = tokens[0][1] if tokens else ''
+
+if tokens and icfg.get('auth_mode') == 'all':
+    st_u, _ = fetch('/api/v1/internal-eval/versions')
+    assert st_u == 401, f'expected 401 without token, got {st_u}'
+    print('internal-eval unauth blocked: 401')
+
+st_d, docs = fetch('/api/v1/internal-eval/docs', token=tok)
+assert st_d == 200, (st_d, docs)
+print('internal-eval docs:', [x['name'] for x in docs['data']['docs']])
+
+st_v, vers = fetch('/api/v1/internal-eval/versions', token=tok)
+assert st_v == 200, (st_v, vers)
+print('internal-eval versions:', vers['data']['total'])
+PY"
 
 echo "==> done: http://${HOST_ALIAS}:${PORT}/api/v1/internal-eval"

@@ -722,6 +722,7 @@ class TaskManagerIntegrationTests(unittest.TestCase):
                 task_manager_poll_interval_sec=0.08,
                 task_manager_max_recovery_rounds=1,
                 task_manager_judge_source="api",
+                rate_limit_per_minute=0,
             )
             store = StateStore(cfg.state_db_path)
             eng = FakeStreamingEngine()
@@ -870,6 +871,7 @@ class TaskManagerIntegrationTests(unittest.TestCase):
                 task_manager_recovery_interval_sec=0.1,
                 task_manager_max_recovery_rounds=6,
                 task_manager_drop_wait_timeout_sec=10.0,
+                rate_limit_per_minute=0,
             )
             store = StateStore(cfg.state_db_path)
             eng = FakeStreamingEngine()

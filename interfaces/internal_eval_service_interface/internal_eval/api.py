@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import gzip
 import json
+import math
 import secrets
 import threading
+import time
 import traceback
+from collections import deque
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -21,7 +24,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 from . import errors
 from .compare import build_compare_payload
 from .config import ALLOWED_SIDES, ServiceConfig, load_config
-from .pipeline import PipelineManager
+from .pipeline import PipelineManager, RunConcurrencyLimitError
 from .state_store import StateStore
 from .timeutil import utc_rfc3339
 
@@ -87,6 +90,58 @@ def _send_json(handler: BaseHTTPRequestHandler, status: int, payload: Any, *, gz
         pass
 
 
+class _CallerConcurrencyGuard:
+    """Per-caller in-flight HTTP concurrency and sliding-window request rate limiter."""
+
+    def __init__(self, max_inflight_per_caller: int, rate_limit_per_minute: int, window_sec: float = 60.0):
+        self.max_inflight_per_caller = max(1, int(max_inflight_per_caller))
+        self.rate_limit_per_minute = max(0, int(rate_limit_per_minute))
+        self.window_sec = max(1.0, float(window_sec))
+        self._lock = threading.Lock()
+        self._inflight: dict[str, int] = {}
+        self._windows: dict[str, deque[float]] = {}
+
+    def acquire(self, caller_key: str) -> None:
+        now = time.monotonic()
+        cutoff = now - self.window_sec
+        with self._lock:
+            current = self._inflight.get(caller_key, 0)
+            if current >= self.max_inflight_per_caller:
+                raise errors.rate_limited(
+                    f"当前调用方并发请求数已达上限（{self.max_inflight_per_caller}），请稍后重试",
+                    retry_after=1,
+                    limit_type="caller_inflight",
+                    caller=caller_key,
+                    max_inflight_per_caller=self.max_inflight_per_caller,
+                )
+            if self.rate_limit_per_minute > 0:
+                q = self._windows.setdefault(caller_key, deque())
+                while q and q[0] <= cutoff:
+                    q.popleft()
+                if len(q) >= self.rate_limit_per_minute:
+                    retry_after = max(1, int(math.ceil(q[0] + self.window_sec - now)))
+                    raise errors.rate_limited(
+                        f"请求过于频繁（上限 {self.rate_limit_per_minute} 次/{int(self.window_sec)} 秒），请在 {retry_after} 秒后重试",
+                        retry_after=retry_after,
+                        limit_type="caller_rate_limit",
+                        caller=caller_key,
+                        limit_per_minute=self.rate_limit_per_minute,
+                    )
+                q.append(now)
+            self._inflight[caller_key] = current + 1
+
+    def release(self, caller_key: str) -> None:
+        with self._lock:
+            cur = self._inflight.get(caller_key, 0)
+            if cur <= 1:
+                self._inflight.pop(caller_key, None)
+            else:
+                self._inflight[caller_key] = cur - 1
+            q = self._windows.get(caller_key)
+            if q is not None and not q and caller_key not in self._inflight:
+                self._windows.pop(caller_key, None)
+
+
 class InternalEvalApp:
     """Self-contained HTTP application for `/api/v1/internal-eval/*`."""
 
@@ -101,6 +156,11 @@ class InternalEvalApp:
         self.pipeline = pipeline
         self.started_at = utc_rfc3339()
         self.inflight = threading.BoundedSemaphore(cfg.max_inflight)
+        self._caller_guard = _CallerConcurrencyGuard(
+            cfg.max_inflight_per_caller,
+            cfg.rate_limit_per_minute,
+            cfg.rate_limit_window_sec,
+        )
 
     def can_handle(self, path: str) -> bool:
         clean = path.rstrip("/")
@@ -110,7 +170,7 @@ class InternalEvalApp:
     def handle_http(self, handler: BaseHTTPRequestHandler) -> None:
         request_id = _request_id()
         if not self.inflight.acquire(blocking=False):
-            exc = errors.rate_limited()
+            exc = errors.rate_limited(limit_type="server_inflight")
             _send_json(
                 handler,
                 exc.status,
@@ -120,14 +180,18 @@ class InternalEvalApp:
             )
             return
 
+        caller_key: str | None = None
+        caller_acquired = False
         try:
             parsed = urlparse(handler.path)
             raw_path = parsed.path.rstrip("/")
             query = parse_qs(parsed.query, keep_blank_values=False)
             method = handler.command.upper()
 
-            if method == "POST":
-                self._check_write_auth(handler)
+            caller_key, is_healthz = self._authenticate(handler, method, raw_path)
+            if not is_healthz:
+                self._caller_guard.acquire(caller_key)
+                caller_acquired = True
 
             status, data, extra_meta = self._dispatch(method, raw_path, query, handler)
             envelope = {
@@ -143,6 +207,13 @@ class InternalEvalApp:
             }
             _send_json(handler, status, envelope, gzip_min_bytes=self.cfg.gzip_min_bytes)
         except errors.ApiError as exc:
+            resp_headers: dict[str, str] = {}
+            if exc.status == 401:
+                resp_headers["WWW-Authenticate"] = 'Bearer realm="internal-eval"'
+            elif exc.status == 429:
+                retry_after = exc.details.get("retry_after")
+                if retry_after is not None:
+                    resp_headers["Retry-After"] = str(retry_after)
             _send_json(
                 handler,
                 exc.status,
@@ -151,6 +222,7 @@ class InternalEvalApp:
                     "error": {"code": exc.code, "message": exc.message, "details": exc.details},
                 },
                 gzip_min_bytes=self.cfg.gzip_min_bytes,
+                headers=resp_headers or None,
             )
         except Exception as exc:  # noqa: BLE001
             print(f"[internal-eval][error] {exc}\n{traceback.format_exc()}", flush=True)
@@ -164,21 +236,39 @@ class InternalEvalApp:
                 gzip_min_bytes=self.cfg.gzip_min_bytes,
             )
         finally:
+            if caller_acquired and caller_key is not None:
+                self._caller_guard.release(caller_key)
             self.inflight.release()
 
-    def _check_write_auth(self, handler: BaseHTTPRequestHandler) -> None:
-        expected = self.cfg.api_write_token
-        if not expected:
-            return
-        auth = (handler.headers.get("Authorization") or "").strip()
-        api_key = (handler.headers.get("X-API-Key") or "").strip()
-        token = ""
+    def _authenticate(self, handler: BaseHTTPRequestHandler, method: str, raw_path: str) -> tuple[str, bool]:
+        prefix = self.cfg.api_prefix.rstrip("/")
+        is_healthz = raw_path in ("/healthz", prefix + "/healthz")
+        tokens = self.cfg.resolved_api_tokens()
+
+        auth = (handler.headers.get("Authorization") or "").strip() if handler.headers else ""
+        api_key = (handler.headers.get("X-API-Key") or "").strip() if handler.headers else ""
+        presented = ""
         if auth.lower().startswith("bearer "):
-            token = auth[7:].strip()
+            presented = auth[7:].strip()
         elif api_key:
-            token = api_key
-        if not token or not secrets.compare_digest(token, expected):
-            raise errors.unauthorized("写操作需要有效的 Bearer Token 或 X-API-Key")
+            presented = api_key
+
+        matched_name: str | None = None
+        if presented and tokens:
+            for name, expected in tokens:
+                if secrets.compare_digest(presented, expected) and matched_name is None:
+                    matched_name = name
+
+        auth_mode = (self.cfg.auth_mode or "all").strip().lower()
+        require_auth = bool(tokens) and (not is_healthz) and (auth_mode != "write_only" or method == "POST")
+        if require_auth and matched_name is None:
+            raise errors.unauthorized("缺少或无效的访问令牌（请通过 Authorization: Bearer <token> 或 X-API-Key 传入）")
+
+        if matched_name is not None:
+            return f"token:{matched_name}", is_healthz
+        client_addr = getattr(handler, "client_address", None)
+        client_ip = client_addr[0] if isinstance(client_addr, tuple) and client_addr else "unknown"
+        return f"ip:{client_ip}", is_healthz
 
     @staticmethod
     def _read_json_body(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
@@ -297,6 +387,15 @@ class InternalEvalApp:
             run, created = self.pipeline.submit_run(body)
         except FileExistsError as exc:
             raise errors.conflict(str(exc)) from exc
+        except RunConcurrencyLimitError as exc:
+            raise errors.rate_limited(
+                str(exc),
+                retry_after=exc.retry_after,
+                limit_type="run_concurrency",
+                active_run_ids=exc.active_run_ids,
+                max_concurrent_runs=exc.max_concurrent_runs,
+                max_queued_runs=exc.max_queued_runs,
+            ) from exc
         except ValueError as exc:
             raise errors.invalid(str(exc)) from exc
         enriched = self._decorate_run(self.store.get_run_progress(run["run_id"]) or run)
@@ -345,6 +444,15 @@ class InternalEvalApp:
             res = self.pipeline.retry_failed(run_id, stages=stages, sides=sides)
         except KeyError as exc:
             raise errors.not_found(f"任务不存在：{run_id}", run_id=run_id) from exc
+        except RunConcurrencyLimitError as exc:
+            raise errors.rate_limited(
+                str(exc),
+                retry_after=exc.retry_after,
+                limit_type="run_concurrency",
+                active_run_ids=exc.active_run_ids,
+                max_concurrent_runs=exc.max_concurrent_runs,
+                max_queued_runs=exc.max_queued_runs,
+            ) from exc
         except RuntimeError as exc:
             raise errors.conflict(str(exc), run_id=run_id) from exc
         return {

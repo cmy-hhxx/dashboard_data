@@ -105,14 +105,19 @@ def _normalize_date_token(version: str) -> str:
     raise ValueError("version 必须为 YYYYMMDD 或 MMDD 日期格式（例如 20261126 或 1126）")
 
 
-def allocate_round_dir(ab_test_root: Path, version: str, model: str = "aime_expert") -> tuple[int, str, Path]:
-    """Allocate strict `version_<YYYYMMDD>_aime_<expert|fast>` dir; reject same-day duplicates."""
-    ab_test_root.mkdir(parents=True, exist_ok=True)
+def resolve_round_dir_name(version: str, model: str = "aime_expert") -> str:
+    """Validate `(version, model)` and return canonical `version_<YYYYMMDD>_<model>` dir name."""
     date_tok = _normalize_date_token(version)
     clean_model = (model or "aime_expert").strip().lower()
     if clean_model not in ("aime_expert", "aime_fast"):
         raise ValueError(f"model 必须为 aime_expert 或 aime_fast，收到：{model!r}")
-    dir_name = f"version_{date_tok}_{clean_model}"
+    return f"version_{date_tok}_{clean_model}"
+
+
+def allocate_round_dir(ab_test_root: Path, version: str, model: str = "aime_expert") -> tuple[int, str, Path]:
+    """Allocate strict `version_<YYYYMMDD>_aime_<expert|fast>` dir; reject same-day duplicates."""
+    ab_test_root.mkdir(parents=True, exist_ok=True)
+    dir_name = resolve_round_dir_name(version, model)
 
     with _ALLOC_LOCK:
         existing_names = {

@@ -96,6 +96,44 @@ def _as_float(value: str | None, default: float, minimum: float = 0.0) -> float:
     return max(minimum, parsed)
 
 
+def _parse_api_tokens(single_token: str = "", multi_tokens: str = "") -> tuple[tuple[str, str], ...]:
+    """Parse named/unnamed access tokens from `INTERNAL_EVAL_API_TOKENS` & `INTERNAL_EVAL_API_TOKEN`.
+
+    Format for `INTERNAL_EVAL_API_TOKENS`: comma/semicolon/newline-separated items,
+    each either `caller_name:token` or `token`.
+    """
+    entries: list[tuple[str, str]] = []
+    seen_tokens: set[str] = set()
+    unnamed_idx = 0
+
+    for chunk in (multi_tokens or "").replace("\n", ",").replace(";", ",").split(","):
+        raw = chunk.strip()
+        if not raw:
+            continue
+        if ":" in raw:
+            name_part, _, tok_part = raw.partition(":")
+            name = name_part.strip()
+            token = tok_part.strip()
+            if not name:
+                unnamed_idx += 1
+                name = f"token_{unnamed_idx}"
+        else:
+            unnamed_idx += 1
+            name = f"token_{unnamed_idx}"
+            token = raw
+        if not token or token in seen_tokens:
+            continue
+        seen_tokens.add(token)
+        entries.append((name, token))
+
+    single = (single_token or "").strip()
+    if single and single not in seen_tokens:
+        seen_tokens.add(single)
+        entries.append(("default", single))
+
+    return tuple(entries)
+
+
 @dataclass(frozen=True)
 class ServiceConfig:
     datasets_root: Path
@@ -161,14 +199,20 @@ class ServiceConfig:
 
     # Orchestrator & HTTP API settings
     max_concurrent_runs: int = 1
+    max_queued_runs: int = 0
     auto_resume_on_startup: bool = True
     api_prefix: str = "/api/v1/internal-eval"
     schema_version: str = "1.0"
     api_write_token: str = ""
+    api_tokens: tuple[tuple[str, str], ...] = ()
+    auth_mode: str = "all"  # all | write_only
     page_base_url: str = ""
     host: str = "0.0.0.0"
     port: int = 5003
     max_inflight: int = 32
+    max_inflight_per_caller: int = 4
+    rate_limit_per_minute: int = 60
+    rate_limit_window_sec: float = 60.0
     gzip_min_bytes: int = 1024
     allow_custom_tier: bool = False
     webhook_timeout_sec: float = 10.0
@@ -177,8 +221,24 @@ class ServiceConfig:
     allowed_tiers: tuple[int, ...] = field(default_factory=lambda: ALLOWED_TIERS)
     allowed_models: tuple[str, ...] = field(default_factory=lambda: ALLOWED_MODELS)
 
+    def resolved_api_tokens(self) -> tuple[tuple[str, str], ...]:
+        """Return deduplicated `(caller_name, token)` pairs without mutating config."""
+        entries: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for name, tok in self.api_tokens:
+            clean_tok = (tok or "").strip()
+            clean_name = (name or "caller").strip() or "caller"
+            if clean_tok and clean_tok not in seen:
+                seen.add(clean_tok)
+                entries.append((clean_name, clean_tok))
+        single = (self.api_write_token or "").strip()
+        if single and single not in seen:
+            entries.append(("default", single))
+        return tuple(entries)
+
     def public_summary(self) -> dict[str, object]:
         """Safe runtime summary with zero secret leakage."""
+        tokens = self.resolved_api_tokens()
         return {
             "api_prefix": self.api_prefix,
             "schema_version": self.schema_version,
@@ -196,7 +256,14 @@ class ServiceConfig:
             "task_manager_judge_source": self.task_manager_judge_source,
             "task_manager_drop_wait_timeout_sec": self.task_manager_drop_wait_timeout_sec,
             "max_concurrent_runs": self.max_concurrent_runs,
-            "write_auth_enabled": bool(self.api_write_token),
+            "max_queued_runs": self.max_queued_runs,
+            "auth_enabled": bool(tokens),
+            "auth_mode": self.auth_mode,
+            "auth_token_count": len(tokens),
+            "write_auth_enabled": bool(tokens),
+            "max_inflight": self.max_inflight,
+            "max_inflight_per_caller": self.max_inflight_per_caller,
+            "rate_limit_per_minute": self.rate_limit_per_minute,
             "gateway_configured": bool(self.gateway_api_key),
             "allowed_tiers": list(self.allowed_tiers),
             "allowed_models": list(self.allowed_models),
@@ -277,6 +344,10 @@ def load_config(
     judge_source = judge_source_raw if judge_source_raw in ("auto", "api", "drop_dir") else "drop_dir"
     tpl_task_raw = merged.get("INTERNAL_EVAL_TASK_MANAGER_TEMPLATE_TASK_ID")
     template_task_id = "2740e85cb7b34909" if tpl_task_raw is None else str(tpl_task_raw).strip()
+    api_write_token = get("INTERNAL_EVAL_API_TOKEN")
+    api_tokens = _parse_api_tokens(api_write_token, get("INTERNAL_EVAL_API_TOKENS"))
+    auth_mode_raw = get("INTERNAL_EVAL_AUTH_MODE", "all").strip().lower()
+    auth_mode = auth_mode_raw if auth_mode_raw in ("all", "write_only") else "all"
 
     return ServiceConfig(
         datasets_root=datasets_root,
@@ -333,13 +404,19 @@ def load_config(
             merged.get("INTERNAL_EVAL_TASK_MANAGER_DROP_WAIT_TIMEOUT_SEC"), 3600.0, minimum=1.0
         ),
         max_concurrent_runs=_as_int(merged.get("INTERNAL_EVAL_MAX_CONCURRENT_RUNS"), 1, minimum=1),
+        max_queued_runs=_as_int(merged.get("INTERNAL_EVAL_MAX_QUEUED_RUNS"), 0, minimum=0),
         auto_resume_on_startup=_as_bool(merged.get("INTERNAL_EVAL_AUTO_RESUME"), True),
         api_prefix=get("INTERNAL_EVAL_API_PREFIX", "/api/v1/internal-eval").rstrip("/"),
-        api_write_token=get("INTERNAL_EVAL_API_TOKEN"),
+        api_write_token=api_write_token,
+        api_tokens=api_tokens,
+        auth_mode=auth_mode,
         page_base_url=get("INTERNAL_EVAL_PAGE_BASE_URL").rstrip("/"),
         host=get("HOST", "0.0.0.0"),
         port=_as_int(merged.get("PORT"), 5003, minimum=1),
         max_inflight=_as_int(merged.get("INTERNAL_EVAL_MAX_INFLIGHT"), 32, minimum=1),
+        max_inflight_per_caller=_as_int(merged.get("INTERNAL_EVAL_MAX_INFLIGHT_PER_CALLER"), 4, minimum=1),
+        rate_limit_per_minute=_as_int(merged.get("INTERNAL_EVAL_RATE_LIMIT_PER_MINUTE"), 60, minimum=0),
+        rate_limit_window_sec=_as_float(merged.get("INTERNAL_EVAL_RATE_LIMIT_WINDOW_SEC"), 60.0, minimum=1.0),
         allow_custom_tier=_as_bool(merged.get("INTERNAL_EVAL_ALLOW_CUSTOM_TIER"), False),
         webhook_timeout_sec=_as_float(merged.get("INTERNAL_EVAL_WEBHOOK_TIMEOUT_SEC"), 10.0, minimum=1.0),
         webhook_retries=_as_int(merged.get("INTERNAL_EVAL_WEBHOOK_RETRIES"), 3, minimum=0),

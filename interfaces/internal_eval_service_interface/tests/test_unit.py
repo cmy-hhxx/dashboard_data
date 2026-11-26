@@ -65,15 +65,44 @@ class UnitTests(unittest.TestCase):
             env_file = Path(td) / "secret.env"
             env_file.write_text(
                 "export INTERNAL_EVAL_GATEWAY_BASE_URL=http://10.217.220.51/ai-gateway/\n"
-                "export INTERNAL_EVAL_GATEWAY_API_KEY=sk-test-secret-should-not-leak\n",
+                "export INTERNAL_EVAL_GATEWAY_API_KEY=sk-test-secret-should-not-leak\n"
+                "export INTERNAL_EVAL_API_TOKENS='alice:tok-alice-secret, bob:tok-bob-secret, tok-bare-secret'\n"
+                "export INTERNAL_EVAL_API_TOKEN=tok-legacy-secret\n"
+                "export INTERNAL_EVAL_AUTH_MODE=all\n"
+                "export INTERNAL_EVAL_MAX_QUEUED_RUNS=0\n"
+                "export INTERNAL_EVAL_MAX_INFLIGHT_PER_CALLER=4\n"
+                "export INTERNAL_EVAL_RATE_LIMIT_PER_MINUTE=60\n",
                 encoding="utf-8",
             )
             cfg = load_config(env={}, env_file=env_file)
             self.assertEqual(cfg.gateway_base_url, "http://10.217.220.51/ai-gateway/v1")
             self.assertEqual(cfg.gateway_api_key, "sk-test-secret-should-not-leak")
+            self.assertEqual(
+                cfg.resolved_api_tokens(),
+                (
+                    ("alice", "tok-alice-secret"),
+                    ("bob", "tok-bob-secret"),
+                    ("token_1", "tok-bare-secret"),
+                    ("default", "tok-legacy-secret"),
+                ),
+            )
             summary = cfg.public_summary()
             self.assertTrue(summary["gateway_configured"])
-            self.assertNotIn("sk-test-secret-should-not-leak", json.dumps(summary))
+            self.assertTrue(summary["auth_enabled"])
+            self.assertEqual(summary["auth_mode"], "all")
+            self.assertEqual(summary["auth_token_count"], 4)
+            self.assertEqual(summary["max_queued_runs"], 0)
+            self.assertEqual(summary["max_inflight_per_caller"], 4)
+            self.assertEqual(summary["rate_limit_per_minute"], 60)
+            serialized = json.dumps(summary)
+            for secret in (
+                "sk-test-secret-should-not-leak",
+                "tok-alice-secret",
+                "tok-bob-secret",
+                "tok-bare-secret",
+                "tok-legacy-secret",
+            ):
+                self.assertNotIn(secret, serialized)
 
     def test_bench_sampler_extracts_history_and_writes_two_dispatch_jsonls(self) -> None:
         with tempfile.TemporaryDirectory() as td:

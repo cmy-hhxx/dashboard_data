@@ -46,8 +46,9 @@ def cursor_expired(message: str = "cursor 已过期或无效，请从第一页�
     return ApiError(410, "CURSOR_EXPIRED", message, {})
 
 
-def rate_limited(message: str = "请求过多，请稍后重试", retry_after: int = 1) -> ApiError:
-    return ApiError(429, "RATE_LIMITED", message, {"retry_after": retry_after})
+def rate_limited(message: str = "请求过多，请稍后重试", retry_after: int = 1, **details: Any) -> ApiError:
+    payload = {"retry_after": retry_after, **details}
+    return ApiError(429, "RATE_LIMITED", message, payload)
 
 
 def unavailable(message: str, **details: Any) -> ApiError:

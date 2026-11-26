@@ -7,6 +7,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -84,6 +85,65 @@ class MountOn5003Tests(unittest.TestCase):
                     self.assertEqual(resp.status, 201)
                     created = json.loads(resp.read().decode("utf-8"))
                     self.assertEqual(created["data"]["status"], "queued")
+            finally:
+                analysis_server.INTERNAL_EVAL_APP = prev_mounted
+                srv.shutdown()
+                srv.server_close()
+
+    def test_auth_isolated_to_internal_eval_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            _write_fake_bench(tmp / "3_dynamic_bench", count=3)
+            cfg = ServiceConfig(
+                datasets_root=tmp,
+                ab_test_root=tmp / "1_aime" / "ab_test",
+                bench_root=tmp / "3_dynamic_bench",
+                state_db_path=tmp / "1_aime" / "ab_test" / ".service_state" / "internal_eval.sqlite3",
+                base_taxonomy_dir=ROOT / "vendor" / "cluster_pkg" / "builtin_taxonomy",
+                allow_custom_tier=True,
+                api_tokens=(("alice", "mount-secret-1"),),
+                auth_mode="all",
+            )
+            store = StateStore(cfg.state_db_path)
+            pipeline = PipelineManager(
+                cfg,
+                store,
+                engine=FakeStreamingEngine(),
+                collector=FileDropCollectorAdapter(cfg),
+                start_worker=False,
+            )
+            mounted = InternalEvalApp(cfg, store, pipeline)
+            prev_mounted = analysis_server.INTERNAL_EVAL_APP
+            analysis_server.mount_internal_eval(mounted)
+
+            srv = analysis_server.Server(("127.0.0.1", 0), analysis_server.Handler)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            port = srv.server_address[1]
+            try:
+                # 1) Existing /healthz and /api/v1/analysis/* stay open without any token
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=5) as resp:
+                    self.assertEqual(resp.status, 200)
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/v1/analysis/docs", timeout=5) as resp:
+                    self.assertEqual(resp.status, 200)
+
+                # 2) /api/v1/internal-eval/healthz stays open for probes
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/v1/internal-eval/healthz", timeout=5) as resp:
+                    self.assertEqual(resp.status, 200)
+                    self.assertTrue(json.loads(resp.read().decode("utf-8"))["data"]["config"]["auth_enabled"])
+
+                # 3) /api/v1/internal-eval/versions rejects missing token with 401
+                with self.assertRaises(urllib.error.HTTPError) as ctx:
+                    urllib.request.urlopen(f"http://127.0.0.1:{port}/api/v1/internal-eval/versions", timeout=5)
+                self.assertEqual(ctx.exception.code, 401)
+                ctx.exception.close()
+
+                # 4) Bearer token unlocks /api/v1/internal-eval/versions
+                auth_req = urllib.request.Request(
+                    f"http://127.0.0.1:{port}/api/v1/internal-eval/versions",
+                    headers={"Authorization": "Bearer mount-secret-1"},
+                )
+                with urllib.request.urlopen(auth_req, timeout=5) as resp:
+                    self.assertEqual(resp.status, 200)
             finally:
                 analysis_server.INTERNAL_EVAL_APP = prev_mounted
                 srv.shutdown()
