@@ -5,7 +5,7 @@ import { createSampleDetail, detailPaneHTML, flash, USER_TYPES, utOf, isLostRow 
 
 const CHEV_LEFT = `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true"><path d="M10 3.5 5.5 8 10 12.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const CHEV_RIGHT = `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-const CHEV_DOWN = `<svg class="chev" viewBox="0 0 12 12" width="12" height="12" fill="none" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const CHEV_DOWN = `<svg class="chev" viewBox="0 0 12 12" width="11" height="11" fill="none" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
 const PAGE = 50;
 const S = {
@@ -230,8 +230,10 @@ async function fetchServerList({ page = S.page, facets = true, sync = facets, sc
   applyServerPage(res, f);
   if (sync) syncFilters();
   else {
+    const isDirty = dirty();
     const resetBtn = $("#sreset", root);
-    if (resetBtn) resetBtn.hidden = !dirty();
+    if (resetBtn) resetBtn.hidden = !isDirty;
+    $("#stoolbar", root)?.classList.toggle("has-reset", isDirty);
     const sortEl = $("#ssort", root);
     if (sortEl) sortEl.value = f.sort;
   }
@@ -387,14 +389,26 @@ function skeleton() {
     <aside class="pane pane-sticky compare-list" aria-label="样本列表">
       <button type="button" class="compare-rail-btn" id="srail" title="展开样本列表" aria-label="展开样本列表">${CHEV_RIGHT}<span class="compare-rail-label">样本列表</span></button>
       <div class="pane-head compare-list-head samples-list-head${ctx.forecast ? " is-forecast" : ""}">
-        <input class="search" id="sq" type="search" placeholder="${ctx.forecast ? "搜索预测问题" : "搜索问题 · Session ID · Trace ID"}" autocomplete="off">
+        ${ctx.forecast
+          ? `<input class="search" id="sq" type="search" placeholder="搜索预测问题" autocomplete="off">
         <div class="filters" id="sf"></div>
-        <div class="list-meta">${ctx.forecast ? `<span id="scount" class="num"></span>` : `<label class="sort-wrap"><select id="ssort" aria-label="排序"><option value="sev">严重度优先</option><option value="n">问题数</option><option value="date">日期新→旧</option></select>${CHEV_DOWN}</label>`}
+        <div class="list-meta"><span id="scount" class="num"></span>
           <span class="meta-end">
             <button type="button" class="reset" id="sreset" hidden>重置</button>
-            ${ctx.forecast ? `<label class="sort-wrap"><select id="ssort" aria-label="排序"><option value="sev">默认</option><option value="date">日期新→旧</option></select>${CHEV_DOWN}</label>` : ""}
+            <label class="sort-wrap"><select id="ssort" aria-label="排序"><option value="sev">默认</option><option value="date">日期新→旧</option></select>${CHEV_DOWN}</label>
             <button type="button" class="compare-icon-btn" id="scollapse" aria-expanded="true" title="折叠样本列表" aria-label="折叠样本列表">${CHEV_LEFT}</button>
-          </span></div>
+          </span></div>`
+          : `<div class="search-row">
+          <input class="search" id="sq" type="search" placeholder="搜索问题 · Session · Trace ID" autocomplete="off">
+          <button type="button" class="compare-icon-btn collapse-btn" id="scollapse" aria-expanded="true" title="折叠样本列表" aria-label="折叠样本列表">${CHEV_LEFT}</button>
+        </div>
+        <div class="filters" id="sf-sev"></div>
+        <div class="list-toolbar" id="stoolbar">
+          <label class="sort-wrap"><select id="ssort" aria-label="排序"><option value="sev">严重度优先</option><option value="n">问题数</option><option value="date">日期新→旧</option></select>${CHEV_DOWN}</label>
+          <button type="button" class="fmore-btn" id="smore" data-more aria-expanded="false" aria-controls="sfmore"><span>筛选</span><b class="num" id="smore-cnt" hidden></b>${CHEV_DOWN}</button>
+          <button type="button" class="reset-btn" id="sreset" hidden>重置</button>
+        </div>
+        <div class="filters" id="sf" hidden></div>`}
       </div>
       <div class="pane-scroll" id="slist" tabindex="0" aria-label="样本"></div>
       <div class="pager" id="spager" hidden></div>
@@ -431,11 +445,20 @@ function skeleton() {
   $("#sreset", root).addEventListener("click", () =>
     setFilter({ ...NO_FILTER, sort: "sev" }),
   );
-  $("#sf", root).addEventListener("click", (e) => {
+  const head = $(".samples-list-head", root);
+  head.addEventListener("click", (e) => {
     const toggle = e.target.closest("[data-more]");
     if (toggle) {
       S.moreOpen = toggle.getAttribute("aria-expanded") !== "true";
       syncFilters();
+      return;
+    }
+    const clearChip = e.target.closest("button[data-clear]");
+    if (clearChip) {
+      const k = clearChip.dataset.clear;
+      if (k === "scene") setFilter({ scene: "", sub: "" });
+      else if (k === "cluster") setFilter({ stage: "", mech: "", pattern: "" });
+      else setFilter({ [k]: "" });
       return;
     }
     const b = e.target.closest("button[data-k]");
@@ -443,7 +466,7 @@ function skeleton() {
     const cur = F()[b.dataset.k];
     setFilter({ [b.dataset.k]: cur === b.dataset.v ? "" : b.dataset.v });
   });
-  $("#sf", root).addEventListener("change", (e) => {
+  head.addEventListener("change", (e) => {
     const s = e.target.closest("select[data-k]");
     if (!s) return;
     const k = s.dataset.k;
@@ -515,8 +538,10 @@ function setFilter(patch) {
     const needSync = needFacets || keys.some((k) => k !== "q" && k !== "sort");
     if (needSync) syncFilters();
     else {
+      const isDirty = dirty();
       const resetBtn = $("#sreset", root);
-      if (resetBtn) resetBtn.hidden = !dirty();
+      if (resetBtn) resetBtn.hidden = !isDirty;
+      $("#stoolbar", root)?.classList.toggle("has-reset", isDirty);
     }
     fetchServerList({ page: 1, facets: needFacets, sync: needFacets, scrollTop: true, prefetchDir: 1 });
     return;
@@ -568,10 +593,12 @@ function forecastFilters(f, p) {
 function syncFilters() {
   const f = F();
   const p = S.prod;
+  const isDirty = dirty();
   $("#sq", root).value !== f.q && document.activeElement !== $("#sq", root) && ($("#sq", root).value = f.q);
   $("#ssort", root).value = f.sort;
   const resetBtn = $("#sreset", root);
-  if (resetBtn) resetBtn.hidden = !dirty();
+  if (resetBtn) resetBtn.hidden = !isDirty;
+  $("#stoolbar", root)?.classList.toggle("has-reset", isDirty);
   if (ctx.forecast) {
     $("#sf", root).innerHTML = forecastFilters(f, p);
     return;
@@ -579,12 +606,26 @@ function syncFilters() {
   const btn = (k, v, label, color) =>
     `<button type="button" data-k="${k}" data-v="${esc(v)}" aria-pressed="${f[k] === v}"${color ? ` style="--c:${color}"` : ""}>${color ? "<i></i>" : ""}${esc(label)}</button>`;
   const row = (cls, items) => `<div class="frow${cls ? ` ${cls}` : ""}">${items}</div>`;
-  let html = f.date ? row("fdate", btn("date", f.date, `日期 ${f.date.slice(5)} ×`)) : "";
-  html += row("sev", WORST.map((w, i) => btn("w", w, SEV_NAME[w], sevColor(i))).join(""));
-  // Everything past severity and model sits behind one toggle that counts what is active.
-  const more = ["ut", "split", "scene", "sub", "stage", "mech", "pattern"].filter((k) => f[k]).length;
-  const open = S.moreOpen ?? more > 0;
-  html += row("models", `<div class="seg-group" role="group" aria-label="模型">${p.models.map((m) => btn("model", m.id, m.label)).join("")}</div><button type="button" class="fmore${more ? " is-active" : ""}" data-more aria-expanded="${open}" aria-controls="sfmore"><span>筛选</span>${more ? `<b class="num">${more}</b>` : ""}${CHEV_DOWN}</button>`);
+
+  const sevHost = $("#sf-sev", root);
+  if (sevHost) sevHost.innerHTML = row("sev", WORST.map((w, i) => btn("w", w, SEV_NAME[w], sevColor(i))).join(""));
+
+  const more = (f.model ? 1 : 0)
+    + (f.ut ? 1 : 0)
+    + (f.split ? 1 : 0)
+    + (f.scene || f.sub ? 1 : 0)
+    + (f.stage || f.mech || f.pattern ? 1 : 0);
+  const open = Boolean(S.moreOpen);
+  const moreBtn = $("#smore", root);
+  if (moreBtn) {
+    moreBtn.setAttribute("aria-expanded", String(open));
+    moreBtn.classList.toggle("is-active", more > 0);
+    const cnt = $("#smore-cnt", root);
+    if (cnt) {
+      cnt.hidden = !more;
+      cnt.textContent = more ? String(more) : "";
+    }
+  }
 
   const tax = ctx.data.taxonomy;
   const opt = (v, label, on) => `<option value="${esc(v)}"${on ? " selected" : ""}>${esc(label)}</option>`;
@@ -608,6 +649,7 @@ function syncFilters() {
     opt(sc, sc, sceneValue === sc) + [...subsOf.get(sc)].sort((a, b) => a.localeCompare(b, "zh"))
       .map((sb) => opt(`${sc}\u0001${sb}`, `\u3000${sb}`, sceneValue === `${sc}\u0001${sb}`)).join("")).join("");
   let clusterSelect = "";
+  let clusterLabel = "";
   if (tax) {
     // 阶段 › 机制 › 模式 in one list, built from the sessions the other filters leave.
     const stagesOn = new Set(), mechsOn = new Set(), paths = new Set();
@@ -631,6 +673,12 @@ function syncFilters() {
     const patIds = Object.keys(tax.patterns).filter((id) => [...paths].some((x) => x === id || x.startsWith(`${id}.`))).sort(byPath);
     const mechName = new Map(tax.mechanisms.map((m) => [m.id, m.name]));
     const clusterValue = f.pattern || (f.stage && f.mech ? `${f.stage}.${f.mech}` : f.stage || (f.mech ? `*.${f.mech}` : ""));
+    if (f.pattern) clusterLabel = patternName(tax, f.pattern);
+    else if (f.stage && f.mech) clusterLabel = `${f.stage}.${f.mech} ${mechName.get(f.mech) || ""}`.trim();
+    else if (f.stage) {
+      const stObj = tax.stages.find((st) => st.id === f.stage);
+      clusterLabel = stObj ? `${stObj.id} ${stObj.name}` : f.stage;
+    } else if (f.mech) clusterLabel = `${f.mech} ${mechName.get(f.mech) || ""}`.trim();
     const stageOpts = tax.stages.filter((st) => stagesOn.has(st.id)).sort((a, b) => num(a.id) - num(b.id)).map((st) => {
       const mechs = [...mechsOn].filter((x) => x.startsWith(`${st.id}.`)).sort(byPath);
       return opt(st.id, `${st.id} ${st.name}`, clusterValue === st.id) + mechs.map((sm) =>
@@ -640,17 +688,53 @@ function syncFilters() {
     }).join("");
     const crossStage = f.mech && !f.stage && !f.pattern ? opt(`*.${f.mech}`, `${f.mech} ${mechName.get(f.mech) || ""}`, true) : "";
     const clusterOn = Boolean(f.stage || f.mech || f.pattern);
-    clusterSelect = `<label class="sel-wrap wide${clusterOn ? " is-on" : ""}"><select data-k="cluster" aria-label="聚类"><option value="">全部聚类</option>${crossStage}${stageOpts}</select>${CHEV_DOWN}</label>`;
+    clusterSelect = `<label class="sel-wrap${clusterOn ? " is-on" : ""}"><select data-k="cluster" aria-label="聚类"><option value="">全部聚类</option>${crossStage}${stageOpts}</select>${CHEV_DOWN}</label>`;
   }
+
+  const chips = [];
+  const chip = (clearKey, text) => `<button type="button" class="fchip" data-clear="${clearKey}"><span>${esc(text)}</span><span aria-hidden="true">×</span></button>`;
+  if (f.date) chips.push(chip("date", `日期 ${f.date.slice(5)}`));
+  if (!open) {
+    if (f.model) {
+      const mLabel = (p.models.find((m) => m.id === f.model) || { label: f.model }).label;
+      chips.push(chip("model", mLabel));
+    }
+    if (f.ut) {
+      const uLabel = (USER_TYPES.find(([id]) => id === f.ut) || [, f.ut])[1];
+      chips.push(chip("ut", uLabel));
+    }
+    if (f.split === "lost") chips.push(chip("split", "流失用户"));
+    if (f.scene || f.sub) chips.push(chip("scene", f.sub || f.scene));
+    if (f.stage || f.mech || f.pattern) chips.push(chip("cluster", clusterLabel || f.pattern || f.mech || f.stage));
+  }
+
   const utOn = Boolean(f.ut);
   const sceneOn = Boolean(f.scene || f.sub);
-  html += `<div class="cascade" id="sfmore"${open ? "" : " hidden"}>
-      <label class="sel-wrap${utOn ? " is-on" : ""}"><select data-k="ut" aria-label="用户类型"><option value="">全部用户</option>${USER_TYPES.map(([id, label]) => opt(id, label, f.ut === id)).join("")}</select>${CHEV_DOWN}</label>
-      ${p.splits.some((s) => s.id === "lost") ? btn("split", "lost", "流失用户") : ""}
-      <label class="sel-wrap wide${sceneOn ? " is-on" : ""}"><select data-k="scenepath" aria-label="场景"><option value="">全部场景</option>${sceneOpts}</select>${CHEV_DOWN}</label>
-      ${clusterSelect}
+  const hasLost = p.splits.some((s) => s.id === "lost");
+  const modelGroup = p.models.length
+    ? `<div class="fgroup"><span class="fgroup-label">模型</span><div class="seg-group" role="group" aria-label="模型">${p.models.map((m) => btn("model", m.id, m.label)).join("")}</div></div>`
+    : "";
+  const panelHtml = `<div class="fpanel" id="sfmore"${open ? "" : " hidden"}>
+      ${modelGroup}
+      <div class="fgroup">
+        <span class="fgroup-label">用户</span>
+        <div class="fgroup-row${hasLost ? " has-lost" : ""}">
+          <label class="sel-wrap${utOn ? " is-on" : ""}"><select data-k="ut" aria-label="用户类型"><option value="">全部用户</option>${USER_TYPES.map(([id, label]) => opt(id, label, f.ut === id)).join("")}</select>${CHEV_DOWN}</label>
+          ${hasLost ? btn("split", "lost", "流失用户") : ""}
+        </div>
+      </div>
+      <div class="fgroup">
+        <span class="fgroup-label">归类</span>
+        <div class="fgroup-stack">
+          <label class="sel-wrap${sceneOn ? " is-on" : ""}"><select data-k="scenepath" aria-label="场景"><option value="">全部场景</option>${sceneOpts}</select>${CHEV_DOWN}</label>
+          ${clusterSelect}
+        </div>
+      </div>
     </div>`;
-  $("#sf", root).innerHTML = html;
+
+  const sfEl = $("#sf", root);
+  sfEl.innerHTML = `${chips.length ? `<div class="fchips">${chips.join("")}</div>` : ""}${panelHtml}`;
+  sfEl.hidden = !chips.length && !open;
 }
 
 function renderList() {

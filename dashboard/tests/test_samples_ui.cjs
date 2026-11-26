@@ -54,6 +54,8 @@ assert(!source.includes("RECALL_CAP"), "samples.js must not cap session list rec
 assert(!source.includes("前 ${fmt(S.recalled)}"), "samples.js must not display capped session count prefix");
 assert(!source.includes("个会话"), "samples.js must not display session count label");
 assert(source.includes("samples-list-head"), "samples.js must apply samples-list-head class");
+assert(source.includes("list-toolbar"), "samples.js must group sort and filter controls in list-toolbar");
+assert(source.includes("fpanel"), "samples.js must categorize folded filters inside fpanel");
 assert(source.includes("seg-group"), "samples.js must group model filter buttons in seg-group");
 assert(source.includes("sort-wrap"), "samples.js must wrap sort selector in sort-wrap");
 console.log("PASS: session severity aggregation, filtering, and independent attribution cards");
