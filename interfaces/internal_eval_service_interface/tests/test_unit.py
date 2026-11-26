@@ -99,7 +99,7 @@ class UnitTests(unittest.TestCase):
                 before_agent={"name": "v1"},
                 after_agent={"name": "v2"},
                 targets=targets,
-                targets_jsonl_path=tmp / "01_targets" / "questions.jsonl",
+                targets_jsonl_path=tmp / "bench" / "bench.jsonl",
                 dispatch_dir=tmp / "dispatch",
                 split_mode="both",
             )
@@ -118,21 +118,30 @@ class UnitTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             ds = Path(td)
             ab_root = ds / "1_aime" / "ab_test"
-            (ab_root / "0_version1106_test").mkdir(parents=True)
-            (ab_root / "1_version1112_test").mkdir(parents=True)
+            (ab_root / "version_20261106_aime_expert").mkdir(parents=True)
+            (ab_root / "version_20261112_aime_expert").mkdir(parents=True)
 
-            o1, n1, d1 = allocate_round_dir(ab_root, "1124")
+            o1, n1, d1 = allocate_round_dir(ab_root, "20261124", "aime_expert")
             self.assertEqual(o1, 2)
-            self.assertEqual(n1, "2_version1124_test")
+            self.assertEqual(n1, "version_20261124_aime_expert")
 
-            o2, n2, d2 = allocate_round_dir(ab_root, "1124")
+            # Same date + model must reject duplicate instead of appending _r2
+            with self.assertRaises(FileExistsError):
+                allocate_round_dir(ab_root, "20261124", "aime_expert")
+
+            # Non-date suffix version must be rejected cleanly
+            with self.assertRaises(ValueError):
+                allocate_round_dir(ab_root, "20261124smoke", "aime_expert")
+
+            # 4-digit MMDD + aime_fast succeeds with strict naming
+            o2, n2, d2 = allocate_round_dir(ab_root, "1125", "aime_fast")
             self.assertEqual(o2, 3)
-            self.assertEqual(n2, "3_version1124r2_test")
+            self.assertRegex(n2, r"^version_\d{4}1125_aime_fast$")
             self.assertNotEqual(d1, d2)
 
             init_round_layout(
                 round_dir=d1,
-                version="1124",
+                version="20261124",
                 model="aime_expert",
                 tier=500,
                 before_agent_label="v1",
@@ -140,8 +149,8 @@ class UnitTests(unittest.TestCase):
                 run_id="run_abc",
                 base_taxonomy_dir=ROOT / "vendor" / "cluster_pkg" / "builtin_taxonomy",
             )
-            self.assertTrue((d1 / "round.json").is_file())
-            self.assertTrue((d1 / "98_service" / "taxonomy" / "inventory.json").is_file())
+            self.assertTrue((d1 / "index_stats" / "meta.json").is_file())
+            self.assertTrue((d1 / ".work" / "taxonomy" / "inventory.json").is_file())
 
             # Verify dashboard/ab_test.py recognizes our round layout cleanly!
             dash_dir = REPO_ROOT / "dashboard"
@@ -149,10 +158,10 @@ class UnitTests(unittest.TestCase):
                 sys.path.insert(0, str(dash_dir))
                 import ab_test as dash_ab  # type: ignore
 
-                self.assertTrue(dash_ab.is_scope_layout(d1))
+                self.assertTrue(dash_ab.is_ab_round(d1))
                 found = dash_ab.ab_round_dirs(ds, "aime")
                 names = [p.name for _, _, p in found]
-                self.assertIn("2_version1124_test", names)
+                self.assertIn("version_20261124_aime_expert", names)
                 # Ensure .service_state is ignored by dashboard scanner
                 (ab_root / ".service_state").mkdir(exist_ok=True)
                 found2 = dash_ab.ab_round_dirs(ds, "aime")
@@ -219,8 +228,8 @@ class UnitTests(unittest.TestCase):
             self.assertEqual(cmp["severity_migration_matrix"]["GOLD"]["P2"], 1)
             self.assertEqual(cmp["severity_migration_matrix"]["P1"]["P1"], 1)
 
-            # Verify sync_round_manifests writes all CSV/JSON artifacts without error
-            round_dir = Path(td) / "0_version1124_test"
+            # Verify sync_round_manifests writes canonical index_stats files without error
+            round_dir = Path(td) / "version_20261124_aime_expert"
             sync_round_manifests(
                 round_dir=round_dir,
                 run=run,
@@ -229,9 +238,9 @@ class UnitTests(unittest.TestCase):
                 after_cases=after_map,
                 compare_payload=cmp,
             )
-            self.assertTrue((round_dir / "00_manifest" / "coverage_before_release_cluster.csv").is_file())
-            self.assertTrue((round_dir / "00_manifest" / "coverage_after_release_retest.csv").is_file())
-            self.assertTrue((round_dir / "05_compare" / "baseline_leaf_counts.csv").is_file())
+            self.assertTrue((round_dir / "index_stats" / "meta.json").is_file())
+            self.assertTrue((round_dir / "index_stats" / "pairs_index.csv").is_file())
+            self.assertTrue((round_dir / "index_stats" / "stats.json").is_file())
 
 
 if __name__ == "__main__":

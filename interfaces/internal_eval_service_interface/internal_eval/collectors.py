@@ -3,7 +3,7 @@
 Supports four modes seamlessly:
   1. `file_drop`:
      Writes dispatch JSONL files (`before_questions.jsonl`, `after_questions.jsonl`)
-     and `DISPATCH_MANIFEST.json`, then monitors `98_service/raw_traces/{before,after}/`
+     and `DISPATCH_MANIFEST.json`, then monitors `.work/raw_traces/{before,after}/`
      for dropped `.jsonl` files (plus optional `_DONE` sentinel) AND accepts HTTP `/ingest`.
   2. `http`:
      POSTs the dispatch job (with paths to the two JSONL files + callback URLs) to a
@@ -37,7 +37,9 @@ from .task_manager import (
     TaskManagerError,
     _looks_like_recall_error,
     build_pipeline_and_step_map,
+    build_task_spec_from_template,
     build_testset_cases,
+    format_abtest_task_name,
     judge_record_to_eval_trace,
     normalize_task_manager_base_url,
 )
@@ -83,6 +85,10 @@ class TraceCollectorAdapter:
         """Optional hook called when a run is cancelled to abort upstream inference."""
         return
 
+    def is_active(self, run_id: str) -> bool:
+        """Return True while an asynchronous collector thread is actively polling."""
+        return False
+
 
 def _write_dispatch_manifest(
     *,
@@ -92,7 +98,7 @@ def _write_dispatch_manifest(
     api_prefix: str,
 ) -> Path:
     round_dir = Path(run["round_dir_path"])
-    manifest_path = round_dir / "98_service" / "dispatch" / "DISPATCH_MANIFEST.json"
+    manifest_path = round_dir / ".work" / "dispatch" / "DISPATCH_MANIFEST.json"
     payload = {
         "run_id": run["run_id"],
         "version": run["version"],
@@ -240,7 +246,7 @@ class TaskManagerCollectorAdapter(TraceCollectorAdapter):
 
     @staticmethod
     def _state_path(run: dict[str, Any]) -> Path:
-        return Path(run["round_dir_path"]) / "98_service" / "dispatch" / "TASK_MANAGER_STATE.json"
+        return Path(run["round_dir_path"]) / ".work" / "dispatch" / "TASK_MANAGER_STATE.json"
 
     @classmethod
     def _save_state(cls, run: dict[str, Any], state: dict[str, Any]) -> Path:
@@ -261,6 +267,77 @@ class TaskManagerCollectorAdapter(TraceCollectorAdapter):
             return data if isinstance(data, dict) else None
         except ValueError:
             return None
+
+    def is_active(self, run_id: str) -> bool:
+        with self._lock:
+            t = self._pollers.get(run_id)
+            return bool(t and t.is_alive())
+
+    def _resolve_task_drop_dir(
+        self,
+        run: dict[str, Any],
+        tm_meta: dict[str, Any],
+        task_id: str,
+        state: dict[str, Any] | None = None,
+    ) -> Path:
+        raw = str((state or {}).get("task_drop_dir") or tm_meta.get("task_drop_dir") or "").strip()
+        if raw:
+            return Path(raw).expanduser()
+        return Path(run["round_dir_path"]) / task_id
+
+    @staticmethod
+    def _is_eval_ready_record(rec: dict[str, Any]) -> bool:
+        """True only for processed eval inputs (reject raw `lf_observations` / `lf_ok=False` placeholders)."""
+        if rec.get("lf_ok") is False:
+            return False
+        msgs = rec.get("messages")
+        traces = rec.get("traces")
+        if isinstance(msgs, list) and len(msgs) > 0:
+            return True
+        if isinstance(traces, list) and len(traces) > 0:
+            return True
+        return False
+
+    @staticmethod
+    def _normalize_dropped_trace(
+        rec: dict[str, Any],
+        *,
+        run: dict[str, Any],
+        side: str,
+        step_key: str,
+        task_id: str,
+        fallback_case_key: str,
+        fallback_question: str,
+        session_info: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Normalize either a TaskManager judge JSONL record or raw Litefusion/Adapter trace."""
+        if isinstance(rec.get("messages"), list) or isinstance(rec.get("traces"), list):
+            out = dict(rec)
+            canonical_case_id = f"{run['run_id']}_{side}_{fallback_case_key}"
+            out["case_key"] = fallback_case_key
+            out["case_id"] = canonical_case_id
+            meta = dict(out.get("meta")) if isinstance(out.get("meta"), dict) else {}
+            meta["case_key"] = fallback_case_key
+            meta["case_id"] = canonical_case_id
+            meta.setdefault("task_manager_task_id", task_id)
+            meta.setdefault("task_manager_step_key", step_key)
+            if fallback_question:
+                meta.setdefault("question", fallback_question)
+                meta.setdefault("question_text", fallback_question)
+            out["meta"] = meta
+            return out
+        return judge_record_to_eval_trace(
+            rec,
+            run_id=run["run_id"],
+            side=side,
+            version=run["version"],
+            agent_label=run["before_agent_label"] if side == "before" else run["after_agent_label"],
+            step_key=step_key,
+            task_id=task_id,
+            fallback_case_key=fallback_case_key,
+            fallback_question=fallback_question,
+            session_info=session_info,
+        )
 
     def _resolve_tm_meta(self, run: dict[str, Any]) -> dict[str, Any]:
         meta = run.get("meta") if isinstance(run.get("meta"), dict) else {}
@@ -442,6 +519,8 @@ class TaskManagerCollectorAdapter(TraceCollectorAdapter):
         ):
             client = self._make_client(run, existing_state)
             task_id = str(existing_state["task_id"])
+            task_drop_dir = self._resolve_task_drop_dir(run, tm_meta, task_id, existing_state)
+            task_drop_dir.mkdir(parents=True, exist_ok=True)
             side_to_step_key = {s: str(existing_state["side_to_step_key"][s]) for s in sides}
             rec = self._trigger_task_recovery(
                 client,
@@ -500,10 +579,16 @@ class TaskManagerCollectorAdapter(TraceCollectorAdapter):
             if str(task_doc.get("status") or "").lower() in ("created", "paused") and tm_meta.get("auto_start", True):
                 client.start_task(attach_task_id)
 
+            task_drop_dir = self._resolve_task_drop_dir(run, tm_meta, attach_task_id)
+            task_drop_dir.mkdir(parents=True, exist_ok=True)
+            judge_source = str(tm_meta.get("judge_source") or self.cfg.task_manager_judge_source or "drop_dir").strip().lower()
             state = {
                 "base_url": client.base_url,
                 "testset_id": (task_doc.get("testset_ids") or [task_doc.get("testset_id")])[0],
                 "task_id": attach_task_id,
+                "task_name": task_doc.get("task_name") or "",
+                "task_drop_dir": str(task_drop_dir),
+                "judge_source": judge_source,
                 "side_to_step_key": side_to_step_key,
                 "pipeline": task_doc.get("pipeline") or {},
                 "attached": True,
@@ -524,7 +609,7 @@ class TaskManagerCollectorAdapter(TraceCollectorAdapter):
             )
             return {side: f"tm:{attach_task_id}:{step_key}" for side, step_key in side_to_step_key.items()}
 
-        # Case 3: Standard automated flow: create testset -> create task -> start -> poll & stream
+        # Case 3: Standard automated flow: create testset -> copy template task (no limit) -> start -> create ab_test/<task_id> dir
         max_hist = int(tm_meta.get("max_history_turns", self.cfg.task_manager_max_history_turns) or 0)
         cases = build_testset_cases(run["run_id"], dispatch_rows, max_history_turns=max(0, max_hist))
         ts_name = f"{run['round_dir_name']}_{run['run_id'][-6:]}"
@@ -540,25 +625,26 @@ class TaskManagerCollectorAdapter(TraceCollectorAdapter):
         )
         testset_id = ts_res["testset_id"]
 
-        pipeline, side_to_step_key = build_pipeline_and_step_map(
+        pipeline, side_to_step_key, tpl_defaults = build_task_spec_from_template(
             run=run,
             sides=sides,
             client=client,
             default_template_task_id=self.cfg.task_manager_template_task_id,
         )
-        concurrency = int(tm_meta.get("concurrency_limit") or self.cfg.task_manager_concurrency)
+        concurrency = int(
+            tm_meta.get("concurrency_limit")
+            or tpl_defaults.get("concurrency_limit")
+            or self.cfg.task_manager_concurrency
+        )
         concurrency_schedule = (
             tm_meta.get("concurrency_schedule")
             if isinstance(tm_meta.get("concurrency_schedule"), dict)
-            else None
+            else tpl_defaults.get("concurrency_schedule")
         )
-        task_name = str(
-            tm_meta.get("task_name")
-            or f"internal-eval-{run['version']}-{run['model']}-{run['run_id'][-6:]}"
-        )
+        task_name = str(tm_meta.get("task_name") or format_abtest_task_name())
         task_res = client.create_task(
             task_name=task_name,
-            testset_selections=[{"testset_id": testset_id}],
+            testset_selections=[{"testset_id": testset_id, "limit": None}],
             pipeline=pipeline,
             concurrency_limit=concurrency,
             description=ts_desc,
@@ -570,14 +656,20 @@ class TaskManagerCollectorAdapter(TraceCollectorAdapter):
 
         client.start_task(task_id)
 
+        task_drop_dir = self._resolve_task_drop_dir(run, tm_meta, task_id)
+        task_drop_dir.mkdir(parents=True, exist_ok=True)
+        judge_source = str(tm_meta.get("judge_source") or self.cfg.task_manager_judge_source or "drop_dir").strip().lower()
         state = {
             "base_url": client.base_url,
             "testset_id": testset_id,
             "task_id": task_id,
             "task_name": task_name,
+            "task_drop_dir": str(task_drop_dir),
+            "judge_source": judge_source,
             "side_to_step_key": side_to_step_key,
             "pipeline": pipeline,
             "concurrency_limit": concurrency,
+            "concurrency_schedule": concurrency_schedule,
             "created_at": utc_rfc3339(),
         }
         self._save_state(run, state)
@@ -585,10 +677,13 @@ class TaskManagerCollectorAdapter(TraceCollectorAdapter):
             log_event,
             "dispatching",
             "task_manager_started",
-            f"已创建并启动 TaskManager 任务 {task_id}（testset={testset_id}, count={len(cases)}, steps={side_to_step_key}）",
+            f"已创建并启动 TaskManager 任务 {task_id}（{task_name}），已建立落盘目录 {task_drop_dir}",
             details={
                 "task_id": task_id,
+                "task_name": task_name,
                 "testset_id": testset_id,
+                "task_drop_dir": str(task_drop_dir),
+                "judge_source": judge_source,
                 "side_to_step_key": side_to_step_key,
                 "concurrency_limit": concurrency,
             },
@@ -712,11 +807,28 @@ class TaskManagerCollectorAdapter(TraceCollectorAdapter):
         cancel_check: Callable[[], bool],
         log_event: LogEventFn | None,
     ) -> None:
+        from .engines import extract_trace_identity
+
         run_id = run["run_id"]
         version = run["version"]
         sides = list(side_to_step_key.keys())
         tm_meta = self._resolve_tm_meta(run)
+        state = self._load_state(run) or {}
+        task_drop_dir = self._resolve_task_drop_dir(run, tm_meta, task_id, state)
+        task_drop_dir.mkdir(parents=True, exist_ok=True)
+        judge_source = str(
+            tm_meta.get("judge_source") or state.get("judge_source") or self.cfg.task_manager_judge_source or "drop_dir"
+        ).strip().lower()
+        if judge_source not in ("auto", "api", "drop_dir"):
+            judge_source = "drop_dir"
+
         poll_interval = float(tm_meta.get("poll_interval_sec") or self.cfg.task_manager_poll_interval_sec)
+        recovery_interval = float(
+            tm_meta.get("recovery_interval_sec") or self.cfg.task_manager_recovery_interval_sec
+        )
+        drop_wait_timeout = float(
+            tm_meta.get("drop_wait_timeout_sec") or self.cfg.task_manager_drop_wait_timeout_sec
+        )
         max_recovery = int(tm_meta.get("max_recovery_rounds", self.cfg.task_manager_max_recovery_rounds))
         recall_wait = int(tm_meta.get("retry_recall_wait_sec") or self.cfg.task_manager_retry_recall_wait_sec)
 
@@ -729,7 +841,18 @@ class TaskManagerCollectorAdapter(TraceCollectorAdapter):
         expected_total = len(question_by_ck)
         ingested_keys = self._load_already_ingested_keys(raw_dirs, sides)
 
-        def _resolve_case_key(record_or_item: dict[str, Any]) -> str | None:
+        # (ino, size, mtime_ns, offset) for `<round_dir>/<task_id>/{step}.jsonl`
+        drop_file_state: dict[str, tuple[int, int, int, int]] = {}
+        placeholder_seen: dict[str, bool] = {s: False for s in sides}
+        archived_keys: dict[str, set[str]] = {s: set() for s in sides}
+        session_map_cache: dict[tuple[str, str], dict[str, Any]] = {}
+        session_trace_to_ck: dict[tuple[str, str], str] = {}
+        session_sid_to_ck: dict[tuple[str, str], str] = {}
+        pending_drop_records: list[tuple[str, dict[str, Any]]] = []
+        last_drop_activity_ts = time.monotonic()
+        tm_finished_at: float | None = None
+
+        def _resolve_case_key(record_or_item: dict[str, Any], *, step_key: str = "") -> str | None:
             ck = extract_case_key(record_or_item)
             if ck and ck in question_by_ck:
                 return ck
@@ -741,16 +864,185 @@ class TaskManagerCollectorAdapter(TraceCollectorAdapter):
             extra = record_or_item.get("extra") if isinstance(record_or_item.get("extra"), dict) else {}
             if extra.get("case_key") in question_by_ck:
                 return str(extra["case_key"])
+            tid, sid, _ = extract_trace_identity(record_or_item)
+            if tid:
+                mapped = session_trace_to_ck.get((step_key, tid)) or session_trace_to_ck.get(("", tid))
+                if mapped and mapped in question_by_ck:
+                    return mapped
+            if sid:
+                mapped = session_sid_to_ck.get((step_key, sid)) or session_sid_to_ck.get(("", sid))
+                if mapped and mapped in question_by_ck:
+                    return mapped
             return None
 
-        def _pull_ready_judges(*, final_sweep: bool = False) -> int:
-            total_newly_ingested = 0
+        if judge_source in ("auto", "api"):
+            for side, step_key in side_to_step_key.items():
+                archive_path = task_drop_dir / f"{task_id}_{step_key}_judge.jsonl"
+                if archive_path.is_file():
+                    try:
+                        for raw_line in archive_path.read_text(encoding="utf-8", errors="replace").splitlines():
+                            raw_line = raw_line.strip()
+                            if not raw_line:
+                                continue
+                            obj = json.loads(raw_line)
+                            if isinstance(obj, dict):
+                                ck = _resolve_case_key(obj, step_key=step_key)
+                                if ck:
+                                    archived_keys[side].add(ck)
+                    except Exception:
+                        pass
+
+        def _refresh_session_index() -> list[dict[str, Any]]:
             completed_items = client.iter_all_items(task_id, status="completed")
             partial_items = client.iter_all_items(task_id, status="partial")
             usable_items = completed_items + partial_items
+            for item in usable_items:
+                ck = _resolve_case_key(item)
+                for s_entry in item.get("session_index") or []:
+                    if not isinstance(s_entry, dict) or not s_entry.get("step"):
+                        continue
+                    skey = str(s_entry["step"])
+                    if ck:
+                        session_map_cache[(skey, ck)] = s_entry
+                        tid = str(s_entry.get("trace_id") or "").strip()
+                        sid = str(s_entry.get("session_id") or "").strip()
+                        if tid:
+                            session_trace_to_ck[(skey, tid)] = ck
+                            session_trace_to_ck.setdefault(("", tid), ck)
+                        if sid:
+                            session_sid_to_ck[(skey, sid)] = ck
+                            session_sid_to_ck.setdefault(("", sid), ck)
+            return usable_items
 
-            # Build session_index lookup `(step_key, case_key) -> session_entry`
-            session_map: dict[tuple[str, str], dict[str, Any]] = {}
+        def _pull_drop_dir_files() -> tuple[int, bool]:
+            nonlocal last_drop_activity_ts
+            done_present = (task_drop_dir / "_DONE").exists() or (task_drop_dir / "DONE").exists()
+            fresh_records: list[tuple[str, dict[str, Any]]] = []
+
+            for side, step_key in side_to_step_key.items():
+                path = task_drop_dir / f"{step_key}.jsonl"
+                if not path.is_file():
+                    continue
+                key = str(path)
+                try:
+                    st = path.stat()
+                except OSError:
+                    continue
+                prev = drop_file_state.get(key)
+                if prev is None:
+                    offset = 0
+                else:
+                    prev_ino, prev_size, prev_mtime, prev_off = prev
+                    if (
+                        st.st_ino != prev_ino
+                        or st.st_size < prev_off
+                        or (st.st_mtime_ns != prev_mtime and st.st_size == prev_size)
+                        or (st.st_mtime_ns != prev_mtime and placeholder_seen.get(side, False))
+                    ):
+                        offset = 0
+                    else:
+                        offset = prev_off
+                if st.st_size <= offset:
+                    drop_file_state[key] = (st.st_ino, st.st_size, st.st_mtime_ns, offset)
+                    continue
+                with path.open("rb") as fh:
+                    fh.seek(offset)
+                    chunk = fh.read()
+                last_nl = chunk.rfind(b"\n")
+                if last_nl < 0:
+                    continue
+                complete = chunk[: last_nl + 1]
+                new_offset = offset + len(complete)
+                drop_file_state[key] = (st.st_ino, st.st_size, st.st_mtime_ns, new_offset)
+                saw_placeholder = False
+                for raw_line in complete.splitlines():
+                    text = raw_line.decode("utf-8", "replace").strip()
+                    if not text:
+                        continue
+                    try:
+                        obj = json.loads(text)
+                    except ValueError:
+                        continue
+                    if not isinstance(obj, dict):
+                        continue
+                    if not self._is_eval_ready_record(obj):
+                        saw_placeholder = True
+                        continue
+                    fresh_records.append((side, obj))
+                placeholder_seen[side] = saw_placeholder
+
+            combined = pending_drop_records + fresh_records
+            pending_drop_records.clear()
+            if not combined:
+                return 0, done_present
+
+            by_side: dict[str, tuple[list[dict[str, Any]], list[str]]] = {s: ([], []) for s in sides}
+            for side, rec in combined:
+                step_key = side_to_step_key[side]
+                ck = _resolve_case_key(rec, step_key=step_key)
+                if not ck:
+                    pending_drop_records.append((side, rec))
+                    continue
+                if ck in ingested_keys[side]:
+                    continue
+                converted = self._normalize_dropped_trace(
+                    rec,
+                    run=run,
+                    side=side,
+                    step_key=step_key,
+                    task_id=task_id,
+                    fallback_case_key=ck,
+                    fallback_question=question_by_ck.get(ck, ""),
+                    session_info=session_map_cache.get((step_key, ck)),
+                )
+                by_side[side][0].append(converted)
+                by_side[side][1].append(ck)
+
+            added = 0
+            for side, (batch, batch_cks) in by_side.items():
+                if not batch:
+                    continue
+                ingest_callback(side, batch)
+                for ck in batch_cks:
+                    ingested_keys[side].add(ck)
+                added += len(batch)
+            if added > 0:
+                last_drop_activity_ts = time.monotonic()
+            return added, done_present
+
+        def _archive_judge_records(side: str, step_key: str, records: list[dict[str, Any]]) -> None:
+            archive_path = task_drop_dir / f"{task_id}_{step_key}_judge.jsonl"
+            new_lines: list[str] = []
+            for rec in records:
+                ck = _resolve_case_key(rec, step_key=step_key)
+                if not ck or ck in archived_keys[side]:
+                    continue
+                archived_keys[side].add(ck)
+                new_lines.append(json.dumps(rec, ensure_ascii=False, separators=(",", ":")))
+            if not new_lines:
+                return
+            archive_path.parent.mkdir(parents=True, exist_ok=True)
+            with archive_path.open("a", encoding="utf-8") as fh:
+                fh.write("\n".join(new_lines) + "\n")
+                fh.flush()
+
+        def _compute_tm_succeeded_counts(usable_items: list[dict[str, Any]]) -> dict[str, int]:
+            counts = {s: 0 for s in sides}
+            for item in usable_items:
+                skeys = set(item.get("success_keys") or [])
+                for side, step_key in side_to_step_key.items():
+                    if step_key in skeys or (item.get("status") == "completed" and not skeys):
+                        counts[side] += 1
+            return counts
+
+        def _pull_ready_judges(*, final_sweep: bool = False) -> tuple[int, bool, dict[str, int]]:
+            usable_items = _refresh_session_index()
+            tm_ok_counts = _compute_tm_succeeded_counts(usable_items)
+            drop_added, drop_done = _pull_drop_dir_files()
+            if judge_source == "drop_dir":
+                return drop_added, drop_done, tm_ok_counts
+
+            total_newly_ingested = drop_added
             ready_by_side: dict[str, list[tuple[str, str]]] = {s: [] for s in sides}
             for item in usable_items:
                 ck = _resolve_case_key(item)
@@ -758,9 +1050,6 @@ class TaskManagerCollectorAdapter(TraceCollectorAdapter):
                     continue
                 tm_cid = str(item.get("case_id") or "")
                 skeys = set(item.get("success_keys") or [])
-                for s_entry in item.get("session_index") or []:
-                    if isinstance(s_entry, dict) and s_entry.get("step"):
-                        session_map[(str(s_entry["step"]), ck)] = s_entry
                 for side, step_key in side_to_step_key.items():
                     if ck in ingested_keys[side]:
                         continue
@@ -768,24 +1057,22 @@ class TaskManagerCollectorAdapter(TraceCollectorAdapter):
                         ready_by_side[side].append((ck, tm_cid))
 
             def _ingest_judge_records(side: str, step_key: str, records: list[dict[str, Any]]) -> int:
-                agent_label = run["before_agent_label"] if side == "before" else run["after_agent_label"]
+                _archive_judge_records(side, step_key, records)
                 batch: list[dict[str, Any]] = []
                 batch_cks: list[str] = []
                 for rec in records:
-                    ck = _resolve_case_key(rec)
+                    ck = _resolve_case_key(rec, step_key=step_key)
                     if not ck or ck in ingested_keys[side]:
                         continue
-                    converted = judge_record_to_eval_trace(
+                    converted = self._normalize_dropped_trace(
                         rec,
-                        run_id=run_id,
+                        run=run,
                         side=side,
-                        version=version,
-                        agent_label=agent_label,
                         step_key=step_key,
                         task_id=task_id,
                         fallback_case_key=ck,
                         fallback_question=question_by_ck.get(ck, ""),
-                        session_info=session_map.get((step_key, ck)),
+                        session_info=session_map_cache.get((step_key, ck)),
                     )
                     batch.append(converted)
                     batch_cks.append(ck)
@@ -804,7 +1091,6 @@ class TaskManagerCollectorAdapter(TraceCollectorAdapter):
 
                 records: list[dict[str, Any]] = []
                 if not final_sweep and 1 <= len(newly_ready) <= 15:
-                    # Low-latency targeted pull while task is streaming
                     for ck, tm_cid in newly_ready:
                         q_term = tm_cid or f"{run_id}_{ck}"
                         recs, _ = client.download_judge(task_id, step_key, page=1, size=5, query=q_term)
@@ -815,7 +1101,6 @@ class TaskManagerCollectorAdapter(TraceCollectorAdapter):
                 added = _ingest_judge_records(side, step_key, records)
                 total_newly_ingested += added
 
-                # On final sweep, if items succeeded on TaskManager but judge_data was missing, regenerate once
                 if final_sweep and not gen_judge_triggered:
                     still_missing = [ck for ck, _ in newly_ready if ck not in ingested_keys[side]]
                     if still_missing:
@@ -840,10 +1125,13 @@ class TaskManagerCollectorAdapter(TraceCollectorAdapter):
                                 f"重造 judge 失败：{exc}",
                                 level="warn",
                             )
-            return total_newly_ingested
+            return total_newly_ingested, drop_done, tm_ok_counts
 
         recovery_round = 0
         consecutive_errors = 0
+        last_recovery_check_ts = time.monotonic()
+        last_recovery_sig: tuple[int, int, int] | None = None
+        stagnant_rounds = 0
         try:
             while True:
                 if cancel_check():
@@ -883,68 +1171,97 @@ class TaskManagerCollectorAdapter(TraceCollectorAdapter):
                     self._sleep_interruptible(min(poll_interval, 5.0), cancel_check)
                     continue
 
+                drop_done = False
+                tm_ok_counts = {s: 0 for s in sides}
                 try:
-                    _pull_ready_judges(final_sweep=False)
+                    _, drop_done, tm_ok_counts = _pull_ready_judges(final_sweep=False)
                 except Exception as exc:  # noqa: BLE001
                     self._emit_log(
                         log_event,
                         "fetch",
                         "task_manager_stream_pull_warn",
-                        f"流式拉取 judge 暂时异常（下轮重试）：{exc}",
+                        f"流式拉取 trace 暂时异常（下轮重试）：{exc}",
                         level="warn",
                     )
 
                 tm_status = str(task_info.get("status") or "").lower()
+                completed_cnt = int(task_info.get("completed_count") or 0)
                 partial_cnt = int(task_info.get("partial_count") or 0)
                 failed_cnt = int(task_info.get("failed_count") or 0)
 
                 if tm_status in ("completed", "failed"):
                     if (partial_cnt > 0 or failed_cnt > 0) and recovery_round < max_recovery and not cancel_check():
-                        recovery_round += 1
-                        try:
-                            rec = self._trigger_task_recovery(
-                                client,
-                                task_id,
-                                retry_recall_wait_sec=recall_wait,
-                                log_event=log_event,
-                            )
-                            self._emit_log(
-                                log_event,
-                                "fetch",
-                                "task_manager_auto_recovery",
-                                f"TaskManager 任务 {task_id} 第 {recovery_round}/{max_recovery} 轮自动恢复：{rec['actions']}",
-                                level="warn",
-                                details=rec,
-                            )
-                            if "start" in rec["actions"]:
-                                self._sleep_interruptible(min(poll_interval, 3.0), cancel_check)
-                                continue
-                            # retry-recall fixed everything without needing re-start; re-check status
-                            task_info = client.get_task(task_id)
-                            partial_cnt = int(task_info.get("partial_count") or 0)
-                            failed_cnt = int(task_info.get("failed_count") or 0)
-                        except Exception as exc:  # noqa: BLE001
-                            self._emit_log(
-                                log_event,
-                                "fetch",
-                                "task_manager_auto_recovery_failed",
-                                f"TaskManager 自动恢复失败（将进入收敛）：{exc}",
-                                level="warn",
-                            )
+                        cur_sig = (completed_cnt, partial_cnt, failed_cnt)
+                        if cur_sig == last_recovery_sig:
+                            stagnant_rounds += 1
+                        else:
+                            stagnant_rounds = 0
+                        last_recovery_sig = cur_sig
 
-                    # Final sweep for all sides
+                        if stagnant_rounds >= 2:
+                            self._emit_log(
+                                log_event,
+                                "fetch",
+                                "task_manager_recovery_stagnant",
+                                f"TaskManager 任务 {task_id} 连续 {stagnant_rounds} 轮无新增进展，终止自动补跑并进入收敛",
+                                level="warn",
+                                details={"completed": completed_cnt, "partial": partial_cnt, "failed": failed_cnt},
+                            )
+                        else:
+                            recovery_round += 1
+                            last_recovery_check_ts = time.monotonic()
+                            try:
+                                rec = self._trigger_task_recovery(
+                                    client,
+                                    task_id,
+                                    retry_recall_wait_sec=recall_wait,
+                                    log_event=log_event,
+                                )
+                                self._emit_log(
+                                    log_event,
+                                    "fetch",
+                                    "task_manager_auto_recovery",
+                                    f"TaskManager 任务 {task_id} 第 {recovery_round}/{max_recovery} 轮自动恢复：{rec['actions']}",
+                                    level="warn",
+                                    details=rec,
+                                )
+                                if "start" in rec["actions"]:
+                                    tm_finished_at = None
+                                    self._sleep_interruptible(min(poll_interval, 3.0), cancel_check)
+                                    continue
+                                task_info = client.get_task(task_id)
+                                partial_cnt = int(task_info.get("partial_count") or 0)
+                                failed_cnt = int(task_info.get("failed_count") or 0)
+                            except Exception as exc:  # noqa: BLE001
+                                self._emit_log(
+                                    log_event,
+                                    "fetch",
+                                    "task_manager_auto_recovery_failed",
+                                    f"TaskManager 自动恢复失败（将进入收敛）：{exc}",
+                                    level="warn",
+                                )
+
                     try:
-                        _pull_ready_judges(final_sweep=True)
+                        _, drop_done, tm_ok_counts = _pull_ready_judges(final_sweep=True)
                     except Exception as exc:  # noqa: BLE001
                         self._emit_log(
                             log_event,
                             "fetch",
                             "task_manager_final_pull_error",
-                            f"最终拉取 judge 失败：{exc}",
+                            f"最终拉取 trace 失败：{exc}",
                             level="error",
                         )
 
-                    # Record explicit per-case fetch failures for remaining missing/failed items
+                    if judge_source == "drop_dir":
+                        if tm_finished_at is None:
+                            tm_finished_at = time.monotonic()
+                        all_ingested = all(len(ingested_keys[s]) >= tm_ok_counts.get(s, 0) for s in sides)
+                        anchor_ts = max(tm_finished_at, last_drop_activity_ts)
+                        drop_timed_out = (time.monotonic() - anchor_ts) >= drop_wait_timeout
+                        if not all_ingested and not drop_done and not drop_timed_out and not cancel_check():
+                            self._sleep_interruptible(poll_interval, cancel_check)
+                            continue
+
                     try:
                         bad_items = client.iter_all_items(task_id, status="failed") + client.iter_all_items(
                             task_id, status="partial"
@@ -990,6 +1307,7 @@ class TaskManagerCollectorAdapter(TraceCollectorAdapter):
                                 "expected": expected_total,
                                 "tm_status": tm_status,
                                 "recovery_rounds_used": recovery_round,
+                                "task_drop_dir": str(task_drop_dir),
                             },
                         )
                     return
@@ -1012,6 +1330,49 @@ class TaskManagerCollectorAdapter(TraceCollectorAdapter):
                             },
                         )
                     return
+
+                # Periodic 15-minute progress check & recovery during running/paused
+                if (time.monotonic() - last_recovery_check_ts) >= recovery_interval:
+                    last_recovery_check_ts = time.monotonic()
+                    self._emit_log(
+                        log_event,
+                        "fetch",
+                        "task_manager_progress_check",
+                        f"定时巡检 TaskManager 任务 {task_id}（status={tm_status}, completed={completed_cnt}, partial={partial_cnt}, failed={failed_cnt}）",
+                        details={
+                            "task_id": task_id,
+                            "status": tm_status,
+                            "completed_count": completed_cnt,
+                            "partial_count": partial_cnt,
+                            "failed_count": failed_cnt,
+                            "active_count": int(task_info.get("active_count") or 0),
+                        },
+                    )
+                    if (partial_cnt > 0 or failed_cnt > 0) and recovery_round < max_recovery and not cancel_check():
+                        recovery_round += 1
+                        try:
+                            rec = self._trigger_task_recovery(
+                                client,
+                                task_id,
+                                retry_recall_wait_sec=recall_wait,
+                                log_event=log_event,
+                            )
+                            self._emit_log(
+                                log_event,
+                                "fetch",
+                                "task_manager_auto_recovery",
+                                f"巡检触发 TaskManager 任务 {task_id} 第 {recovery_round}/{max_recovery} 轮补缺重试：{rec['actions']}",
+                                level="warn",
+                                details=rec,
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            self._emit_log(
+                                log_event,
+                                "fetch",
+                                "task_manager_periodic_recovery_warn",
+                                f"巡检补缺重试触发跳过（运行中暂不支持或网络波动）：{exc}",
+                                level="warn",
+                            )
 
                 self._sleep_interruptible(poll_interval, cancel_check)
         except Exception as exc:  # noqa: BLE001
@@ -1146,7 +1507,7 @@ def create_collector_adapter(cfg: ServiceConfig) -> TraceCollectorAdapter:
 
 
 class RawDirTailer:
-    """Incrementally tails `.jsonl` files dropped into `98_service/raw_traces/<side>/`."""
+    """Incrementally tails `.jsonl` files dropped into `.work/raw_traces/<side>/`."""
 
     def __init__(self, raw_dir: Path):
         self.raw_dir = raw_dir

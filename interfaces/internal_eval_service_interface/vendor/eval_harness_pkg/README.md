@@ -13,6 +13,7 @@
 cp config.example.yaml config.yaml   # 填入 API 端点、输入路径、输出路径
 python prepare_eval.py -c config.yaml
 python run_eval.py -c config.yaml
+python human_read_eval.py -c config.yaml
 ```
 
 ## 最小配置（`config.yaml`）
@@ -37,7 +38,7 @@ prepare:
 将原始轨迹清洗为可直接评测的标准 JSONL：
 
 1. 自动读取 `.jsonl` / `.jsonl.gz` / `.jsonl.zst`（单文件或目录），去除 BOM、空行与非法行。
-2. 拆分多 trace session（可配置）、修复缺失的 `user_question`、从日期文件名或配置补齐 `batch_id`。
+2. 拆分多 trace session（可配置）、修复缺失的 `user_question`、对齐主仓库规则规范化单 trace 多轮过期/占位符/转录 dump 问句与内部 `--- ---` 包装块，并从日期文件名或配置补齐 `batch_id`。
 3. 复用内置评测引擎的准入校验规则过滤不合格样本，可选输出 `audit_output` 审计明细，并执行无损瘦身（`slim`）。
 
 常用参数：`--raw-input`、`--output`、`--audit`、`--no-slim`、`--verify`、`--fail-on-reject`。
@@ -50,6 +51,12 @@ prepare:
 
 常用参数：`--limit N`（冒烟测试）、`--concurrency N`、`--no-resume`、`--fail-on-reject`、`-q`。
 
+## 后置人话翻译（`human_read_eval.py`）
+
+- 完全后置、零侵入原评测输出文件；默认读取 `output`（及可选 `execution.compact_output`）并结合 `input` 生成镜像翻译结果与 `.state/state.sqlite3`（WAL 索引）到 `<output_dir>/human_read`（可通过 `human_read.output_root` 指定）。
+- 可单独在 `config.yaml` 的 `human_read:` 段配置便宜高速模型（默认使用 `openai-completions` 协议，也可通过 `human_read.api` 切换为 `openai-responses`），也可直接继承顶层 `api:`；支持目录模式（`human_read.source_dir` + `human_read.input_dir`）。
+- 常用参数：`--limit N`、`--workers N`、`--rpm N`、`--retry-failed`、`--status`、`-q`。
+
 ## 移植与其他项目集成
 
 **方式一：直接复制整个目录**
@@ -59,14 +66,16 @@ prepare:
 **方式二：作为 Python 包安装或导入**
 
 ```bash
-pip install ./eval_harness_pkg          # 安装后亦可使用 eval-prepare / eval-run 命令
+pip install ./eval_harness_pkg          # 安装后亦可使用 eval-prepare / eval-run / eval-human-read 命令
 ```
 
 ```python
-from eval_harness import prepare_eval, run_eval
+from eval_harness import prepare_eval, run_eval, human_read_eval, human_read_status
 
 prep_report = prepare_eval("config.yaml")
 eval_summary = run_eval("config.yaml", limit=20)
+hr_summary = human_read_eval("config.yaml")
+hr_counts = human_read_status("config.yaml")
 ```
 
 也可直接传 `dict` 作为配置，无需落盘 YAML 文件。

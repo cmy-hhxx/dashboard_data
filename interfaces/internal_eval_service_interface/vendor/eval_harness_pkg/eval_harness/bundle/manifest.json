@@ -1,10 +1,11 @@
 {
-  "evaluatorVersion": "r532",
+  "evaluatorVersion": "r533",
+  "humanReadPromptVersion": "v1.3",
   "identity": {
     "engine": "pi",
     "version": "1.4.0",
     "commit": "4a080252f06caf63a525d7873c5d94d3c23887e0",
     "buildId": "10a59bb4-e0d4-42b1-9ef7-c3684f0b7611"
   },
-  "builtAt": "2026-11-23T14:17:32.365Z"
+  "builtAt": "2026-11-26T08:13:38.731Z"
 }

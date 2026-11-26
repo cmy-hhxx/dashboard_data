@@ -26,10 +26,10 @@ from pathlib import Path
 from typing import Any
 
 from .ab_layout import (
-    SCOPE_DIR_BY_SIDE,
+    INPUT_FILENAME,
+    SIDE_DIR,
     allocate_round_dir,
     init_round_layout,
-    sync_cluster_slice_alias,
     sync_round_manifests,
 )
 from .bench_sampler import sample_bench_targets, write_targets_and_dispatch_files
@@ -221,7 +221,7 @@ class PipelineManager:
             raise ValueError("callback_url 必须是有效的 http(s) URL")
 
         run_id = _generate_run_id()
-        round_order, round_dir_name, round_dir = allocate_round_dir(self.cfg.ab_test_root, version)
+        round_order, round_dir_name, round_dir = allocate_round_dir(self.cfg.ab_test_root, version, model)
 
         meta_payload = dict(payload["meta"]) if isinstance(payload.get("meta"), dict) else {}
         if isinstance(payload.get("task_manager"), dict):
@@ -296,7 +296,7 @@ class PipelineManager:
             raise ValueError(f"side={side!r} 不在本次任务 sides={run['sides']} 中")
 
         round_dir = Path(run["round_dir_path"])
-        raw_dir = round_dir / "98_service" / "raw_traces" / side
+        raw_dir = round_dir / ".work" / "raw_traces" / side
         raw_dir.mkdir(parents=True, exist_ok=True)
         store_file = raw_dir / f"_accepted_{side}.jsonl"
         target_map = self.store.get_target_map(run_id)
@@ -374,6 +374,24 @@ class PipelineManager:
                     meta.setdefault("question_text", target["question"])
                     meta.setdefault("agent_name", agent_label)
                     normalized["meta"] = meta
+                    if isinstance(normalized.get("traces"), list) and normalized["traces"]:
+                        new_traces: list[Any] = []
+                        for tr in normalized["traces"]:
+                            if isinstance(tr, dict):
+                                tr_copy = dict(tr)
+                                tr_meta = dict(tr_copy.get("meta")) if isinstance(tr_copy.get("meta"), dict) else {}
+                                tr_meta["case_id"] = canonical_case_id
+                                tr_meta["case_key"] = case_key
+                                tr_meta.setdefault("trace_id", trace_id)
+                                tr_meta.setdefault("session_id", session_id)
+                                tr_meta.setdefault("request_time", req_time)
+                                tr_meta.setdefault("question", target["question"])
+                                tr_meta.setdefault("question_text", target["question"])
+                                tr_copy["meta"] = tr_meta
+                                new_traces.append(tr_copy)
+                            else:
+                                new_traces.append(tr)
+                        normalized["traces"] = new_traces
 
                     is_new = self.store.mark_fetched(
                         run_id,
@@ -579,7 +597,7 @@ class PipelineManager:
                 before_agent=run["before_agent"],
                 after_agent=run["after_agent"],
                 targets=targets,
-                targets_jsonl_path=layout["targets"] / "questions.jsonl",
+                targets_jsonl_path=layout["bench"] / "bench.jsonl",
                 dispatch_dir=layout["dispatch"],
                 split_mode=self.cfg.collector_dispatch_split,
             )
@@ -780,8 +798,11 @@ class PipelineManager:
                         )
                 break
 
-            # Upstream silence timeout check
-            if any_pending_fetch and (time.monotonic() - last_activity_ts) >= self.cfg.collector_silence_timeout_sec:
+            # Upstream silence timeout check (suppressed while collector like TaskManager is actively polling)
+            collector_active = bool(self.collector.is_active(run_id))
+            if collector_active:
+                last_activity_ts = time.monotonic()
+            elif any_pending_fetch and (time.monotonic() - last_activity_ts) >= self.cfg.collector_silence_timeout_sec:
                 for side in live_sides:
                     leftovers = self.store.get_side_cases(run_id, side=side, statuses=("pending_fetch",))
                     if leftovers:
@@ -813,7 +834,7 @@ class PipelineManager:
             self._finish_cancelled(run_id)
             return
 
-        # ---- Stage 6: Finalize (final auto_leaf cluster + manifest sync) ----
+        # ---- Stage 6: Finalize (final auto_leaf cluster + human_read + manifest sync) ----
         self.store.update_run(run_id, status="finalizing", stage="finalizing")
         for side in live_sides:
             self._maybe_cluster_side(
@@ -826,6 +847,7 @@ class PipelineManager:
                 force=True,
                 allow_auto_leaf=self.cfg.cluster_final_auto_leaf,
             )
+            self._run_human_read_side(run_id=run_id, side=side, round_dir=round_dir)
 
         self._refresh_manifests(run_id)
         prog = self.store.get_run_progress(run_id)
@@ -926,11 +948,12 @@ class PipelineManager:
         run = self.store.get_run(run_id)
         assert run is not None
         want_keys = {c["case_key"] for c in cases}
-        raw_sink = round_dir / "98_service" / "raw_traces" / side / f"_accepted_{side}.jsonl"
-        batch_raw = round_dir / "98_service" / "raw_traces" / side / f"prepare_batch_{batch_no:04d}.jsonl"
-        scope_dir = SCOPE_DIR_BY_SIDE[side]
-        prepared_out = round_dir / scope_dir / "inputs" / model / f"prepared_{batch_no:04d}.jsonl"
-        audit_out = round_dir / "98_service" / "audit" / side / f"prepare_audit_{batch_no:04d}.jsonl"
+        raw_sink = round_dir / ".work" / "raw_traces" / side / f"_accepted_{side}.jsonl"
+        batch_raw = round_dir / ".work" / "raw_traces" / side / f"prepare_batch_{batch_no:04d}.jsonl"
+        side_dir = round_dir / SIDE_DIR[side]
+        prepared_out = round_dir / ".work" / "prepared" / side / f"prepared_{batch_no:04d}.jsonl"
+        canonical_input = side_dir / INPUT_FILENAME[side]
+        audit_out = round_dir / ".work" / "audit" / side / f"prepare_audit_{batch_no:04d}.jsonl"
 
         # Extract the exact subset of raw lines for this batch
         matched_records: dict[str, dict[str, Any]] = {}
@@ -988,21 +1011,28 @@ class PipelineManager:
             )
             return
 
-        # Identify which case_keys made it into prepared_out
+        # Identify which case_keys made it into prepared_out and append to canonical res_{before,after}_opt.jsonl
         accepted_keys: set[str] = set()
         if prepared_out.is_file():
+            accepted_lines: list[str] = []
             with prepared_out.open("r", encoding="utf-8", errors="replace") as fh:
                 for line in fh:
-                    line = line.strip()
-                    if not line:
+                    stripped = line.strip()
+                    if not stripped:
                         continue
                     try:
-                        obj = json.loads(line)
+                        obj = json.loads(stripped)
                     except ValueError:
                         continue
                     ck = extract_case_key(obj)
                     if ck in matched_records:
                         accepted_keys.add(ck)
+                        accepted_lines.append(stripped)
+            if accepted_lines:
+                canonical_input.parent.mkdir(parents=True, exist_ok=True)
+                with self._get_ingest_lock(run_id):
+                    with canonical_input.open("a", encoding="utf-8") as cfh:
+                        cfh.write("\n".join(accepted_lines) + "\n")
 
         for ck in accepted_keys:
             self.store.mark_prepared(run_id, side, ck, prepared_file=str(prepared_out))
@@ -1064,9 +1094,10 @@ class PipelineManager:
     ) -> None:
         run = self.store.get_run(run_id)
         assert run is not None
-        scope_dir = SCOPE_DIR_BY_SIDE[side]
-        attr_path = round_dir / scope_dir / "attribution" / model / f"{model}_attribution-{run['version']}.jsonl"
-        eval_audit = round_dir / "98_service" / "audit" / side / "eval_audit.jsonl"
+        side_dir = round_dir / SIDE_DIR[side]
+        attr_path = side_dir / "eval_output" / "attribution.jsonl"
+        compact_path = side_dir / "eval_output" / "compact.jsonl"
+        eval_audit = round_dir / ".work" / "audit" / side / "eval_audit.jsonl"
 
         # Group by prepared_file (usually 1 file per batch)
         by_file: dict[str, list[dict[str, Any]]] = {}
@@ -1145,6 +1176,7 @@ class PipelineManager:
                 self.engine.evaluate_streaming(
                     input_path=Path(prepared_file),
                     output_path=attr_path,
+                    compact_output=compact_path,
                     audit_path=eval_audit,
                     batch_id=run["version"],
                     version=agent_label,
@@ -1224,19 +1256,19 @@ class PipelineManager:
         if not should_flush:
             return False
 
-        scope_dir = SCOPE_DIR_BY_SIDE[side]
-        attr_dir = round_dir / scope_dir / "attribution" / model
-        tree_dir = round_dir / scope_dir / "cluster_tree" / model
-        shared_tax_dir = round_dir / "98_service" / "taxonomy"
+        side_dir = round_dir / SIDE_DIR[side]
+        attr_file = side_dir / "eval_output" / "attribution.jsonl"
+        tree_dir = side_dir / "cluster"
+        shared_tax_dir = round_dir / ".work" / "taxonomy"
 
-        if not attr_dir.is_dir() or not any(attr_dir.glob("*.jsonl")):
+        if not attr_file.is_file() or attr_file.stat().st_size == 0:
             return False
 
         tax_lock = self._get_taxonomy_lock(run_id)
         with tax_lock:
             try:
                 res = self.engine.cluster_incremental(
-                    attribution_input=attr_dir,
+                    attribution_input=attr_file,
                     tree_dir=tree_dir,
                     shared_taxonomy_dir=shared_tax_dir,
                     allow_auto_leaf=allow_auto_leaf,
@@ -1257,7 +1289,6 @@ class PipelineManager:
                 )
                 return False
 
-        sync_cluster_slice_alias(tree_dir)
         assignments: dict[str, dict[int, dict[str, Any]]] = res.get("assignments") or {}
         leaf_names: dict[str, str] = res.get("leaf_names") or {}
 
@@ -1312,6 +1343,44 @@ class PipelineManager:
         if newly_ready > 0:
             self._on_new_ready_trace(run_id)
         return True
+
+    def _run_human_read_side(self, *, run_id: str, side: str, round_dir: Path) -> None:
+        side_dir = round_dir / SIDE_DIR[side]
+        input_path = side_dir / INPUT_FILENAME[side]
+        eval_dir = side_dir / "eval_output"
+        attr_file = eval_dir / "attribution.jsonl"
+        hr_output = eval_dir / "attribution_human_read.jsonl"
+        compact_file = eval_dir / "compact.jsonl"
+        work_dir = round_dir / ".work" / "human_read" / side
+
+        if not attr_file.is_file() or attr_file.stat().st_size == 0:
+            return
+        try:
+            summary = self.engine.human_read(
+                input_path=input_path,
+                attribution_path=attr_file,
+                output_path=hr_output,
+                work_dir=work_dir,
+                compact_path=compact_file if compact_file.is_file() else None,
+            )
+            if not summary.get("skipped"):
+                self.store.add_event(
+                    run_id,
+                    "human_read",
+                    "human_read_done",
+                    f"{side} 人话归因翻译完成（copied={bool(summary.get('copied'))}）",
+                    side=side,
+                    details=summary,
+                )
+        except Exception as exc:  # noqa: BLE001
+            self.store.add_event(
+                run_id,
+                "human_read",
+                "human_read_warn",
+                f"{side} 人话归因翻译失败（不影响主评测收敛）：{exc}",
+                level="warn",
+                side=side,
+            )
 
     def _on_new_ready_trace(self, run_id: str) -> None:
         self._refresh_manifests(run_id)

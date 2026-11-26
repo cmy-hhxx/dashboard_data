@@ -13,6 +13,7 @@ dependencies = []
 [project.scripts]
 eval-prepare = "eval_harness.cli:prepare_main"
 eval-run = "eval_harness.cli:run_main"
+eval-human-read = "eval_harness.cli:human_read_main"
 
 [tool.setuptools.packages.find]
 include = ["eval_harness*"]

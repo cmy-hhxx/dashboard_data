@@ -34,6 +34,7 @@ class FakeStreamingEngine(EngineBackend):
         self.reject_prepare_keys: set[str] = set()
         self.gold_keys: set[str] = {"eq_00001"}
         self.cluster_calls: list[dict[str, Any]] = []
+        self.human_read_calls: list[dict[str, Any]] = []
         self.eval_delay_sec: float = 0.01
 
     def prepare(
@@ -83,8 +84,11 @@ class FakeStreamingEngine(EngineBackend):
         on_row: Callable[[dict[str, Any]], None],
         on_case_error: Callable[[str, str], None],
         cancel_check: Callable[[], bool],
+        compact_output: Path | None = None,
     ) -> dict[str, Any]:
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        if compact_output is not None:
+            compact_output.parent.mkdir(parents=True, exist_ok=True)
         rows = [json.loads(l) for l in input_path.read_text(encoding="utf-8").splitlines() if l.strip()]
         completed = 0
         failed = 0
@@ -190,6 +194,29 @@ class FakeStreamingEngine(EngineBackend):
             "assignments": assignments,
             "leaf_names": leaf_names,
         }
+
+    def human_read(
+        self,
+        *,
+        input_path: Path,
+        attribution_path: Path,
+        output_path: Path,
+        work_dir: Path,
+        compact_path: Path | None = None,
+    ) -> dict[str, Any]:
+        work_dir.mkdir(parents=True, exist_ok=True)
+        if not attribution_path.is_file() or attribution_path.stat().st_size == 0:
+            return {"skipped": True}
+        rows = [json.loads(l) for l in attribution_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("w", encoding="utf-8") as fh:
+            for row in rows:
+                translated = json.loads(json.dumps(row))
+                for turn in translated.get("turns") or []:
+                    turn["summary"] = f"[人话] {turn.get('summary') or ''}"
+                fh.write(json.dumps(translated, ensure_ascii=False) + "\n")
+        self.human_read_calls.append({"output_path": str(output_path), "rows": len(rows)})
+        return {"copied": True, "translated": len(rows), "output_path": str(output_path)}
 
 
 def _http_json(url: str, method: str = "GET", body: dict[str, Any] | None = None, headers: dict[str, str] | None = None) -> tuple[int, dict[str, Any]]:
@@ -434,6 +461,40 @@ class PipelineE2ETests(unittest.TestCase):
                 # Paired ready count should now be 3 (eq_00001, eq_00002, eq_00005)
                 cmp_after_retry = _http_json(f"{base_url}/runs/{run_id}/compare")[1]["data"]
                 self.assertEqual(cmp_after_retry["paired_summary"]["paired_ready_count"], 3)
+
+                # Verify canonical layout on disk is directly consumable by dashboard/ab_test.py & ab_detail.py
+                run_info_final = _http_json(f"{base_url}/runs/{run_id}")[1]["data"]
+                rdir = Path(run_info_final["round_dir_path"])
+                self.assertTrue((rdir / "bench" / "bench.jsonl").is_file())
+                self.assertTrue((rdir / "agent_before_opt" / "res_before_opt.jsonl").is_file())
+                self.assertTrue((rdir / "agent_after_opt" / "res_after_opt.jsonl").is_file())
+                self.assertTrue((rdir / "agent_before_opt" / "eval_output" / "attribution.jsonl").is_file())
+                self.assertTrue((rdir / "agent_after_opt" / "eval_output" / "attribution.jsonl").is_file())
+                self.assertTrue((rdir / "index_stats" / "meta.json").is_file())
+                self.assertTrue((rdir / "index_stats" / "pairs_index.csv").is_file())
+                self.assertTrue((rdir / "index_stats" / "stats.json").is_file())
+                dash_dir = ROOT.parent.parent / "dashboard"
+                if dash_dir.is_dir():
+                    if str(dash_dir) not in sys.path:
+                        sys.path.insert(0, str(dash_dir))
+                    import ab_test as dash_ab  # type: ignore
+                    import ab_detail as dash_ab_detail  # type: ignore
+
+                    ds_root = rdir.parent.parent.parent
+                    payload = dash_ab.ab_payload(ds_root, "aime")
+                    self.assertIsNotNone(payload)
+                    self.assertEqual(len(payload["rounds"]), 1)
+                    rnd = payload["rounds"][0]
+                    self.assertEqual(rnd["before_label"], "aime-old")
+                    self.assertEqual(rnd["after_label"], "aime-new")
+                    self.assertEqual(len(rnd["pairs"]), 3)
+                    builder = dash_ab_detail.ABDetailBuilder(
+                        ds_root, ds_root / ".cache", ds_root / ".ab_samples"
+                    )
+                    b1 = builder.ensure(rdir.name, "before-1")
+                    a1 = builder.ensure(rdir.name, "after-1")
+                    self.assertTrue(b1 is not None and b1.is_file())
+                    self.assertTrue(a1 is not None and a1.is_file())
             finally:
                 app.pipeline.stop()
                 srv.shutdown()
@@ -475,8 +536,8 @@ class PipelineE2ETests(unittest.TestCase):
                 # Historical before should already have 3 ready traces!
                 self.assertEqual(run_data["sides_detail"]["before"]["ready"], 3)
 
-                # Drop 1 trace file directly into 98_service/raw_traces/after/ (FileDrop mode)
-                after_raw_dir = Path(run_data["round_dir_path"]) / "98_service" / "raw_traces" / "after"
+                # Drop 1 trace file directly into .work/raw_traces/after/ (FileDrop mode)
+                after_raw_dir = Path(run_data["round_dir_path"]) / ".work" / "raw_traces" / "after"
                 (after_raw_dir / "part_01.jsonl").write_text(
                     json.dumps(_make_trace(run_id, "after", "eq_00001", "Target question 0")) + "\n",
                     encoding="utf-8",

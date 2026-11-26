@@ -3,10 +3,8 @@
 Reads frozen stratified tier files from:
     <bench_root>/<model>/tier_<tier>.jsonl
 
-Assigns stable pairing keys (`eq_00001`..`eq_NNNNN`), writes the dashboard-
-compatible `01_targets/questions.jsonl`, and writes structured dispatch JSONLs
-under `98_service/dispatch/` (by default two files: `before_questions.jsonl` and
-`after_questions.jsonl`, with configurable `by_turn` / `both` split support).
+Assigns stable pairing keys (`eq_00001`..`eq_NNNNN`), writes `bench/bench.jsonl`,
+and writes structured dispatch JSONLs under `.work/dispatch/`.
 """
 
 from __future__ import annotations
@@ -167,6 +165,8 @@ def sample_bench_targets(
                     "bench_seed": str(bench_info.get("seed") or ""),
                     "bench_severity": sev,
                     "bench_primary": row.get("primary") if isinstance(row.get("primary"), dict) else {},
+                    "task": str(meta.get("task_category") or row.get("task_category") or "").strip(),
+                    "subtask": str(meta.get("subtask_category") or row.get("subtask_category") or "").strip(),
                     "history_messages": history_messages,
                 }
             )
@@ -203,20 +203,11 @@ def write_targets_and_dispatch_files(
     dispatch_dir: Path,
     split_mode: str = "by_side",
 ) -> dict[str, str]:
-    """Write `01_targets/questions.jsonl` and colleague dispatch JSONL files.
-
-    Returns a dict of logical dispatch keys -> absolute file paths.
-    Default (`by_side`) creates two JSONL files:
-      - `before_questions.jsonl`
-      - `after_questions.jsonl`
-    When `split_mode` is `by_turn` or `both`, also creates:
-      - `single_turn.jsonl`
-      - `multi_turn.jsonl`
-    """
+    """Write `bench/bench.jsonl` and colleague dispatch JSONL files."""
     targets_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
     dispatch_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Dashboard-compatible 01_targets/questions.jsonl
+    # 1. Canonical bench/bench.jsonl
     with targets_jsonl_path.open("w", encoding="utf-8") as fh:
         for t in targets:
             row = {
@@ -229,6 +220,8 @@ def write_targets_and_dispatch_files(
                 "mode": "fast" if "fast" in model else "expert",
                 "model": model,
                 "question": t["question"],
+                "task": t.get("task", ""),
+                "subtask": t.get("subtask", ""),
                 "turn": t["turn"],
                 "session_round": t["session_round"],
                 "severity": t["bench_severity"],

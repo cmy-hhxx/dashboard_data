@@ -2,10 +2,9 @@
 
 面向外部业务方的**内部评测与聚类自动化服务接口**，挂载于弗吉尼亚 `5003` 端口（`/api/v1/internal-eval/*`），串联：
 
-1. **Bench 抽题**：从 `/mnt/aime_eval_ssd/3_dynamic_bench/<model>/tier_<N>.jsonl`（`500 / 1000 / 5000 / 10000`）取题，产出看板兼容的 `01_targets/questions.jsonl` 与发给拉数同事的两份下发 JSONL（`before_questions.jsonl`、`after_questions.jsonl`）；
-2. **可插拔数据拉取适配**：`TraceCollectorAdapter` 支持 `task_manager`（直连 TaskManager `http://10.217.216.85:8888/api/v1/task` 触发推理、轮询、恢复与取消；⚠️ **已知缺口**：TaskManager 返回的 `judge_data` 不含完整异步 Litefusion 数据、不符合标准评测输入口径，待内部 Litefusion 异步拉数走通后将取数步替换为按 `session_id`/`trace_id` 拉取标准 Litefusion trace，详见 `docs/拉数同事接口契约.md` §0）、`file_drop`（目录投递）、`http`（自定义异步派单）与 `mock`（联调测试）；
-3. **清洗 + 流式归因评测**：内置 vendor 的 `eval_harness_pkg`（`prepare_eval` + 流式 tail `engine.mjs evaluate`）；
-4. **微批增量聚类 + 实时供数**：内置 vendor 的 `cluster_pkg`；无问题 trace（`GOLD`）评完即 `ready`，有问题 trace 首条立即聚类、后续按微批窗口增量聚类并实时更新 `/results`、`/results/changes`、`/compare` 与 `ab_test` 目录。
+1. **Bench 抽题**：从 `/mnt/aime_eval_ssd/3_dynamic_bench/<model>/tier_<N>.jsonl`（`500 / 1000 / 5000 / 10000`）取题，产出 `version_{YYYYMMDD}_aime_{expert|fast}/bench/bench.jsonl`（严格日期+模型命名，同日同模型已存在返回 `409`）与 `.work/dispatch/` 下发文件；
+2. **可插拔数据拉取适配**：`TraceCollectorAdapter` 支持 `task_manager`（复制模板 `2740e85cb7b34909`，命名 `AIME_RSI_ABTEST_{YYYYMMDD-HHMMSS}`、不设 `limit`，在 `<round_dir>/<task_id>/` 创建落盘目录并消费顶层加工后 `{step}.jsonl`、忽略 `raw/` 与 `judge_data`，默认每 15 分钟巡检补缺重试）、`file_drop`、`http` 与 `mock`；
+3. **清洗 + 流式评测 + 人话 + 聚类**：内置 `eval_harness_pkg`（`prepare_eval` → `engine.mjs evaluate` → 后置 `human_read_eval` 生成 `attribution_human_read.jsonl`）与 `cluster_pkg` v4.6.0；无问题 trace（`GOLD`）评完即 `ready`，有问题 trace 首条立即聚类并按微批窗口增量供数。
 
 ## 目录结构
 
@@ -42,7 +41,11 @@ export INTERNAL_EVAL_CLUSTER_REASONING=none
 export INTERNAL_EVAL_COLLECTOR_MODE=task_manager
 export INTERNAL_EVAL_TASK_MANAGER_BASE_URL=http://10.217.216.85:8888/api/v1/task
 export INTERNAL_EVAL_TASK_MANAGER_USER_ID=<白名单用户>
-export INTERNAL_EVAL_TASK_MANAGER_CONCURRENCY=10
+export INTERNAL_EVAL_TASK_MANAGER_TEMPLATE_TASK_ID=2740e85cb7b34909
+export INTERNAL_EVAL_TASK_MANAGER_RECOVERY_INTERVAL_SEC=900
+export INTERNAL_EVAL_TASK_MANAGER_JUDGE_SOURCE=drop_dir
+export INTERNAL_EVAL_TASK_MANAGER_DROP_WAIT_TIMEOUT_SEC=3600
+export INTERNAL_EVAL_HUMAN_READ_ENABLED=true
 export INTERNAL_EVAL_DISPATCH_SPLIT=by_side
 export INTERNAL_EVAL_PAGE_BASE_URL=http://10.217.219.2:2476
 ```

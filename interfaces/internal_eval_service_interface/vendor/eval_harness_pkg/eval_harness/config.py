@@ -84,12 +84,44 @@ class ExecutionConfig:
 
 
 @dataclass(frozen=True)
+class HumanReadConfig:
+    output_root: Path | None = None
+    base_url: str | None = None
+    model: str | None = None
+    api_key: str | None = None
+    api_key_env: str | None = None
+    api: str | None = None
+    attribution_input: Path | None = None
+    compact_input: Path | None = None
+    eval_input: Path | None = None
+    source_dir: Path | None = None
+    input_dir: Path | None = None
+    ab_root: Path | None = None
+    rel_prefix: str | None = None
+    models: tuple[str, ...] = ()
+    dates: tuple[str, ...] = ()
+    kinds: tuple[str, ...] = ("attribution", "compact")
+    workers: int = 8
+    target_rpm: int = 40
+    temperature: float = 0.15
+    max_tokens: int = 16384
+    timeout_seconds: int = 180
+    max_retries: int = 8
+    problem_batch_size: int = 3
+    compact_batch_size: int = 12
+    limit: int | None = None
+    retry_failed: bool = False
+    runtime_config: Path | None = None
+
+
+@dataclass(frozen=True)
 class EvalConfig:
     input_path: Path
     output_path: Path
     api: ApiConfig | None = None
     prepare: PrepareConfig = field(default_factory=PrepareConfig)
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
+    human_read: HumanReadConfig = field(default_factory=HumanReadConfig)
     config_path: Path | None = None
 
 
@@ -254,6 +286,26 @@ def _validate_url(url: str) -> str:
     return url.rstrip("/")
 
 
+def _str_tuple(value: Any, name: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        items = [s.strip() for s in value.split(",") if s.strip()]
+        return tuple(items)
+    if isinstance(value, (list, tuple)):
+        items = [str(item).strip() for item in value if str(item).strip()]
+        return tuple(items)
+    raise ValueError(f"{name} must be a list of strings")
+
+
+def _positive_float(value: Any, name: str, default: float, minimum: float = 0.0) -> float:
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or float(value) < minimum:
+        raise ValueError(f"{name} must be a number >= {minimum}")
+    return float(value)
+
+
 def load_config(
     source: str | Path | dict[str, Any],
     *,
@@ -400,11 +452,57 @@ def load_config(
         audit_output=eval_audit,
     )
 
+    hr_raw = data.get("human_read") if isinstance(data.get("human_read"), dict) else {}
+    hr_base_url_raw = str(hr_raw.get("base_url") or "").strip() or None
+    if hr_base_url_raw is not None:
+        hr_base_url_raw = _validate_url(hr_base_url_raw)
+    hr_api_raw = str(hr_raw.get("api") or "").strip() or None
+    if hr_api_raw is not None and hr_api_raw not in ("openai-completions", "openai-responses"):
+        raise ValueError("human_read.api must be 'openai-completions' or 'openai-responses'")
+    hr_kinds = _str_tuple(hr_raw.get("kinds"), "human_read.kinds") or ("attribution", "compact")
+    for k in hr_kinds:
+        if k not in ("attribution", "compact"):
+            raise ValueError(f"human_read.kinds contains invalid entry {k!r}; expected attribution or compact")
+    hr_limit = hr_raw.get("limit")
+    if hr_limit is not None:
+        hr_limit = _positive_int(hr_limit, "human_read.limit", 1)
+
+    human_read_cfg = HumanReadConfig(
+        output_root=_resolve_path(hr_raw.get("output_root"), anchor),
+        base_url=hr_base_url_raw,
+        model=str(hr_raw.get("model") or "").strip() or None,
+        api_key=str(hr_raw["api_key"]).strip() or None if hr_raw.get("api_key") is not None else None,
+        api_key_env=str(hr_raw["api_key_env"]).strip() or None if hr_raw.get("api_key_env") is not None else None,
+        api=hr_api_raw,
+        attribution_input=_resolve_path(hr_raw.get("attribution_input"), anchor),
+        compact_input=_resolve_path(hr_raw.get("compact_input"), anchor),
+        eval_input=_resolve_path(hr_raw.get("eval_input"), anchor),
+        source_dir=_resolve_path(hr_raw.get("source_dir"), anchor),
+        input_dir=_resolve_path(hr_raw.get("input_dir"), anchor),
+        ab_root=_resolve_path(hr_raw.get("ab_root"), anchor),
+        rel_prefix=str(hr_raw.get("rel_prefix") or "").strip() or None,
+        models=_str_tuple(hr_raw.get("models"), "human_read.models"),
+        dates=_str_tuple(hr_raw.get("dates"), "human_read.dates"),
+        kinds=hr_kinds,
+        workers=_positive_int(hr_raw.get("workers"), "human_read.workers", 8),
+        target_rpm=_positive_int(hr_raw.get("target_rpm"), "human_read.target_rpm", 40, minimum=0),
+        temperature=_positive_float(hr_raw.get("temperature"), "human_read.temperature", 0.15, minimum=0.0),
+        max_tokens=_positive_int(hr_raw.get("max_tokens"), "human_read.max_tokens", 16384),
+        timeout_seconds=_positive_int(hr_raw.get("timeout_seconds"), "human_read.timeout_seconds", 180),
+        max_retries=_positive_int(hr_raw.get("max_retries"), "human_read.max_retries", 8, minimum=0),
+        problem_batch_size=_positive_int(hr_raw.get("problem_batch_size"), "human_read.problem_batch_size", 3),
+        compact_batch_size=_positive_int(hr_raw.get("compact_batch_size"), "human_read.compact_batch_size", 12),
+        limit=hr_limit,
+        retry_failed=bool(hr_raw.get("retry_failed", False)),
+        runtime_config=_resolve_path(hr_raw.get("runtime_config"), anchor),
+    )
+
     return EvalConfig(
         input_path=input_path,
         output_path=output_path,
         api=api_cfg,
         prepare=prepare_cfg,
         execution=execution_cfg,
+        human_read=human_read_cfg,
         config_path=config_path,
     )

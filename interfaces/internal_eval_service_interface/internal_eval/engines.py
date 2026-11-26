@@ -54,11 +54,14 @@ def extract_case_key(record: dict[str, Any]) -> str | None:
         container = record.get(container_key)
         if isinstance(container, dict):
             candidates.extend([container.get("case_key"), container.get("case_id")])
-    turns = record.get("turns")
-    if isinstance(turns, list) and turns and isinstance(turns[0], dict):
-        tmeta = turns[0].get("meta")
-        if isinstance(tmeta, dict):
-            candidates.extend([tmeta.get("case_key"), tmeta.get("case_id")])
+    for list_key in ("turns", "traces"):
+        entries = record.get(list_key)
+        if isinstance(entries, list):
+            for entry in entries[:1]:
+                if isinstance(entry, dict):
+                    emeta = entry.get("meta")
+                    if isinstance(emeta, dict):
+                        candidates.extend([emeta.get("case_key"), emeta.get("case_id")])
     for val in candidates:
         if not val:
             continue
@@ -74,9 +77,12 @@ def extract_trace_identity(record: dict[str, Any]) -> tuple[str, str, str]:
     smeta = record.get("session_meta") if isinstance(record.get("session_meta"), dict) else {}
     turns = record.get("turns") if isinstance(record.get("turns"), list) else []
     tmeta = turns[0].get("meta") if turns and isinstance(turns[0], dict) and isinstance(turns[0].get("meta"), dict) else {}
+    traces = record.get("traces") if isinstance(record.get("traces"), list) else []
+    trmeta = traces[0].get("meta") if traces and isinstance(traces[0], dict) and isinstance(traces[0].get("meta"), dict) else {}
 
     trace_id = str(
         tmeta.get("trace_id")
+        or trmeta.get("trace_id")
         or record.get("trace_id")
         or meta.get("trace_id")
         or smeta.get("trace_id")
@@ -86,6 +92,7 @@ def extract_trace_identity(record: dict[str, Any]) -> tuple[str, str, str]:
         smeta.get("session_id")
         or meta.get("session_id")
         or record.get("session_id")
+        or trmeta.get("session_id")
         or tmeta.get("session_id")
         or ""
     ).strip()
@@ -93,6 +100,9 @@ def extract_trace_identity(record: dict[str, Any]) -> tuple[str, str, str]:
         smeta.get("request_time")
         or meta.get("request_time")
         or record.get("request_time")
+        or trmeta.get("request_time")
+        or trmeta.get("timestamp")
+        or meta.get("timestamp")
         or tmeta.get("request_time")
         or ""
     ).strip()
@@ -161,6 +171,7 @@ class EngineBackend:
         on_row: Callable[[dict[str, Any]], None],
         on_case_error: Callable[[str, str], None],
         cancel_check: Callable[[], bool],
+        compact_output: Path | None = None,
     ) -> dict[str, Any]:
         raise NotImplementedError
 
@@ -174,6 +185,17 @@ class EngineBackend:
         log_fn: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         raise NotImplementedError
+
+    def human_read(
+        self,
+        *,
+        input_path: Path,
+        attribution_path: Path,
+        output_path: Path,
+        work_dir: Path,
+        compact_path: Path | None = None,
+    ) -> dict[str, Any]:
+        return {"skipped": True}
 
 
 class VendoredEngineBackend(EngineBackend):
@@ -227,6 +249,7 @@ class VendoredEngineBackend(EngineBackend):
         on_row: Callable[[dict[str, Any]], None],
         on_case_error: Callable[[str, str], None],
         cancel_check: Callable[[], bool],
+        compact_output: Path | None = None,
     ) -> dict[str, Any]:
         ensure_vendor_on_path()
         from eval_harness.runner import bundle_dir, check_node_runtime  # type: ignore
@@ -241,6 +264,8 @@ class VendoredEngineBackend(EngineBackend):
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         audit_path.parent.mkdir(parents=True, exist_ok=True)
+        if compact_output is not None:
+            compact_output.parent.mkdir(parents=True, exist_ok=True)
 
         # Record current offset in output_path so we only emit newly appended rows
         start_offset = output_path.stat().st_size if output_path.is_file() else 0
@@ -259,6 +284,7 @@ class VendoredEngineBackend(EngineBackend):
             },
             "input": str(input_path),
             "output": str(output_path),
+            **({"compact_output": str(compact_output)} if compact_output is not None else {}),
             "audit_output": str(audit_path),
             "execution": {
                 "concurrency": self.cfg.eval_concurrency,
@@ -430,6 +456,7 @@ class VendoredEngineBackend(EngineBackend):
         cluster_cfg: dict[str, Any] = {
             "api": {
                 "base_url": self.cfg.gateway_base_url,
+                "protocol": "auto",
                 "api_key": self.cfg.gateway_api_key,
                 "model": self.cfg.cluster_model,
                 "reasoning_effort": self.cfg.cluster_reasoning_effort,
@@ -473,6 +500,63 @@ class VendoredEngineBackend(EngineBackend):
         result["assignments"] = assignments
         result["leaf_names"] = leaf_names
         return result
+
+    def human_read(
+        self,
+        *,
+        input_path: Path,
+        attribution_path: Path,
+        output_path: Path,
+        work_dir: Path,
+        compact_path: Path | None = None,
+    ) -> dict[str, Any]:
+        """Run post-processing human-read translation and copy to `attribution_human_read.jsonl`."""
+        if (
+            not self.cfg.human_read_enabled
+            or not attribution_path.is_file()
+            or attribution_path.stat().st_size == 0
+        ):
+            return {"skipped": True, "reason": "disabled_or_empty"}
+        if not self.cfg.gateway_api_key:
+            raise RuntimeError("未配置人话翻译网关密钥（INTERNAL_EVAL_GATEWAY_API_KEY）")
+
+        ensure_vendor_on_path()
+        from eval_harness import human_read_eval  # type: ignore
+
+        work_dir.mkdir(parents=True, exist_ok=True)
+        cfg_dict: dict[str, Any] = {
+            "api": {
+                "base_url": self.cfg.gateway_base_url,
+                "api_key": self.cfg.gateway_api_key,
+                "model": self.cfg.eval_model,
+            },
+            "input": str(input_path),
+            "output": str(attribution_path),
+            "human_read": {
+                "output_root": str(work_dir),
+                "base_url": self.cfg.gateway_base_url,
+                "model": self.cfg.human_read_model or self.cfg.eval_model,
+                "api_key": self.cfg.gateway_api_key,
+                "api": self.cfg.human_read_api or "openai-completions",
+                "kinds": ["attribution"],
+                "workers": self.cfg.human_read_workers,
+            },
+        }
+        if compact_path is not None and compact_path.is_file():
+            cfg_dict["human_read"]["compact_input"] = str(compact_path)
+
+        summary = dict(human_read_eval(cfg_dict, quiet=True) or {})
+        translated = work_dir / attribution_path.name
+        copied = False
+        if translated.is_file() and translated.stat().st_size > 0:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = output_path.parent / f".{output_path.name}.tmp"
+            shutil.copy2(translated, tmp)
+            os.replace(tmp, output_path)
+            copied = True
+        summary["output_path"] = str(output_path)
+        summary["copied"] = copied
+        return summary
 
 
 def load_cluster_assignments(tree_dir: Path) -> tuple[dict[str, dict[int, dict[str, Any]]], dict[str, str]]:

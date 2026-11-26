@@ -131,6 +131,12 @@ class ServiceConfig:
     cluster_final_auto_leaf: bool = True
     cluster_l4_enabled: bool = True
 
+    # Human-read translation defaults
+    human_read_enabled: bool = True
+    human_read_model: str = ""
+    human_read_api: str = "openai-completions"
+    human_read_workers: int = 8
+
     # Colleague trace collector settings
     collector_mode: str = "file_drop"  # file_drop | http | task_manager | mock
     collector_base_url: str = ""
@@ -142,13 +148,16 @@ class ServiceConfig:
     # TaskManager inference API settings (`collector_mode = "task_manager"`)
     task_manager_base_url: str = ""
     task_manager_user_id: str = ""
-    task_manager_template_task_id: str = ""
+    task_manager_template_task_id: str = "2740e85cb7b34909"
     task_manager_concurrency: int = 10
     task_manager_batch_size: int = 100
     task_manager_poll_interval_sec: float = 10.0
-    task_manager_max_recovery_rounds: int = 2
+    task_manager_recovery_interval_sec: float = 900.0
+    task_manager_max_recovery_rounds: int = 10
     task_manager_retry_recall_wait_sec: int = 60
     task_manager_max_history_turns: int = 0
+    task_manager_judge_source: str = "drop_dir"  # drop_dir | auto | api
+    task_manager_drop_wait_timeout_sec: float = 3600.0
 
     # Orchestrator & HTTP API settings
     max_concurrent_runs: int = 1
@@ -178,9 +187,14 @@ class ServiceConfig:
             "state_db_path": str(self.state_db_path),
             "collector_mode": self.collector_mode,
             "collector_dispatch_split": self.collector_dispatch_split,
+            "human_read_enabled": self.human_read_enabled,
             "task_manager_base_url": self.task_manager_base_url or None,
             "task_manager_auth_configured": bool(self.task_manager_user_id),
             "task_manager_template_task_id": self.task_manager_template_task_id or None,
+            "task_manager_recovery_interval_sec": self.task_manager_recovery_interval_sec,
+            "task_manager_max_recovery_rounds": self.task_manager_max_recovery_rounds,
+            "task_manager_judge_source": self.task_manager_judge_source,
+            "task_manager_drop_wait_timeout_sec": self.task_manager_drop_wait_timeout_sec,
             "max_concurrent_runs": self.max_concurrent_runs,
             "write_auth_enabled": bool(self.api_write_token),
             "gateway_configured": bool(self.gateway_api_key),
@@ -259,6 +273,11 @@ def load_config(
         or get("OPENAI_API_KEY")
     )
 
+    judge_source_raw = get("INTERNAL_EVAL_TASK_MANAGER_JUDGE_SOURCE", "drop_dir").strip().lower()
+    judge_source = judge_source_raw if judge_source_raw in ("auto", "api", "drop_dir") else "drop_dir"
+    tpl_task_raw = merged.get("INTERNAL_EVAL_TASK_MANAGER_TEMPLATE_TASK_ID")
+    template_task_id = "2740e85cb7b34909" if tpl_task_raw is None else str(tpl_task_raw).strip()
+
     return ServiceConfig(
         datasets_root=datasets_root,
         ab_test_root=ab_test_root,
@@ -286,6 +305,10 @@ def load_config(
         cluster_microbatch_interval_sec=_as_float(merged.get("INTERNAL_EVAL_CLUSTER_INTERVAL_SEC"), 25.0, minimum=0.1),
         cluster_final_auto_leaf=_as_bool(merged.get("INTERNAL_EVAL_CLUSTER_FINAL_AUTO_LEAF"), True),
         cluster_l4_enabled=_as_bool(merged.get("INTERNAL_EVAL_CLUSTER_L4_ENABLED"), True),
+        human_read_enabled=_as_bool(merged.get("INTERNAL_EVAL_HUMAN_READ_ENABLED"), True),
+        human_read_model=get("INTERNAL_EVAL_HUMAN_READ_MODEL"),
+        human_read_api=get("INTERNAL_EVAL_HUMAN_READ_API", "openai-completions"),
+        human_read_workers=_as_int(merged.get("INTERNAL_EVAL_HUMAN_READ_WORKERS"), 8, minimum=1),
         collector_mode=get("INTERNAL_EVAL_COLLECTOR_MODE", "file_drop").lower(),
         collector_base_url=get("INTERNAL_EVAL_COLLECTOR_BASE_URL").rstrip("/"),
         collector_token=get("INTERNAL_EVAL_COLLECTOR_TOKEN"),
@@ -297,13 +320,18 @@ def load_config(
             or (get("INTERNAL_EVAL_COLLECTOR_BASE_URL") if get("INTERNAL_EVAL_COLLECTOR_MODE", "").lower() in ("task_manager", "taskmanager") else "")
         ),
         task_manager_user_id=get("INTERNAL_EVAL_TASK_MANAGER_USER_ID"),
-        task_manager_template_task_id=get("INTERNAL_EVAL_TASK_MANAGER_TEMPLATE_TASK_ID"),
+        task_manager_template_task_id=template_task_id,
         task_manager_concurrency=_as_int(merged.get("INTERNAL_EVAL_TASK_MANAGER_CONCURRENCY"), 10, minimum=1),
         task_manager_batch_size=_as_int(merged.get("INTERNAL_EVAL_TASK_MANAGER_BATCH_SIZE"), 100, minimum=1),
         task_manager_poll_interval_sec=_as_float(merged.get("INTERNAL_EVAL_TASK_MANAGER_POLL_INTERVAL_SEC"), 10.0, minimum=0.05),
-        task_manager_max_recovery_rounds=_as_int(merged.get("INTERNAL_EVAL_TASK_MANAGER_MAX_RECOVERY_ROUNDS"), 2, minimum=0),
+        task_manager_recovery_interval_sec=_as_float(merged.get("INTERNAL_EVAL_TASK_MANAGER_RECOVERY_INTERVAL_SEC"), 900.0, minimum=0.5),
+        task_manager_max_recovery_rounds=_as_int(merged.get("INTERNAL_EVAL_TASK_MANAGER_MAX_RECOVERY_ROUNDS"), 10, minimum=0),
         task_manager_retry_recall_wait_sec=_as_int(merged.get("INTERNAL_EVAL_TASK_MANAGER_RETRY_RECALL_WAIT_SEC"), 60, minimum=1),
         task_manager_max_history_turns=_as_int(merged.get("INTERNAL_EVAL_TASK_MANAGER_MAX_HISTORY_TURNS"), 0, minimum=0),
+        task_manager_judge_source=judge_source,
+        task_manager_drop_wait_timeout_sec=_as_float(
+            merged.get("INTERNAL_EVAL_TASK_MANAGER_DROP_WAIT_TIMEOUT_SEC"), 3600.0, minimum=1.0
+        ),
         max_concurrent_runs=_as_int(merged.get("INTERNAL_EVAL_MAX_CONCURRENT_RUNS"), 1, minimum=1),
         auto_resume_on_startup=_as_bool(merged.get("INTERNAL_EVAL_AUTO_RESUME"), True),
         api_prefix=get("INTERNAL_EVAL_API_PREFIX", "/api/v1/internal-eval").rstrip("/"),

@@ -7,6 +7,7 @@ import json
 import sys
 from typing import Sequence
 
+from .human_read import human_read_eval, human_read_status
 from .prepare import prepare_eval
 from .runner import EvalRunError, run_eval
 
@@ -76,6 +77,45 @@ def run_main(argv: Sequence[str] | None = None) -> int:
             fail_on_reject=True if args.fail_on_reject else None,
             quiet=args.quiet,
         )
+    except EvalRunError as exc:
+        if exc.summary is not None:
+            _print_json(exc.summary)
+        print(f"Error: {exc}", file=sys.stderr)
+        return exc.returncode
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    _print_json(summary)
+    return 0
+
+
+def human_read_main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="human_read_eval.py",
+        description="Run post-processing plain-Chinese human-read translation on attribution/compact outputs.",
+    )
+    parser.add_argument("-c", "--config", required=True, help="Path to config.yaml (or output_root dir with --status)")
+    parser.add_argument("--limit", type=int, help="Translate at most N records")
+    parser.add_argument("--workers", type=int, help="Override human_read.workers")
+    parser.add_argument("--rpm", type=int, help="Override human_read.target_rpm")
+    parser.add_argument("--retry-failed", action="store_true", help="Retry previously failed records")
+    parser.add_argument("--status", action="store_true", help="Print current translation counts and exit")
+    parser.add_argument("-q", "--quiet", action="store_true", help="Suppress progress logs on stderr")
+    args = parser.parse_args(argv)
+
+    try:
+        if args.status:
+            summary = human_read_status(args.config)
+        else:
+            summary = human_read_eval(
+                args.config,
+                limit=args.limit,
+                workers=args.workers,
+                rpm=args.rpm,
+                retry_failed=True if args.retry_failed else None,
+                quiet=args.quiet,
+            )
     except EvalRunError as exc:
         if exc.summary is not None:
             _print_json(exc.summary)

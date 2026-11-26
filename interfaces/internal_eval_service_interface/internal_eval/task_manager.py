@@ -21,7 +21,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .engines import extract_case_key
@@ -100,6 +100,13 @@ def normalize_task_manager_base_url(raw: str) -> str:
 def _sanitize_step_key(raw: str, fallback: str) -> str:
     cleaned = _SAFE_KEY_RE.sub("-", (raw or "").strip()).strip("-")
     return cleaned[:64] if cleaned else fallback
+
+
+def format_abtest_task_name(now: datetime | None = None) -> str:
+    """Return canonical TaskManager task name `AIME_RSI_ABTEST_{YYYYMMDD-HHMMSS}` in UTC+8."""
+    tz_cn = timezone(timedelta(hours=8))
+    dt = (now or datetime.now(tz_cn)).astimezone(tz_cn)
+    return f"AIME_RSI_ABTEST_{dt.strftime('%Y%m%d-%H%M%S')}"
 
 
 def _normalize_timestamp_to_rfc3339(
@@ -789,35 +796,38 @@ class TaskManagerClient:
         return records
 
 
-def build_pipeline_and_step_map(
+def build_task_spec_from_template(
     *,
     run: dict[str, Any],
     sides: list[str],
     client: TaskManagerClient,
     default_template_task_id: str = "",
-) -> tuple[dict[str, Any], dict[str, str]]:
-    """Build TaskManager `pipeline` config and `{side: step_key}` mapping for `sides`.
+) -> tuple[dict[str, Any], dict[str, str], dict[str, Any]]:
+    """Build TaskManager `pipeline`, `{side: step_key}`, and inherited task-level defaults.
 
-    Priority per step:
-      1. Default AIME `new`-architecture step derived from `run["model"]` (`aime_expert` / `aime_fast`).
-      2. Optional template step copied via `GET /tasks/{template_task_id}` (agent-level, run-level, or service default).
-      3. Explicit overrides inside `before_agent` / `after_agent` (or `agent["step"]`).
+    Copies `pipeline`, positional `steps[idx]`, `concurrency_limit`, and `concurrency_schedule`
+    from `template_task_id` (default `2740e85cb7b34909`), preserving template step keys
+    unless explicitly overridden per side.
     """
     tm_meta = run.get("meta", {}).get("task_manager") if isinstance(run.get("meta"), dict) else {}
     if not isinstance(tm_meta, dict):
         tm_meta = {}
 
     run_template_id = str(tm_meta.get("template_task_id") or default_template_task_id or "").strip()
-    template_cache: dict[str, dict[str, Any]] = {}
+    template_doc_cache: dict[str, dict[str, Any]] = {}
 
-    def _fetch_template_pipeline(tid: str) -> dict[str, Any]:
+    def _fetch_template_doc(tid: str) -> dict[str, Any]:
         if not tid:
             return {}
-        if tid not in template_cache:
+        if tid not in template_doc_cache:
             task_doc = client.get_task(tid)
-            pipe = task_doc.get("pipeline")
-            template_cache[tid] = dict(pipe) if isinstance(pipe, dict) else {}
-        return template_cache[tid]
+            template_doc_cache[tid] = dict(task_doc) if isinstance(task_doc, dict) else {}
+        return template_doc_cache[tid]
+
+    def _fetch_template_pipeline(tid: str) -> dict[str, Any]:
+        doc = _fetch_template_doc(tid)
+        pipe = doc.get("pipeline")
+        return dict(pipe) if isinstance(pipe, dict) else {}
 
     is_fast = "fast" in str(run.get("model") or "").lower()
     base_pipeline: dict[str, Any] = {
@@ -830,11 +840,19 @@ def build_pipeline_and_step_map(
         "parallel": len(sides) > 1,
         "steps": [],
     }
+    template_defaults: dict[str, Any] = {}
     if run_template_id:
+        tpl_doc = _fetch_template_doc(run_template_id)
         tpl_pipe = _fetch_template_pipeline(run_template_id)
         for field in PIPELINE_OVERRIDE_FIELDS:
             if field in tpl_pipe:
                 base_pipeline[field] = tpl_pipe[field]
+        tpl_cl = tpl_doc.get("concurrency_limit")
+        if isinstance(tpl_cl, int) and not isinstance(tpl_cl, bool) and tpl_cl > 0:
+            template_defaults["concurrency_limit"] = tpl_cl
+        tpl_cs = tpl_doc.get("concurrency_schedule")
+        if isinstance(tpl_cs, dict) and tpl_cs:
+            template_defaults["concurrency_schedule"] = dict(tpl_cs)
 
     pipe_overrides = tm_meta.get("pipeline") if isinstance(tm_meta.get("pipeline"), dict) else {}
     for field in PIPELINE_OVERRIDE_FIELDS:
@@ -845,7 +863,7 @@ def build_pipeline_and_step_map(
     side_to_step_key: dict[str, str] = {}
     steps: list[dict[str, Any]] = []
 
-    for side in sides:
+    for idx_side, side in enumerate(sides):
         agent_cfg = run["before_agent"] if side == "before" else run["after_agent"]
         agent_label = run["before_agent_label"] if side == "before" else run["after_agent_label"]
         agent_dict = agent_cfg if isinstance(agent_cfg, dict) else {}
@@ -880,6 +898,7 @@ def build_pipeline_and_step_map(
             "ab_test_content": None,
         }
 
+        tpl_step_key = ""
         if step_template_id:
             tpl_pipe = _fetch_template_pipeline(step_template_id)
             tpl_steps = tpl_pipe.get("steps") if isinstance(tpl_pipe.get("steps"), list) else []
@@ -889,10 +908,13 @@ def build_pipeline_and_step_map(
                     if isinstance(ts, dict) and str(ts.get("key") or "") == step_template_key:
                         chosen_tpl_step = ts
                         break
+            if chosen_tpl_step is None and idx_side < len(tpl_steps) and isinstance(tpl_steps[idx_side], dict):
+                chosen_tpl_step = tpl_steps[idx_side]
             if chosen_tpl_step is None and tpl_steps and isinstance(tpl_steps[0], dict):
                 chosen_tpl_step = tpl_steps[0]
             if chosen_tpl_step:
                 step.update(dict(chosen_tpl_step))
+                tpl_step_key = str(chosen_tpl_step.get("key") or "").strip()
 
         # Apply explicit overrides (nested `step` first, then top-level `agent_dict`)
         for src in (nested_step, agent_dict):
@@ -900,12 +922,13 @@ def build_pipeline_and_step_map(
                 if field in src:
                     step[field] = src[field]
 
-        raw_key = str(
+        explicit_key = str(
             agent_dict.get("step_key")
             or nested_step.get("key")
             or agent_dict.get("key")
-            or f"{side}-{agent_label}"
-        )
+            or ""
+        ).strip()
+        raw_key = explicit_key or tpl_step_key or f"{side}-{agent_label}"
         candidate_key = _sanitize_step_key(raw_key, f"{side}-step")
         if candidate_key in used_keys:
             candidate_key = _sanitize_step_key(f"{side}-{candidate_key}", f"{side}-step")
@@ -923,4 +946,21 @@ def build_pipeline_and_step_map(
     base_pipeline["steps"] = steps
     if len(steps) > 1 and "parallel" not in pipe_overrides:
         base_pipeline["parallel"] = True
-    return base_pipeline, side_to_step_key
+    return base_pipeline, side_to_step_key, template_defaults
+
+
+def build_pipeline_and_step_map(
+    *,
+    run: dict[str, Any],
+    sides: list[str],
+    client: TaskManagerClient,
+    default_template_task_id: str = "",
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Backward-compatible wrapper returning `(pipeline, {side: step_key})`."""
+    pipeline, side_to_step_key, _ = build_task_spec_from_template(
+        run=run,
+        sides=sides,
+        client=client,
+        default_template_task_id=default_template_task_id,
+    )
+    return pipeline, side_to_step_key

@@ -4,7 +4,9 @@ Cleans raw JSONL (plain, .gz, or .zst; single file or directory):
   1. Strips UTF-8 BOM/CRLF and drops blank lines.
   2. Splits multi-trace session lines into one trace per line (optional).
   3. Repairs missing user questions for v2_observations traces from meta.question
-     or message_pool (while preserving lf_plugin_v2 captured questions intact).
+     or message_pool (while preserving lf_plugin_v2 captured questions intact),
+     and normalizes single-trace multi-turn stale/placeholder/transcript-dump
+     questions and internal `--- ---` wrapper blocks.
   4. Infers missing batch_id from date-prefixed filenames or default_batch_id.
   5. Validates every record with the bundled evaluator's exact admission rules
      and optionally applies lossless prompt-snapshot slimming.
@@ -26,8 +28,103 @@ from typing import Any, Iterator
 from .config import EvalConfig, load_config
 from .runner import EvalRunError, bundle_dir, check_node_runtime
 
+_CLIENT_PREFIX = re.compile(r"^\[client_id=client-tools:[0-9a-f-]+\][ \t]+", re.I)
 _LEADING_STAMP = re.compile(r"^\[\d{4}-\d{2}-\d{2}T[^\]]{1,40}\]\s*")
+_WRAPPER_HEADING = re.compile(
+    r"^#\s*(?:Content of attachments and URLs provided in this turn|Context\s*\(internal|Multi-turn\b|本轮提供的附件|上下文[（(]内部)"
+)
+_PLACEHOLDER_QUESTIONS = {"[这是一条空消息]", "[EMPTY_USER_MESSAGE_JUST_FOR_PLACEHOLDER]"}
 _DATE_FILENAME = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:$|[-_])")
+
+
+def _find_wrapper_divider(text: str) -> int:
+    """Linear-time lookup for `--- ---` internal wrapper dividers."""
+    if "--- ---" not in text:
+        return -1
+    cursor = 0
+    scan_floor = 0
+    n = len(text)
+    while True:
+        pos = text.find("--- ---", cursor)
+        if pos < 0:
+            return -1
+        if pos == 0 or text[pos - 1] != "\n":
+            cursor = pos + 7
+            scan_floor = cursor
+            continue
+        after = pos + 7
+        while after < n and text[after] in (" ", "\t"):
+            after += 1
+        if text.startswith("\r\n", after):
+            after += 2
+        elif after < n and text[after] == "\n":
+            after += 1
+        else:
+            cursor = pos + 7
+            scan_floor = cursor
+            continue
+        heading_offset = after
+        while heading_offset < n:
+            line_end = heading_offset
+            while line_end < n and text[line_end] in (" ", "\t"):
+                line_end += 1
+            if text.startswith("\r\n", line_end):
+                heading_offset = line_end + 2
+            elif line_end < n and text[line_end] == "\n":
+                heading_offset = line_end + 1
+            else:
+                break
+        if not _WRAPPER_HEADING.match(text[heading_offset:]):
+            cursor = pos + 7
+            scan_floor = cursor
+            continue
+        block_start = pos - 1
+        if block_start > scan_floor and text[block_start - 1] == "\r":
+            block_start -= 1
+        while block_start > scan_floor:
+            line_start = block_start - 1
+            while line_start >= scan_floor and text[line_start] in (" ", "\t"):
+                line_start -= 1
+            if line_start >= scan_floor and text[line_start] == "\n":
+                block_start = line_start - 1 if (line_start > scan_floor and text[line_start - 1] == "\r") else line_start
+            else:
+                break
+        return block_start
+
+
+def _unwrap_question(text: Any) -> str | None:
+    if not isinstance(text, str):
+        return None
+    cleaned = _CLIENT_PREFIX.sub("", text)
+    cleaned = _LEADING_STAMP.sub("", cleaned)
+    idx = _find_wrapper_divider(cleaned)
+    if idx >= 0:
+        cleaned = cleaned[:idx]
+    return cleaned.strip()
+
+
+def _is_placeholder_question(text: Any) -> bool:
+    return isinstance(text, str) and text.strip() in _PLACEHOLDER_QUESTIONS
+
+
+def _is_transcript_dump_question(text: Any) -> bool:
+    if not isinstance(text, str):
+        return False
+    stripped = text.lstrip()
+    return stripped.startswith("Uploaded files directory:") and ("[USER]:" in stripped or "[ASSISTANT]:" in stripped)
+
+
+def _first_llm_snapshot(trace: dict[str, Any]) -> list[Any] | None:
+    pool = trace.get("message_pool")
+    for message in trace.get("messages") or []:
+        if not isinstance(message, dict) or message.get("type") != "llm_turn":
+            continue
+        inp = message.get("input_messages")
+        msgs = inp if isinstance(inp, list) else (inp.get("messages") if isinstance(inp, dict) else None)
+        if not isinstance(msgs, list):
+            continue
+        return [pool[x] if isinstance(x, int) and isinstance(pool, list) and 0 <= x < len(pool) else x for x in msgs]
+    return None
 
 
 def _content_text(value: Any) -> str:
@@ -105,18 +202,27 @@ def _pooled_question(trace: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def repair_question_in_row(row: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-    """Recover missing user_question from meta.question or message_pool when safe.
+    """Recover missing user_question and normalize multi-turn/wrapper questions.
 
-    Records collected by `lf_plugin_v2` are left untouched so the evaluator's
-    non-mutating captured-question coordinate resolver handles them directly.
+    1) Traces collected from `v2_observations` spans can miss `user_question` in
+       `messages`; recover it from `meta.question` or `message_pool` (while
+       skipping missing-question mutation for `lf_plugin_v2` captured-question rows).
+    2) Single-trace multi-turn records can carry Turn 1's stale question,
+       placeholders, transcript dumps, or internal `--- ---` wrapper blocks in
+       `messages[-1]` / `meta.question`; normalize them identically to `chunking.py`.
     """
     meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
-    if meta.get("fetched_by") == "lf_plugin_v2":
-        return row, False
+    is_lf_v2 = meta.get("fetched_by") == "lf_plugin_v2"
 
     is_session = isinstance(row.get("traces"), list)
     traces = row["traces"] if is_session else [row]
     fixed: dict[str, Any] | None = None
+
+    def ensure_copy() -> dict[str, Any]:
+        nonlocal fixed
+        if fixed is None:
+            fixed = copy.deepcopy(row)
+        return fixed
 
     for idx, trace in enumerate(traces):
         if not isinstance(trace, dict):
@@ -125,24 +231,89 @@ def repair_question_in_row(row: dict[str, Any]) -> tuple[dict[str, Any], bool]:
         if not isinstance(messages, list) or not messages:
             return row, False
         content = _last_user_content(messages)
-        if content is not None and _has_question(content):
+        if content is None or not _has_question(content):
+            if is_lf_v2:
+                continue
+            q_text = _meta_question(row, trace)
+            recovered = {"role": "user", "type": "user_question", "content": q_text} if q_text else _pooled_question(trace)
+            if not recovered:
+                return row, False
+            out = ensure_copy()
+            target = out["traces"][idx] if is_session else out
+            if content is None:
+                target["messages"] = [recovered] + target["messages"]
+            else:
+                for msg in reversed(target["messages"]):
+                    if not isinstance(msg, dict):
+                        continue
+                    if msg.get("role") == "user" or (msg.get("role") is None and msg.get("type") == "user_question"):
+                        msg["content"] = recovered["content"]
+                        break
+            content = recovered["content"]
+
+        if not isinstance(content, str):
             continue
-        q_text = _meta_question(row, trace)
-        recovered = {"role": "user", "type": "user_question", "content": q_text} if q_text else _pooled_question(trace)
-        if not recovered:
-            return row, False
-        if fixed is None:
-            fixed = copy.deepcopy(row)
-        target = fixed["traces"][idx] if is_session else fixed
-        if content is None:
-            target["messages"] = [recovered] + target["messages"]
-        else:
-            for msg in reversed(target["messages"]):
-                if not isinstance(msg, dict):
-                    continue
-                if msg.get("role") == "user" or (msg.get("role") is None and msg.get("type") == "user_question"):
-                    msg["content"] = recovered["content"]
-                    break
+
+        snap = _first_llm_snapshot(trace)
+        users = [i for i, x in enumerate(snap) if isinstance(x, dict) and x.get("role") == "user"] if snap else []
+        has_asst = any(isinstance(x, dict) and x.get("role") == "assistant" for x in (snap[: users[-1]] if users else [])) if snap else False
+        is_ask = bool(snap and users and any(isinstance(x, dict) and x.get("role") == "tool" for x in snap[users[-1] + 1 :]))
+        last_u_raw = snap[users[-1]].get("content") if users else None
+        last_u = _unwrap_question(last_u_raw) if isinstance(last_u_raw, str) else None
+        prior_us = {
+            _unwrap_question(snap[i].get("content"))
+            for i in users[:-1]
+            if isinstance(snap[i].get("content"), str)
+        } if len(users) >= 2 else set()
+        uq_clean = _unwrap_question(content)
+
+        target_q = None
+        if not is_ask and not (last_u and last_u.startswith("[SYSTEM CONTEXT:")):
+            if _is_placeholder_question(uq_clean) and last_u and not _is_placeholder_question(last_u):
+                target_q = last_u
+            elif _is_transcript_dump_question(content) and last_u and not _is_transcript_dump_question(last_u) and not _is_placeholder_question(last_u):
+                target_q = last_u
+            elif has_asst and last_u and not _is_placeholder_question(last_u) and uq_clean != last_u and uq_clean in prior_us:
+                target_q = last_u
+        if target_q is None and _find_wrapper_divider(content) >= 0 and uq_clean:
+            target_q = uq_clean
+        if target_q is None:
+            target_q = content
+
+        meta_target_q = target_q.strip()
+        need_uq_update = target_q != content
+        cur_row = fixed or row
+        row_meta = cur_row.get("meta") if isinstance(cur_row.get("meta"), dict) else None
+        tmeta = trace.get("meta") if isinstance(trace.get("meta"), dict) else None
+        need_meta_update = bool(
+            meta_target_q
+            and (
+                (isinstance(row_meta, dict) and row_meta.get("question") != meta_target_q)
+                or (isinstance(row_meta, dict) and "question_text" in row_meta and row_meta.get("question_text") != meta_target_q)
+                or (isinstance(tmeta, dict) and "question" in tmeta and tmeta.get("question") != meta_target_q)
+            )
+        )
+        if need_uq_update or need_meta_update:
+            out = ensure_copy()
+            target = out["traces"][idx] if is_session else out
+            if need_uq_update:
+                for msg in reversed(target["messages"]):
+                    if not isinstance(msg, dict):
+                        continue
+                    if msg.get("role") == "user" or (msg.get("role") is None and msg.get("type") == "user_question"):
+                        msg["content"] = target_q
+                        break
+            if meta_target_q:
+                if not isinstance(out.get("meta"), dict):
+                    out["meta"] = {}
+                if out["meta"].get("question") != meta_target_q:
+                    out["meta"]["question"] = meta_target_q
+                if "question_length" in out["meta"]:
+                    out["meta"]["question_length"] = len(meta_target_q)
+                if "question_text" in out["meta"]:
+                    out["meta"]["question_text"] = meta_target_q
+                if isinstance(target.get("meta"), dict) and "question" in target["meta"]:
+                    target["meta"]["question"] = meta_target_q
     return (fixed, True) if fixed is not None else (row, False)
 
 

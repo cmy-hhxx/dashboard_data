@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -26,7 +27,9 @@ from internal_eval.state_store import StateStore
 from internal_eval.task_manager import (
     TaskManagerClient,
     build_pipeline_and_step_map,
+    build_task_spec_from_template,
     build_testset_cases,
+    format_abtest_task_name,
     judge_record_to_eval_trace,
     normalize_task_manager_base_url,
 )
@@ -71,8 +74,50 @@ class _MockTaskManagerServer:
                 ],
             },
         }
+        self.tasks["2740e85cb7b34909"] = {
+            "task_id": "2740e85cb7b34909",
+            "task_name": "AIME_RSI_ABTEST_{DATE_TIME}_test",
+            "status": "completed",
+            "concurrency_limit": 1,
+            "concurrency_schedule": {"0": 5, "9": 1, "10": 1},
+            "pipeline": {
+                "is_cn": False,
+                "is_deep": False,
+                "run_source": "",
+                "raw_dir": "",
+                "with_pic": False,
+                "add_history": False,
+                "parallel": True,
+                "steps": [
+                    {
+                        "key": "analyst-big-fast-eval-1",
+                        "fetcher": "new",
+                        "is_pre": True,
+                        "is_deep": False,
+                        "mode": "expert",
+                        "runtime": None,
+                        "user_id": "1817014354",
+                        "schedule_user_id": "1817014354",
+                        "history": False,
+                        "agent_id": "analyst-big-fast-eval-1",
+                    },
+                    {
+                        "key": "analyst-big-fast-eval-2",
+                        "fetcher": "new",
+                        "is_pre": True,
+                        "is_deep": False,
+                        "mode": "expert",
+                        "runtime": None,
+                        "user_id": "1817014354",
+                        "schedule_user_id": "1817014354",
+                        "history": False,
+                        "agent_id": "analyst-big-fast-eval-2",
+                    },
+                ],
+            },
+        }
         # Programmable test hooks
-        self.behavior: str = "recovery_demo"  # "recovery_demo" | "hang_running"
+        self.behavior: str = "recovery_demo"  # "recovery_demo" | "hang_running" | "always_partial"
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -247,8 +292,10 @@ class _MockTaskManagerServer:
                             "task_id": tid,
                             "task_name": body.get("task_name", ""),
                             "testset_ids": [ts_id],
+                            "testset_selections": body.get("testset_selections") or [],
                             "pipeline": body.get("pipeline") or {},
                             "concurrency_limit": body.get("concurrency_limit", 10),
+                            "concurrency_schedule": body.get("concurrency_schedule"),
                             "status": "created",
                             "total_count": len(cases),
                             "completed_count": 0,
@@ -436,6 +483,17 @@ class _MockTaskManagerServer:
         with self.lock:
             step_keys = list(self.tasks[tid]["_step_keys"])
             items = self.items[tid]
+
+        if self.behavior == "always_partial":
+            time.sleep(0.03)
+            with self.lock:
+                for it in items:
+                    self._mark_step_ok(it, step_keys[0])
+                    it["status"] = "partial" if len(step_keys) > 1 else "failed"
+                    it["error"] = "QUESTION_FAILED: persistent partial"
+                self.tasks[tid]["status"] = "completed"
+                self._recompute_counts(tid)
+            return
 
         if start_no == 1:
             # First item completes immediately so streaming triggers while task is STILL running!
@@ -663,6 +721,7 @@ class TaskManagerIntegrationTests(unittest.TestCase):
                 task_manager_batch_size=2,  # Forces /testsets + /append chunking for 4 cases!
                 task_manager_poll_interval_sec=0.08,
                 task_manager_max_recovery_rounds=1,
+                task_manager_judge_source="api",
             )
             store = StateStore(cfg.state_db_path)
             eng = FakeStreamingEngine()
@@ -724,6 +783,26 @@ class TaskManagerIntegrationTests(unittest.TestCase):
                 self.assertEqual(run_info["sides_detail"]["after"]["ready"], 3)
                 self.assertEqual(run_info["sides_detail"]["after"]["failed"], 1)
 
+                # Verify <round_dir>/<task_id>/ drop dir & archived judge JSONLs + human_read output!
+                round_dir = Path(run_info["round_dir_path"])
+                self.assertTrue((round_dir / "agent_before_opt" / "eval_output" / "attribution_human_read.jsonl").is_file())
+                self.assertTrue((round_dir / "agent_after_opt" / "eval_output" / "attribution_human_read.jsonl").is_file())
+                self.assertEqual(len(eng.human_read_calls), 2)
+                tm_state = json.loads((round_dir / ".work" / "dispatch" / "TASK_MANAGER_STATE.json").read_text(encoding="utf-8"))
+                drop_dir = Path(tm_state["task_drop_dir"])
+                self.assertEqual(drop_dir, round_dir / tm_state["task_id"])
+                self.assertTrue(any(drop_dir.glob("*_judge.jsonl")))
+
+                # Verify dashboard/ab_test.py ignores <task_id> drop directory and lists the round
+                dash_dir = ROOT.parent.parent / "dashboard"
+                if dash_dir.is_dir():
+                    sys.path.insert(0, str(dash_dir))
+                    import ab_test as dash_ab  # type: ignore
+                    self.assertFalse(dash_ab.is_ab_round(drop_dir))
+                    found_names = [p.name for _, _, p in dash_ab.ab_round_dirs(tmp, "aime")]
+                    self.assertIn(round_dir.name, found_names)
+                    self.assertNotIn(drop_dir.name, found_names)
+
                 # Verify compare & failures endpoints
                 st, cmp_resp = _http_json(f"{base_url}/runs/{run_id}/compare")
                 self.assertEqual(st, 200)
@@ -760,6 +839,203 @@ class TaskManagerIntegrationTests(unittest.TestCase):
                 self.assertTrue(
                     _wait_until(lambda: any(m == "POST" and p.endswith("/cancel") for m, p in mock_tm.calls))
                 )
+            finally:
+                pipeline.stop()
+                srv.shutdown()
+                srv.server_close()
+                mock_tm.stop()
+
+    def test_template_2740_copy_name_limit_none_and_drop_dir_and_stagnation(self) -> None:
+        mock_tm = _MockTaskManagerServer(allowed_user="huangdaqiang")
+        tm_url = mock_tm.start()
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            _write_fake_bench(tmp / "3_dynamic_bench", count=2)
+            cfg = ServiceConfig(
+                datasets_root=tmp,
+                ab_test_root=tmp / "1_aime" / "ab_test",
+                bench_root=tmp / "3_dynamic_bench",
+                state_db_path=tmp / "1_aime" / "ab_test" / ".service_state" / "internal_eval.sqlite3",
+                base_taxonomy_dir=ROOT / "vendor" / "cluster_pkg" / "builtin_taxonomy",
+                collector_mode="task_manager",
+                collector_poll_interval_sec=0.05,
+                eval_poll_interval_sec=0.05,
+                cluster_microbatch_size=1,
+                cluster_microbatch_interval_sec=0.05,
+                allow_custom_tier=True,
+                task_manager_base_url=tm_url,
+                task_manager_user_id="huangdaqiang",
+                task_manager_template_task_id="2740e85cb7b34909",
+                task_manager_poll_interval_sec=0.05,
+                task_manager_recovery_interval_sec=0.1,
+                task_manager_max_recovery_rounds=6,
+                task_manager_drop_wait_timeout_sec=10.0,
+            )
+            store = StateStore(cfg.state_db_path)
+            eng = FakeStreamingEngine()
+            collector = TaskManagerCollectorAdapter(cfg)
+            pipeline = PipelineManager(cfg, store, engine=eng, collector=collector, start_worker=True)
+            app = InternalEvalApp(cfg, store, pipeline)
+
+            class Handler(BaseHTTPRequestHandler):
+                def log_message(self, fmt: str, *args: Any) -> None:
+                    pass
+
+                def do_GET(self) -> None:
+                    app.handle_http(self)
+
+                def do_POST(self) -> None:
+                    app.handle_http(self)
+
+            srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            base_url = f"http://127.0.0.1:{srv.server_address[1]}{cfg.api_prefix}"
+            try:
+                # Verify template copy helper preserves 2740e85cb7b34909 steps & schedule
+                client = TaskManagerClient(tm_url, user_id="huangdaqiang")
+                pipe, smap, tpl_def = build_task_spec_from_template(
+                    run={
+                        "run_id": "run_chk",
+                        "model": "aime_expert",
+                        "before_agent": {"name": "before"},
+                        "after_agent": {"name": "after"},
+                        "before_agent_label": "before",
+                        "after_agent_label": "after",
+                        "meta": {},
+                    },
+                    sides=["before", "after"],
+                    client=client,
+                    default_template_task_id="2740e85cb7b34909",
+                )
+                self.assertEqual(smap, {"before": "analyst-big-fast-eval-1", "after": "analyst-big-fast-eval-2"})
+                self.assertEqual(tpl_def["concurrency_limit"], 1)
+                self.assertEqual(tpl_def["concurrency_schedule"], {"0": 5, "9": 1, "10": 1})
+                self.assertEqual(len(pipe["steps"]), 2)
+                self.assertRegex(format_abtest_task_name(), r"^AIME_RSI_ABTEST_\d{8}-\d{6}$")
+
+                # 1. Invalid non-date version must return 400; valid YYYYMMDD succeeds with strict folder
+                st_bad, _ = _http_json(
+                    f"{base_url}/runs",
+                    method="POST",
+                    body={
+                        "version": "20261126smoke",
+                        "tier": 2,
+                        "model": "aime_expert",
+                        "before_agent": {"name": "analyst-big-fast-eval-1"},
+                        "after_agent": {"name": "analyst-big-fast-eval-2"},
+                    },
+                )
+                self.assertEqual(st_bad, 400)
+
+                mock_tm.behavior = "always_partial"
+                st, created = _http_json(
+                    f"{base_url}/runs",
+                    method="POST",
+                    body={
+                        "version": "20261126",
+                        "tier": 2,
+                        "model": "aime_expert",
+                        "before_agent": {"name": "analyst-big-fast-eval-1"},
+                        "after_agent": {"name": "analyst-big-fast-eval-2"},
+                    },
+                )
+                self.assertEqual(st, 201)
+
+                # Same-day duplicate for same model must return 409 Conflict
+                st_dup, _ = _http_json(
+                    f"{base_url}/runs",
+                    method="POST",
+                    body={
+                        "version": "20261126",
+                        "tier": 2,
+                        "model": "aime_expert",
+                        "before_agent": {"name": "analyst-big-fast-eval-1"},
+                        "after_agent": {"name": "analyst-big-fast-eval-2"},
+                    },
+                )
+                self.assertEqual(st_dup, 409)
+
+                run_id = created["data"]["run_id"]
+                round_dir = Path(created["data"]["round_dir_path"])
+                self.assertEqual(round_dir.name, "version_20261126_aime_expert")
+                state_file = round_dir / ".work" / "dispatch" / "TASK_MANAGER_STATE.json"
+                self.assertTrue(_wait_until(lambda: state_file.is_file(), timeout=8.0))
+                tm_state = json.loads(state_file.read_text(encoding="utf-8"))
+                tm_id = tm_state["task_id"]
+                drop_dir = Path(tm_state["task_drop_dir"])
+                self.assertEqual(drop_dir, round_dir / tm_id)
+                self.assertTrue(drop_dir.is_dir())
+                self.assertRegex(mock_tm.tasks[tm_id]["task_name"], r"^AIME_RSI_ABTEST_\d{8}-\d{6}$")
+                self.assertEqual(mock_tm.tasks[tm_id]["testset_selections"][0].get("limit"), None)
+                self.assertEqual(mock_tm.tasks[tm_id]["concurrency_schedule"], {"0": 5, "9": 1, "10": 1})
+
+                # Wait until TaskManager reaches initial `completed` with session_index populated
+                self.assertTrue(_wait_until(lambda: len(mock_tm.items[tm_id][0]["session_index"]) >= 1, timeout=8.0))
+                with mock_tm.lock:
+                    sess_before = mock_tm.items[tm_id][0]["session_index"][0]
+                    tid_before = sess_before["trace_id"]
+                    sid_before = sess_before["session_id"]
+
+                # Ignored files: raw/* and *.tmp MUST NOT be ingested
+                (drop_dir / "raw").mkdir(exist_ok=True)
+                (drop_dir / "raw" / "lf_analyst-big-fast-eval-1.jsonl").write_text(
+                    json.dumps({"case_key": "eq_00001", "lf_ok": True, "messages": [{"role": "user", "type": "user_question", "content": "X"}, {"role": "assistant", "type": "final_answer", "content": "Y"}]}) + "\n",
+                    encoding="utf-8",
+                )
+                (drop_dir / "analyst-big-fast-eval-1.jsonl.tmp").write_text("{bad\n", encoding="utf-8")
+
+                # First write lf_ok=False placeholder -> must be skipped without marking failed
+                b_path = drop_dir / "analyst-big-fast-eval-1.jsonl"
+                b_path.write_text(
+                    json.dumps({"case_id": f"{run_id}_eq_00001", "lf_ok": False, "n_obs": 0, "lf_observations": []}) + "\n",
+                    encoding="utf-8",
+                )
+                time.sleep(0.15)
+
+                # Atomically replace analyst-big-fast-eval-1.jsonl with Adapter A record WITHOUT case_id/case_key!
+                adapter_a_line = {
+                    "meta": {"session_id": sid_before, "question": "Target question 0"},
+                    "traces": [
+                        {
+                            "meta": {"trace_id": tid_before, "session_id": sid_before, "timestamp": "2026-11-26T09:00:00Z"},
+                            "messages": [
+                                {"role": "user", "type": "user_question", "content": "Target question 0"},
+                                {"role": "assistant", "type": "final_answer", "content": "Answer before 1"},
+                            ],
+                        }
+                    ],
+                }
+                tmp_b = drop_dir / ".analyst-big-fast-eval-1.jsonl.swap"
+                tmp_b.write_text(json.dumps(adapter_a_line) + "\n", encoding="utf-8")
+                os.replace(tmp_b, b_path)
+
+                # Also drop Adapter B processed trace into analyst-big-fast-eval-2.jsonl
+                trace_line = {
+                    "case_key": "eq_00001",
+                    "trace_id": "drop_t_a1",
+                    "session_id": "drop_s_a1",
+                    "messages": [
+                        {"role": "user", "type": "user_question", "content": "Target question 0"},
+                        {"role": "assistant", "type": "final_answer", "content": "Answer after 1"},
+                    ],
+                }
+                (drop_dir / "analyst-big-fast-eval-2.jsonl").write_text(json.dumps(trace_line) + "\n", encoding="utf-8")
+                (drop_dir / "_DONE").write_text("", encoding="utf-8")
+
+                self.assertTrue(
+                    _wait_until(
+                        lambda: _http_json(f"{base_url}/runs/{run_id}")[1]["data"]["status"] in ("succeeded", "completed_with_errors"),
+                        timeout=15.0,
+                    ),
+                    f"drop_dir run did not converge: {_http_json(f'{base_url}/runs/{run_id}')[1]['data']}",
+                )
+                info = _http_json(f"{base_url}/runs/{run_id}")[1]["data"]
+                self.assertEqual(info["sides_detail"]["before"]["ready"], 1)
+                self.assertEqual(info["sides_detail"]["after"]["ready"], 1)
+                self.assertFalse(any(drop_dir.glob("*_judge.jsonl")))
+                self.assertTrue((round_dir / "agent_before_opt" / "eval_output" / "attribution_human_read.jsonl").is_file())
+                # Stagnation guard stops recovery well before max_recovery_rounds=6 (_start_count <= 3)
+                self.assertLessEqual(mock_tm.tasks[tm_id]["_start_count"], 3)
             finally:
                 pipeline.stop()
                 srv.shutdown()

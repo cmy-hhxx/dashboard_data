@@ -42,3 +42,16 @@ execution:
   # limit: 50                            # optional: smoke-test first N cases
   # compact_output: "./data/eval_compact.jsonl"  # optional: save compact sidecar
   # audit_output: "./data/eval_audit.jsonl"      # optional: save admission issues
+
+# 6. Optional post-processing human-read translation (used by human_read_eval.py)
+# human_read:
+#   output_root: "./data/human_read"     # defaults to <output_dir>/human_read
+#   base_url: "https://your-gateway.example.com/v1"  # defaults to top-level `api.base_url`
+#   model: "deepseek-v4.1-flash"         # defaults to top-level `api.model`
+#   api: "openai-completions"            # openai-completions | openai-responses
+#   api_key_env: "HUMAN_READ_API_KEY"    # defaults to top-level `api` key
+#   workers: 8
+#   target_rpm: 40
+#   kinds: ["attribution", "compact"]
+#   # source_dir: "./data/0_daily_eval"  # optional: scan a business output directory instead of single `output`
+#   # input_dir: "./data/0_daily_eval_input"

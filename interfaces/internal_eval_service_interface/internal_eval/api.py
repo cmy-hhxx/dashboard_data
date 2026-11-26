@@ -295,6 +295,8 @@ class InternalEvalApp:
     def _create_run(self, body: dict[str, Any]) -> tuple[int, dict[str, Any], dict[str, Any]]:
         try:
             run, created = self.pipeline.submit_run(body)
+        except FileExistsError as exc:
+            raise errors.conflict(str(exc)) from exc
         except ValueError as exc:
             raise errors.invalid(str(exc)) from exc
         enriched = self._decorate_run(self.store.get_run_progress(run["run_id"]) or run)
