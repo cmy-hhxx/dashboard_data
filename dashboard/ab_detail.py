@@ -1,23 +1,21 @@
-"""Lazy sample details for the after-release retest (GET /ab_samples/<roundId>/<eq>.json).
+"""Self-contained symmetric AB sample detail builder (GET /ab_samples/<roundId>/<side>-<eq>.json).
 
-The retest samples are not in the main samples index: they are the fixed question set re-run
-after the release and their sources live inside the round::
+Both ``before`` and ``after`` sides read strictly from inside the round directory::
 
-    03_after_release_retest/attribution/<model>/<batch>/<model>_attribution-<batch>.jsonl
-    99_provenance/retest_eval_run/compact/<model>_compact-<batch>.jsonl
-    99_provenance/retest_input/<batch>.slim.jsonl  (or 03_after_release_retest/inputs/<batch>.jsonl)
+    bench/bench.jsonl
+    agent_before_opt/
+      res_before_opt.jsonl
+      eval_output/{attribution.jsonl, attribution_human_read.jsonl, compact.jsonl}
+      cluster/item_index.jsonl
+    agent_after_opt/
+      res_after_opt.jsonl
+      eval_output/{attribution.jsonl, attribution_human_read.jsonl, compact.jsonl}
+      cluster/item_index.jsonl
+    index_stats/pairs_index.csv
 
-The three are joined by ``meta.item_id`` (``case_id`` fallback).  An attribution row is
-required; the input row is preferred but optional (the page then shows the same
-missing-input state as the main samples).  Compact is optional.  The input file is
-GB-sized, so the first request builds a (size, mtime) checked line-offset index cached at
-``cache/ab-details/<roundId>.json`` and later reads use ``pread`` instead of loading the file.
-
-The attribution problems get their cluster leaf backfilled from the retest cluster
-``item_index.slice.jsonl``: its rows are keyed by ``(target trace, json_path)``, which maps one
-problem exactly even when several labels share a leaf.  The coverage CSV's
-``cls_paths``/``cls_labels`` are path-deduplicated, so they only feed the pairs' after-side
-counts.  A problem with no item_index row keeps ``cl = None`` rather than guessing.
+Attribution, input, compact, and optional human_read records are joined via ``eq_index``,
+``case_key``/``case_id``, ``item_id``, and ``trace_id``. File byte offsets are cached in
+``cache/ab-details/<roundId>-<side>.json`` and verified against ``(size, mtime_ns)``.
 """
 from __future__ import annotations
 
@@ -32,37 +30,27 @@ from pathlib import Path
 
 import ab_test
 import build
-import build_store as bs
 import human_read_overlay as hro
 from keylocks import KeyedLocks
 
-INDEX_VERSION = 5
-
-ATTRIBUTION_DIR = ab_test.SCOPE_AFTER + "/attribution"
-BEFORE_ATTRIBUTION_DIR = ab_test.SCOPE_BEFORE + "/attribution"
-ITEM_INDEX_DIR = ab_test.SCOPE_AFTER + "/cluster_tree"
-COMPACT_DIR = "99_provenance/retest_eval_run/compact"
-INPUT_DIR = "99_provenance/retest_input"
-# The retest runner publishes its raw inputs here before the slim copy exists (v1112+);
-# the coverage script already reads both, so the dashboard must too.
-RETEST_INPUT_DIR = f"{ab_test.SCOPE_AFTER}/inputs"
+INDEX_VERSION = 6
 
 ROUND_ID_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*$")
-EQ_RE = re.compile(r"_eq_(\d+)$")
+REF_RE = re.compile(r"^(?:(before|after)-)?(\d+)$")
+CASE_EQ_RE = re.compile(r"(?:^|_)eq_(\d+)$")
 ITEM_RE = re.compile(rb'"item_id"\s*:\s*"([^"]+)"')
 CASE_RE = re.compile(rb'"case_id"\s*:\s*"([^"]+)"')
+CASE_KEY_RE = re.compile(rb'"case_key"\s*:\s*"([^"]+)"')
+TRACE_RE = re.compile(rb'"trace_id"\s*:\s*"([^"]+)"')
+
+FS_CLOCK_SLACK_NS = 20_000_000
 
 
-def _slim_meta_ids(raw):
-    """``(item_id, case_id)`` from a slim input line, without decoding its transcript.
-
-    The line is ``{"meta": {...}, "traces": [...]}`` and can be hundreds of KB; the meta
-    object is small but not guaranteed to be in a fixed prefix (real rows put item_id past
-    32 KB when the question/context fields are long).  The transcript is never touched:
-    only the leading meta object is parsed, so no prefix limit is needed.
-    """
-    # Parse the value of the top-level "meta" key (the first value on the line); the outer
-    # object is not closed yet at that point, so start at the meta object's own ``{``.
+def _slim_meta_ids(raw: bytes):
+    """Extract ``(item_id, case_id, case_key, trace_ids)`` without decoding full transcripts."""
+    item_id = ""
+    case_id = ""
+    case_key = ""
     key = raw.find(b'"meta"')
     start = raw.find(b"{", key + 1) if key >= 0 else -1
     if start >= 0:
@@ -78,24 +66,31 @@ def _slim_meta_ids(raw):
                 except ValueError:
                     meta = None
                 if isinstance(meta, dict):
-                    return str(meta.get("item_id") or ""), str(meta.get("case_id") or "")
+                    item_id = str(meta.get("item_id") or "")
+                    case_id = str(meta.get("case_id") or "")
+                    case_key = str(meta.get("case_key") or "")
+                    break
             pos = anchor + 1
-    # Unknown key order: fall back to the first occurrence anywhere on the line.
-    item = ITEM_RE.search(raw)
-    case = CASE_RE.search(raw)
-    return (item.group(1).decode() if item else "",
-            case.group(1).decode() if case else "")
-
-
-def _model_from_path(path: Path, base: Path) -> str:
-    try:
-        parts = path.relative_to(base).parts
-    except ValueError:
-        return ""
-    if not parts:
-        return ""
-    tail = parts[0].rsplit("_", 1)[-1]
-    return tail if tail in ("fast", "expert") else parts[0]
+    if not item_id:
+        m = ITEM_RE.search(raw)
+        if m:
+            item_id = m.group(1).decode("utf-8", "ignore")
+    if not case_id:
+        m = CASE_RE.search(raw)
+        if m:
+            case_id = m.group(1).decode("utf-8", "ignore")
+    if not case_key:
+        m = CASE_KEY_RE.search(raw)
+        if m:
+            case_key = m.group(1).decode("utf-8", "ignore")
+    tids = []
+    seen = set()
+    for m in TRACE_RE.finditer(raw):
+        tid = m.group(1).decode("utf-8", "ignore")
+        if tid and tid not in seen:
+            seen.add(tid)
+            tids.append(tid)
+    return item_id, case_id, case_key, tids
 
 
 def _retest_date(inp, smeta) -> str:
@@ -111,48 +106,75 @@ def _retest_date_from(value) -> str:
     return build.local_day(value) or ""
 
 
-def _fill_clusters(detail, trace, index, fallback_trace=""):
-    """Backfill attribution problems from the retest cluster item index.
+def _apply_human_read(detail: dict, hr_attr: dict | None) -> bool:
+    """Apply ``attribution_human_read.jsonl`` display fields over ``detail`` when present."""
+    if not isinstance(hr_attr, dict) or not isinstance(detail.get("attribution"), dict):
+        return False
+    da = detail["attribution"]
+    applied = False
+    if (hr_attr.get("session_summary") or "").strip() and da.get("summary"):
+        da["summary"] = hr_attr["session_summary"]
+        applied = True
 
-    The authoritative key is ``(target trace, json_path)``: each item_index row is one
-    attribution problem (``turns[ti].problem[pi]`` or ``session_problem[pi]``) and carries its
-    leaf.  The coverage CSV's ``cls_paths``/``cls_labels`` are path-deduplicated and not
-    parallel, so they are only used for the pairs' after-side counts, never for this mapping.
-    A problem with no matching item stays ``cl = None`` (unclustered on the page).
+    hr_turns = hr_attr.get("turns") or []
+    d_turns = da.get("turns") or []
+    d_probs = da.get("problems") or []
+    if len(hr_turns) == len(d_turns):
+        for dt_row, ht_row in zip(d_turns, hr_turns):
+            if (ht_row.get("summary") or "").strip() and dt_row.get("summary"):
+                dt_row["summary"] = ht_row["summary"]
+                applied = True
+            hp_list = ht_row.get("problem") or []
+            dp_ids = dt_row.get("problems") or []
+            if len(hp_list) == len(dp_ids):
+                for pid, hp in zip(dp_ids, hp_list):
+                    if 0 <= pid < len(d_probs) and hro._apply_problem_overlay(d_probs[pid], hp):
+                        applied = True
 
-    Returns ``(matched, total, first_hit)`` for logging/optional detail fields.
+    hr_sprobs = hr_attr.get("session_problem") or []
+    d_sprob_ids = da.get("session_problems") or []
+    if len(hr_sprobs) == len(d_sprob_ids):
+        for pid, hp in zip(d_sprob_ids, hr_sprobs):
+            if 0 <= pid < len(d_probs) and hro._apply_problem_overlay(d_probs[pid], hp):
+                applied = True
+    return applied
+
+
+def _fill_clusters(detail, index, *idents: str):
+    """Backfill attribution problems from ``cluster/item_index.jsonl``.
+
+    Matches both ``json_path`` (``turns[0].problem[0]`` / ``session_problem[0]``) and
+    ``(turn_index, problem_index)`` keys.
     """
-    problems = (detail.get("attribution") or {}).get("problems") or []
-    lookup = index.get("problems") or {}
     attr = detail.get("attribution") or {}
+    problems = attr.get("problems") or []
+    lookup = index.get("problems") or {}
     matched = 0
     first_hit = None
+    clean_idents = [str(x) for x in idents if x]
 
-    def apply(problem_id, key):
+    def apply(problem_id: int, keys: tuple[str, ...]):
         nonlocal matched, first_hit
-        for ident in (trace, fallback_trace):
-            if not ident:
-                continue
-            hit = lookup.get(f"{ident}\x1f{key}")
-            if hit and hit.get("path"):
-                problem = problems[problem_id]
-                problem["cl"] = {"path": hit["path"], "edge": bool(hit.get("edge")),
-                                 "tags": []}
-                matched += 1
-                if first_hit is None:
-                    first_hit = hit
-                return
+        for ident in clean_idents:
+            for key in keys:
+                hit = lookup.get(f"{ident}\x1f{key}")
+                if hit and hit.get("path"):
+                    problems[problem_id]["cl"] = {
+                        "path": hit["path"],
+                        "edge": bool(hit.get("edge")),
+                        "tags": [],
+                    }
+                    matched += 1
+                    if first_hit is None:
+                        first_hit = hit
+                    return
 
     for ti, turn in enumerate(attr.get("turns") or []):
         for pi, problem_id in enumerate(turn.get("problems") or []):
-            apply(problem_id, f"turns[{ti}].problem[{pi}]")
+            apply(problem_id, (f"turns[{ti}].problem[{pi}]", f"tp:{ti}:{pi}"))
     for pi, problem_id in enumerate(attr.get("session_problems") or []):
-        apply(problem_id, f"session_problem[{pi}]")
+        apply(problem_id, (f"session_problem[{pi}]",))
     return matched, len(problems), first_hit
-
-
-# File mtimes come from a coarse clock (one kernel tick, 4–10 ms) behind time.time_ns().
-FS_CLOCK_SLACK_NS = 20_000_000
 
 
 class ABDetailBuilder:
@@ -162,30 +184,16 @@ class ABDetailBuilder:
         self.sample_dir = Path(sample_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.sample_dir.mkdir(parents=True, exist_ok=True)
-        # The index is read-only after it is loaded; only its first build/load must be
-        # serialised.  Distinct eq details can then be generated in parallel, which
-        # matters when several compare panes are opened around the same time.
         self._index_lock = threading.RLock()
         self._eq_locks = KeyedLocks()
         self._indexes = {}
-        self._before_indexes = {}
         self._gpt_cache = {}
         self._rounds = {}
-        self._inputs = None
-        self._inputs_lock = threading.Lock()
-        self._human_read = hro.HumanReadOverlay(self.datasets)
 
-    def _eq_lock(self, round_id: str, eq: int):
-        return self._eq_locks((round_id, eq))
-
-    # ---- discovery -------------------------------------------------------------------------
+    def _eq_lock(self, round_id: str, cache_stem: str):
+        return self._eq_locks((round_id, cache_stem))
 
     def _round(self, round_id: str):
-        """``(product, round_dir)`` for a scope-layout round, or ``None``.
-
-        The URL only carries the round directory name, so both products are searched; the name
-        is regex-checked first and only an actual directory is ever returned (no traversal).
-        """
         if not ROUND_ID_RE.match(round_id or ""):
             return None
         cached = self._rounds.get(round_id)
@@ -193,7 +201,7 @@ class ABDetailBuilder:
             return cached
         for product in sorted(build.ENABLED):
             for _order, _version, round_dir in ab_test.ab_round_dirs(self.datasets, product):
-                if round_dir.name == round_id and ab_test.is_scope_layout(round_dir):
+                if round_dir.name == round_id and ab_test.is_ab_round(round_dir):
                     found = (product, round_dir)
                     with self._index_lock:
                         self._rounds[round_id] = found
@@ -201,46 +209,24 @@ class ABDetailBuilder:
         return None
 
     @staticmethod
-    def _source_files(round_dir: Path):
-        attr_base = round_dir / ATTRIBUTION_DIR
-        attr = sorted(p for p in attr_base.rglob("*.jsonl") if p.is_file()) if attr_base.is_dir() else []
-        tree_base = round_dir / ITEM_INDEX_DIR
-        items = (sorted(p for p in tree_base.glob("*/item_index.slice.jsonl") if p.is_file())
-                 if tree_base.is_dir() else [])
-        comp_base = round_dir / COMPACT_DIR
-        comp = sorted(p for p in comp_base.glob("*.jsonl") if p.is_file()) if comp_base.is_dir() else []
-        inp = []
-        for input_base in (round_dir / INPUT_DIR, round_dir / RETEST_INPUT_DIR):
-            if input_base.is_dir():
-                inp.extend(p for p in input_base.glob("*.jsonl") if p.is_file())
-        inp.sort()
-        return attr, items, comp, inp
-
-    @staticmethod
-    def _before_files(round_dir: Path):
-        base = round_dir / BEFORE_ATTRIBUTION_DIR
-        return sorted(p for p in base.rglob("*.jsonl") if p.is_file()) if base.is_dir() else []
-
-    def _input_locations(self):
-        """trace_id -> (relative input path, byte offset) from the dashboard build store."""
-        if self._inputs is not None:
-            return self._inputs
-        with self._inputs_lock:
-            if self._inputs is not None:
-                return self._inputs
-            store_path = self.cache_dir / "build.sqlite3"
-            try:
-                store = bs.BuildStore(store_path, readonly=True)
-                try:
-                    self._inputs = store.input_locations()
-                finally:
-                    store.close()
-            except Exception as exc:  # noqa: BLE001 - before details degrade to unavailable
-                build.debug(f"ab before input index: {exc}")
-                self._inputs = {}
-            return self._inputs
-
-    # ---- index -----------------------------------------------------------------------------
+    def _side_files(round_dir: Path, side: str):
+        side_dir = round_dir / ab_test.SIDE_DIR[side]
+        attr = side_dir / ab_test.ATTR_REL
+        hr_attr = side_dir / ab_test.HR_ATTR_REL
+        comp = side_dir / ab_test.COMPACT_REL
+        inp = side_dir / ab_test.INPUT_FILE[side]
+        items = side_dir / ab_test.CLUSTER_DIR / "item_index.jsonl"
+        pairs = round_dir / ab_test.PAIRS_INDEX_REL
+        meta = round_dir / ab_test.META_REL
+        return {
+            "attr": attr if attr.is_file() else None,
+            "hr_attr": hr_attr if hr_attr.is_file() else None,
+            "comp": comp if comp.is_file() else None,
+            "inp": inp if inp.is_file() else None,
+            "items": items if items.is_file() else None,
+            "pairs": pairs if pairs.is_file() else None,
+            "meta": meta if meta.is_file() else None,
+        }
 
     @staticmethod
     def _stat(path: Path, round_dir: Path):
@@ -248,91 +234,80 @@ class ABDetailBuilder:
         return [path.relative_to(round_dir).as_posix(), st.st_size, st.st_mtime_ns]
 
     @staticmethod
-    def _signature(stats) -> str:
-        return hashlib.sha1(json.dumps({"version": INDEX_VERSION, "stats": stats},
-                                       separators=(",", ":")).encode()).hexdigest()
+    def _signature(side: str, stats) -> str:
+        return hashlib.sha1(json.dumps(
+            {"version": INDEX_VERSION, "side": side, "stats": stats},
+            separators=(",", ":"),
+        ).encode()).hexdigest()
 
-    def _index(self, round_id: str, round_dir: Path):
-        attr, items, comp, inp = self._source_files(round_dir)
-        coverage = ab_test.scope_coverage_path(round_dir, "after")
-        stats = [self._stat(path, round_dir) for path in (*attr, *items, *comp, *inp)]
-        if coverage and coverage.is_file():
-            stats.append(self._stat(coverage, round_dir))
-        sig = self._signature(stats)
-        cached = self._indexes.get(round_id)
+    def _index(self, round_id: str, round_dir: Path, side: str):
+        files = self._side_files(round_dir, side)
+        stats = [self._stat(p, round_dir) for p in files.values() if p is not None]
+        sig = self._signature(side, stats)
+        key = (round_id, side)
+        cached = self._indexes.get(key)
         if cached and cached.get("sig") == sig:
             return cached
-        path = self.cache_dir / "ab-details" / f"{round_id}.json"
+        cache_path = self.cache_dir / "ab-details" / f"{round_id}-{side}.json"
         try:
-            index = json.loads(path.read_text(encoding="utf-8"))
+            index = json.loads(cache_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             index = None
         if not index or index.get("version") != INDEX_VERSION or index.get("sig") != sig:
-            index = self._build_index(round_dir, attr, items, comp, inp, coverage, sig)
-            self._save_index(path, index)
-        self._indexes[round_id] = index
+            index = self._build_index(round_dir, side, files, sig)
+            self._save_index(cache_path, index)
+        self._indexes[key] = index
         return index
 
-    def _before_index(self, round_id: str, round_dir: Path):
-        files = self._before_files(round_dir)
-        stats = [self._stat(path, round_dir) for path in files]
-        sig = hashlib.sha1(json.dumps({"version": INDEX_VERSION, "before": stats},
-                                      separators=(",", ":")).encode()).hexdigest()
-        cached = self._before_indexes.get(round_id)
-        if cached and cached.get("sig") == sig:
-            return cached
-        sources = []
-        traces = {}
-        for path in files:
-            st = path.stat()
-            entry = {
-                "rel": path.relative_to(round_dir).as_posix(),
-                "size": st.st_size, "mtime_ns": st.st_mtime_ns, "offsets": [],
-            }
-            file_idx = len(sources)
-            sources.append(entry)
-            model = _model_from_path(path, round_dir / BEFORE_ATTRIBUTION_DIR)
-            pos = 0
-            with open(path, "rb") as fh:
-                for line_no, raw in enumerate(fh):
-                    if not raw.endswith(b"\n"):
-                        break
-                    entry["offsets"].append(pos)
-                    pos += len(raw)
-                    try:
-                        row = json.loads(raw)
-                    except ValueError:
-                        continue
-                    for turn in row.get("turns") or []:
-                        trace = str((turn.get("meta") or {}).get("trace_id") or "")
-                        if trace:
-                            traces.setdefault(trace, (file_idx, line_no, model))
-            entry["committed"] = pos
-        index = {"sig": sig, "built_at_ns": time.time_ns(), "sources": sources, "traces": traces}
-        self._before_indexes[round_id] = index
-        return index
-
-    def _build_index(self, round_dir: Path, attr, items, comp, inp, coverage, sig):
+    def _build_index(self, round_dir: Path, side: str, files: dict, sig: str):
         sources = []
         attribution = {}
         problems = {}
         problem_dupes = 0
-        compact_by_item, compact_by_case = {}, {}
-        input_by_item, input_by_case = {}, {}
+        compact_by_item, compact_by_case, compact_by_trace = {}, {}, {}
+        input_by_item, input_by_case, input_by_trace = {}, {}, {}
+        hr_by_key, hr_by_hash, hr_by_eq = {}, {}, {}
+
+        meta_doc = ab_test.read_json(files["meta"]) if files["meta"] else {}
+        model_name = ab_test._short_model(str((meta_doc or {}).get("model") or ""))
+
+        pair_by_eq = {}
+        trace_to_eqs = {}
+        case_to_eq = {}
+        if files["pairs"]:
+            for idx, row in enumerate(ab_test.read_rows(files["pairs"]), 1):
+                eq = ab_test._as_int(row.get("eq_index")) or idx
+                t_tid = str(row.get("trace_id") or "").strip()
+                b_tid = str(row.get("before_trace_id") or "").strip()
+                a_tid = str(row.get("after_trace_id") or "").strip()
+                ck = str(row.get("case_key") or f"eq_{eq:05d}").strip()
+                pair_by_eq[str(eq)] = {
+                    "trace": t_tid,
+                    "side_trace": b_tid if side == "before" else a_tid,
+                    "case_key": ck,
+                    "session_id": str(row.get("session_id") or "").strip(),
+                }
+                if ck:
+                    case_to_eq[ck] = eq
+                for cand in (t_tid, b_tid if side == "before" else a_tid):
+                    if cand:
+                        trace_to_eqs.setdefault(cand, []).append(eq)
 
         def add_source(kind: str, path: Path):
             st = path.stat()
             sources.append({
-                "kind": kind, "rel": path.relative_to(round_dir).as_posix(),
-                "size": st.st_size, "mtime_ns": st.st_mtime_ns, "offsets": [],
+                "kind": kind,
+                "rel": path.relative_to(round_dir).as_posix(),
+                "size": st.st_size,
+                "mtime_ns": st.st_mtime_ns,
+                "offsets": [],
             })
             return len(sources) - 1, sources[-1]
 
-        for path in attr:
-            file_idx, entry = add_source("attribution", path)
-            model = _model_from_path(path, round_dir / ATTRIBUTION_DIR)
+        if files["attr"]:
+            file_idx, entry = add_source("attribution", files["attr"])
             pos = 0
-            with open(path, "rb") as fh:
+            with open(files["attr"], "rb") as fh:
                 for line_no, raw in enumerate(fh):
                     if not raw.endswith(b"\n"):
                         break
@@ -343,20 +318,50 @@ class ABDetailBuilder:
                     except ValueError:
                         continue
                     smeta = row.get("session_meta") or {}
-                    case = str(smeta.get("case_id") or "")
-                    match = EQ_RE.search(case)
-                    if not match:
-                        continue
-                    attribution[str(int(match.group(1)))] = {
-                        "file": file_idx, "line": line_no, "model": model,
-                        "item_id": str(smeta.get("item_id") or ""),
-                    }
+                    item_id = str(smeta.get("item_id") or "")
+                    case_id = str(smeta.get("case_id") or "")
+                    case_key = str(smeta.get("case_key") or "")
+                    turns = row.get("turns") or []
+                    row_tids = []
+                    for turn in turns:
+                        if isinstance(turn, dict):
+                            tid = str((turn.get("meta") or {}).get("trace_id") or "")
+                            if tid and tid not in row_tids:
+                                row_tids.append(tid)
+                    if smeta.get("trace_id") and str(smeta["trace_id"]) not in row_tids:
+                        row_tids.append(str(smeta["trace_id"]))
+
+                    matched_eqs = []
+                    for cand in (case_key, case_id):
+                        if not cand:
+                            continue
+                        if cand in case_to_eq:
+                            matched_eqs.append(case_to_eq[cand])
+                            break
+                        m = CASE_EQ_RE.search(cand)
+                        if m:
+                            matched_eqs.append(int(m.group(1)))
+                            break
+                    if not matched_eqs:
+                        for tid in row_tids:
+                            matched_eqs.extend(trace_to_eqs.get(tid) or [])
+
+                    for eq_num in matched_eqs:
+                        attribution.setdefault(str(eq_num), {
+                            "file": file_idx,
+                            "line": line_no,
+                            "model": model_name,
+                            "item_id": item_id,
+                            "case_id": case_id,
+                            "case_key": case_key,
+                            "trace_id": row_tids[0] if row_tids else "",
+                        })
             entry["committed"] = pos
 
-        for path in items:
-            file_idx, entry = add_source("item_index", path)
+        if files["items"]:
+            _fidx, entry = add_source("item_index", files["items"])
             pos = 0
-            with open(path, "rb") as fh:
+            with open(files["items"], "rb") as fh:
                 for raw in fh:
                     if not raw.endswith(b"\n"):
                         break
@@ -369,27 +374,42 @@ class ABDetailBuilder:
                     path_value = item.get("path")
                     if not path_value:
                         continue
-                    key = f"{item.get('json_path') or ''}"
+                    keys = []
+                    jp = str(item.get("json_path") or "").strip()
+                    if jp:
+                        keys.append(jp)
+                    ti = item.get("turn_index")
+                    pi = item.get("problem_index")
+                    if ti is not None and pi is not None:
+                        keys.append(f"tp:{ti}:{pi}")
+                    if not keys:
+                        keys.append("")
                     record = {
-                        "path": path_value, "edge": bool(item.get("edge")),
+                        "path": path_value,
+                        "edge": bool(item.get("edge")),
                         "retest_trace_id": str(item.get("retest_trace_id") or ""),
                         "request_time": str(item.get("request_time") or ""),
                     }
-                    for ident in (item.get("trace_id"), item.get("retest_trace_id"),
-                                  item.get("session_id")):
+                    idents = [
+                        item.get("trace_id"),
+                        item.get("retest_trace_id"),
+                        item.get("session_id"),
+                    ]
+                    for ident in idents:
                         if not ident:
                             continue
-                        lookup = f"{ident}\x1f{key}"
-                        if lookup in problems:
-                            problem_dupes += 1
-                            continue
-                        problems[lookup] = record
+                        for k in keys:
+                            lookup = f"{ident}\x1f{k}"
+                            if lookup in problems:
+                                problem_dupes += 1
+                                continue
+                            problems[lookup] = record
             entry["committed"] = pos
 
-        for path in comp:
-            file_idx, entry = add_source("compact", path)
+        if files["comp"]:
+            file_idx, entry = add_source("compact", files["comp"])
             pos = 0
-            with open(path, "rb") as fh:
+            with open(files["comp"], "rb") as fh:
                 for line_no, raw in enumerate(fh):
                     if not raw.endswith(b"\n"):
                         break
@@ -402,45 +422,67 @@ class ABDetailBuilder:
                     smeta = row.get("session_meta") or {}
                     item = str(smeta.get("item_id") or "")
                     case = str(smeta.get("case_id") or "")
+                    ckey = str(smeta.get("case_key") or "")
                     if item:
                         compact_by_item.setdefault(item, [file_idx, line_no])
                     if case:
                         compact_by_case.setdefault(case, [file_idx, line_no])
+                    if ckey:
+                        compact_by_case.setdefault(ckey, [file_idx, line_no])
+                    for cand in (smeta.get("trace_id"), row.get("trace_id")):
+                        if cand:
+                            compact_by_trace.setdefault(str(cand), [file_idx, line_no])
             entry["committed"] = pos
 
-        for path in inp:
-            file_idx, entry = add_source("input", path)
+        if files["inp"]:
+            file_idx, entry = add_source("input", files["inp"])
             pos = 0
-            with open(path, "rb") as fh:
+            with open(files["inp"], "rb") as fh:
                 for line_no, raw in enumerate(fh):
                     if not raw.endswith(b"\n"):
                         break
                     entry["offsets"].append(pos)
                     pos += len(raw)
-                    item, case = _slim_meta_ids(raw)
+                    item, case, ckey, tids = _slim_meta_ids(raw)
                     if item:
                         input_by_item.setdefault(item, [file_idx, line_no])
                     if case:
                         input_by_case.setdefault(case, [file_idx, line_no])
+                    if ckey:
+                        input_by_case.setdefault(ckey, [file_idx, line_no])
+                    for tid in tids:
+                        input_by_trace.setdefault(tid, [file_idx, line_no])
             entry["committed"] = pos
 
-        rows = {}
-        if coverage and coverage.is_file():
-            for row in ab_test.read_rows(coverage):
-                eq = ab_test._as_int(row.get("eq_index"))
-                if eq is None:
-                    continue
-                rows[str(eq)] = {
-                    "trace": str(row.get("trace_id") or ""),
-                    "state": (row.get("retest_state") or "").strip(),
-                    "paths": ab_test._split_paths(row.get("cls_paths")),
-                    "labels": ab_test._split_paths(row.get("cls_labels")),
-                }
+        if files["hr_attr"]:
+            file_idx, entry = add_source("human_read", files["hr_attr"])
+            pos = 0
+            with open(files["hr_attr"], "rb") as fh:
+                for line_no, raw in enumerate(fh):
+                    if not raw.endswith(b"\n"):
+                        break
+                    entry["offsets"].append(pos)
+                    pos += len(raw)
+                    try:
+                        row = json.loads(raw)
+                    except ValueError:
+                        continue
+                    ref = [file_idx, line_no]
+                    rkey = hro.record_key_for_record(row, "attribution")
+                    shash = hro._attr_fingerprint(row)
+                    hr_by_key.setdefault(rkey, ref)
+                    hr_by_hash.setdefault(shash, ref)
+                    smeta = row.get("session_meta") or {}
+                    for cand in (smeta.get("case_key"), smeta.get("case_id")):
+                        m = CASE_EQ_RE.search(str(cand or ""))
+                        if m:
+                            hr_by_eq.setdefault(str(int(m.group(1))), ref)
+                            break
+            entry["committed"] = pos
 
-        if problem_dupes:
-            build.debug(f"ab detail index {round_dir.name}: {problem_dupes} duplicate problem keys")
         return {
             "version": INDEX_VERSION,
+            "side": side,
             "sig": sig,
             "built_at_ns": time.time_ns(),
             "sources": sources,
@@ -449,15 +491,23 @@ class ABDetailBuilder:
             "problem_duplicates": problem_dupes,
             "compact_by_item": compact_by_item,
             "compact_by_case": compact_by_case,
+            "compact_by_trace": compact_by_trace,
             "input_by_item": input_by_item,
             "input_by_case": input_by_case,
-            "coverage": rows,
+            "input_by_trace": input_by_trace,
+            "hr_by_key": hr_by_key,
+            "hr_by_hash": hr_by_hash,
+            "hr_by_eq": hr_by_eq,
+            "pairs": pair_by_eq,
         }
 
     @staticmethod
     def _save_index(path: Path, index):
         path.parent.mkdir(parents=True, exist_ok=True)
-        build.replace_bytes(path, json.dumps(index, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        build.replace_bytes(
+            path,
+            json.dumps(index, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+        )
 
     @staticmethod
     def _read_line(round_dir: Path, entry, line_no: int) -> bytes:
@@ -478,13 +528,8 @@ class ABDetailBuilder:
             build.debug(f"ab detail: source row read failed: {exc}")
             return None
 
-    # ---- details ---------------------------------------------------------------------------
-
     @staticmethod
     def _fresh(path: Path, stamp: int):
-        # ``stamp`` comes from time.time_ns(), file mtimes from the kernel's coarse
-        # clock, which can trail it by a tick: a detail written right after the index
-        # would otherwise look stale and be rebuilt on every request.
         try:
             if path.stat().st_mtime_ns >= stamp - FS_CLOCK_SLACK_NS:
                 build.ensure_detail_gz(path)
@@ -493,30 +538,35 @@ class ABDetailBuilder:
             pass
         return False
 
-    def warm(self):
-        """Load/build the AB index at startup so the first compare pane is instant.
+    @staticmethod
+    def _drop(path: Path):
+        for target in (path, Path(str(path) + ".gz"), Path(str(path) + ".br")):
+            try:
+                target.unlink()
+            except OSError:
+                pass
 
-        The index is cached on disk, but a retest update invalidates its signature;
-        rebuilding it inside the first /ab_samples request would stall that pane for
-        seconds.  A background warm pays the same cost where nobody is waiting.
-        """
+    def warm(self):
+        """Warm both before & after AB indexes at startup."""
         for product in sorted(build.ENABLED):
             try:
                 rounds = ab_test.ab_round_dirs(self.datasets, product)
             except OSError:
                 continue
             for _order, _version, round_dir in rounds:
-                if not ab_test.is_scope_layout(round_dir):
+                if not ab_test.is_ab_round(round_dir):
                     continue
-                try:
-                    with self._index_lock:
-                        index = self._index(round_dir.name, round_dir)
-                    build.debug(f"ab index ready: {round_dir.name} ({len(index.get('attribution') or {})} rows)")
-                except Exception as exc:  # noqa: BLE001 - warm is best effort
-                    build.debug(f"ab index warm failed {round_dir.name}: {exc}")
+                for side in ("before", "after"):
+                    try:
+                        with self._index_lock:
+                            index = self._index(round_dir.name, round_dir, side)
+                        build.debug(
+                            f"ab index ready: {round_dir.name}/{side} ({len(index.get('attribution') or {})} rows)"
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        build.debug(f"ab index warm failed {round_dir.name}/{side}: {exc}")
 
     def gpt(self, round_id, key):
-        """One GPT answer for the compare page; ``None`` when it is not on disk yet."""
         found = self._round(round_id)
         if not found:
             return None
@@ -536,75 +586,40 @@ class ABDetailBuilder:
         return answer
 
     @staticmethod
-    def _drop(path: Path):
-        """Remove a cached detail that no longer has a source row.
-
-        Coverage can shrink after a retest rerun; leaving the old JSON in
-        ``static/ab_samples`` would make the server serve a deleted eq forever.
-        """
-        for target in (path, Path(str(path) + ".gz"), Path(str(path) + ".br")):
-            try:
-                target.unlink()
-            except OSError:
-                pass
+    def _parse_ref(ref) -> tuple[str, int] | None:
+        if isinstance(ref, int):
+            return ("after", ref) if ref > 0 else None
+        text = str(ref or "").strip()
+        m = REF_RE.match(text)
+        if not m:
+            return None
+        side = m.group(1) or "after"
+        eq = int(m.group(2))
+        if eq <= 0:
+            return None
+        return side, eq
 
     def ensure(self, round_id, ref):
-        """Generate (or reuse) one after / before detail; ``None`` when it cannot be built."""
-        before_trace = None
-        if isinstance(ref, str) and ref.startswith("before-"):
-            before_trace = ref[len("before-"):]
-            eq = None
-        else:
-            try:
-                eq = int(ref)
-            except (TypeError, ValueError):
-                return None
-            if eq <= 0:
-                return None
+        parsed = self._parse_ref(ref)
+        if not parsed:
+            return None
+        side, eq = parsed
         found = self._round(round_id)
         if not found:
             return None
         product, round_dir = found
-        if before_trace:
-            path = self.sample_dir / round_id / f"before-{before_trace}.json"
-            with self._index_lock:
-                index = self._before_index(round_id, round_dir)
-            with self._eq_lock(round_id, "before-" + before_trace):
-                if before_trace not in index["traces"]:
-                    self._drop(path)
-                    return None
-                hr_stamp = 0
-                if product == "aime":
-                    entry = index["traces"][before_trace]
-                    attr_rel = hro.ab_rel_path(round_id, index["sources"][entry[0]]["rel"])
-                    hr_stamp = self._human_read.file_latest_ns(attr_rel)
-                if self._fresh(path, max(index.get("built_at_ns") or 0, hr_stamp)):
-                    return path
-                detail = self._build_before_detail(product, round_dir, round_id, before_trace, index)
-                if detail is None:
-                    self._drop(path)
-                    return None
-                build.write_json(path, detail)
-                build.ensure_detail_gz(path)
-                return path
-        path = self.sample_dir / round_id / f"{eq}.json"
+        file_stem = str(ref).strip()
+        cache_stem = f"{side}-{eq}"
+        path = self.sample_dir / round_id / f"{file_stem}.json"
         with self._index_lock:
-            index = self._index(round_id, round_dir)
-        with self._eq_lock(round_id, eq):
+            index = self._index(round_id, round_dir, side)
+        with self._eq_lock(round_id, cache_stem):
             if str(eq) not in index["attribution"]:
                 self._drop(path)
                 return None
-            hr_stamp = 0
-            if product == "aime":
-                found_meta = index["attribution"][str(eq)]
-                attr_rel = hro.ab_rel_path(round_id, index["sources"][found_meta["file"]]["rel"])
-                item_id = str(found_meta.get("item_id") or "")
-                comp_ref = index["compact_by_item"].get(item_id) if item_id else None
-                comp_rel = hro.ab_rel_path(round_id, index["sources"][comp_ref[0]]["rel"]) if comp_ref else None
-                hr_stamp = self._human_read.file_latest_ns(attr_rel, comp_rel)
-            if self._fresh(path, max(index.get("built_at_ns") or 0, hr_stamp)):
+            if self._fresh(path, index.get("built_at_ns") or 0):
                 return path
-            detail = self._build_detail(product, round_dir, round_id, eq, index)
+            detail = self._build_side_detail(product, round_dir, round_id, side, eq, index)
             if detail is None:
                 self._drop(path)
                 return None
@@ -612,43 +627,14 @@ class ABDetailBuilder:
             build.ensure_detail_gz(path)
             return path
 
-    def _build_before_detail(self, product: str, round_dir: Path, round_id: str, trace: str, index):
-        entry = index["traces"].get(trace)
-        if not entry:
-            return None
-        file_idx, line_no, model = entry
-        attr = self._load(index, round_dir, (file_idx, line_no))
-        if not isinstance(attr, dict):
-            return None
-        location = self._input_locations().get(trace)
-        if not location:
-            return None
-        rel, offset = location
-        try:
-            with open(self.datasets / rel, "rb") as fh:
-                fh.seek(offset)
-                inp = json.loads(fh.readline())
-        except (OSError, ValueError):
-            return None
-        smeta = attr.get("session_meta") or {}
-        date = _retest_date(inp, smeta) or _retest_date_from(smeta.get("request_time"))
-        split = "lost" if "lost_user" in rel else "daily"
-        pair = {
-            "product": product, "model": model,
-            "date": date, "split": split,
-            "input": None, "compact": None, "output": None,
-        }
-        detail, _row, _facts = build.build_sample(pair, inp, attr, None, {}, Counter())
-        if product == "aime":
-            attr_rel = hro.ab_rel_path(round_id, index["sources"][file_idx]["rel"])
-            try:
-                self._human_read.overlay_detail(detail, attr_rel, attr)
-            except Exception as exc:  # noqa: BLE001
-                build.debug(f"ab before detail {round_id}/{trace}: human_read overlay failed: {exc}")
-        detail["ab"] = {"round": round_id, "trace": trace, "side": "before"}
-        return detail
+    @staticmethod
+    def _lookup_ref(mapping: dict, *keys: str):
+        for k in keys:
+            if k and k in mapping:
+                return mapping[k]
+        return None
 
-    def _build_detail(self, product: str, round_dir: Path, round_id: str, eq: int, index):
+    def _build_side_detail(self, product: str, round_dir: Path, round_id: str, side: str, eq: int, index):
         found = index["attribution"].get(str(eq))
         if not found:
             return None
@@ -656,47 +642,75 @@ class ABDetailBuilder:
         if not isinstance(attr, dict):
             return None
         smeta = attr.get("session_meta") or {}
+        pair_info = index["pairs"].get(str(eq)) or {}
+        target_trace = pair_info.get("trace") or ""
+        side_trace = found.get("trace_id") or pair_info.get("side_trace") or str(smeta.get("trace_id") or "")
         item = str(smeta.get("item_id") or found.get("item_id") or "")
-        case = str(smeta.get("case_id") or "")
+        case = str(smeta.get("case_id") or found.get("case_id") or "")
+        ckey = str(smeta.get("case_key") or found.get("case_key") or pair_info.get("case_key") or "")
 
-        input_ref = index["input_by_item"].get(item) if item else None
-        if input_ref is None and case:
-            input_ref = index["input_by_case"].get(case)
-        inp = self._load(index, round_dir, input_ref) if input_ref else None
+        turn_tids = [
+            str((t.get("meta") or {}).get("trace_id") or "")
+            for t in (attr.get("turns") or [])
+            if isinstance(t, dict) and (t.get("meta") or {}).get("trace_id")
+        ]
+
+        inp_ref = (
+            self._lookup_ref(index["input_by_item"], item)
+            or self._lookup_ref(index["input_by_case"], case, ckey)
+            or self._lookup_ref(index["input_by_trace"], side_trace, target_trace, *turn_tids)
+        )
+        inp = self._load(index, round_dir, inp_ref) if inp_ref else None
         if not isinstance(inp, dict):
-            # Attribution without a published input (the retest runner may drop its
-            # staging inputs after mapping) still renders: the pane shows the
-            # "no eval input" state with output + attribution instead of a 404.
             inp = None
 
-        compact_ref = index["compact_by_item"].get(item) if item else None
-        if compact_ref is None and case:
-            compact_ref = index["compact_by_case"].get(case)
-        comp = self._load(index, round_dir, compact_ref) if compact_ref else None
+        comp_ref = (
+            self._lookup_ref(index["compact_by_item"], item)
+            or self._lookup_ref(index["compact_by_case"], case, ckey)
+            or self._lookup_ref(index["compact_by_trace"], side_trace, target_trace, *turn_tids)
+        )
+        comp = self._load(index, round_dir, comp_ref) if comp_ref else None
 
-        coverage = index["coverage"].get(str(eq)) or {}
-        target_trace = coverage.get("trace") or ""
-        retest_trace = str(smeta.get("trace_id") or "")
         pair = {
-            "product": product, "model": found.get("model") or "",
-            "date": _retest_date(inp, smeta), "split": "retest",
-            "input": None, "compact": None, "output": None,
+            "product": product,
+            "model": found.get("model") or "",
+            "date": _retest_date(inp, smeta),
+            "split": side,
+            "input": None,
+            "compact": None,
+            "output": None,
         }
         detail, _row, _facts = build.build_sample(
-            pair, inp, attr, comp if isinstance(comp, dict) else None, {}, Counter())
-        matched, total, first_hit = _fill_clusters(detail, target_trace, index, retest_trace)
-        if product == "aime":
-            attr_rel = hro.ab_rel_path(round_id, index["sources"][found["file"]]["rel"])
-            comp_rel = hro.ab_rel_path(round_id, index["sources"][compact_ref[0]]["rel"]) if compact_ref else None
-            try:
-                self._human_read.overlay_detail(detail, attr_rel, attr, comp_rel, comp if isinstance(comp, dict) else None)
-            except Exception as exc:  # noqa: BLE001
-                build.debug(f"ab detail {round_id}/{eq}: human_read overlay failed: {exc}")
+            pair, inp, attr, comp if isinstance(comp, dict) else None, {}, Counter()
+        )
+        matched, total, first_hit = _fill_clusters(
+            detail,
+            index,
+            target_trace,
+            side_trace,
+            *turn_tids,
+            pair_info.get("session_id") or "",
+            str(smeta.get("session_id") or ""),
+        )
+
+        hr_ref = None
+        if index.get("hr_by_key") or index.get("hr_by_hash") or index.get("hr_by_eq"):
+            rkey = hro.record_key_for_record(attr, "attribution")
+            shash = hro._attr_fingerprint(attr)
+            hr_ref = (
+                index["hr_by_key"].get(rkey)
+                or index["hr_by_hash"].get(shash)
+                or index["hr_by_eq"].get(str(eq))
+            )
+        if hr_ref:
+            hr_attr = self._load(index, round_dir, hr_ref)
+            _apply_human_read(detail, hr_attr)
+
         if total:
-            build.debug(f"ab detail {round_id}/{eq}: cluster backfill {matched}/{total}")
+            build.debug(f"ab detail {round_id}/{side}-{eq}: cluster backfill {matched}/{total}")
         if first_hit and not pair["date"]:
             detail["date"] = pair["date"] = _retest_date_from(first_hit.get("request_time"))
-        detail["ab"] = {"round": round_id, "eq": eq, "trace": target_trace}
-        if first_hit:
-            detail["ab"]["retest_trace"] = first_hit.get("retest_trace_id") or retest_trace
+        detail["ab"] = {"round": round_id, "side": side, "eq": eq, "trace": target_trace}
+        if side_trace and side_trace != target_trace:
+            detail["ab"]["side_trace"] = side_trace
         return detail

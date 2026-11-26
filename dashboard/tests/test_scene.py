@@ -29,15 +29,10 @@ if __name__ == "__main__":
 
 
 class ABSceneTests(unittest.TestCase):
-    def test_ab_scene_pair_ignores_skill(self):
-        import ab_test
-        detail = {"meta": {"skill": "aime-finquery,data-visualizer"}}
-        self.assertEqual(ab_test.scene_pair(detail, {}), (ab_test.NO_SCENE, ""))
-
-    def test_ab_sample_index_ignores_skill(self):
+    def test_ab_sample_scene_index_ignores_skill(self):
         import ab_test
         samples = [("s1", {"meta": {"skill": "stock-analysis"}, "ids": {}},
                     {"m": "a_fast", "sid": "thread_1", "d": "2026-11-18", "tid": "t1"}, {})]
-        index = ab_test._sample_index(samples)
-        self.assertEqual(index["by_trace"], {})
-        self.assertEqual(index["by_session"]["thread_1"][0]["task"], "")
+        by_trace, by_session = ab_test._sample_scene_index(samples)
+        self.assertEqual(by_trace, {})
+        self.assertEqual(by_session, {})

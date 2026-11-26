@@ -512,18 +512,7 @@ export async function loadABTrendSamplePage(ctx, spec, pick) {
   const { round, sides } = pick.series.samples[pick.index];
   if (!round.sample_refs) return { items: [], emptyText: "当前快照缺少 A/B 样本关联" };
   const refs = abTrendSampleRefs(round, sides, spec.row, spec.node).slice(0, RECALL_CAP);
-  const slugs = [...new Set(refs.map((ref) => ref.slug).filter(Boolean))];
-  const tids = [...new Set(refs.filter((ref) => !ref.slug && ref.side === "before" && ref.trace).map((ref) => ref.trace))];
-  let rows = null;
-  if ((slugs.length || tids.length) && typeof ctx.recallLookup === "function") {
-    const looked = await ctx.recallLookup(ctx.product, { slugs, tids, cap: RECALL_CAP });
-    if (looked && Array.isArray(looked.rows)) rows = looked.rows;
-  }
-  if (!rows) {
-    const index = await ctx.loadIndex(ctx.product);
-    rows = index.products?.[ctx.product]?.rows || [];
-  }
-  const { items } = resolveABSamples(refs, rows, spec.node);
+  const { items } = resolveABSamples(refs, [], spec.node);
   return {
     items: items.map(({ row, trace, n, ref }) => ({
       ...caseItem(row),
@@ -563,9 +552,6 @@ export function mountABCellTrend(plot, spec, ctx, onOpenCompare) {
       },
     });
   return mountSampleTrend(plot, makeChart, (pick) => loadABTrendSamplePage(ctx, spec, pick), {
-    openItem: (item) => {
-      if (item.ref?.side === "online") onOpenCompare({ online: item.ref.slug, round: item.round });
-      else onOpenCompare({ pair: item.pair, round: item.round });
-    },
+    openItem: (item) => onOpenCompare({ pair: item.pair, round: item.round }),
   });
 }

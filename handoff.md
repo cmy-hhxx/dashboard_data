@@ -49,7 +49,7 @@ server.py (:5001，定时刷新) ──> 静态服务 + /samples/<slug>.json & /
 
 - **召回与标签拆分**：`samples-<product>.json` 的 `rows[]` 不含 `lb`，前端/业务方按行号与 `labels-<product>.json` 配对；详情仅在选中后请求 `/samples/<slug>.json`。
 - **聚类矩阵与趋势**：矩阵与 `trends-<product>.json` 均按 **trace 口径**计数；`cells` 含 `p0..p4`、`h0..h4`、`hAny` 及 `(mask, count)` 稀疏直方图，多选等级按位交集精确求并集。发版日配置优先读 `<datasets>/releases.json`，兜底 `dashboard/config/releases.json`。
-- **A/B Test 轮次**：仅识别 `ab_test/<n>_version<MMDD>_test/`（含 `round.json`、`00_manifest/coverage_*.csv`、`01_targets/`、`02_before_release/`、`03_after_release_retest/`、`04_after_release_online_real/`、可选 `06_verify/verify.jsonl` 与 `07_gpt_answer/`）。`sides/leaves/nodes/matrix` 四处不可用时必须同源为 `null`，禁止用 `{}`/`[]` 占位；线上批次独立展示，不与固定题集相减。
+- **A/B Test 轮次**：仅识别 `ab_test/version_<YYYYMMDD>_<model>[_<suffix>]/`（含 `bench/bench.jsonl`、`agent_before_opt/{res_before_opt.jsonl,eval_output/{attribution.jsonl,attribution_human_read.jsonl,compact.jsonl},cluster/}`、`agent_after_opt/...`、`index_stats/{meta.json,pairs_index.csv,stats.json}`、可选 `verify/verify.jsonl` 与 `gpt_answer/`）。双侧详情自包含读取，优先叠加同目录 `attribution_human_read.jsonl`（缺失静默回退 `attribution.jsonl`）。
 - **用户规则**：`<datasets>/user_rules.json` 定义真实用户（纯数字 ≤ 10 位）、`test/real` 覆盖名单与 `lost.ids` 流失名单；规则哈希进入构建签名，变更后自动重建。
 - **数据缺口报告**：若 `<datasets>/<n>_<product>/dashboard_data_absence/` 存在，每次构建自动输出 `<product>-data-absence.{json,md}`。
 

@@ -13,7 +13,7 @@ const SAMPLE_PARAMS = {
   model: null, scene: null, sub: null, stage: null, mech: null, pattern: null, date: null, case: null, trace: null,
   res: null, cls: null, typ: null, cause: null,
 };
-const COMPARE_PARAMS = { pair: null, online: null, round: null, face: null };
+const COMPARE_PARAMS = { pair: null, round: null, face: null };
 const BENCH_PARAMS = { bm: null, bl: null, bt: null, bd: null, bv: null };
 // Views that read data-<product>.json (17 MB for AIME). The others only need the data.json shell,
 // so they neither wait for it nor spend the bandwidth their own payloads need.
@@ -362,8 +362,8 @@ async function boot() {
     const cmpBtn = e.target.closest('button[data-value="compare"]');
     if (cmpBtn) {
       const sp = new URLSearchParams(location.search);
-      if (sp.get("face") || sp.get("pair") || sp.get("online")) {
-        navigate({ view: "compare", face: null, pair: null, online: null });
+      if (sp.get("face") || sp.get("pair")) {
+        navigate({ view: "compare", face: null, pair: null });
       }
     }
   });

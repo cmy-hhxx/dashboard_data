@@ -4288,10 +4288,8 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
 
         t0 = time.time()
         ab_bytes = 0
-        input_traces = store.input_trace_ids() if ab_expected else set()
         for product in products:
-            payload = ab_test.ab_payload(datasets, product, generated, samples[product],
-                                         input_traces=input_traces)
+            payload = ab_test.ab_payload(datasets, product, generated, samples[product])
             if not payload:
                 continue
             latest = payload["rounds"][-1]
@@ -4300,7 +4298,6 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
                 "url": f"abtests-{product}.json", "rounds": len(payload["rounds"]),
                 "label": latest["label"], "targets": latest["targets"],
                 "paired": latest["sides"]["after"] is not None,
-                "online": latest["sides"]["online"] is not None,
             }
             ab_bytes += write_json(out_dir / f"abtests-{product}.json", payload)
         for stale in out_dir.glob("abtests-*.json*"):

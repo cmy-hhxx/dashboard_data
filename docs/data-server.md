@@ -21,7 +21,7 @@ AIME 的评测数据、看板（5001）、页面接口（5002）与供数/内部
 │   │   ├── 0_daily_eval/<model>/compact/<model>_compact-<date>.jsonl   # 压缩轨迹
 │   │   ├── cluster/<model>/{cluster_tree.json,item_index.jsonl,...}    # 聚类树（4.4+）
 │   │   └── human_read/                      # 人话译文镜像；外部服务维护，看板只读叠层（勿删）
-│   ├── ab_test/<n>_version<MMDD>_test/   # A/B 轮次（round.json / 00_manifest / 01_targets / 02~07 / 99_provenance）
+│   ├── ab_test/version_<YYYYMMDD>_<model>/   # A/B 轮次（bench/ + agent_{before,after}_opt/ + index_stats/）
 │   ├── user_kyc/                         # 用户 KYC SQLite 库（见 用户KYC库.md）
 │   └── stats/<UTC>/                      # backup_stats.py 每小时快照（保留 12 份）
 ├── 3_dynamic_bench/<model>/tier_<N>.jsonl # 动态抽题库（500/1000/5000/10000）

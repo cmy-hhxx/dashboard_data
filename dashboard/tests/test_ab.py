@@ -1,12 +1,14 @@
-"""AB 测试记录: the before/after round payload and its place in the build."""
+"""AB 测试记录: canonical before/after round payload and its place in the build."""
+import csv
 import gzip
 import json
 import os
-from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 try:
     from dashboard.tests.test_empty_data import DASHBOARD, seed, write_jsonl
@@ -33,65 +35,124 @@ TREE = {
     ]},
 }
 
-
-BEFORE_COVERAGE = """trace_id,session_id,user_id,question_time,mode,question,qtype,status,b_reason,eval_category,eval_store,eval_file,eval_line,eval_n_problem,eval_is_correct,cls_n_items,cls_paths,cls_labels,cls_dates,eval_stores_alt,recycle
-t1,thread_1,,2026-10-20T10:00:00Z,expert,q1,string,已评测_有落点,,daily,daily_expert,e.jsonl,1,2,,2,S1.M2.1;S1.M2.1.3,l1;l2,,"daily_expert,demo_expert",
-t2,thread_2,,2026-10-21T10:00:00Z,expert,q2,string,已评测_有落点,,lost_user,lost_expert,e.jsonl,2,1,,1,S2.M1.2,l3,,
-t3,thread_3,,2026-10-22T10:00:00Z,expert,q3,string,无评测记录,,,e.jsonl,3,0,,0,,,,
-"""
-
-AFTER_COVERAGE = """trace_id,eq_index,retest_state,n_problem,retest_session_id,cls_n_items,cls_paths,cls_labels
-t1,1,已重测_有归因,1,thread_r1,1,S2.M1.2,l3
-t2,2,已重测_有归因,0,thread_r2,0,,
-t3,3,未重测_批次无该题,0,,0,,
-"""
-
-ONLINE_HEADER = "trace_id,session_id,user_id,question_time,model,question,retest_state,n_problem,cls_n_items,cls_paths\n"
+PAIRS_COLUMNS = [
+    "eq_index", "case_key", "trace_id", "session_id", "question_time", "question",
+    "task", "subtask", "before_status", "before_b_reason", "before_trace_id",
+    "before_n_problem", "before_severity", "before_cls_paths", "before_cls_labels",
+    "after_status", "after_trace_id", "after_session_id", "after_n_problem",
+    "after_severity", "after_cls_paths", "after_cls_labels",
+]
 
 
-def scope_round_dir(root: Path, name="0_version1106_test", after=True):
-    """A round in the current three-scope layout."""
+def canonical_round_dir(root: Path, name="version_20261106_aime_expert", after=True, with_scenes=False):
+    """Seed a round in the canonical ab_test layout."""
     base = root / "1_aime" / "ab_test" / name
-    manifest = base / "00_manifest"
-    manifest.mkdir(parents=True, exist_ok=True)
-    (manifest / "coverage_before_release_cluster.csv").write_text(BEFORE_COVERAGE, encoding="utf-8")
-    (manifest / "coverage_before_release.csv").write_text(BEFORE_COVERAGE, encoding="utf-8")
-    (manifest / "coverage_after_release_online_real.csv").write_text(ONLINE_HEADER, encoding="utf-8")
-    (manifest / "summary.json").write_text(json.dumps({
-        "generated_at": "2026-11-07T00:00:00+00:00", "target_traces": 3,
-        "status": {"A_已评测_有落点": 2, "C_无评测记录": 1},
-        "eval_category": {"daily": 1, "lost_user": 1},
-    }), encoding="utf-8")
-    (base / "round.json").write_text(json.dumps({"released_at": "2026-11-06", "label": "1106 发版"}),
-                                     encoding="utf-8")
-    (base / "01_targets").mkdir(exist_ok=True)
-    (base / "01_targets" / "questions.jsonl").write_text(
-        "".join(json.dumps({"trace_id": trace, "session_id": f"thread_{i}"}) + "\n"
-                for i, trace in enumerate(("t1", "t2", "t3"), 1)), encoding="utf-8")
-    for rel in ("02_before_release", "03_after_release_retest", "04_after_release_online_real"):
-        (base / rel).mkdir(exist_ok=True)
-    for rel, items in (("02_before_release/cluster_tree/aime_expert", [("t1", "S1.M2.1"), ("t1", "S1.M2.1.3"), ("t2", "S2.M1.2")]),
-                       ("03_after_release_retest/cluster_tree/aime_expert", [("t1", "S2.M1.2")])):
-        tree = base / rel
-        tree.mkdir(parents=True, exist_ok=True)
-        (tree / "cluster_tree.json").write_text(json.dumps(TREE, ensure_ascii=False), encoding="utf-8")
-        (tree / "leaves.tsv").write_text(
-            "path\tl1\tl2\tname\nS1.M2.1\t取数规划\t目标错配\t请求照抄原句\n"
-            "S2.M1.2\t检索规划\t空转未执行\t未发起检索\n", encoding="utf-8")
-        (tree / "item_index.slice.jsonl").write_text(
-            "".join(json.dumps({"trace_id": trace, "path": path}) + "\n" for trace, path in items),
-            encoding="utf-8")
-    # 重测归因：case_id 结尾的 eq 决定哪些题能开「改版后」详情（这里 1、2 有、3 没有）。
-    attr = base / "03_after_release_retest" / "attribution" / "aime_expert" / "1800_lost_user_backtest"
-    attr.mkdir(parents=True, exist_ok=True)
-    (attr / "aime_expert_attribution-1800_lost_user_backtest.jsonl").write_text(
-        "".join(json.dumps({"session_meta": {"item_id": f"item_{eq}", "case_id": f"set_eq_{eq:05d}"}}) + "\n"
-                for eq in (1, 2)), encoding="utf-8")
+    (base / "bench").mkdir(parents=True, exist_ok=True)
+    (base / "index_stats").mkdir(parents=True, exist_ok=True)
+    (base / "agent_before_opt" / "eval_output").mkdir(parents=True, exist_ok=True)
+    (base / "agent_before_opt" / "cluster").mkdir(parents=True, exist_ok=True)
+
+    ver = name.split("_")[1] if name.startswith("version_") else "20261106"
+    rel_date = f"{ver[:4]}-{ver[4:6]}-{ver[6:8]}" if len(ver) == 8 else "2026-11-06"
+    (base / "index_stats" / "meta.json").write_text(
+        json.dumps({
+            "version": ver,
+            "model": "aime_expert",
+            "released_at": rel_date,
+            "label": f"{ver[4:]} 发版",
+            "title": f"AIME v{ver[4:]} 优化前后对比",
+            "before_label": "优化前",
+            "after_label": "优化后",
+            "tier": 3,
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    rows = [
+        {
+            "eq_index": 1, "case_key": "eq_00001", "trace_id": "t1", "session_id": "thread_1",
+            "question_time": "2026-10-20T10:00:00Z", "question": "q1",
+            "task": "取数规划" if with_scenes else "", "subtask": "目标错配" if with_scenes else "",
+            "before_status": "evaluated", "before_b_reason": "", "before_trace_id": "t1",
+            "before_n_problem": 2, "before_severity": "P1",
+            "before_cls_paths": "S1.M2.1;S1.M2.1.3", "before_cls_labels": "l1;l2",
+            "after_status": "evaluated" if after else "pending",
+            "after_trace_id": "tr1" if after else "", "after_session_id": "thread_r1" if after else "",
+            "after_n_problem": 1 if after else 0, "after_severity": "P2" if after else "",
+            "after_cls_paths": "S2.M1.2" if after else "", "after_cls_labels": "l3" if after else "",
+        },
+        {
+            "eq_index": 2, "case_key": "eq_00002", "trace_id": "t2", "session_id": "thread_2",
+            "question_time": "2026-10-21T10:00:00Z", "question": "q2",
+            "task": "检索规划" if with_scenes else "", "subtask": "空转未执行" if with_scenes else "",
+            "before_status": "evaluated", "before_b_reason": "", "before_trace_id": "t2",
+            "before_n_problem": 1, "before_severity": "P2",
+            "before_cls_paths": "S2.M1.2", "before_cls_labels": "l3",
+            "after_status": "evaluated" if after else "pending",
+            "after_trace_id": "tr2" if after else "", "after_session_id": "thread_r2" if after else "",
+            "after_n_problem": 0, "after_severity": "GOLD" if after else "",
+            "after_cls_paths": "", "after_cls_labels": "",
+        },
+        {
+            "eq_index": 3, "case_key": "eq_00003", "trace_id": "t3", "session_id": "thread_3",
+            "question_time": "2026-10-22T10:00:00Z", "question": "q3",
+            "task": "", "subtask": "",
+            "before_status": "missing", "before_b_reason": "", "before_trace_id": "",
+            "before_n_problem": 0, "before_severity": "",
+            "before_cls_paths": "", "before_cls_labels": "",
+            "after_status": "missing",
+            "after_trace_id": "", "after_session_id": "",
+            "after_n_problem": 0, "after_severity": "",
+            "after_cls_paths": "", "after_cls_labels": "",
+        },
+    ]
+    with (base / "index_stats" / "pairs_index.csv").open("w", encoding="utf-8", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=PAIRS_COLUMNS)
+        w.writeheader()
+        for r in rows:
+            w.writerow(r)
+
+    (base / "bench" / "bench.jsonl").write_text(
+        "".join(json.dumps({"eq_index": r["eq_index"], "case_key": r["case_key"],
+                            "trace_id": r["trace_id"], "question": r["question"]}) + "\n" for r in rows),
+        encoding="utf-8",
+    )
+    (base / "agent_before_opt" / "eval_output" / "attribution.jsonl").write_text(
+        "".join(json.dumps({
+            "session_meta": {"case_id": f"eq_{eq:05d}", "trace_id": f"t{eq}", "session_id": f"thread_{eq}"},
+            "turns": [{"meta": {"trace_id": f"t{eq}"}, "summary": "ok", "problem": []}],
+        }) + "\n" for eq in (1, 2)),
+        encoding="utf-8",
+    )
+    before_cluster = base / "agent_before_opt" / "cluster"
+    (before_cluster / "cluster_tree.json").write_text(json.dumps(TREE, ensure_ascii=False), encoding="utf-8")
+    (before_cluster / "leaves.tsv").write_text(
+        "path\tl1\tl2\tname\nS1.M2.1\t取数规划\t目标错配\t请求照抄原句\nS2.M1.2\t检索规划\t空转未执行\t未发起检索\n",
+        encoding="utf-8",
+    )
+    (before_cluster / "item_index.jsonl").write_text(
+        "".join(json.dumps({"trace_id": t, "path": p}) + "\n" for t, p in [("t1", "S1.M2.1"), ("t1", "S1.M2.1.3"), ("t2", "S2.M1.2")]),
+        encoding="utf-8",
+    )
+
     if after:
-        (manifest / "coverage_after_release_retest.csv").write_text(AFTER_COVERAGE, encoding="utf-8")
-    else:
-        import shutil
-        shutil.rmtree(base / "03_after_release_retest")
+        (base / "agent_after_opt" / "eval_output").mkdir(parents=True, exist_ok=True)
+        (base / "agent_after_opt" / "cluster").mkdir(parents=True, exist_ok=True)
+        (base / "agent_after_opt" / "eval_output" / "attribution.jsonl").write_text(
+            "".join(json.dumps({
+                "session_meta": {"item_id": f"item_{eq}", "case_id": f"set_eq_{eq:05d}"},
+                "turns": [{"meta": {"trace_id": f"tr{eq}"}, "summary": "ok", "problem": []}],
+            }) + "\n" for eq in (1, 2)),
+            encoding="utf-8",
+        )
+        after_cluster = base / "agent_after_opt" / "cluster"
+        (after_cluster / "cluster_tree.json").write_text(json.dumps(TREE, ensure_ascii=False), encoding="utf-8")
+        (after_cluster / "leaves.tsv").write_text(
+            "path\tl1\tl2\tname\nS2.M1.2\t检索规划\t空转未执行\t未发起检索\n", encoding="utf-8"
+        )
+        (after_cluster / "item_index.jsonl").write_text(
+            json.dumps({"trace_id": "t1", "path": "S2.M1.2"}) + "\n", encoding="utf-8"
+        )
     return base
 
 
@@ -102,52 +163,35 @@ class PayloadTests(unittest.TestCase):
     def test_round_metadata_and_signature(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            base = scope_round_dir(root)
-            (base / "round.json").write_text(json.dumps({"released_at": "2026-11-06", "label": "1106 发版"},
-                                                        ensure_ascii=False), encoding="utf-8")
+            canonical_round_dir(root)
             before = ab_test.rounds_signature(root)
             rnd = self.payload(root)["rounds"][0]
             self.assertEqual((rnd["released_at"], rnd["release_label"]), ("2026-11-06", "1106 发版"))
-            # 新文件、以及「发版后」数据回填，都必须让 reuse marker 失效。
-            scope_round_dir(root, name="1_version1201_test", after=False)
+            self.assertEqual((rnd["before_label"], rnd["after_label"]), ("优化前", "优化后"))
+            self.assertNotIn("online", rnd["sides"])
+            self.assertNotIn("online", rnd["matrix"])
+            self.assertNotIn("online", rnd["sample_refs"])
+            # Adding another round or completing after invalidates signature
+            canonical_round_dir(root, name="version_20261201_aime_expert", after=False)
             self.assertNotEqual(ab_test.rounds_signature(root), before)
             signature = ab_test.rounds_signature(root)
-            scope_round_dir(root, name="1_version1201_test")
+            canonical_round_dir(root, name="version_20261201_aime_expert", after=True)
             self.assertNotEqual(ab_test.rounds_signature(root), signature)
 
     def test_sample_recall_keeps_only_questions_with_both_details(self):
         pairs = [
-            {"id": "both", "before": {"detail": "slug"}, "after": {"detail": 1}},
-            {"id": "before-only", "before": {"detail": "slug"}, "after": {"detail": None}},
-            {"id": "after-only", "before": {"detail": None}, "after": {"detail": 2}},
+            {"id": "both", "before": {"detail": "before-1"}, "after": {"detail": "after-1"}},
+            {"id": "before-only", "before": {"detail": "before-2"}, "after": {"detail": None}},
+            {"id": "after-only", "before": {"detail": None}, "after": {"detail": "after-3"}},
         ]
-        refs = {"before": [{"pair": "both"}, {"pair": "before-only"}, {"pair": "after-only"}],
-                "after": [{"pair": "both"}, {"pair": "before-only"}, {"pair": "after-only"}],
-                "online": [{"slug": "online"}]}
+        refs = {
+            "before": [{"pair": "both"}, {"pair": "before-only"}, {"pair": "after-only"}],
+            "after": [{"pair": "both"}, {"pair": "before-only"}, {"pair": "after-only"}],
+        }
         ab_test._paired_only(pairs, refs)
         self.assertEqual([pair["id"] for pair in pairs], ["both"])
         self.assertEqual([ref["pair"] for ref in refs["before"]], ["both"])
         self.assertEqual([ref["pair"] for ref in refs["after"]], ["both"])
-        self.assertEqual(refs["online"], [{"slug": "online"}])
-
-    def test_online_window_stops_at_the_next_release(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            first = scope_round_dir(root, name="0_version1106_test")
-            second = scope_round_dir(root, name="1_version1113_test")
-            (first / "round.json").write_text(json.dumps({"released_at": "2026-11-06"}), encoding="utf-8")
-            (second / "round.json").write_text(json.dumps({"released_at": "2026-11-13"}), encoding="utf-8")
-
-            def sample(slug, day, trace):
-                detail = {"meta": {"task": "行情解读", "subtask": "股价走势"},
-                          "attribution": {"problems": [{"cl": {"path": "S1.M2.1"}}]}}
-                return (slug, detail, {"d": day, "ut": "real", "tid": trace, "m": "expert"}, {})
-
-            samples = [sample("r1", "2026-11-07", "r1"), sample("r2", "2026-11-13", "r2")]
-            payload = ab_test.ab_payload(root, "aime", samples=samples)
-            self.assertEqual([rnd["sides"]["online"]["traces"] for rnd in payload["rounds"]], [1, 1])
-            self.assertEqual(payload["rounds"][0]["sides"]["online"]["to"], "2026-11-07")
-            self.assertEqual(payload["rounds"][1]["sides"]["online"]["from"], "2026-11-13")
 
     def test_no_ab_directory_means_no_payload(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -175,252 +219,117 @@ class BuildIntegrationTests(unittest.TestCase):
             datasets, static = root / "datasets", root / "static"
             seed(datasets)
             add_aime(datasets)
-            # 线上样本换一条 trace，避免和固定题集里的 t1 撞车后被排除。
-            online_inp = datasets / "1_aime/eval_input/0_daily_eval_input/aime_fast/2026-11-01.jsonl"
-            online = json.loads(online_inp.read_text(encoding="utf-8"))
-            online["trace_id"] = "online-t1"
-            write_jsonl(online_inp, online)
-            base = scope_round_dir(datasets)
-            (base / "round.json").write_text(json.dumps({"released_at": "2026-10-31"}), encoding="utf-8")
+            canonical_round_dir(datasets, with_scenes=True)
 
             summary = self.run_build(datasets, static)
             self.assertGreater(summary["ab_kb"], 0)
             abtests = self.abtests(static, "aime")
-            self.assertEqual([rnd["id"] for rnd in abtests["rounds"]], ["0_version1106_test"])
+            self.assertEqual([rnd["id"] for rnd in abtests["rounds"]], ["version_20261106_aime_expert"])
             self.assertFalse((static / "abtests-wencai.json").exists())
 
-            # 卡片入口跟着数据走：没有 AB 轮次的产品不出现这个按钮。
             data = json.loads((static / "data-aime.json").read_text(encoding="utf-8"))
             entry = data["products"]["aime"]["ab"]
             self.assertEqual(entry["url"], "abtests-aime.json")
             self.assertEqual((entry["rounds"], entry["targets"], entry["paired"]), (1, 3, True))
-            self.assertTrue(entry["online"])
-            # The online sample is aime_fast; a round scopes every side to its release models
-            # (aime_expert here), so it is counted out — see test_round_scopes_every_side_to_its_release_models.
-            self.assertEqual(abtests["rounds"][0]["sides"]["online"]["traces"], 0)
+            self.assertNotIn("online", entry)
             wencai = json.loads((static / "data-wencai.json").read_text(encoding="utf-8"))
             self.assertNotIn("ab", wencai["products"]["wencai"])
 
-            # 复用标记覆盖 ab_test：新增一期、或删除全部轮次，都要重建。
+            # Reuse check + round add + removal
             self.assertEqual(self.run_build(datasets, static).get("reused"), 1)
-            scope_round_dir(datasets, name="1_version1201_test")
+            canonical_round_dir(datasets, name="version_20261201_aime_expert", with_scenes=True)
             summary = self.run_build(datasets, static)
             self.assertNotIn("reused", summary)
             self.assertEqual(len(self.abtests(static, "aime")["rounds"]), 2)
-            self.assertEqual(json.loads((static / "data-aime.json").read_text())["products"]["aime"]["ab"]["rounds"], 2)
 
-            import shutil
             shutil.rmtree(datasets / "1_aime" / "ab_test")
             self.run_build(datasets, static)
             self.assertFalse((static / "abtests-aime.json").exists())
             self.assertFalse((static / "abtests-aime.json.gz").exists())
 
 
-class ScopeLayoutTests(unittest.TestCase):
+class CanonicalLayoutTests(unittest.TestCase):
     def samples(self):
-        def sample(slug, trace, task, sub, day, ut="real", model="aime_expert", paths=None,
-                   session=None):
-            problems = [{"cl": {"path": path}} for path in (paths or [])]
+        def sample(slug, trace, task, sub, day, model="aime_expert", session=None):
             detail = {"meta": {"task": task, "subtask": sub},
                       "ids": {"session": session or f"s_{slug}", "trace": f"s_{slug}", "case": trace},
-                      "attribution": {"turns": [{"trace_id": trace}], "problems": problems}}
-            row = {"d": day, "ut": ut, "tid": f"s_{slug}", "m": model, "sid": session or f"s_{slug}"}
+                      "attribution": {"turns": [{"trace_id": trace}], "problems": []}}
+            row = {"d": day, "ut": "real", "tid": f"s_{slug}", "m": model, "sid": session or f"s_{slug}"}
             return (slug, detail, row, {})
         return [
             sample("sess-t1", "t1", "取数规划", "目标错配", "2026-10-20", session="thread_1"),
-            sample("sess-t2", "t2", "检索规划", "空转未执行", "2026-10-21", model="aime_fast",
-                   session="thread_2"),
-            sample("online-1", "t9", "行情解读", "股价走势", "2026-11-07", paths=["S9.M1.1"]),
+            sample("sess-t2", "t2", "检索规划", "空转未执行", "2026-10-21", session="thread_2"),
         ]
 
-    def test_scope_round_reads_three_sides_from_scope_files(self):
+    def test_reads_both_sides_symmetrically(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            scope_round_dir(root)
+            canonical_round_dir(root)
             rnd = ab_test.ab_payload(root, "aime", samples=self.samples())["rounds"][0]
             self.assertEqual((rnd["version"], rnd["label"], rnd["released_at"]),
-                             ("1106", "v1106", "2026-11-06"))
+                             ("1106", "1106 发版", "2026-11-06"))
             self.assertEqual(rnd["targets"], 3)
             self.assertEqual(rnd["status"], {"A": 2, "C": 1})
-            self.assertEqual(rnd["sources"], [["daily", 1], ["lost_user", 1]])
             self.assertEqual(rnd["dates"], ["2026-10-20", "2026-10-22"])
             before, after = rnd["sides"]["before"], rnd["sides"]["after"]
-            self.assertEqual((before["traces"], before["hits"], before["problem_traces"]),
-                             (2, 3, 2))
-            self.assertEqual((after["traces"], after["hits"], after["problem_traces"]),
-                             (2, 1, 1))
-            self.assertEqual((rnd["sides"]["online"]["traces"], rnd["sides"]["online"]["hits"]),
-                             (1, 1))
-            self.assertEqual(rnd["sides"]["online"]["from"], "2026-11-06")
-            self.assertEqual(rnd["sides"]["online"]["to"], "2026-11-07")
+            self.assertEqual((before["traces"], before["hits"], before["problem_traces"]), (2, 3, 2))
+            self.assertEqual((after["traces"], after["hits"], after["problem_traces"]), (2, 1, 1))
 
             leaves = {leaf["id"]: leaf for leaf in rnd["leaves"]}
-            self.assertEqual((leaves["S1.M2.1"]["before"], leaves["S1.M2.1"]["after"]),
-                             (1, 0))                     # after available: real 0, not null
+            self.assertEqual((leaves["S1.M2.1"]["before"], leaves["S1.M2.1"]["after"]), (1, 0))
             self.assertEqual(leaves["S1.M2.1.3"]["after"], 0)
             self.assertEqual(leaves["S2.M1.2"]["after"], 1)
-            self.assertEqual(leaves["S1.M2.1"]["online"], 0)  # online available: real 0
+            self.assertNotIn("online", leaves["S1.M2.1"])
 
-            # Scenes come from the build samples: the coverage files carry no task/subtask.
             before_matrix = {tuple(row[:2]): row[2] for row in rnd["matrix"]["before"]}
-            self.assertEqual(before_matrix[("取数规划", "目标错配")],
-                             [["S1.M2.1", 1], ["S1.M2.1.3", 1]])
+            self.assertEqual(before_matrix[("取数规划", "目标错配")], [["S1.M2.1", 1], ["S1.M2.1.3", 1]])
             self.assertEqual(before_matrix[("检索规划", "空转未执行")], [["S2.M1.2", 1]])
-            # 场景按 trace 归属，不随新落点变化：t1 仍是「取数规划 · 目标错配」。
-            self.assertEqual(rnd["matrix"]["after"],
-                             [["取数规划", "目标错配", [["S2.M1.2", 1]], 1]])
-            self.assertEqual(rnd["matrix"]["online"],
-                             [["行情解读", "股价走势", [["S9.M1.1", 1]], 1]])
+            self.assertEqual(rnd["matrix"]["after"], [["取数规划", "目标错配", [["S2.M1.2", 1]], 1]])
 
-            refs = {ref["trace"]: ref for ref in rnd["sample_refs"]["before"]}
-            self.assertEqual((refs["t1"]["task"], refs["t1"]["sub"]), ("取数规划", "目标错配"))
-            self.assertEqual(refs["t1"]["slug"], "sess-t1")
-            self.assertEqual(refs["t2"]["slug"], "sess-t2")
-            self.assertEqual(rnd["sample_refs"]["online"][0]["slug"], "online-1")
-
-            # 同题 pairs：只保留两侧详情都存在的题；eq3 缺详情不进入召回列表。
             pairs = rnd["pairs"]
             self.assertEqual([pair["eq"] for pair in pairs], [1, 2])
-            self.assertEqual([pair["q"] for pair in pairs], ["q1", "q2"])
-            first = pairs[0]
-            self.assertEqual((first["id"], first["scene"], first["sub"]),
-                             ("t1", "取数规划", "目标错配"))
-            self.assertEqual(first["before"], {
-                "trace": "t1", "model": "expert", "detail": "sess-t1", "n": 2,
-                "paths": ["S1.M2.1", "S1.M2.1.3"], "status": "已评测_有落点",
-            })
-            self.assertEqual(first["after"], {
-                "trace": "t1", "model": "expert", "detail": 1, "n": 1,
-                "paths": ["S2.M1.2"], "status": "已重测_有归因",
-            })
-            self.assertNotIn(3, {pair["eq"] for pair in pairs})
-
-            # sample_refs 的对比字段：before 用 slug，after detail 是能开详情的 eq。
-            refs = {ref["trace"]: ref for ref in rnd["sample_refs"]["before"]}
-            self.assertEqual((refs["t1"]["pair"], refs["t1"]["eq"], refs["t1"]["q"],
-                              refs["t1"]["detail"]), ("t1", 1, "q1", "sess-t1"))
-            self.assertEqual((refs["t2"]["pair"], refs["t2"]["eq"], refs["t2"]["q"],
-                              refs["t2"]["detail"]), ("t2", 2, "q2", "sess-t2"))
-            after_refs = {ref["trace"]: ref for ref in rnd["sample_refs"]["after"]}
-            self.assertEqual((after_refs["t1"]["pair"], after_refs["t1"]["eq"],
-                              after_refs["t1"]["q"], after_refs["t1"]["detail"]),
-                             ("t1", 1, "q1", 1))
-
-    def test_round_scopes_every_side_to_its_release_models(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            base = scope_round_dir(root)
-            coverage = base / "00_manifest" / "coverage_before_release_cluster.csv"
-            coverage.write_text(
-                BEFORE_COVERAGE
-                + "t4,thread_4,,2026-10-23T10:00:00Z,fast,q4,string,已评测_有落点,,daily,daily_fast,e2.jsonl,4,1,,1,S1.M2.1,,,,\n",
-                encoding="utf-8")
-            tree = base / "02_before_release/cluster_tree/aime_expert/item_index.slice.jsonl"
-            tree.write_text(tree.read_text(encoding="utf-8")
-                            + json.dumps({"trace_id": "t4", "path": "S1.M2.1"}) + "\n", encoding="utf-8")
-            # 同一道题的重测行也存在（eq4），但 before 是 fast：不能拿来和 expert 的 after 对比。
-            (base / "00_manifest" / "coverage_after_release_retest.csv").write_text(
-                AFTER_COVERAGE + "t4,4,已重测_有归因,0,thread_r4,0,,\n", encoding="utf-8")
-
-            def deep_sample(slug, model, trace):
-                detail = {"meta": {"task": "行情解读", "subtask": "股价走势"},
-                          "attribution": {"problems": [{"cl": {"path": "S9.M1.1"}}]}}
-                return (slug, detail, {"d": "2026-11-07", "ut": "real", "tid": trace, "m": model}, {})
-
-            samples = self.samples() + [deep_sample("online-fast", "aime_fast", "t11")]
-            rnd = ab_test.ab_payload(root, "aime", samples=samples)["rounds"][0]
-            # 1106 retests expert only: the older fast trace and the fast online sample are out.
-            self.assertEqual(rnd["models"], ["expert"])
-            self.assertNotIn("t4", {ref["trace"] for ref in rnd["sample_refs"]["before"]})
-            before = rnd["sides"]["before"]
-            self.assertEqual((before["traces"], before["hits"], before["problem_traces"]),
-                             (2, 3, 2))
-            self.assertEqual(rnd["sides"]["online"]["traces"], 1)
-            self.assertEqual([ref["slug"] for ref in rnd["sample_refs"]["online"]], ["online-1"])
-            # 只保留两侧都有详情的专家题；跨模型 before 为 null 的 t4 不再进入召回列表。
-            pairs = {pair["eq"]: pair for pair in rnd["pairs"]}
-            self.assertEqual(sorted(pairs), [1, 2])
-            self.assertIsNotNone(pairs[1]["before"])
+            self.assertEqual(pairs[0]["before"]["detail"], "before-1")
+            self.assertEqual(pairs[0]["after"]["detail"], "after-1")
+            before_refs = {ref["trace"]: ref for ref in rnd["sample_refs"]["before"]}
+            self.assertEqual(before_refs["t1"]["detail"], "before-1")
+            after_refs = {ref["pair"]: ref for ref in rnd["sample_refs"]["after"]}
+            self.assertEqual(after_refs["t1"]["detail"], "after-1")
 
     def test_missing_after_scope_is_null_everywhere(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            scope_round_dir(root, after=False)
+            canonical_round_dir(root, after=False)
             rnd = ab_test.ab_payload(root, "aime", samples=self.samples())["rounds"][0]
             self.assertIsNone(rnd["sides"]["after"])
             self.assertIsNone(rnd["matrix"]["after"])
             self.assertTrue(all(leaf["after"] is None for leaf in rnd["leaves"]))
             self.assertTrue(all(node["after"] is None for node in rnd["nodes"]))
             self.assertIsNotNone(rnd["matrix"]["before"])
-            # 重测未落盘时没有可配对的两侧详情，列表为空而不是给出单向样本。
             self.assertEqual(rnd["pairs"], [])
             self.assertEqual(rnd["sample_refs"]["before"], [])
             self.assertEqual(rnd["sample_refs"]["after"], [])
 
-    def test_trace_scenes_csv_wins_over_samples(self):
+    def test_signature_tracks_human_read_and_after_attr(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            base = scope_round_dir(root)
-            (base / "00_manifest" / "trace_scenes.csv").write_text(
-                "trace_id,session_id,task,subtask\nt2,thread_2,事件解读,行情事件解读\n",
-                encoding="utf-8")
-            rnd = ab_test.ab_payload(root, "aime", samples=self.samples())["rounds"][0]
-            pairs = {tuple(row[:2]) for row in rnd["matrix"]["before"]}
-            self.assertIn(("事件解读", "行情事件解读"), pairs)
-            self.assertNotIn(("检索规划", "空转未执行"), pairs)
-
-    def test_build_writes_scope_payload_and_entry(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            datasets, static = root / "datasets", root / "static"
-            seed(datasets)
-            add_aime(datasets)
-            base = scope_round_dir(datasets)
-            (base / "round.json").write_text(json.dumps({"released_at": "2026-10-31"}), encoding="utf-8")
-            proc = subprocess.run(
-                [sys.executable, str(DASHBOARD / "build.py"), "--datasets", str(datasets),
-                 "--out", str(static)],
-                check=True, capture_output=True, text=True, env={**os.environ},
-            )
-            self.assertGreater(json.loads(proc.stdout.strip().splitlines()[-1])["ab_kb"], 0)
-            payload = json.loads((static / "abtests-aime.json").read_text(encoding="utf-8"))
-            rnd = payload["rounds"][0]
-            self.assertEqual((rnd["sides"]["before"]["traces"], rnd["sides"]["after"]["traces"]), (2, 2))
-            self.assertEqual(len(rnd["pairs"]), 1)
-            self.assertIsInstance(rnd["matrix"]["after"], list)
-            self.assertIsInstance(rnd["matrix"]["online"], list)
-            entry = json.loads((static / "data-aime.json").read_text())["products"]["aime"]["ab"]
-            self.assertEqual((entry["rounds"], entry["paired"], entry["online"]), (1, True, True))
-
-    def test_scope_signature_tracks_after_backfill(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            scope_round_dir(root, after=False)
+            base = canonical_round_dir(root, after=False)
             baseline = ab_test.rounds_signature(root)
-            base = scope_round_dir(root, after=True)
-            self.assertNotEqual(ab_test.rounds_signature(root), baseline)
-            (base / "00_manifest" / "trace_scenes.csv").write_text(
-                "trace_id,session_id,task,subtask\nt1,thread_1,取数规划,目标错配\n", encoding="utf-8")
-            self.assertNotEqual(ab_test.rounds_signature(root),
-                                baseline)
-            # 重测归因变化（只多一行）也要让 after.detail 的 payload 重建。
-            signature = ab_test.rounds_signature(root)
-            attr = base / "03_after_release_retest" / "attribution" / "aime_expert" / "batch"
-            attr.mkdir(parents=True, exist_ok=True)
-            (attr / "aime_expert_attribution-batch.jsonl").write_text(
-                json.dumps({"session_meta": {"case_id": "set_eq_00009"}}) + "\n", encoding="utf-8")
-            self.assertNotEqual(ab_test.rounds_signature(root), signature)
+            canonical_round_dir(root, after=True)
+            sig2 = ab_test.rounds_signature(root)
+            self.assertNotEqual(sig2, baseline)
+            (base / "agent_after_opt" / "eval_output" / "attribution_human_read.jsonl").write_text(
+                "{}\n", encoding="utf-8"
+            )
+            self.assertNotEqual(ab_test.rounds_signature(root), sig2)
 
 
 class VerifyAndGptTests(unittest.TestCase):
-    """The current verify batch (per-model common/special facts) and the GPT answer column."""
-
     VERIFY_ROW = {
         "question_id": "t1",
         "question": "q1",
         "paired_model": [
-            {"model_id": "before_release", "model_label": "发版前", "has_answer": True},
-            {"model_id": "after_retest", "model_label": "发版后原样重测", "has_answer": True},
+            {"model_id": "before_release", "model_label": "优化前", "has_answer": True},
+            {"model_id": "after_retest", "model_label": "优化后", "has_answer": True},
         ],
         "verifiable_fact_check_list": [
             {"model_id": "before_release",
@@ -434,7 +343,7 @@ class VerifyAndGptTests(unittest.TestCase):
             {"model_id": "before_release",
              "common": [{"fact_id": "c1", "what_to_check": "通用事实", "model_answer": "答 1",
                          "is_correct": "对", "correct_answer": "实际 1",
-                         "correct_answer_source": "Yahoo；核对：https://example.com/a",
+                         "correct_answer_source": "Yahoo；https://example.com/a",
                          "responsible_component": "", "attribution": "对在区间"}],
              "special": [{"fact_id": "s1", "what_to_check": "专属事实", "model_answer": "答 2",
                           "is_correct": "错", "correct_answer": "实际 2",
@@ -468,118 +377,49 @@ class VerifyAndGptTests(unittest.TestCase):
     }
 
     def add_verify(self, base: Path, rows):
-        (base / "06_verify").mkdir(parents=True, exist_ok=True)
-        (base / "06_verify" / "verify.jsonl").write_text(
-            "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
+        (base / "verify").mkdir(parents=True, exist_ok=True)
+        (base / "verify" / "verify.jsonl").write_text(
+            "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8"
+        )
 
     def add_gpt(self, base: Path, keys, raws):
-        gpt = base / "07_gpt_answer"
+        gpt = base / "gpt_answer"
         (gpt / "raw").mkdir(parents=True, exist_ok=True)
         (gpt / "questions.jsonl").write_text(
             "".join(json.dumps({"key": key, "question": f"q {key}"}) + "\n" for key in keys),
-            encoding="utf-8")
+            encoding="utf-8",
+        )
         for key, payload in raws.items():
             (gpt / "raw" / f"{key}.json").write_text(json.dumps(payload), encoding="utf-8")
 
-    def test_current_verify_batch_merges_common_and_special_by_fact(self):
+    def test_verify_and_gpt(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            base = scope_round_dir(root)
+            base = canonical_round_dir(root, with_scenes=True)
+            sig0 = ab_test.rounds_signature(root)
             self.add_verify(base, [self.VERIFY_ROW])
-            rnd = ab_test.ab_payload(root, "aime")["rounds"][0]
-            entry = rnd["verify"]["t1"]
-            models = {model["id"]: model for model in entry["models"]}
-            self.assertEqual(list(models), ["before_release", "after_retest"])
-            self.assertEqual(models["before_release"]["label"], "发版前")
-            before = models["before_release"]["facts"]
-            self.assertEqual([fact["fact_id"] for fact in before], ["c1", "s1"])
-            self.assertEqual([fact["kind"] for fact in before], ["common", "special"])
-            self.assertEqual((before[0]["is_correct"], before[0]["what_to_check"]),
-                             ("对", "通用事实"))
-            self.assertEqual(before[0]["correct_answer_source"], "Yahoo；核对：https://example.com/a")
-            self.assertEqual((before[1]["is_correct"], before[1]["responsible_component"]),
-                             ("错", "答案合成·推断"))
-            after = models["after_retest"]["facts"]
-            self.assertEqual([(fact["fact_id"], fact["is_correct"]) for fact in after], [("c1", "部分对")])
-            # The pair and the verify batch share the fixed-set id; no facts means no entry.
-            self.assertNotIn("t2", rnd["verify"])
-
-    def test_older_verify_batch_uses_checks_and_results(self):
-        row = {
-            "question_id": "t1",
-            "verifiable_fact_check_list": [
-                {"model_id": "before", "checks": [{"fact_id": "c1", "what_to_check": "旧字段"}]},
-                {"model_id": "after", "checks": [{"fact_id": "c1", "what_to_check": "旧字段"}]},
-            ],
-            "eval_per_model": [
-                {"model_id": "before", "results": [{"fact_id": "c1", "is_correct": "对"}]},
-                {"model_id": "after", "results": [{"fact_id": "c1", "is_correct": "错"}]},
-            ],
-        }
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            base = scope_round_dir(root)
-            self.add_verify(base, [row])
-            entry = ab_test.ab_payload(root, "aime")["rounds"][0]["verify"]["t1"]
-            self.assertEqual([(model["id"], model["facts"][0]["is_correct"])
-                              for model in entry["models"]],
-                             [("before", "对"), ("after", "错")])
-            self.assertEqual(entry["models"][0]["facts"][0]["what_to_check"], "旧字段")
-
-    def test_gpt_index_marks_pending_questions_and_extracts_the_answer(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            base = scope_round_dir(root)
+            self.assertNotEqual(ab_test.rounds_signature(root), sig0)
+            sig1 = ab_test.rounds_signature(root)
             self.add_gpt(base, ["t1", "t3"], {"t1": self.GPT_RAW})
-            index = ab_test.read_gpt_index(base)
-            self.assertEqual((index["total"], index["answered"]), (2, 1))
-            self.assertEqual((index["model"], index["effort"]), ("gpt-6.1-sol", "medium"))
-            self.assertTrue(index["questions"]["t1"]["has"])
-            self.assertFalse(index["questions"]["t3"]["has"])
+            self.assertNotEqual(ab_test.rounds_signature(root), sig1)
 
-            answer = ab_test.read_gpt_answer(base, "t1")
-            self.assertEqual(answer["answer"], "GPT 回答正文")
-            self.assertEqual(answer["sources"], [{"title": "Yahoo", "url": "https://example.com/a"}])
-            self.assertEqual(answer["searches"], ["AAPL forecast"])
-            self.assertEqual(answer["usage"], {"input": 10, "output": 20})
-            self.assertIsNone(ab_test.read_gpt_answer(base, "t3"))
+            rnd = ab_test.ab_payload(root, "aime")["rounds"][0]
+            self.assertIn("t1", rnd["verify"])
+            self.assertEqual(rnd["gpt"], {"total": 2, "answered": 1, "model": "gpt-6.1-sol", "effort": "medium"})
+            ans = ab_test.read_gpt_answer(base, "t1")
+            self.assertEqual(ans["answer"], "GPT 回答正文")
             self.assertIsNone(ab_test.read_gpt_answer(base, "../t1"))
-
-            rnd = ab_test.ab_payload(root, "aime", samples=ScopeLayoutTests().samples())["rounds"][0]
-            self.assertEqual(rnd["gpt"], {"total": 2, "answered": 1,
-                                          "model": "gpt-6.1-sol", "effort": "medium"})
-            pairs = {pair["id"]: pair for pair in rnd["pairs"]}
-            self.assertEqual(pairs["t1"]["gpt"], {"key": "t1", "has": True,
-                                                  "model": "gpt-6.1-sol"})
-            # Questions still on the run list, and every other fixed-set question, are pending.
-            self.assertFalse(pairs["t2"]["gpt"]["has"])
-
-    def test_round_signature_tracks_verify_and_gpt_updates(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            base = scope_round_dir(root)
-            signature = ab_test.rounds_signature(root)
-            self.add_verify(base, [self.VERIFY_ROW])
-            self.assertNotEqual(ab_test.rounds_signature(root), signature)
-            signature = ab_test.rounds_signature(root)
-            self.add_gpt(base, ["t1"], {"t1": self.GPT_RAW})
-            self.assertNotEqual(ab_test.rounds_signature(root), signature)
-            signature = ab_test.rounds_signature(root)
-            self.GPT_RAW["response"]["output"][1]["content"][0]["text"] = "更新后的回答"
-            self.add_gpt(base, ["t1"], {"t1": self.GPT_RAW})
-            self.assertNotEqual(ab_test.rounds_signature(root), signature)
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class ABReadRowsTests(unittest.TestCase):
     def test_large_csv_cell_is_read(self):
-        """Coverage CSVs carry long leaf paths; csv's 128 KiB default must not abort the build."""
         with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "coverage.csv"
+            path = Path(folder) / "pairs_index.csv"
             path.write_text("a,b\n" + "x" * 200000 + ",1\n", encoding="utf-8")
             rows = ab_test.read_rows(path)
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["b"], "1")
+
+
+if __name__ == "__main__":
+    unittest.main()

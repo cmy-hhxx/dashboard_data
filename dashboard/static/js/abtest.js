@@ -14,15 +14,12 @@ import { sunburst } from "./sunburst.js";
 import { createKlineChart } from "./kline_chart.js";
 import { trendSampleFrame, abTrendSampleRefs, abLeafRefs } from "./trend_samples.js";
 
-const SIDES = ["before", "after", "online"];
-const SIDE_SHORT = { before: "改版前", after: "改版后", online: "线上" };
-const METRICS = [
-  ["paired", "同题变化"],
-  ["online", "线上真实"],
-];
-const METRIC_LABEL = { paired: "同题变化", before: "发版前", after: "发版后同题测试", online: "线上真实" };
+const SIDES = ["before", "after"];
+const sideLabel = (rnd, side) => (side === "before" ? rnd?.before_label : rnd?.after_label) || (side === "before" ? "优化前" : "优化后");
+const METRICS = [["paired", "同题变化"]];
+const METRIC_LABEL = { paired: "同题变化", before: "优化前", after: "优化后" };
 const TREND_LABEL = METRIC_LABEL;
-const TREE_LABEL = { before: "发版前", after: "发版后同题", online: "发版后线上" };
+const TREE_LABEL = { before: "优化前", after: "优化后" };
 const NO_SCENE = "未接入分类体系";
 const metricLabel = (key) => METRIC_LABEL[key] || "";
 // The round may test one model or both; the page only needs the three pre-defined tags.
@@ -41,7 +38,7 @@ const num = (v) => Number(v) || 0;
 const signed = (v) => (v > 0 ? `+${fmt(v)}` : v < 0 ? `−${fmt(-v)}` : "0");
 const sumOf = (list) => list.reduce((s, v) => s + num(v), 0);
 const pathRelated = (a, b) => a === b || String(a).startsWith(`${b}.`) || String(b).startsWith(`${a}.`);
-const SIDE_TONE = { before: "var(--t2)", after: "var(--accent)", online: "var(--loc-ulq)" };
+const SIDE_TONE = { before: "var(--t2)", after: "var(--accent)" };
 /* The overview is three cards sharing one row: the release tree, the paired change with its four
    flows, and the ranked movers.  Any card can take the row while the other two fold, borrowing
    the bento push-pull: measure, switch the layout, play every card from its old box. */
@@ -54,7 +51,7 @@ const sideReady = (rnd, side) => !!(rnd.sides && rnd.sides[side]);
 const metricReady = (rnd, metric) => metric === "paired"
   ? sideReady(rnd, "before") && sideReady(rnd, "after")
   : sideReady(rnd, metric);
-const defaultMetric = (rnd) => (sideReady(rnd, "before") && sideReady(rnd, "after") ? "paired" : "online");
+const defaultMetric = (rnd) => (sideReady(rnd, "before") && sideReady(rnd, "after") ? "paired" : "before");
 const roundLabel = (rnd, i) => rnd.label || rnd.release_label || `第 ${i + 1} 期`;
 const roundDate = (rnd) => rnd.released_at || (rnd.dates || [])[1] || null;
 
@@ -105,20 +102,18 @@ export function abRoundsHTML(rounds, active) {
 /* 三批问题数量收成一行读数：变化构成的卡头不再重复画一组柱子，每一批只留问题数与其体量。
    基线与复测之间仍是一条发丝红虚线，线上真实是另一批人，不参与相减。 */
 export function abComparisonHTML(rnd, activeSide = "") {
-  const labels = { before: "改版前", after: "改版后同题", online: "线上真实" };
-  return `<div class="ab-batches" role="group" aria-label="三批问题数量">${SIDES.map((side) => {
+  return `<div class="ab-batches" role="group" aria-label="双侧问题数量">${SIDES.map((side) => {
+    const label = sideLabel(rnd, side);
     const result = rnd.sides?.[side];
     const n = result ? num(result.hits) : null;
     const traces = result?.traces == null ? DASH : fmt(result.traces);
     const problemTraces = result?.problem_traces;
     const aria = result
-      ? side === "online"
-        ? `线上真实：${fmt(n)} 个问题，${traces} 条评测样本`
-        : `同题交集：${traces} 条 Trace，其中 ${problemTraces == null ? DASH : fmt(problemTraces)} 条有问题；共 ${fmt(n)} 个问题`
-      : `${labels[side]}暂无数据`;
+      ? `${label}：同题交集 ${traces} 条 Trace，其中 ${problemTraces == null ? DASH : fmt(problemTraces)} 条有问题；共 ${fmt(n)} 个问题`
+      : `${label}暂无数据`;
     const active = Boolean(result && activeSide === side);
     return `<button type="button" class="ab-batch is-${side}${result ? "" : " is-missing"}" data-act="abbatch" data-side="${side}" data-tip="ab-batch:${side}" aria-pressed="${active}" aria-label="${esc(aria)}"${result ? "" : " disabled"}>
-      <span>${labels[side]}</span>
+      <span>${esc(label)}</span>
       <b class="num">${n == null ? DASH : fmt(n)}</b>
     </button>`;
   }).join("")}</div>`;
@@ -145,7 +140,6 @@ export function metricValue(cell, metric, rnd) {
   if (metric === "before") return sideReady(rnd, "before") ? num(cell.before) : null;
   if (metric === "paired") return sideReady(rnd, "after") && sideReady(rnd, "before") ? num(cell.after) - num(cell.before) : null;
   if (metric === "after") return sideReady(rnd, "after") ? num(cell.after) : null;
-  if (metric === "online") return sideReady(rnd, "online") ? num(cell.online) : null;
   return null;
 }
 
@@ -155,10 +149,10 @@ export function metricTip(cell, metric, rnd) {
     const value = metricValue(cell, "paired", rnd);
     return {
       value: value == null ? `同题变化 ${DASH}` : `同题变化 ${signed(value)}`,
-      note: `同题基线 ${fmt(cell.before)} → 同题复测 ${fmt(cell.after)}`,
+      note: `${sideLabel(rnd, "before")} ${fmt(cell.before)} → ${sideLabel(rnd, "after")} ${fmt(cell.after)}`,
     };
   }
-  return { value: `${metricLabel(metric)} ${fmt(cell[metric])}`, note: "" };
+  return { value: `${sideLabel(rnd, metric) || metricLabel(metric)} ${fmt(cell[metric])}`, note: "" };
 }
 
 function sceneMatches(node, task, sub) {
@@ -240,8 +234,8 @@ function clusterTree(cross, tax, names) {
 }
 
 function matrixViewAb(rnd, rows, cols, metric) {
-  const cells = rows.map(() => cols.map(() => ({ before: 0, after: 0, online: 0, pats: new Map() })));
-  const traces = { before: rows.map(() => 0), after: rows.map(() => 0), online: rows.map(() => 0) };
+  const cells = rows.map(() => cols.map(() => ({ before: 0, after: 0, pats: new Map() })));
+  const traces = { before: rows.map(() => 0), after: rows.map(() => 0) };
   const addPaths = (ri, side, paths) => {
     (paths || []).forEach((pid) => {
       const ci = cols.findIndex((c) => pid === c.prefix || String(pid).startsWith(`${c.prefix}.`));
@@ -252,9 +246,7 @@ function matrixViewAb(rnd, rows, cols, metric) {
     });
   };
   const common = Array.isArray(rnd.common?.rows) ? rnd.common.rows : null;
-  if (common && metric !== "online") {
-    // 发版前矩阵 / 发版后矩阵 / 同题变化矩阵共用同一个交集：
-    // 发版前已评测 ∩ 发版后已重测。无问题 Trace 也计入场景 volume。
+  if (common && common.length) {
     common.forEach(([task, sub, beforePaths, afterPaths]) => {
       const ri = rows.findIndex((r) => sceneMatches(r, task || NO_SCENE, sub || ""));
       if (ri < 0) return;
@@ -366,7 +358,7 @@ function matrixTableAb(view, rnd, metric, selected) {
       if (change) {
         const b = num(cell.before), a = num(cell.after), d = a - b;
         if (!b && !a) { gridCells += `<span class="cell is-empty" data-abmx="${ri}:${ci}"></span>`; return; }
-        const tip = `${r.name} · ${c.name}|同题变化 ${signed(d)} · ${ratioText(d, b)}|同题基线 ${fmt(b)} → 同题复测 ${fmt(a)}`;
+        const tip = `${r.name} · ${c.name}|同题变化 ${signed(d)} · ${ratioText(d, b)}|${sideLabel(rnd, "before")} ${fmt(b)} → ${sideLabel(rnd, "after")} ${fmt(a)}`;
         gridCells += `<span class="cell num${toneOf(d)}${on}" style="--v:${heatDelta(d)}" data-act="cell" data-ri="${ri}" data-ci="${ci}" data-abmx="${ri}:${ci}" data-tip="${esc(tip)}">${changeCellData(b, a)}</span>`;
         return;
       }
@@ -470,8 +462,8 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
   const labels = data.labels || {};
   if (!(Number(state.round) >= 0 && Number(state.round) < rounds.length)) state.round = rounds.length - 1;
   state.round = Number(state.round);
-  state.orbit = state.orbit && typeof state.orbit === "object" && (state.orbit.before || state.orbit.after || state.orbit.online)
-    ? state.orbit : { before: {}, after: {}, online: {} };
+  state.orbit = state.orbit && typeof state.orbit === "object" && (state.orbit.before || state.orbit.after)
+    ? state.orbit : { before: {}, after: {} };
   SIDES.forEach((side) => { state.orbit[side] = state.orbit[side] || {}; });
   state.orbitSide = SIDES.includes(state.orbitSide) ? state.orbitSide : "before";
   if (!sideReady(rounds[state.round], state.orbitSide)) {
@@ -502,7 +494,7 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     if (!(i >= 0 && i < rounds.length) || i === state.round) return;
     state.round = i;
     state.metric = defaultMetric(rounds[i]);
-    state.orbit = { before: {}, after: {}, online: {} };
+    state.orbit = { before: {}, after: {} };
     state.orbitSide = SIDES.find((side) => sideReady(rounds[i], side)) || "before";
     state.overviewOpen = "";
     state.cell = null;
@@ -529,15 +521,14 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
      pre-release ref opens the paired baseline, a retest ref opens its generated detail, and an
      online ref has no same-question twin so it opens the compare page on its own. */
   function samplePane(node) {
+    const rnd = rounds[state.round];
     const sides = [state.orbitSide];
-    const refs = abLeafRefs(rounds[state.round], sides, node.id);
+    const refs = abLeafRefs(rnd, sides, node.id);
     const body = refs.length
       ? refs.map((ref, i) => {
-          const jump = ref.side === "online"
-            ? `data-compare-online="${esc(ref.slug || "")}"`
-            : `data-compare-pair="${esc(ref.pair || ref.trace || "")}"`;
+          const jump = `data-compare-pair="${esc(ref.pair || ref.trace || "")}"`;
           return `<button type="button" class="gl-r" style="--i:${Math.min(i, 8)};--c:${SIDE_TONE[ref.side]}" ${jump} title="${esc(ref.q || "")}">
-          <i></i><span>${esc(ref.q || "（无提问）")}</span><b>${SIDE_SHORT[ref.side]}</b>
+          <i></i><span>${esc(ref.q || "（无提问）")}</span><b>${esc(sideLabel(rnd, ref.side))}</b>
         </button>`;
         }).join("")
       : `<p class="ab-sample-empty">暂无具体样本</p>`;
@@ -556,7 +547,7 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
   }
 
   function orbitCard(rnd) {
-    const sides = SIDES.map((side) => `<button type="button" data-value="${side}" aria-pressed="${state.orbitSide === side}"${sideReady(rnd, side) ? "" : " disabled"}>${TREE_LABEL[side]}</button>`).join("");
+    const sides = SIDES.map((side) => `<button type="button" data-value="${side}" aria-pressed="${state.orbitSide === side}"${sideReady(rnd, side) ? "" : " disabled"}>${esc(sideLabel(rnd, side))}</button>`).join("");
     return `<section class="ab-card ab-orbit-card${state.overviewOpen === "orbit" ? " is-deep" : state.overviewOpen ? " is-compact" : ""}" data-abcard="orbit" data-abname="聚类树">
       <div class="ab-card-top">
         <span class="ab-card-title">聚类树</span>
@@ -759,7 +750,7 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     const open = state.overviewOpen === "ranks";
     return `<section class="ab-card ab-rank-card${open ? " is-deep" : state.overviewOpen ? " is-compact" : ""}" data-abcard="ranks" data-abname="问题变化">
       <div class="ab-card-top">
-        <span class="ab-card-title" title="同一道题改版后的结果减去改版前的结果；线上真实用户的数据另算">问题变化</span>
+        <span class="ab-card-title" title="同一道题优化后的结果减去优化前的结果">问题变化</span>
       </div>
       ${rankPanel("变好", improved.slice(0, open ? 12 : 7), "is-better", max, improved.length, rnd)}
       ${rankPanel("变差", worsened.slice(0, open ? 12 : 7), "is-worse", max, worsened.length, rnd)}
@@ -767,7 +758,7 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
   }
 
   function overview(rnd, improved, worsened, max) {
-    return `<section class="ab-overview" id="abOverview" data-open="${state.overviewOpen}" data-cards="3" aria-label="A/B Test 改版前后问题对比">
+    return `<section class="ab-overview" id="abOverview" data-open="${state.overviewOpen}" data-cards="3" aria-label="A/B Test 优化前后问题对比">
       ${orbitCard(rnd)}
       ${changeCard(rnd)}
       ${rankCard(rnd, improved, worsened, max)}
@@ -776,7 +767,7 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
 
   function orbitTree(rnd, side) {
     const nodes = Array.isArray(rnd.nodes) ? rnd.nodes : [];
-    const root = { id: "ab/root", name: TREE_LABEL[side], n: 0, children: [] };
+    const root = { id: "ab/root", name: sideLabel(rnd, side) || TREE_LABEL[side], n: 0, children: [] };
     const byId = new Map();
     nodes.forEach((node) => {
       const n = num(node[side]);
@@ -793,13 +784,10 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
   }
 
   function changes(rnd) {
-    // 同题变化: the ranking and its counts stay on the paired fixed set.  The online batch is a
-    // different population, so it is shown as evidence on each row instead of being added in.
     return (Array.isArray(rnd.leaves) ? rnd.leaves : [])
       .filter((leaf) => leaf.after != null)
       .map((leaf) => ({
-        leaf, before: num(leaf.before), after: num(leaf.after),
-        online: leaf.online == null ? null : num(leaf.online), d: num(leaf.after) - num(leaf.before),
+        leaf, before: num(leaf.before), after: num(leaf.after), d: num(leaf.after) - num(leaf.before),
       }));
   }
 
@@ -816,7 +804,7 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
           const areaD = `${curveD} L44,23 L4,23 Z`;
           const flowKey = leafFlowKey(row.leaf);
           const stageId = String(row.leaf.id || "").split(".")[0];
-          return `<div class="ab-rankrow ${tone}" data-flow="${esc(flowKey)}" data-stage="${esc(stageId)}" data-dir="${tone === "is-better" ? "better" : "worse"}" title="${esc(`${row.leaf.name || row.leaf.id} · 前 ${fmt(row.before)} → 后 ${fmt(row.after)} · 净 ${signed(row.d)} · 线上 ${row.online == null ? DASH : fmt(row.online)}`)}">
+          return `<div class="ab-rankrow ${tone}" data-flow="${esc(flowKey)}" data-stage="${esc(stageId)}" data-dir="${tone === "is-better" ? "better" : "worse"}" title="${esc(`${row.leaf.name || row.leaf.id} · 前 ${fmt(row.before)} → 后 ${fmt(row.after)} · 净 ${signed(row.d)}`)}">
           <span class="ab-rankname">${esc(row.leaf.name || row.leaf.id)}</span>
           <svg class="ab-slope" viewBox="0 0 48 24" aria-hidden="true">
             <path class="ab-slope-area" d="${areaD}"/>
@@ -832,7 +820,7 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
           <b class="ab-rdelta num">${signed(row.d)}</b>
         </div>`;
         }).join("")
-      : `<p class="ab-rankempty">${sideReady(rnd, "after") || sideReady(rnd, "online") ? "暂无变化" : "改版后暂无结果"}</p>`;
+      : `<p class="ab-rankempty">${sideReady(rnd, "after") ? "暂无变化" : "优化后暂无结果"}</p>`;
     return `<section class="ab-rank ${tone}"><header><span>${title}</span><b class="num">${total}</b></header>
       ${body}</section>`;
   }
@@ -842,8 +830,6 @@ export function mountAB(host, data, state, tax, product = null, actions = {}) {
     const improved = changesNow.filter((x) => x.d < 0).sort((a, b) => a.d - b.d || b.before - a.before);
     const worsened = changesNow.filter((x) => x.d > 0).sort((a, b) => b.d - a.d || b.after - a.after);
     const max = Math.max(1, ...changesNow.map((x) => Math.max(x.before, x.after)));
-    const onlineRows = (Array.isArray(rnd.leaves) ? rnd.leaves : []).filter((leaf) => num(leaf.online) > 0);
-    changesNow.forEach((row) => { row.onlineMatched = onlineRows.some((leaf) => pathRelated(row.leaf.id, leaf.id)); });
     return `<section class="ab-summary">${overview(rnd, improved, worsened, max)}</section>`;
   }
 
@@ -879,31 +865,29 @@ function trend(rnd, selectedCell, metric) {
       label: roundLabel(r, i),
       before: treeCount(r, "before", row, col.prefix),
       after: treeCount(r, "after", row, col.prefix),
-      online: treeCount(r, "online", row, col.prefix),
     }));
     const cur = values[state.round];
     const label = TREND_LABEL[metric] || metricLabel(metric);
     const kline = abTrendKline(rounds, values, metric, label);
-    // 每个口径直接显示“问题数 · 涉及的 Trace 数”；Trace 数就是点击后召回的 Trace 数。
-    // 变化矩阵只看发版前 / 发版后，不再混入线上真实样本。
     const refsBySide = {
       before: abTrendSampleRefs(rnd, ["before"], row, col.prefix),
       after: abTrendSampleRefs(rnd, ["after"], row, col.prefix),
-      online: abTrendSampleRefs(rnd, ["online"], row, col.prefix),
     };
     const stat = (side, name, count) => {
       const refs = refsBySide[side];
-      const body = `<span class="ab-trendstat-k">${name}</span><b class="num">${count == null ? DASH : fmt(count)}</b><span>个问题</span><span class="ab-trendstat-sep">·</span><b class="num">${fmt(refs.length)}</b><span>条 Trace</span>`;
+      const body = `<span class="ab-trendstat-k">${esc(name)}</span><b class="num">${count == null ? DASH : fmt(count)}</b><span>个问题</span><span class="ab-trendstat-sep">·</span><b class="num">${fmt(refs.length)}</b><span>条 Trace</span>`;
       return refs.length
-        ? `<button type="button" class="ab-trendstat" data-trend-samples data-sides="${side}" data-source="${name}" title="召回${name}命中的 ${fmt(refs.length)} 条 Trace">${body}</button>`
+        ? `<button type="button" class="ab-trendstat" data-trend-samples data-sides="${side}" data-source="${esc(name)}" title="召回${esc(name)}命中的 ${fmt(refs.length)} 条 Trace">${body}</button>`
         : `<span class="ab-trendstat is-empty">${body}</span>`;
     };
+    const beforeName = sideLabel(rnd, "before");
+    const afterName = sideLabel(rnd, "after");
     const stats = metric === "paired"
-      ? `${stat("before", "发版前", cur.before)}${stat("after", "发版后", cur.after)}`
-      : stat(metric, label, cur[metric]);
+      ? `${stat("before", beforeName, cur.before)}${stat("after", afterName, cur.after)}`
+      : stat(metric, sideLabel(rnd, metric) || label, cur[metric]);
     const amount = (v) => (v == null ? "无" : fmt(v));
     const aria = metric === "paired"
-      ? `AB 趋势：${row.name} · ${col.name}，${values.map((v) => `${v.label} 发版前 ${amount(v.before)} 发版后同题 ${amount(v.after)}`).join("；")}`
+      ? `AB 趋势：${row.name} · ${col.name}，${values.map((v) => `${v.label} ${beforeName} ${amount(v.before)} ${afterName} ${amount(v.after)}`).join("；")}`
       : `AB 趋势：${row.name} · ${col.name}，${values.map((v) => `${v.label} ${label} ${amount(v[metric])}`).join("；")}`;
     cellTrendChart = { kline: kline.spec, picks: kline.picks, row, node: col.prefix, colName: col.name, round: rnd };
     return `<section class="ab-trend is-on" aria-live="polite">
@@ -913,13 +897,6 @@ function trend(rnd, selectedCell, metric) {
       </div>
       ${trendSampleFrame(`<div class="mxt-plot" id="abCellTrend" role="img" aria-label="${esc(aria)}"></div>`)}
     </section>`;
-  }
-
-  function metricChips(rnd) {
-    return METRICS.map(([key, label]) => {
-      const disabled = !metricReady(rnd, key);
-      return `<button type="button" class="ab-chip" data-act="metric" data-metric="${key}" aria-pressed="${state.metric === key}"${disabled ? " disabled" : ""}>${label}</button>`;
-    }).join("");
   }
 
   function matrix(rnd) {
@@ -978,7 +955,7 @@ function trend(rnd, selectedCell, metric) {
     mxNow = { view, rowPath, colPath };
     const drilled = rowPath.length > 1 || colPath.length > 1;
     return `<section class="ab-matrixstep">
-      <div class="ab-matrixhead"><div class="ab-matrix-title"><h3>聚类矩阵</h3>${drilled ? `<button type="button" class="mx-back" data-act="abmx-back" aria-label="返回上一级">← 返回</button>` : ""}</div><div class="ab-metrics" role="group" aria-label="矩阵口径">${metricChips(rnd)}</div><span class="ab-matrixmeta">${esc(roundLabel(rnd, state.round))} · ${esc(rnd.released_at || (rnd.dates || []).join(" ~ ") || "")}</span></div>
+      <div class="ab-matrixhead"><div class="ab-matrix-title"><h3>聚类矩阵</h3>${drilled ? `<button type="button" class="mx-back" data-act="abmx-back" aria-label="返回上一级">← 返回</button>` : ""}</div><span class="ab-matrixmeta">${esc(roundLabel(rnd, state.round))} · ${esc(rnd.released_at || (rnd.dates || []).join(" ~ ") || "")}</span></div>
       <div class="ab-mxshell" id="abMxShell">${matrixTableAb(view, rnd, state.metric, selectedIdx)}</div>
       ${trend(rnd, state.cell, state.metric)}
     </section>`;
@@ -1189,11 +1166,10 @@ function trend(rnd, selectedCell, metric) {
   }
 
   host.addEventListener("click", (e) => {
-    const ref = e.target.closest("[data-compare-pair], [data-compare-online]");
+    const ref = e.target.closest("[data-compare-pair]");
     if (ref) {
       const rnd = rounds[state.round];
-      if (ref.dataset.compareOnline != null) actions.openCompare && actions.openCompare({ online: ref.dataset.compareOnline, round: rnd.id });
-      else actions.openCompare && actions.openCompare({ pair: ref.dataset.comparePair, round: rnd.id });
+      actions.openCompare && actions.openCompare({ pair: ref.dataset.comparePair, round: rnd.id });
       return;
     }
     let action = e.target.closest("[data-act]");

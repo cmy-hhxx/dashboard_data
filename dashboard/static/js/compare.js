@@ -22,7 +22,7 @@ const SAMPLE_VIEW_RESET = {
 
 const C = {
   root: null, ctx: null, product: null, round: null, pairs: [], list: [], page: 1, query: "",
-  online: null, pairId: null, gen: "", skelKey: "", listKey: "", sidesKey: "", token: 0, details: [],
+  pairId: null, gen: "", skelKey: "", listKey: "", sidesKey: "", token: 0, details: [],
   listOff: false, syncScroll: false, verifyOnly: false, sides: { b: true, a: true, g: true },
 };
 
@@ -30,13 +30,13 @@ const C = {
 export function parseCompareURL(search) {
   const q = new URLSearchParams(search || "");
   const clean = (value) => (value == null || value === "" ? null : value);
-  return { round: clean(q.get("round")), pair: clean(q.get("pair")), online: clean(q.get("online")) };
+  return { round: clean(q.get("round")), pair: clean(q.get("pair")) };
 }
 
 export function resolveCompareFace(search, { hasAB = true, isStandalone = false } = {}) {
   if (isStandalone || !hasAB) return "detail";
   const q = new URLSearchParams(search || "");
-  if (q.get("face") === "detail" || q.get("pair") || q.get("online")) return "detail";
+  if (q.get("face") === "detail" || q.get("pair")) return "detail";
   return "ab";
 }
 
@@ -215,7 +215,7 @@ function testsetPicker(root, ctx, rounds) {
   plot.innerHTML = timelinePlotHTML(timelineModel(list, plot.clientWidth || 1200));
   $(".compare-tl", root).addEventListener("click", (event) => {
     const node = event.target.closest("[data-round]");
-    if (node && C.ctx) C.ctx.navigate({ round: node.dataset.round, pair: null, online: null });
+    if (node && C.ctx) C.ctx.navigate({ round: node.dataset.round, pair: null });
   });
   pickerRO = new ResizeObserver(() => {
     if (!C.root || C.root !== root) return;
@@ -261,10 +261,6 @@ function loadAB(ctx) {
   const key = `${ctx.product}|${ctx.data?.generated_at || ""}`;
   if (!AB_CACHE.has(key)) AB_CACHE.set(key, getJSON(`abtests-${ctx.product}.json`).catch(() => null));
   return AB_CACHE.get(key);
-}
-
-function onlineRef(round, slug) {
-  return (round.sample_refs?.online || []).find((ref) => ref.slug === slug) || null;
 }
 
 /* ---------------------------------------------------------------- icons (one 16px chevron set) */
@@ -360,7 +356,7 @@ function closeSideFull(restoreView = true) {
   if (restoreView && restore) {
     C.sidesKey = "";
     const pair = (C.pairs || []).find((item) => String(item.id) === String(C.pairId));
-    if (!C.online && pair) paintSides(C.round, pair, null);
+    if (pair) paintSides(C.round, pair);
   }
   realignDetails();
 }
@@ -396,8 +392,7 @@ async function toggleSideFull(side) {
   if (fullSide) closeSideFull(false);
   const prefix = side.dataset.side;
   const pair = (C.pairs || []).find((item) => String(item.id) === String(C.pairId));
-  // Online samples have one side already; a single selected model also needs no refold.
-  const available = C.online || !pair ? [] : [
+  const available = !pair ? [] : [
     ...(pair.before ? ["b"] : []),
     ...(pair.after ? ["a"] : []),
     ...(C.round?.gpt ? ["g"] : []),
@@ -409,7 +404,7 @@ async function toggleSideFull(side) {
   fullRestore = { ...C.sides };
   C.sides = { b: prefix === "b", a: prefix === "a", g: prefix === "g" };
   C.sidesKey = "";
-  await paintSides(C.round, pair, null);
+  await paintSides(C.round, pair);
   enterFull($(`.compare-side[data-side="${prefix}"]`, C.root));
 }
 
@@ -448,13 +443,13 @@ function wireSkeleton(host) {
   $("#cmplist", host).addEventListener("click", (e) => {
     const row = e.target.closest(".srow");
     if (!row) return;
-    if (!C.online && String(row.dataset.pair) === String(C.pairId)) return;
-    C.ctx.navigate({ pair: row.dataset.pair, online: null, face: "detail" });
+    if (String(row.dataset.pair) === String(C.pairId)) return;
+    C.ctx.navigate({ pair: row.dataset.pair, face: "detail" });
   });
   $(".bench-compare", host).addEventListener("click", (e) => {
     const act = e.target.closest("[data-act]");
     if (act?.dataset.act === "to-ab") {
-      C.ctx?.navigate({ face: null, pair: null, online: null });
+      C.ctx?.navigate({ face: null, pair: null });
       return;
     }
     if (act?.dataset.act === "toggle-list") {
@@ -469,7 +464,7 @@ function wireSkeleton(host) {
   $(".compare-list-head", host).addEventListener("click", (e) => {
     const act = e.target.closest("[data-act]");
     if (act?.dataset.act === "testsets") {
-      if (C.ctx) C.ctx.navigate({ round: null, pair: null, online: null });
+      if (C.ctx) C.ctx.navigate({ round: null, pair: null });
       return;
     }
     if (act?.dataset.act === "sync") {
@@ -497,7 +492,7 @@ function wireSkeleton(host) {
       C.sides = next;
       C.sidesKey = "";
       const pair = (C.pairs || []).find((item) => String(item.id) === String(C.pairId));
-      if (!C.online && pair) paintSides(C.round, pair, null);
+      if (pair) paintSides(C.round, pair);
     }
   });
 }
@@ -514,21 +509,21 @@ function applyLayout() {
 const VERIFY_ICON = `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true"><path d="M3.5 8.5 6.5 11.5 12.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
 function rowHTML(pair) {
-  // A missing side is unknown, never "0 problems": the count is cluster hits, and the row must
-  // not imply the release fixed something the data simply does not cover.
   const before = pair.before ? Number(pair.before.n || 0) : null;
   const after = pair.after ? Number(pair.after.n || 0) : null;
+  const beforeName = C.round?.before_label || "优化前";
+  const afterName = C.round?.after_label || "优化后";
   const verified = !!C.round?.verify?.[pair.id];
   return `<button type="button" class="srow" data-pair="${esc(pair.id)}" style="--c:var(--t3)">
     <span class="bar"></span>
     <span class="srow-body"><span class="q">${esc(pair.q || "（无提问）")}</span>
-    <span class="m num"><span class="srow-model">改版前 ${before == null ? "—" : fmt(before)} · 改版后 ${after == null ? "—" : fmt(after)}</span>${verified ? `<span class="srow-verify" role="img" aria-label="事实核验" title="事实核验">${VERIFY_ICON}</span>` : ""}</span></span>
+    <span class="m num"><span class="srow-model">${esc(beforeName)} ${before == null ? "—" : fmt(before)} · ${esc(afterName)} ${after == null ? "—" : fmt(after)}</span>${verified ? `<span class="srow-verify" role="img" aria-label="事实核验" title="事实核验">${VERIFY_ICON}</span>` : ""}</span></span>
   </button>`;
 }
 
 function paintList(page) {
   const root = C.root;
-  const key = `${C.gen}|${C.round.id}|${C.query}|${C.page}|${C.list.length}|${C.online || ""}|${C.verifyOnly ? 1 : 0}`;
+  const key = `${C.gen}|${C.round.id}|${C.query}|${C.page}|${C.list.length}|${C.verifyOnly ? 1 : 0}`;
   $("#cmpcount", root).textContent = C.verifyOnly
     ? `${fmt(C.list.length)} / ${fmt(verifiedCount(C.round))} 有核验`
     : `${fmt(C.list.length)} / ${fmt(C.pairs.length)} 道同题`;
@@ -538,7 +533,7 @@ function paintList(page) {
     list.innerHTML = page.rows.length ? page.rows.map(rowHTML).join("") : `<div class="empty">没有符合条件的题目</div>`;
     renderPager(page.pages);
   }
-  $$(".srow", list).forEach((row) => row.setAttribute("aria-current", String(!C.online && String(row.dataset.pair) === String(C.pairId))));
+  $$(".srow", list).forEach((row) => row.setAttribute("aria-current", String(String(row.dataset.pair) === String(C.pairId))));
 }
 
 function renderPager(pages) {
@@ -569,9 +564,8 @@ function verifyItems(entry, side) {
   const match = (id) => {
     const text = String(id || "").toLowerCase();
     if (side === "g") return text.includes("gpt");
-    if (side === "o") return text.includes("online");
     if (side === "b") return text.includes("before");
-    return text.includes("after") && !text.includes("online");
+    return text.includes("after");
   };
   let hit = models.find((model) => match(model?.id || model?.model_id));
   if (!hit) {
@@ -789,8 +783,11 @@ async function mountDetail(host, spec) {
   detail.refreshThreads?.();
 }
 
-function beforeSession(pair, ref) {
-  return { key: ref.detail, rows: [{ s: ref.detail }], sid: "", m: ref.model || "", sp: "", d: "", q: pair.q || "", uid: "", ut: "", case: "" };
+function beforeSession(round, pair, ref) {
+  return {
+    key: `ab:${round.id}:${ref.detail}`, rows: [{ s: String(ref.detail) }],
+    sid: "", m: ref.model || "", sp: "", d: "", q: pair.q || "", uid: "", ut: "", case: "",
+  };
 }
 
 function afterSession(round, pair, ref) {
@@ -800,51 +797,40 @@ function afterSession(round, pair, ref) {
   };
 }
 
-function onlineSession(slug, ref) {
-  return { key: slug, rows: [{ s: slug }], sid: "", m: ref?.model || "", sp: "", d: "", q: ref?.q || "", uid: "", ut: "", case: "" };
-}
-
-async function paintSides(round, pair, online) {
+async function paintSides(round, pair) {
   const panes = $("#cmppanes", C.root);
   const sidesKey = `${C.sides.b ? 1 : 0}${C.sides.a ? 1 : 0}${C.sides.g ? 1 : 0}`;
-  const key = online
-    ? `${C.gen}|online|${C.product}|${round.id}|${online}`
-    : `${C.gen}|pair|${C.product}|${round.id}|${pair.id}|${sidesKey}`;
+  const key = `${C.gen}|pair|${C.product}|${round.id}|${pair.id}|${sidesKey}`;
   if (C.sidesKey === key) return;
   C.sidesKey = key;
   destroyDetails();
   const token = ++C.token;
   const productData = C.ctx.data?.products?.[C.product];
   const fallbackModel = Array.isArray(round.models) && round.models.length === 1 ? round.models[0] : "";
-  const before = online ? null : (pair.before || {});
-  const after = online ? null : (pair.after || null);
-  const gaps = online ? { before: true, after: true } : pairGaps(pair);
-  const onlineSource = online ? onlineRef(round, online) : null;
-  // 有 07_gpt_answer 的轮次才有第三列；没跑到的题在列里显示「待补」，而不是少一列。
-  const gptOn = !online && !!round.gpt;
+  const before = pair.before || {};
+  const after = pair.after || null;
+  const gaps = pairGaps(pair);
+  const gptOn = !!round.gpt;
   const gptRef = gptOn
     ? (pair.gpt || { key: pair.id, has: false, model: round.gpt?.model || "GPT" })
     : null;
-  const allColumns = online
-    ? [{ prefix: "o", label: "线上真实", ref: onlineSource, gap: false, model: onlineSource?.model || fallbackModel, online: true }]
-    : [
-        { prefix: "b", label: "改版前", ref: before, gap: gaps.before, model: before?.model || fallbackModel },
-        { prefix: "a", label: "改版后", ref: after, gap: gaps.after, model: after?.model || fallbackModel },
-        ...(gptOn ? [{ prefix: "g", label: "GPT", ref: gptRef, gap: !gptRef.has, model: gptRef.model || round.gpt?.model || "GPT", gpt: true }] : []),
-      ];
-  const columns = online ? allColumns : allColumns.filter((column) => C.sides[column.prefix] !== false);
+  const beforeLabel = round?.before_label || "优化前";
+  const afterLabel = round?.after_label || "优化后";
+  const allColumns = [
+    { prefix: "b", label: beforeLabel, ref: before, gap: gaps.before, model: before?.model || fallbackModel },
+    { prefix: "a", label: afterLabel, ref: after, gap: gaps.after, model: after?.model || fallbackModel },
+    ...(gptOn ? [{ prefix: "g", label: "GPT", ref: gptRef, gap: !gptRef.has, model: gptRef.model || round.gpt?.model || "GPT", gpt: true }] : []),
+  ];
+  const columns = allColumns.filter((column) => C.sides[column.prefix] !== false);
   panes.classList.toggle("is-single", columns.length === 1);
-  // 多列才需要折叠；单列就是具体数据页的完整工作台（含 threads）。
   const folds = columns.length > 1;
   const modelHost = $(".compare-models", C.root);
   if (modelHost) {
-    modelHost.hidden = !!online;
-    if (!online) {
-      modelHost.innerHTML = allColumns.map((column) => {
-        const on = C.sides[column.prefix] !== false;
-        return `<button type="button" class="compare-model" data-act="side" data-side="${column.prefix}" aria-pressed="${on}" title="${esc(`${on ? "隐藏" : "显示"} ${column.label}${column.model ? ` · ${column.model}` : ""}`)}">${esc(column.label)}</button>`;
-      }).join("");
-    }
+    modelHost.hidden = false;
+    modelHost.innerHTML = allColumns.map((column) => {
+      const on = C.sides[column.prefix] !== false;
+      return `<button type="button" class="compare-model" data-act="side" data-side="${column.prefix}" aria-pressed="${on}" title="${esc(`${on ? "隐藏" : "显示"} ${column.label}${column.model ? ` · ${column.model}` : ""}`)}">${esc(column.label)}</button>`;
+    }).join("");
   }
   const rates = columns.map((column) => predictionRate(productData, column.model));
   const hasPrediction = rates.some((rate) => rate != null);
@@ -860,44 +846,30 @@ async function paintSides(round, pair, online) {
   applyLayout();
   const jobs = [];
   const initialFolds = folds ? { traj: false, chain: false } : null;
-  if (online) {
-    const ref = onlineSource;
-    jobs.push(mountDetail(panes.querySelector('[data-side="o"]'), {
-      prefix: "o", session: onlineSession(online, ref),
+  if (!gaps.before && C.sides.b) {
+    jobs.push(mountDetail(panes.querySelector('[data-side="b"]'), {
+      prefix: "b", session: beforeSession(round, pair, before),
       focus: {},
-      expand: true,
       compareFolds: folds,
-      loadDetail: (slug) => getJSON(`samples/${encodeURIComponent(slug)}.json`),
+      compareHead: true,
+      headExtra: verifyHTML(round, pair, "b"),
+      folds: initialFolds,
+      loadDetail: (ref) => getJSON(`ab_samples/${encodeURIComponent(round.id)}/${encodeURIComponent(ref)}.json`),
     }));
-  } else {
-    if (!gaps.before && C.sides.b) {
-      jobs.push(mountDetail(panes.querySelector('[data-side="b"]'), {
-        prefix: "b", session: beforeSession(pair, before),
-        focus: { focusTrace: before.trace },
-        expand: true,
-        compareFolds: folds,
-        compareHead: true,
-        headExtra: verifyHTML(round, pair, "b"),
-        folds: initialFolds,
-        loadDetail: (ref) => getJSON(String(ref).startsWith("before-")
-          ? `ab_samples/${encodeURIComponent(round.id)}/${encodeURIComponent(ref)}.json`
-          : `samples/${encodeURIComponent(ref)}.json`),
-      }));
-    }
-    if (!gaps.after && C.sides.a) {
-      jobs.push(mountDetail(panes.querySelector('[data-side="a"]'), {
-        prefix: "a", session: afterSession(round, pair, after),
-        focus: {},
-        compareFolds: folds,
-        compareHead: true,
-        headExtra: verifyHTML(round, pair, "a"),
-        folds: initialFolds,
-        loadDetail: (eq) => getJSON(`ab_samples/${encodeURIComponent(round.id)}/${encodeURIComponent(eq)}.json`),
-      }));
-    }
-    if (gptOn && C.sides.g) {
-      jobs.push(mountGpt(panes.querySelector('[data-side="g"]'), round, pair, gptRef));
-    }
+  }
+  if (!gaps.after && C.sides.a) {
+    jobs.push(mountDetail(panes.querySelector('[data-side="a"]'), {
+      prefix: "a", session: afterSession(round, pair, after),
+      focus: {},
+      compareFolds: folds,
+      compareHead: true,
+      headExtra: verifyHTML(round, pair, "a"),
+      folds: initialFolds,
+      loadDetail: (ref) => getJSON(`ab_samples/${encodeURIComponent(round.id)}/${encodeURIComponent(ref)}.json`),
+    }));
+  }
+  if (gptOn && C.sides.g) {
+    jobs.push(mountGpt(panes.querySelector('[data-side="g"]'), round, pair, gptRef));
   }
   wireSyncScroll();
   await Promise.all(jobs);
@@ -942,9 +914,9 @@ async function mountBackDetail(backHost, ctx, payload, round, url, hasAB) {
     </div><div class="bento"><div class="card" style="--span:12"><div class="empty">暂无同题详情</div></div></div>`;
     $(".compare-empty-head", backHost).addEventListener("click", (event) => {
       if (hasAB && event.target.closest("[data-act='to-ab']")) {
-        ctx.navigate({ face: null, pair: null, online: null });
+        ctx.navigate({ face: null, pair: null });
       } else if (event.target.closest("[data-act='testsets']")) {
-        ctx.navigate({ round: null, pair: null, online: null });
+        ctx.navigate({ round: null, pair: null });
       }
     });
     return;
@@ -963,27 +935,26 @@ async function mountBackDetail(backHost, ctx, payload, round, url, hasAB) {
   }
   C.gen = payload?.generated_at || "";
   C.round = round;
-  C.online = url.online;
   C.pairs = pairs;
   C.list = listPairs();
-  let wanted = !url.online && url.pair ? C.list.find((pair) => String(pair.id) === String(url.pair)) : null;
-  if ((url.pair && !wanted) || url.online) {
+  let wanted = url.pair ? C.list.find((pair) => String(pair.id) === String(url.pair)) : null;
+  if (url.pair && !wanted) {
     if (C.query || C.verifyOnly) {
       C.query = "";
       C.verifyOnly = false;
       $("#cmpq", backHost).value = "";
       $(".compare-filter", backHost)?.setAttribute("aria-pressed", "false");
       C.list = listPairs();
-      wanted = !url.online && url.pair ? C.list.find((pair) => String(pair.id) === String(url.pair)) : null;
+      wanted = url.pair ? C.list.find((pair) => String(pair.id) === String(url.pair)) : null;
     }
   }
   if (wanted) C.page = Math.floor(C.list.indexOf(wanted) / PAGE) + 1;
   const page = pagePairs(C.list, C.page);
   C.page = page.page;
-  const selected = url.online ? null : (wanted || page.rows[0] || pairs[0]);
+  const selected = wanted || page.rows[0] || pairs[0];
   C.pairId = selected ? selected.id : null;
   paintList(page);
-  await paintSides(round, selected, url.online);
+  await paintSides(round, selected);
 }
 
 /* ---------------------------------------------------------------- render */
@@ -1088,13 +1059,13 @@ export async function render(root, ctx) {
       if (abCard.classList.contains("is-full")) setAbFull(false, false);
       const activeRound = rounds[abState.round];
       const nextRound = patch.round || activeRound?.id || null;
-      ctx.navigate({ face: "detail", round: nextRound, pair: patch.pair ?? null, online: patch.online ?? null });
+      ctx.navigate({ face: "detail", round: nextRound, pair: patch.pair ?? null });
     };
 
     const faceSeg = faceSegEl
       ? segmented(faceSegEl, (v) => {
           if (v === "detail") openDetailPatch({});
-          else ctx.navigate({ face: null, pair: null, online: null });
+          else ctx.navigate({ face: null, pair: null });
         })
       : null;
     root._cmpFaceSeg = faceSeg;

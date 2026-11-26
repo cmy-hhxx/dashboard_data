@@ -58,9 +58,9 @@ _RESP_GZIP = {}
 _RESP_GZIP_LOCK = threading.Lock()
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 MODEL_RE = re.compile(r"^[a-z][a-z0-9_]*$")
-# /ab_samples/<roundId>/<eq>.json: the round name is validated before it can reach the builder.
+# /ab_samples/<roundId>/<side>-<eq>.json: validated before reaching ABDetailBuilder.
 AB_ROUND_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*$")
-AB_DETAIL_RE = re.compile(r"^/ab_samples/([^/]+)/(before-[0-9A-Za-z_-]+|\d+)\.json$")
+AB_DETAIL_RE = re.compile(r"^/ab_samples/([^/]+)/((?:before|after)-\d+|\d+)\.json$")
 GPT_DETAIL_RE = re.compile(r"^/gpt_samples/([^/]+)/([0-9A-Za-z_-]+)\.json$")
 # /bench/<product>.json: serves schema:1 golden/bad slices or schema:2 dynamic bench views/fields.
 BENCH_RE = re.compile(r"^/bench/([a-z][a-z0-9_]*)\.json$")
@@ -1173,7 +1173,7 @@ class Handler(SimpleHTTPRequestHandler):
             ref = None
             if match and AB_ROUND_RE.match(match.group(1)):
                 key = match.group(2)
-                if key.startswith("before-"):
+                if key.startswith(("before-", "after-")):
                     ref = (match.group(1), key)
                 elif int(key) > 0:
                     ref = (match.group(1), int(key))

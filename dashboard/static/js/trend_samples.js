@@ -28,21 +28,19 @@ export function abTrendSampleRefs(round, sides, row, node) {
   return refs;
 }
 
-export function resolveABSamples(refs, rows, node) {
-  const bySlug = new Map(rows.map((row) => [row.s, row]));
+export function resolveABSamples(refs, rows = [], node = "") {
+  const bySlug = new Map((rows || []).map((row) => [row.s, row]));
   const items = [], seen = new Set();
   let unavailable = 0;
-  for (const ref of refs) {
-    // The baseline and online batches live in the recall index; a retest keeps its own detail
-    // reference (eq) instead, so it never borrows the baseline row for the same trace.
-    const matches = ref.slug ? [bySlug.get(ref.slug)].filter(Boolean) : ref.side === "before"
-      ? rows.filter((row) => row.tid === ref.trace && (!ref.model || row.m === ref.model || row.m.endsWith(`_${ref.model}`))) : [];
-    const matched = matches.length === 1 ? matches[0] : null;
-    const row = matched || (ref.side === "after" && ref.detail != null
-      ? { s: String(ref.detail), q: ref.q || "", m: ref.model || "", sp: "", d: "" }
-      : null);
+  for (const ref of refs || []) {
+    let row = null;
+    if (ref.detail != null) {
+      row = { s: String(ref.detail), q: ref.q || "", m: ref.model || "", sp: "", d: "" };
+    } else if (ref.slug) {
+      row = bySlug.get(ref.slug) || null;
+    }
     if (!row) { unavailable++; continue; }
-    const key = ref.detail != null ? `eq:${ref.detail}` : `${row.s}|${ref.trace || ""}`;
+    const key = ref.detail != null ? `d:${ref.detail}` : `${row.s}|${ref.trace || ""}`;
     if (seen.has(key)) continue;
     seen.add(key);
     items.push({ row, trace: ref.trace, n: (ref.paths || []).filter((path) => path === node || path.startsWith(`${node}.`)).length, ref });

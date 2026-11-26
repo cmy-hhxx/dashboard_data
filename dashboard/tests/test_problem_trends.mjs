@@ -126,28 +126,24 @@ test("rounded Trace shares sum to exactly 100.0% without inventing a denominator
   assert.deepEqual(traceShares([0, 0, 0, 0, 0, 0]), [null, null, null, null, null, null]);
 });
 
-test("AB batches keep both released populations but keep their volumes separate", () => {
-  const html = abComparisonHTML({ sides: { before: { hits: 200, traces: 80, problem_traces: 70 }, after: { hits: 60, traces: 30, problem_traces: 25 }, online: { hits: 40, traces: 400 } } });
-  assert.equal((html.match(/class="ab-batch is-/g) || []).length, 3);
-  assert.match(html, /改版前/);
-  assert.match(html, /改版后同题/);
-  assert.match(html, /线上真实/);
+test("AB batches render before and after sides without online", () => {
+  const html = abComparisonHTML({ sides: { before: { hits: 200, traces: 80, problem_traces: 70 }, after: { hits: 60, traces: 30, problem_traces: 25 } } });
+  assert.equal((html.match(/class="ab-batch is-/g) || []).length, 2);
+  assert.match(html, /优化前/);
+  assert.match(html, /优化后/);
+  assert.doesNotMatch(html, /线上真实/);
   assert.doesNotMatch(html, /<small/);
   assert.match(html, /80 条 Trace，其中 70 条有问题/);
   assert.match(html, /30 条 Trace，其中 25 条有问题/);
-  assert.match(html, /400 条评测样本/);
 });
 
 test("AB comparison distinguishes missing results from measured zero problems", () => {
   const missing = abComparisonHTML({ sides: { before: { hits: 200 }, after: null } });
-  assert.equal((missing.match(/is-missing/g) || []).length, 2); // The retest and the online batch are both missing.
+  assert.equal((missing.match(/is-missing/g) || []).length, 1);
   assert.doesNotMatch(missing, /减少/);
   const zero = abComparisonHTML({ sides: { before: { hits: 200 }, after: { hits: 0 } } });
-  assert.equal((zero.match(/is-missing/g) || []).length, 1); // Online remains independently missing.
+  assert.equal((zero.match(/is-missing/g) || []).length, 0);
   assert.match(zero, /<b class="num">0<\/b>/);
-  const onlineOnly = abComparisonHTML({ sides: { before: { hits: 200 }, online: { hits: 40 } } });
-  assert.doesNotMatch(onlineOnly, /同题减少|同题增加/);
-  assert.equal((onlineOnly.match(/is-missing/g) || []).length, 1);
 });
 
 test("AB overview is three cards whose four flows add up to the net paired change", () => {
@@ -213,25 +209,20 @@ test("AB overview keeps three cards but no waterfall while the release side has 
   }
 });
 
-test("AB cell trends read one side at a time and the paired change across the release", () => {
+test("AB cell trends read the paired change across the release", () => {
   const row = { name: "未接入分类体系", task: "未接入分类体系", sub: "" };
   const col = { name: "本地计算", prefix: "S4" };
-  const matrix = (before, after, online) => [
-    [[row.task, "", [["S4.M1.1", before]], before]],
-    [[row.task, "", [["S4.M1.1", after]], after]],
-    [[row.task, "", [["S4.M1.1", online]], online]],
-  ];
-  const [mBefore, mAfter, mOnline] = matrix(95, 60, 40);
+  const mBefore = [[row.task, "", [["S4.M1.1", 95]], 95]];
+  const mAfter = [[row.task, "", [["S4.M1.1", 60]], 60]];
   const released = {
     label: "v1106", released_at: "2026-11-06", targets: 120,
-    sides: { before: { hits: 95, traces: 95 }, after: { hits: 60, traces: 60 }, online: { hits: 40, traces: 40 } },
-    matrix: { before: mBefore, after: mAfter, online: mOnline },
+    sides: { before: { hits: 95, traces: 95 }, after: { hits: 60, traces: 60 } },
+    matrix: { before: mBefore, after: mAfter },
     common: { rows: [[row.task, "", ["S4.M1.1"], ["S4.M1.1"]]] },
     nodes: [],
     sample_refs: {
       before: [{ trace: "a", model: "expert", task: row.task, sub: "", paths: ["S4.M1.1"] }],
       after: [],
-      online: [{ trace: "b", model: "expert", task: row.task, sub: "", paths: ["S4.M1.1"], slug: "online-sample" }],
     },
   };
   const chartHost = { clientWidth: 720, querySelector: () => null };
@@ -252,31 +243,23 @@ test("AB cell trends read one side at a time and the paired change across the re
     assert.ok(mounted, "the AB chart must use the shared sample drawer mount");
     assert.equal(mounted[0], chartHost);
     const { kline, picks } = mounted[1];
-    // One candle per round on its release date: 同题变化 opens before the release, closes after it.
     assert.deepEqual(kline.candles.map((c) => [c.time, c.open, c.close, c.volume]), [["2026-11-06", 95, 60, 120]]);
     assert.deepEqual(kline.releases, [{ date: "2026-11-06", label: "v1106" }]);
     assert.deepEqual(picks.get("2026-11-06").sides, ["before", "after"]);
-    assert.match(host.innerHTML, /发版前<\/span><b class="num">95<\/b><span>个问题<\/span><span class="ab-trendstat-sep">·<\/span><b class="num">1<\/b><span>条 Trace<\/span>/);
-    assert.match(host.innerHTML, /发版后<\/span><b class="num">60<\/b><span>个问题<\/span><span class="ab-trendstat-sep">·<\/span><b class="num">0<\/b><span>条 Trace<\/span>/);
+    assert.match(host.innerHTML, /优化前<\/span><b class="num">95<\/b><span>个问题<\/span><span class="ab-trendstat-sep">·<\/span><b class="num">1<\/b><span>条 Trace<\/span>/);
+    assert.match(host.innerHTML, /优化后<\/span><b class="num">60<\/b><span>个问题<\/span><span class="ab-trendstat-sep">·<\/span><b class="num">0<\/b><span>条 Trace<\/span>/);
     assert.match(host.innerHTML, /data-trend-samples data-sides="before"/);
     assert.doesNotMatch(host.innerHTML, /ab-trendacts|ab-samplechip|data-sides="after"/);
-
-    mount("online");
-    assert.deepEqual(mounted[1].kline.candles.map((c) => [c.open, c.close]), [[40, 40]]);
-    assert.deepEqual(mounted[1].picks.get("2026-11-06").sides, ["online"]);
-    assert.match(host.innerHTML, /线上真实<\/span><b class="num">40<\/b><span>个问题<\/span><span class="ab-trendstat-sep">·<\/span><b class="num">1<\/b><span>条 Trace<\/span>/);
-    assert.match(host.innerHTML, /data-trend-samples data-sides="online"/);
   } finally {
     globalThis.window = previousWindow;
     globalThis.requestAnimationFrame = previousRAF;
   }
 });
 
-test("AB matrix offers the paired and online readings and paints four numbers in every change cell", () => {
+test("AB matrix paints four numbers in every change cell without online metric switcher", () => {
   const row = { name: "未接入分类体系", task: "未接入分类体系", sub: "" };
   const rowBefore = [row.task, "", [["S4.M1.1", 95]], 95];
   const rowAfter = [row.task, "", [["S4.M1.1", 60]], 60];
-  const rowOnline = [row.task, "", [["S4.M1.1", 40]], 40];
   const pairs = Array.from({ length: 120 }, (_, i) => ({
     scene: row.task, sub: "",
     before: { paths: i < 95 ? ["S4.M1.1"] : [], n: i < 95 ? 1 : 0 },
@@ -284,8 +267,8 @@ test("AB matrix offers the paired and online readings and paints four numbers in
   }));
   const post = {
     label: "v1106",
-    sides: { before: { hits: 95, traces: 95 }, after: { hits: 60, traces: 60 }, online: { hits: 40, traces: 40 } },
-    matrix: { before: [rowBefore], after: [rowAfter], online: [rowOnline] },
+    sides: { before: { hits: 95, traces: 95 }, after: { hits: 60, traces: 60 } },
+    matrix: { before: [rowBefore], after: [rowAfter] },
     pairs,
     common: {
       total: 120,
@@ -303,61 +286,25 @@ test("AB matrix offers the paired and online readings and paints four numbers in
   try {
     post.models = ["expert"];
     mountAB(host, { rounds: [post] }, { round: 0, step: "matrix", cell: null }, {}, null, {});
-    assert.equal((host.innerHTML.match(/data-act="metric"/g) || []).length, 2, "同题变化 + 线上真实");
-    assert.match(host.innerHTML, /data-metric="paired" aria-pressed="true"/);
-    assert.match(host.innerHTML, /同题变化/);
-    assert.match(host.innerHTML, /data-metric="online"/);
-    assert.doesNotMatch(host.innerHTML, /data-metric="(before|after|all|delta|post)"/);
-    assert.doesNotMatch(host.innerHTML, /同题\+线上变化|发版后（同题回测\+线上真实）/);
-    assert.doesNotMatch(host.innerHTML, /class="ab-round"/); // the records live in the card head
-    assert.doesNotMatch(host.innerHTML, /ab-mxnote|ab-scope/);
-    // The change matrix compares one fixed set: the scene volume is that set's count, and it
-    // must not swing with the two batches.
+    assert.doesNotMatch(host.innerHTML, /data-act="metric"/);
+    assert.doesNotMatch(host.innerHTML, /线上真实/);
+    assert.doesNotMatch(host.innerHTML, /class="ab-round"/);
     assert.match(host.innerHTML, /未接入分类体系<em class="mx-vol num">120<\/em>/);
-    assert.doesNotMatch(host.innerHTML, /（95→60条）|（95→199条）/);
-    // Each change cell carries 发版前 → 发版后, the net move and that move's rate.
     assert.match(host.innerHTML, /<span class="cell-pair"><b class="is-from">95<\/b><i class="cell-arrow"[^>]*>→<\/i><b class="is-to">60<\/b><\/span><span class="cell-delta"><b class="cell-delta-num"><span class="cell-sign">−<\/span>35<\/b><i class="cell-dot"[^>]*>·<\/i><span class="cell-ratio">37%<\/span><\/span>/);
     assert.match(host.innerHTML, /变化合计/);
-    // The shared session-matrix tooltip resolver owns [data-mx]; AB cells opt out for their own tip.
     assert.doesNotMatch(host.innerHTML, /data-mx="/);
     assert.match(host.innerHTML, /data-tip="[^"]*同题变化 −35 · 36.8%/);
-    assert.match(host.innerHTML, /同题基线 95 → 同题复测 60/);
+    assert.match(host.innerHTML, /优化前 95 → 优化后 60/);
   } finally {
     globalThis.window = previousWindow;
     globalThis.requestAnimationFrame = previousRAF;
   }
-  const cell = { before: 95, after: 60, online: 40 };
+  const cell = { before: 95, after: 60 };
   assert.equal(metricValue(cell, "paired", post), -35);
   assert.equal(metricValue(cell, "before", post), 95);
   assert.equal(metricValue(cell, "after", post), 60);
-  assert.equal(metricValue(cell, "online", post), 40);
-  assert.equal(metricValue(cell, "paired", { sides: { online: {} } }), null);
+  assert.equal(metricValue(cell, "paired", { sides: { before: {} } }), null);
   assert.equal(metricValue(cell, "after", { sides: { after: null } }), null);
-});
-
-test("AB online matrix carries the scene trace volume on the row and count + rate in the cell", () => {
-  const row = { name: "交易建议", task: "交易建议", sub: "" };
-  const rnd = {
-    label: "v1106",
-    sides: { before: null, after: null, online: { hits: 128, traces: 160 } },
-    matrix: { before: null, after: null, online: [[row.task, "", [["S4.M1.1", 128]], 160]] },
-    nodes: [],
-  };
-  const host = { innerHTML: "", getBoundingClientRect: () => ({ width: 720 }),
-    querySelector: () => null, querySelectorAll: () => [], addEventListener() {} };
-  const previousWindow = globalThis.window, previousRAF = globalThis.requestAnimationFrame;
-  globalThis.window = { addEventListener() {} };
-  globalThis.requestAnimationFrame = () => 0;
-  try {
-    mountAB(host, { rounds: [rnd] }, { round: 0, step: "matrix", metric: "online", cell: null }, {}, null, {});
-    assert.match(host.innerHTML, /交易建议<em class="mx-vol num">160<\/em>/);
-    assert.match(host.innerHTML, /<span class="cell-data"><span class="cell-main"><b>128<\/b><\/span><span class="cell-pct">80.0%<\/span><\/span>/);
-    assert.doesNotMatch(host.innerHTML, /cell-den/);
-    assert.doesNotMatch(host.innerHTML, /cell-pair/);
-  } finally {
-    globalThis.window = previousWindow;
-    globalThis.requestAnimationFrame = previousRAF;
-  }
 });
 
 test("AB round records are head chips tagged with one of expert / fast / fast+expert", () => {
@@ -374,60 +321,51 @@ test("AB round records are head chips tagged with one of expert / fast / fast+ex
 });
 
 test("AB cell tooltips carry the same four numbers as the change cell", () => {
-  const released = { sides: { before: {}, after: {}, online: {} } };
-  const s1 = { before: 95, after: 60, online: 40 };
+  const released = { sides: { before: {}, after: {} } };
+  const s1 = { before: 95, after: 60 };
   const paired = metricTip(s1, "paired", released);
   assert.equal(paired.value, "同题变化 −35");
-  assert.equal(paired.note, "同题基线 95 → 同题复测 60");
-  assert.equal(metricTip(s1, "before", released).value, "发版前 95");
-  assert.equal(metricTip(s1, "after", released).value, "发版后同题测试 60");
-  assert.equal(metricTip(s1, "online", released).value, "线上真实 40");
-  assert.equal(metricTip({ before: 5, after: 0, online: 0 }, "paired", { sides: { before: {} } }).value, "同题变化 —");
+  assert.equal(paired.note, "优化前 95 → 优化后 60");
+  assert.equal(metricTip(s1, "before", released).value, "优化前 95");
+  assert.equal(metricTip(s1, "after", released).value, "优化后 60");
+  assert.equal(metricTip({ before: 5, after: 0 }, "paired", { sides: { before: {} } }).value, "同题变化 —");
 });
 
 test("AB cloud sample refs keep phase, scene and taxonomy prefix aligned with the selected point", () => {
   const before = { trace: "a", task: "查询", sub: "行情", paths: ["S1.M2.1"] };
-  const online = { slug: "online", trace: "b", task: "查询", sub: "行情", paths: ["S1.M2.2"] };
-  const otherScene = { ...online, slug: "other", sub: "公告" };
-  const otherPrefix = { ...online, slug: "prefix", paths: ["S10.M2.1"] };
-  const round = { sample_refs: { before: [before], after: [], online: [online, otherScene, otherPrefix] } };
+  const after = { trace: "b", task: "查询", sub: "行情", paths: ["S1.M2.2"], detail: "after-1" };
+  const otherScene = { ...after, sub: "公告" };
+  const otherPrefix = { ...after, paths: ["S10.M2.1"] };
+  const round = { sample_refs: { before: [before], after: [after, otherScene, otherPrefix] } };
   const row = { task: "查询", sub: "行情" };
   assert.deepEqual(abTrendSampleRefs(round, ["before"], row, "S1"), [{ ...before, side: "before" }]);
-  assert.deepEqual(abTrendSampleRefs(round, ["after", "online"], row, "S1"), [{ ...online, side: "online" }]);
-  assert.deepEqual(abTrendSampleRefs(round, ["online"], { group: true, tasks: ["查询"] }, "S1").map((ref) => ref.slug), ["online", "other"]);
+  assert.deepEqual(abTrendSampleRefs(round, ["after"], row, "S1"), [{ ...after, side: "after" }]);
+  assert.deepEqual(abTrendSampleRefs(round, ["after"], { group: true, tasks: ["查询"] }, "S1").length, 2);
   assert.deepEqual(abTrendSampleRefs({}, ["before"], row, "S1"), []);
 });
 
 test("AB layout leaf refs keep the side and match the taxonomy prefix", () => {
-  const before = { trace: "a", pair: "a", q: "Q", paths: ["S1.M2.1"] };
-  const after = { trace: "b", pair: "b", q: "Q", detail: 3, paths: ["S1.M2.2"] };
-  const online = { slug: "online", trace: "c", q: "Q", paths: ["S1.M2.2"] };
-  const round = { sample_refs: { before: [before], after: [after], online: [online] } };
+  const before = { trace: "a", pair: "a", q: "Q", detail: "before-1", paths: ["S1.M2.1"] };
+  const after = { trace: "b", pair: "b", q: "Q", detail: "after-3", paths: ["S1.M2.2"] };
+  const round = { sample_refs: { before: [before], after: [after] } };
   assert.deepEqual(abLeafRefs(round, ["before"], "S1"), [{ ...before, side: "before" }]);
-  assert.deepEqual(abLeafRefs(round, ["after", "online"], "S1.M2"), [{ ...after, side: "after" }, { ...online, side: "online" }]);
+  assert.deepEqual(abLeafRefs(round, ["after"], "S1.M2"), [{ ...after, side: "after" }]);
   assert.deepEqual(abLeafRefs(round, ["after"], "S10"), []);
   assert.deepEqual(abLeafRefs({}, ["before"], "S1"), []);
 });
 
-test("AB sample navigation opens the exact retest detail without borrowing the baseline", () => {
-  const row = { s: "baseline", tid: "a", m: "aime_expert" };
-  const ref = { side: "before", trace: "a", model: "expert", paths: ["S1.M2.1"] };
-  const resolved = resolveABSamples([ref], [row], "S1");
-  assert.equal(resolved.items[0].row, row);
-  assert.equal(resolved.items[0].ref, ref);
+test("AB sample navigation opens both before and after self-contained details", () => {
+  const beforeRef = { side: "before", trace: "a", pair: "a", detail: "before-7", q: "Q", model: "expert", paths: ["S1.M2.1"] };
+  const resolved = resolveABSamples([beforeRef], [], "S1");
+  assert.equal(resolved.items[0].row.s, "before-7");
+  assert.equal(resolved.items[0].ref, beforeRef);
   assert.equal(resolved.items[0].n, 1);
-  // A retest with no generated detail cannot open, and must not substitute the baseline.
-  assert.deepEqual(resolveABSamples([{ ...ref, side: "after" }], [row], "S1"), { items: [], unavailable: 1 });
-  // Schema 3: the retest carries its own eq reference, so no recall-index row is needed.
-  const retest = { ...ref, side: "after", pair: "a", detail: 7, q: "Q" };
-  const after = resolveABSamples([retest], [row], "S1");
-  assert.equal(after.items[0].row.s, "7");
-  assert.equal(after.items[0].ref, retest);
-  // An online ref still resolves through its sample slug.
-  const online = { side: "online", slug: "live-1", paths: ["S1.M2.2"] };
-  assert.equal(resolveABSamples([online], [row, { ...row, s: "live-1" }], "S1").items[0].row.s, "live-1");
-  // A baseline trace that matches more than one index row stays unavailable: never guess.
-  assert.deepEqual(resolveABSamples([ref], [row, { ...row, s: "retest" }], "S1"), { items: [], unavailable: 1 });
+  // A side without a generated detail cannot open.
+  assert.deepEqual(resolveABSamples([{ side: "after", trace: "a", paths: ["S1.M2.1"] }], [], "S1"), { items: [], unavailable: 1 });
+  const afterRef = { ...beforeRef, side: "after", detail: "after-7" };
+  const after = resolveABSamples([afterRef], [], "S1");
+  assert.equal(after.items[0].row.s, "after-7");
+  assert.equal(after.items[0].ref, afterRef);
 });
 
 test("sample recall filters the selected day, series, scene and taxonomy boundary", () => {

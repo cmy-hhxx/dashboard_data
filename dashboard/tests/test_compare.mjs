@@ -10,12 +10,12 @@ const { parseCompareURL, resolveCompareFace, pickRound, sortPairs, filterPairs, 
 
 const pair = (eq, before, after, q = `题目 ${eq}`) => ({ id: `t${eq}`, eq, q, before: { n: before, detail: "s1" }, after: after == null ? null : { n: after, detail: eq } });
 
-test("compare URL keeps round, pair and online as separate optional selections", () => {
-  assert.deepEqual(parseCompareURL(""), { round: null, pair: null, online: null });
-  assert.deepEqual(parseCompareURL("?view=compare&product=aime&round=0_version1106_test&pair=t7"),
-    { round: "0_version1106_test", pair: "t7", online: null });
-  assert.deepEqual(parseCompareURL("?view=compare&round=&pair=&online=sample-1"),
-    { round: null, pair: null, online: "sample-1" });
+test("compare URL keeps round and pair as separate optional selections", () => {
+  assert.deepEqual(parseCompareURL(""), { round: null, pair: null });
+  assert.deepEqual(parseCompareURL("?view=compare&product=aime&round=version_20261106_aime_expert&pair=t7"),
+    { round: "version_20261106_aime_expert", pair: "t7" });
+  assert.deepEqual(parseCompareURL("?view=compare&round=&pair="),
+    { round: null, pair: null });
   assert.equal(parseCompareURL("?pair=0").pair, "0");
 });
 
@@ -116,7 +116,6 @@ test("resolveCompareFace defaults to AB front face and flips to detail on explic
   assert.equal(resolveCompareFace("?view=compare&product=aime", { hasAB: true, isStandalone: false }), "ab");
   assert.equal(resolveCompareFace("?view=compare&face=detail", { hasAB: true, isStandalone: false }), "detail");
   assert.equal(resolveCompareFace("?view=compare&pair=t7", { hasAB: true, isStandalone: false }), "detail");
-  assert.equal(resolveCompareFace("?view=compare&online=slug-1", { hasAB: true, isStandalone: false }), "detail");
   assert.equal(resolveCompareFace("?view=compare", { hasAB: true, isStandalone: true }), "detail");
   assert.equal(resolveCompareFace("?view=compare", { hasAB: false, isStandalone: false }), "detail");
 });
