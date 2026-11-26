@@ -1,4 +1,4 @@
-"""Server-side cached recall index with bounded queries (max 500) and lazy pagination.
+"""Server-side cached recall index: uncapped paginated session recall and bounded (<= 500) slices.
 
 Replaces downloading multi-ten-MB ``samples-<product>.json`` + ``labels-<product>.json``
 into the browser on every recall jump, filter, sunburst galaxy open, trend drawer,
@@ -6,12 +6,15 @@ and compare sibling lookup.
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 import json
 import math
 import os
 import threading
 
 RECALL_CAP = 500
+_ORDER_CACHE_MAX = 16
+_FACET_CACHE_MAX = 32
 SEV = ("P0", "P1", "P2", "P3", "P4")
 WORST = ("P0", "P1", "P2", "P3", "P4", "none")
 WORST_IDX = {w: i for i, w in enumerate(WORST)}
@@ -446,8 +449,71 @@ class RecallEntry:
 
         self.sorted_dates = sorted(self.by_date.keys())
         self.sessions, self.session_by_key, self.session_by_slug = _group_sessions(rows)
+        self.session_pos: dict[str, int] = {s["key"]: i for i, s in enumerate(self.sessions)}
+        self._query_lock = threading.Lock()
+        self._order_cache: OrderedDict[tuple, list[dict]] = OrderedDict()
+        self._facet_cache: OrderedDict[tuple, dict] = OrderedDict()
         empty_f = {k: "" for k in ("q", "w", "split", "model", "ut", "date", "scene", "sub", "stage", "mech", "pattern")}
         self.default_facets = _compute_facets(self.sessions, empty_f)
+
+    def _ordered_sessions(self, f: dict[str, str], sort_by: str) -> list[dict]:
+        sort_key = sort_by if sort_by in ("n", "date") else "sev"
+        needle = f["q"].lower()
+        has_filter = bool(needle or any(f[k] for k in ("w", "split", "model", "ut", "date", "scene", "sub", "stage", "mech", "pattern")))
+        if not has_filter and sort_key == "sev":
+            return self.sessions
+        cache_key = (
+            needle, f["w"], f["split"], f["model"], f["ut"], f["date"],
+            f["scene"], f["sub"], f["stage"], f["mech"], f["pattern"], sort_key,
+        )
+        with self._query_lock:
+            hit = self._order_cache.get(cache_key)
+            if hit is not None:
+                self._order_cache.move_to_end(cache_key)
+                return hit
+
+        date_val = f["date"]
+        if not has_filter:
+            matched_list = self.sessions
+        else:
+            matched_list = [
+                sess for sess in self.sessions
+                if _list_hit(sess, f)
+                and (not date_val or date_val in sess["_dates"])
+                and (not needle or needle in sess["_search"])
+            ]
+
+        if sort_key == "n":
+            ordered = sorted(matched_list, key=lambda x: x["n"], reverse=True)
+        elif sort_key == "date":
+            ordered = sorted(matched_list, key=lambda x: x["d"], reverse=True)
+        else:
+            ordered = matched_list
+
+        with self._query_lock:
+            self._order_cache[cache_key] = ordered
+            self._order_cache.move_to_end(cache_key)
+            while len(self._order_cache) > _ORDER_CACHE_MAX:
+                self._order_cache.popitem(last=False)
+        return ordered
+
+    def _facets_for(self, f: dict[str, str]) -> dict:
+        cache_key = (f["w"], f["split"], f["model"], f["ut"], f["scene"], f["sub"])
+        if not any(cache_key):
+            return self.default_facets
+        with self._query_lock:
+            hit = self._facet_cache.get(cache_key)
+            if hit is not None:
+                self._facet_cache.move_to_end(cache_key)
+                return hit
+
+        facets = _compute_facets(self.sessions, f)
+        with self._query_lock:
+            self._facet_cache[cache_key] = facets
+            self._facet_cache.move_to_end(cache_key)
+            while len(self._facet_cache) > _FACET_CACHE_MAX:
+                self._facet_cache.popitem(last=False)
+        return facets
 
     def query_sessions(self, q: dict[str, str]) -> dict:
         f = {
@@ -472,38 +538,14 @@ class RecallEntry:
             page = max(1, int(q.get("page") or "1"))
         except ValueError:
             page = 1
-        try:
-            cap = max(1, min(RECALL_CAP, int(q.get("cap") or str(RECALL_CAP))))
-        except ValueError:
-            cap = RECALL_CAP
         wanted = (q.get("case") or "").strip()
         locate = q.get("locate") == "1"
         want_facets = q.get("facets") != "0"
 
-        needle = f["q"].lower()
-        date_val = f["date"]
-        has_filter = any(f.values())
-        if not has_filter:
-            matched_list = self.sessions
-        else:
-            matched_list = [
-                sess for sess in self.sessions
-                if _list_hit(sess, f)
-                and (not date_val or date_val in sess["_dates"])
-                and (not needle or needle in sess["_search"])
-            ]
-
-        if sort_by == "n":
-            ordered = sorted(matched_list, key=lambda x: x["n"], reverse=True)
-        elif sort_by == "date":
-            ordered = sorted(matched_list, key=lambda x: x["d"], reverse=True)
-        else:
-            ordered = matched_list
-
+        ordered = self._ordered_sessions(f, sort_by)
         matched_total = len(ordered)
-        capped_list = ordered[:cap]
-        recalled = len(capped_list)
-        pages = max(1, math.ceil(recalled / size))
+        recalled = matched_total
+        pages = max(1, math.ceil(matched_total / size))
 
         target_sess = None
         target_page = None
@@ -511,16 +553,21 @@ class RecallEntry:
             target_sess = self.session_by_key.get(wanted) or self.session_by_slug.get(wanted)
             if target_sess is not None:
                 tkey = target_sess["key"]
-                for idx, sess in enumerate(capped_list):
-                    if sess["key"] == tkey:
+                if not any(f.values()) and sort_by not in ("n", "date"):
+                    idx = self.session_pos.get(tkey)
+                    if idx is not None:
                         target_page = (idx // size) + 1
-                        break
+                else:
+                    for idx, sess in enumerate(ordered):
+                        if sess["key"] == tkey:
+                            target_page = (idx // size) + 1
+                            break
                 if locate and target_page is not None:
                     page = target_page
 
         page = max(1, min(pages, page))
         start = (page - 1) * size
-        page_rows = [_public_session(sess) for sess in capped_list[start:start + size]]
+        page_rows = [_public_session(sess) for sess in ordered[start:start + size]]
 
         resp = {
             "product": self.product,
@@ -531,8 +578,8 @@ class RecallEntry:
             "total_sessions": len(self.sessions),
             "matched": matched_total,
             "recalled": recalled,
-            "cap": cap,
-            "capped": matched_total > cap,
+            "cap": None,
+            "capped": False,
             "page": page,
             "size": size,
             "pages": pages,
@@ -542,8 +589,7 @@ class RecallEntry:
             resp["target"] = _public_session(target_sess)
             resp["target_page"] = target_page
         if want_facets:
-            has_facet_filter = any(f[k] for k in ("w", "split", "model", "ut", "scene", "sub"))
-            resp["facets"] = _compute_facets(self.sessions, f) if has_facet_filter else self.default_facets
+            resp["facets"] = self._facets_for(f)
         return resp
 
     def query_galaxy(self, q: dict[str, str]) -> dict:

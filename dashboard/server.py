@@ -66,7 +66,7 @@ GPT_DETAIL_RE = re.compile(r"^/gpt_samples/([^/]+)/([0-9A-Za-z_-]+)\.json$")
 BENCH_RE = re.compile(r"^/bench/([a-z][a-z0-9_]*)\.json$")
 BENCH_CASE_RE = re.compile(r"^/bench_case/([a-z][a-z0-9_]*)/([a-z0-9_]+)/([^/]+)\.json$")
 BENCH_EXPORT_RE = re.compile(r"^/bench_export/([a-z][a-z0-9_]*)\.jsonl$")
-# /api/recall* & /api/input_slice*: bounded (<= 500) server-side paginated & sliced sample recall.
+# /api/recall/: uncapped paginated session recall; /api/recall_slice*, /api/recall_lookup*, /api/input_slice*: bounded (<= 500).
 RECALL_RE = re.compile(r"^/api/recall/([a-z][a-z0-9_]*)\.json$")
 RECALL_SLICE_RE = re.compile(r"^/api/recall_slice/([a-z][a-z0-9_]*)\.json$")
 RECALL_LOOKUP_RE = re.compile(r"^/api/recall_lookup/([a-z][a-z0-9_]*)\.json$")
@@ -830,7 +830,7 @@ class Handler(SimpleHTTPRequestHandler):
         }
 
     def _serve_recall(self, path_only):
-        """Serve bounded paginated session recall and sliced galaxy/trend/session queries."""
+        """Serve uncapped paginated session recall and bounded (<= 500) sliced galaxy/trend/session queries."""
         m_list = RECALL_RE.match(path_only)
         m_slice = None if m_list else RECALL_SLICE_RE.match(path_only)
         if not m_list and not m_slice:
@@ -848,9 +848,10 @@ class Handler(SimpleHTTPRequestHandler):
                 except (ValueError, UnicodeDecodeError):
                     up_data = None
                 if isinstance(up_data, dict):
-                    if m_slice and query.get("mode") == "galaxy" and query.get("card") == "attr" and (query.get("model") or query.get("sev") or query.get("mech")) and not (up_data.get("groups") or []):
-                        up_data = self._upstream_attr_fallback(up, product, query, cap=500)
-                    up_data = self._cap_recall_payload(up_data, cap=500)
+                    if m_slice:
+                        if query.get("mode") == "galaxy" and query.get("card") == "attr" and (query.get("model") or query.get("sev") or query.get("mech")) and not (up_data.get("groups") or []):
+                            up_data = self._upstream_attr_fallback(up, product, query, cap=500)
+                        up_data = self._cap_recall_payload(up_data, cap=500)
                     self._cache_policy = "no-cache"
                     body = json.dumps(up_data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
                     self._send_body(200, body, "application/json; charset=utf-8")
@@ -858,22 +859,28 @@ class Handler(SimpleHTTPRequestHandler):
         if entry is None:
             self._send_body(404, b'{"error":"recall index unavailable"}', "application/json")
             return True
-        if m_list:
-            result = entry.query_sessions(query)
-        else:
-            mode = query.get("mode") or ""
-            if mode == "galaxy":
-                result = entry.query_galaxy(query)
-            elif mode == "trend":
-                result = entry.query_trend(query)
-            elif mode == "session":
-                result = entry.query_session(query)
-            else:
-                self._send_body(400, b'{"error":"unknown recall slice mode"}', "application/json")
-                return True
+        mode = "" if m_list else (query.get("mode") or "")
+        if not m_list and mode not in ("galaxy", "trend", "session"):
+            self._send_body(400, b'{"error":"unknown recall slice mode"}', "application/json")
+            return True
         self._cache_policy = "no-cache"
         qhash = hashlib.sha1(self.path.encode("utf-8")).hexdigest()[:12]
         etag = f'{entry.etag[:-1]}-{qhash}"'
+        inm = self.headers.get("If-None-Match")
+        if inm and etag in {part.strip() for part in inm.split(",")}:
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            return True
+        if m_list:
+            result = entry.query_sessions(query)
+        elif mode == "galaxy":
+            result = entry.query_galaxy(query)
+        elif mode == "trend":
+            result = entry.query_trend(query)
+        else:
+            result = entry.query_session(query)
         body = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         self._send_body(200, body, "application/json; charset=utf-8", etag=etag)
         return True

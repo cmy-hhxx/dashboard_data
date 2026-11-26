@@ -5,12 +5,12 @@ import { createSampleDetail, detailPaneHTML, flash, USER_TYPES, utOf, isLostRow 
 
 const CHEV_LEFT = `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true"><path d="M10 3.5 5.5 8 10 12.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const CHEV_RIGHT = `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const CHEV_DOWN = `<svg class="chev" viewBox="0 0 12 12" width="12" height="12" fill="none" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
 const PAGE = 50;
-const RECALL_CAP = 500;
 const S = {
   product: null, all: [], rows: [], pageRows: [], page: 1, slug: null, refocusList: false, listOff: false,
-  serverMode: false, pages: 1, total: 0, matched: 0, recalled: 0, cap: RECALL_CAP, capped: false,
+  serverMode: false, pages: 1, total: 0, matched: 0,
   facets: null, lastFilterSig: "", reqSeq: 0,
 };
 let ctx;
@@ -185,7 +185,7 @@ function buildRecallQuery(f, { page = 1, wanted = "", locate = false, facets = t
   return {
     q: f.q, w: f.w, split: f.split, model: f.model, ut: f.ut, date: f.date,
     scene: f.scene, sub: f.sub, stage: f.stage, mech: f.mech, pattern: f.pattern,
-    sort: f.sort || "sev", page, size: PAGE, cap: RECALL_CAP,
+    sort: f.sort || "sev", page, size: PAGE,
     case: wanted || "", locate: locate ? "1" : "", facets: facets ? "1" : "0",
   };
 }
@@ -197,9 +197,6 @@ function applyServerPage(res, f) {
   S.pages = Math.max(1, Number(res.pages) || 1);
   S.total = Number(res.total_sessions) || 0;
   S.matched = Number(res.matched) || 0;
-  S.recalled = Number(res.recalled) || 0;
-  S.cap = Number(res.cap) || RECALL_CAP;
-  S.capped = Boolean(res.capped);
   if (res.facets) S.facets = res.facets;
   S.pageRows = Array.isArray(res.rows) ? res.rows : [];
   S.rows = S.pageRows;
@@ -209,12 +206,16 @@ function applyServerPage(res, f) {
   S.lastFilterSig = filterSig(f);
 }
 
-function prefetchNextServerPage(f) {
-  if (!S.serverMode || !ctx?.recallPage || S.page >= S.pages) return;
-  ctx.recallPage(ctx.product, buildRecallQuery(f, { page: S.page + 1, facets: false })).catch(() => {});
+const FACET_KEYS = new Set(["w", "split", "model", "ut", "scene", "sub"]);
+
+function prefetchNextServerPage(f, dir = 1) {
+  if (!S.serverMode || !ctx?.recallPage) return;
+  const target = Math.max(1, Math.min(S.pages, S.page + (dir < 0 ? -1 : 1)));
+  if (target === S.page) return;
+  ctx.recallPage(ctx.product, buildRecallQuery(f, { page: target, facets: false })).catch(() => {});
 }
 
-async function fetchServerList({ page = S.page, facets = true, scrollTop = false } = {}) {
+async function fetchServerList({ page = S.page, facets = true, sync = facets, scrollTop = false, prefetchDir = 1 } = {}) {
   if (!S.serverMode || !ctx?.recallPage) return;
   const seq = ++S.reqSeq;
   const f = F();
@@ -227,11 +228,17 @@ async function fetchServerList({ page = S.page, facets = true, scrollTop = false
     return;
   }
   applyServerPage(res, f);
-  if (facets) syncFilters();
+  if (sync) syncFilters();
+  else {
+    const resetBtn = $("#sreset", root);
+    if (resetBtn) resetBtn.hidden = !dirty();
+    const sortEl = $("#ssort", root);
+    if (sortEl) sortEl.value = f.sort;
+  }
   renderList();
   markCurrent();
   if (scrollTop) $("#slist", root).scrollTop = 0;
-  prefetchNextServerPage(f);
+  prefetchNextServerPage(f, prefetchDir);
 }
 
 export async function render(r, c) {
@@ -379,13 +386,13 @@ function skeleton() {
   root.innerHTML = `<div class="bench">
     <aside class="pane pane-sticky compare-list" aria-label="样本列表">
       <button type="button" class="compare-rail-btn" id="srail" title="展开样本列表" aria-label="展开样本列表">${CHEV_RIGHT}<span class="compare-rail-label">样本列表</span></button>
-      <div class="pane-head compare-list-head">
+      <div class="pane-head compare-list-head samples-list-head${ctx.forecast ? " is-forecast" : ""}">
         <input class="search" id="sq" type="search" placeholder="${ctx.forecast ? "搜索预测问题" : "搜索问题 · Session ID · Trace ID"}" autocomplete="off">
         <div class="filters" id="sf"></div>
-        <div class="list-meta"><span id="scount" class="num"></span>
+        <div class="list-meta">${ctx.forecast ? `<span id="scount" class="num"></span>` : `<label class="sort-wrap"><select id="ssort" aria-label="排序"><option value="sev">严重度优先</option><option value="n">问题数</option><option value="date">日期新→旧</option></select>${CHEV_DOWN}</label>`}
           <span class="meta-end">
             <button type="button" class="reset" id="sreset" hidden>重置</button>
-            <select id="ssort" aria-label="排序">${ctx.forecast ? `<option value="sev">默认</option><option value="date">日期新→旧</option>` : `<option value="sev">严重度优先</option><option value="n">问题数</option><option value="date">日期新→旧</option>`}</select>
+            ${ctx.forecast ? `<label class="sort-wrap"><select id="ssort" aria-label="排序"><option value="sev">默认</option><option value="date">日期新→旧</option></select>${CHEV_DOWN}</label>` : ""}
             <button type="button" class="compare-icon-btn" id="scollapse" aria-expanded="true" title="折叠样本列表" aria-label="折叠样本列表">${CHEV_LEFT}</button>
           </span></div>
       </div>
@@ -418,7 +425,7 @@ function skeleton() {
   let timer;
   $("#sq", root).addEventListener("input", (e) => {
     clearTimeout(timer);
-    timer = setTimeout(() => setFilter({ q: e.target.value.trim() }), 140);
+    timer = setTimeout(() => setFilter({ q: e.target.value.trim() }), 200);
   });
   $("#ssort", root).addEventListener("change", (e) => setFilter({ sort: e.target.value }));
   $("#sreset", root).addEventListener("click", () =>
@@ -463,11 +470,13 @@ function skeleton() {
     const b = e.target.closest("button[data-page]");
     if (!b) return;
     if (S.serverMode) {
-      const next = b.dataset.page === "first" ? 1
-        : b.dataset.page === "last" ? S.pages
-        : b.dataset.page === "prev" ? S.page - 1 : S.page + 1;
+      const action = b.dataset.page;
+      const next = action === "first" ? 1
+        : action === "last" ? S.pages
+        : action === "prev" ? S.page - 1 : S.page + 1;
       const clamped = Math.max(1, Math.min(S.pages, next));
-      if (clamped !== S.page) fetchServerList({ page: clamped, facets: false, scrollTop: true });
+      const prefetchDir = action === "prev" || action === "last" ? -1 : 1;
+      if (clamped !== S.page) fetchServerList({ page: clamped, facets: false, sync: false, scrollTop: true, prefetchDir });
       return;
     }
     if (whenFull()) return;
@@ -501,7 +510,15 @@ function setFilter(patch) {
   ctx.navigate(patch, { replace: true });
   S.page = 1;
   if (S.serverMode) {
-    fetchServerList({ page: 1, facets: true, scrollTop: true });
+    const keys = Object.keys(patch || {});
+    const needFacets = !S.facets || keys.some((k) => FACET_KEYS.has(k));
+    const needSync = needFacets || keys.some((k) => k !== "q" && k !== "sort");
+    if (needSync) syncFilters();
+    else {
+      const resetBtn = $("#sreset", root);
+      if (resetBtn) resetBtn.hidden = !dirty();
+    }
+    fetchServerList({ page: 1, facets: needFacets, sync: needFacets, scrollTop: true, prefetchDir: 1 });
     return;
   }
   if (whenFull()) return;
@@ -562,12 +579,12 @@ function syncFilters() {
   const btn = (k, v, label, color) =>
     `<button type="button" data-k="${k}" data-v="${esc(v)}" aria-pressed="${f[k] === v}"${color ? ` style="--c:${color}"` : ""}>${color ? "<i></i>" : ""}${esc(label)}</button>`;
   const row = (cls, items) => `<div class="frow${cls ? ` ${cls}` : ""}">${items}</div>`;
-  let html = f.date ? row("", btn("date", f.date, `日期 ${f.date.slice(5)} ×`)) : "";
+  let html = f.date ? row("fdate", btn("date", f.date, `日期 ${f.date.slice(5)} ×`)) : "";
   html += row("sev", WORST.map((w, i) => btn("w", w, SEV_NAME[w], sevColor(i))).join(""));
   // Everything past severity and model sits behind one toggle that counts what is active.
   const more = ["ut", "split", "scene", "sub", "stage", "mech", "pattern"].filter((k) => f[k]).length;
   const open = S.moreOpen ?? more > 0;
-  html += row("models", `${p.models.map((m) => btn("model", m.id, m.label)).join("")}<button type="button" class="fmore" data-more aria-expanded="${open}" aria-controls="sfmore">筛选${more ? `<b class="num">${more}</b>` : ""}</button>`);
+  html += row("models", `<div class="seg-group" role="group" aria-label="模型">${p.models.map((m) => btn("model", m.id, m.label)).join("")}</div><button type="button" class="fmore${more ? " is-active" : ""}" data-more aria-expanded="${open}" aria-controls="sfmore"><span>筛选</span>${more ? `<b class="num">${more}</b>` : ""}${CHEV_DOWN}</button>`);
 
   const tax = ctx.data.taxonomy;
   const opt = (v, label, on) => `<option value="${esc(v)}"${on ? " selected" : ""}>${esc(label)}</option>`;
@@ -622,13 +639,16 @@ function syncFilters() {
           .map((id) => opt(id, `\u3000\u3000${patternName(tax, id)}`, clusterValue === id)).join("")).join("");
     }).join("");
     const crossStage = f.mech && !f.stage && !f.pattern ? opt(`*.${f.mech}`, `${f.mech} ${mechName.get(f.mech) || ""}`, true) : "";
-    clusterSelect = `<select data-k="cluster" aria-label="聚类"><option value="">全部聚类</option>${crossStage}${stageOpts}</select>`;
+    const clusterOn = Boolean(f.stage || f.mech || f.pattern);
+    clusterSelect = `<label class="sel-wrap wide${clusterOn ? " is-on" : ""}"><select data-k="cluster" aria-label="聚类"><option value="">全部聚类</option>${crossStage}${stageOpts}</select>${CHEV_DOWN}</label>`;
   }
+  const utOn = Boolean(f.ut);
+  const sceneOn = Boolean(f.scene || f.sub);
   html += `<div class="cascade" id="sfmore"${open ? "" : " hidden"}>
-      <select data-k="ut" aria-label="用户类型"><option value="">全部用户</option>${USER_TYPES.map(([id, label]) => opt(id, label, f.ut === id)).join("")}</select>
+      <label class="sel-wrap${utOn ? " is-on" : ""}"><select data-k="ut" aria-label="用户类型"><option value="">全部用户</option>${USER_TYPES.map(([id, label]) => opt(id, label, f.ut === id)).join("")}</select>${CHEV_DOWN}</label>
       ${p.splits.some((s) => s.id === "lost") ? btn("split", "lost", "流失用户") : ""}
-      <select data-k="scenepath" aria-label="场景" class="wide"><option value="">全部场景</option>${sceneOpts}</select>
-      ${clusterSelect.replace('<select data-k="cluster"', '<select data-k="cluster" class="wide"')}
+      <label class="sel-wrap wide${sceneOn ? " is-on" : ""}"><select data-k="scenepath" aria-label="场景"><option value="">全部场景</option>${sceneOpts}</select>${CHEV_DOWN}</label>
+      ${clusterSelect}
     </div>`;
   $("#sf", root).innerHTML = html;
 }
@@ -644,14 +664,7 @@ function renderList() {
 
   if (S.serverMode) {
     pages = S.pages;
-    countForPager = S.recalled;
-    if (S.capped) {
-      scountEl.textContent = `前 ${fmt(S.recalled)} / ${fmt(S.matched)} 个会话`;
-      scountEl.title = `单次召回上限 ${fmt(S.cap)} 个会话（总命中 ${fmt(S.matched)} / 全部 ${fmt(S.total)}），可通过筛选缩小范围`;
-    } else {
-      scountEl.textContent = `${fmt(S.matched)} / ${fmt(S.total)} 个会话`;
-      scountEl.removeAttribute("title");
-    }
+    countForPager = S.matched;
   } else {
     const needle = f.q.toLowerCase();
     const hit = (r) =>
@@ -701,10 +714,10 @@ function renderList() {
     S.pageRows = S.rows.slice((S.page - 1) * PAGE, S.page * PAGE);
     // The head holds only the first page; its counts come from the full index it was cut from.
     const total = S.prod.head ? S.prod.head.sessions : S.all.length;
-    scountEl.textContent = ctx.forecast
-      ? `${fmt(S.rows.length)} / ${fmt(questionTotal)} 题 · ${fmt(answerTotal)} 份回答`
-      : `${fmt(S.prod.head ? total : S.rows.length)} / ${fmt(total)} 个会话`;
-    scountEl.removeAttribute("title");
+    if (scountEl && ctx.forecast) {
+      scountEl.textContent = `${fmt(S.rows.length)} / ${fmt(questionTotal)} 题 · ${fmt(answerTotal)} 份回答`;
+      scountEl.removeAttribute("title");
+    }
     pages = S.prod.head ? Math.max(1, Math.ceil(total / PAGE)) : pages;
     countForPager = S.prod.head ? total : S.rows.length;
   }
@@ -743,7 +756,7 @@ function renderPager(pages, count) {
   // The total count already sits in the list meta above; repeating it here pushed the last
   // button past the 300px pane, so the pager only carries the page it is on.
   el.innerHTML = `${btn("first", "«", S.page === 1)}${btn("prev", "上一页", S.page === 1)}
-    <span class="pager-info">第 <b class="num">${S.page}</b> / ${pages} 页</span>
+    <span class="pager-info">第 <b class="num">${fmt(S.page)}</b> / ${fmt(pages)} 页</span>
     ${btn("next", "下一页", S.page === pages)}${btn("last", "»", S.page === pages)}`;
 }
 

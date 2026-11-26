@@ -167,9 +167,9 @@ function loadRecallHead(product = state.product) {
 }
 const peekIndex = (product = state.product) => state.indexes[product] || null;
 
-/* Server-side bounded recall (max 2,000 cases + lazy pagination): keeps every recall jump,
-   filter, sunburst galaxy, trend drawer and compare sibling lookup to a few KB instead of
-   pulling the tens-of-MB full samples index into the browser. */
+/* Server-side recall: uncapped paginated session recall for 具体数据 and bounded (<= 500)
+   slices for 数据看板 (sunburst galaxy, trend drawer, compare sibling lookup) to keep requests
+   to a few KB instead of pulling the tens-of-MB full samples index into the browser. */
 const recallCache = new Map();
 const RECALL_CACHE_MAX = 64;
 let recallApiBroken = false;

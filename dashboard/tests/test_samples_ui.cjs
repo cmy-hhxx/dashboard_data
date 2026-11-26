@@ -50,4 +50,10 @@ assert.equal(context.api.listHit({ ...taxRows[0], sv: [1, 0, 0, 0, 0], w: "P0" }
 assert.equal(context.api.listHit({ ...taxRows[1], sv: [0, 1, 0, 0, 0], w: "P1" }, { ...f, w: "P0" }), false, "cascade options honor the active severity filter");
 assert(!source.includes('${r.w} · ${r.n}'), "session list must not append the ambiguous problem total");
 assert(!source.includes("fit(group, nat.group)"), "attribution cards must not be clipped by the shared band");
+assert(!source.includes("RECALL_CAP"), "samples.js must not cap session list recall at 500");
+assert(!source.includes("前 ${fmt(S.recalled)}"), "samples.js must not display capped session count prefix");
+assert(!source.includes("个会话"), "samples.js must not display session count label");
+assert(source.includes("samples-list-head"), "samples.js must apply samples-list-head class");
+assert(source.includes("seg-group"), "samples.js must group model filter buttons in seg-group");
+assert(source.includes("sort-wrap"), "samples.js must wrap sort selector in sort-wrap");
 console.log("PASS: session severity aggregation, filtering, and independent attribution cards");

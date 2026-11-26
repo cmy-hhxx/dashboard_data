@@ -72,14 +72,20 @@ class RecallIndexUnitTests(unittest.TestCase):
             entry = store.get(str(static), "aime")
             self.assertIsNotNone(entry)
 
-            # Default page 1 is capped at 500 (10 pages x 50)
+            # Default page 1 is uncapped: all 703 sessions across 15 pages (14x50 + 3)
             p1 = entry.query_sessions({"page": "1", "size": "50"})
             self.assertEqual(p1["total_sessions"], 703)
             self.assertEqual(p1["matched"], 703)
-            self.assertEqual(p1["recalled"], 500)
-            self.assertTrue(p1["capped"])
-            self.assertEqual(p1["pages"], 10)
+            self.assertEqual(p1["recalled"], 703)
+            self.assertIsNone(p1["cap"])
+            self.assertFalse(p1["capped"])
+            self.assertEqual(p1["pages"], 15)
             self.assertEqual(len(p1["rows"]), 50)
+            # Legacy cap query param is ignored for session list recall
+            p_legacy = entry.query_sessions({"page": "1", "size": "50", "cap": "500", "facets": "0"})
+            self.assertEqual(p_legacy["recalled"], 703)
+            self.assertFalse(p_legacy["capped"])
+            self.assertEqual(p_legacy["pages"], 15)
             # Multi-round session aggregated sv=[1,2,0,0,0], worst=P0, peer models=[aime_expert, aime_fast]
             first = p1["rows"][0]
             self.assertEqual(first["w"], "P0")
@@ -89,10 +95,10 @@ class RecallIndexUnitTests(unittest.TestCase):
             self.assertIn("财报分析", p1["facets"]["scenes"])
             self.assertIn("S1", p1["facets"]["stages"])
 
-            # Page beyond cap clamps cleanly to page 10
+            # Page beyond total clamps cleanly to last page (15) with remaining 3 sessions
             p99 = entry.query_sessions({"page": "99", "size": "50", "facets": "0"})
-            self.assertEqual(p99["page"], 10)
-            self.assertEqual(len(p99["rows"]), 50)
+            self.assertEqual(p99["page"], 15)
+            self.assertEqual(len(p99["rows"]), 3)
             self.assertNotIn("facets", p99)
 
             # Label search matches merged labels-aime.json
@@ -100,10 +106,22 @@ class RecallIndexUnitTests(unittest.TestCase):
             self.assertEqual(ql["matched"], 1)
             self.assertEqual(ql["rows"][0]["sid"], "sess-shared")
 
-            # Locate deep-linked slug even when outside page 1
-            loc = entry.query_sessions({"case": "bulk-0120", "locate": "1", "size": "50"})
+            # Locate deep-linked slug even when past 500
+            loc = entry.query_sessions({"case": "bulk-0650", "locate": "1", "size": "50"})
             self.assertEqual(loc["page"], loc["target_page"])
-            self.assertEqual(loc["target"]["rows"][0]["s"], "bulk-0120")
+            self.assertGreater(loc["target_page"], 10)
+            self.assertEqual(loc["target"]["rows"][0]["s"], "bulk-0650")
+            self.assertTrue(any(r["s"] == "bulk-0650" for sess in loc["rows"] for r in sess["rows"]))
+
+            # Date sort + pagination cache + facet cache consistency
+            d1 = entry.query_sessions({"sort": "date", "page": "1", "size": "50", "model": "aime_fast"})
+            d2 = entry.query_sessions({"sort": "date", "page": "2", "size": "50", "model": "aime_fast"})
+            d_loc = entry.query_sessions({"sort": "date", "case": "bulk-0120", "locate": "1", "size": "50", "model": "aime_fast"})
+            self.assertEqual(d1["matched"], 702)
+            self.assertEqual(d2["page"], 2)
+            self.assertEqual(d_loc["page"], d_loc["target_page"])
+            self.assertGreaterEqual(len(entry._order_cache), 1)
+            self.assertGreaterEqual(len(entry._facet_cache), 1)
 
             # Lost split filter
             lost = entry.query_sessions({"split": "lost"})
@@ -269,6 +287,12 @@ class RecallHttpEndpointTests(unittest.TestCase):
                 res304 = conn.getresponse()
                 res304.read()
                 self.assertEqual(res304.status, 304)
+
+                # Invalid slice mode returns 400 even with an If-None-Match header
+                conn.request("GET", "/api/recall_slice/aime.json?mode=bogus", headers={"If-None-Match": etag})
+                res400 = conn.getresponse()
+                res400.read()
+                self.assertEqual(res400.status, 400)
 
                 # Galaxy slice GET
                 conn.request("GET", "/api/recall_slice/aime.json?mode=galaxy&card=clu&prefix=S1")

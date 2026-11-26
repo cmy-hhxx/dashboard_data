@@ -90,6 +90,114 @@
 .reset:active { transform: scale(0.95); }
 .reset[hidden] { display: none; }
 
+/* 具体数据: clean tonal sidebar filter header without session-count clutter */
+.samples-list-head {
+  padding: 14px var(--px) 10px;
+  gap: 8px;
+  box-shadow: inset 0 -1px 0 var(--well-2);
+}
+.samples-list-head + .pane-scroll { padding-top: 6px; }
+.samples-list-head .search { height: 34px; font-size: var(--fs-small); padding: 0 11px; }
+.samples-list-head .search::placeholder { color: var(--faint); }
+.samples-list-head .filters { display: grid; gap: 6px; }
+.samples-list-head .filters .frow.fdate button {
+  height: 24px; padding: 0 8px; border-radius: var(--r-chip);
+  background: var(--accent-soft); color: var(--accent);
+  font-size: var(--fs-meta); font-weight: var(--w-medium);
+}
+.samples-list-head .filters .frow.sev {
+  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)) minmax(0, 1.48fr);
+  gap: 2px; width: 100%; padding: 3px; border-radius: var(--r-ctl); background: var(--well);
+}
+.samples-list-head .filters .frow.sev button {
+  height: 24px; min-width: 0; padding: 0 2px; border-radius: var(--r-knob);
+  justify-content: center; gap: 3px; font-size: var(--fs-meta); color: var(--ink-2);
+}
+.samples-list-head .filters .frow.sev button i { width: 6px; height: 6px; flex: none; }
+.samples-list-head .filters .frow.sev button:hover {
+  background: color-mix(in oklab, var(--card) 75%, transparent); color: var(--ink);
+}
+.samples-list-head .filters .frow.sev button[aria-pressed="true"] {
+  background: var(--ink); color: var(--card); font-weight: var(--w-medium);
+}
+.samples-list-head .filters .frow.models { display: flex; align-items: center; gap: 6px; width: 100%; }
+.samples-list-head .filters .seg-group {
+  display: inline-flex; align-items: center; gap: 2px; padding: 3px;
+  border-radius: var(--r-ctl); background: var(--well); min-width: 0;
+}
+.samples-list-head .filters .seg-group button {
+  height: 24px; padding: 0 10px; border-radius: var(--r-knob);
+  font-size: var(--fs-meta); color: var(--ink-2);
+}
+.samples-list-head .filters .seg-group button:hover {
+  background: color-mix(in oklab, var(--card) 75%, transparent); color: var(--ink);
+}
+.samples-list-head .filters .seg-group button[aria-pressed="true"] {
+  background: var(--ink); color: var(--card); font-weight: var(--w-medium);
+}
+.samples-list-head .filters .fmore {
+  margin-left: auto; height: 30px; padding: 0 9px; border-radius: var(--r-ctl);
+  background: var(--well); color: var(--ink-2); font-size: var(--fs-meta); gap: 4px;
+}
+.samples-list-head .filters .fmore::after { content: none; }
+.samples-list-head .filters .fmore .chev {
+  color: var(--muted); transition: transform var(--snap), color var(--snap);
+}
+.samples-list-head .filters .fmore[aria-expanded="true"] .chev { transform: rotate(180deg); }
+.samples-list-head .filters .fmore:hover,
+.samples-list-head .filters .fmore[aria-expanded="true"] { background: var(--well-2); color: var(--ink); }
+.samples-list-head .filters .fmore.is-active { background: var(--accent-soft); color: var(--accent); }
+.samples-list-head .filters .fmore.is-active .chev { color: var(--accent); }
+.samples-list-head:not(.is-forecast) .filters .cascade {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; width: 100%;
+  padding: 8px; border-radius: var(--r-well); background: var(--well);
+}
+.samples-list-head:not(.is-forecast) .filters .cascade > button {
+  height: 28px; padding: 0 10px; border-radius: var(--r-chip);
+  background: var(--card); color: var(--ink-2); font-size: var(--fs-meta);
+}
+.samples-list-head:not(.is-forecast) .filters .cascade > button:hover {
+  background: var(--lift); color: var(--ink);
+}
+.samples-list-head:not(.is-forecast) .filters .cascade > button[aria-pressed="true"] {
+  background: var(--ink); color: var(--card); font-weight: var(--w-medium);
+}
+.samples-list-head .sel-wrap { position: relative; display: flex; align-items: center; min-width: 0; }
+.samples-list-head .sel-wrap.wide { grid-column: 1 / -1; }
+.samples-list-head .sel-wrap select {
+  width: 100%; height: 28px; min-width: 0; appearance: none; -webkit-appearance: none;
+  border: 0; border-radius: var(--r-chip); background: var(--card); color: var(--ink-2);
+  font-size: var(--fs-meta); padding: 0 24px 0 9px; cursor: pointer; outline: none;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  transition: background var(--snap), color var(--snap), box-shadow var(--snap);
+}
+.samples-list-head .sel-wrap select:hover { background: var(--lift); color: var(--ink); }
+.samples-list-head .sel-wrap select:focus-visible { background: var(--lift); box-shadow: 0 0 0 2px var(--accent); }
+.samples-list-head .sel-wrap .chev { position: absolute; right: 7px; pointer-events: none; color: var(--muted); flex: none; }
+.samples-list-head .sel-wrap.is-on select { background: var(--accent-soft); color: var(--accent); font-weight: var(--w-medium); }
+.samples-list-head .sel-wrap.is-on .chev { color: var(--accent); }
+.samples-list-head .list-meta {
+  display: flex; flex-wrap: nowrap; align-items: center; justify-content: space-between;
+  gap: 6px; min-height: 28px;
+}
+.samples-list-head.is-forecast .list-meta { flex-wrap: wrap; }
+.samples-list-head .meta-end { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.samples-list-head .sort-wrap { position: relative; display: inline-flex; align-items: center; min-width: 0; }
+.samples-list-head .sort-wrap select {
+  height: 26px; appearance: none; -webkit-appearance: none; border: 0;
+  border-radius: var(--r-chip); background: var(--well); color: var(--ink-2);
+  font-size: var(--fs-meta); padding: 0 22px 0 9px; cursor: pointer; outline: none;
+  transition: background var(--snap), color var(--snap), box-shadow var(--snap);
+}
+.samples-list-head .sort-wrap select:hover { background: var(--well-2); color: var(--ink); }
+.samples-list-head .sort-wrap select:focus-visible { background: var(--lift); box-shadow: 0 0 0 2px var(--accent); }
+.samples-list-head .sort-wrap .chev { position: absolute; right: 6px; pointer-events: none; color: var(--muted); }
+.samples-list-head .reset {
+  height: 26px; padding: 0 9px; border-radius: var(--r-chip); font-size: var(--fs-meta);
+  font-weight: var(--w-medium); color: var(--accent); background: var(--accent-soft);
+}
+.samples-list-head .reset:hover { background: color-mix(in oklab, var(--accent) 18%, var(--card)); color: var(--accent); }
+
 .pager {
   flex: none; display: flex; align-items: center; justify-content: space-between; gap: 4px;
   min-width: 0; padding: 8px 12px 12px; border-top: 1px solid var(--well-2);
