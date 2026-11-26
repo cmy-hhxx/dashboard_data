@@ -347,9 +347,9 @@
 @keyframes fade-in { from { opacity: 0; } }
 /* A cited message is washed in its worst severity's hue instead of carrying a bar:
    the tint says "cited", the header swatches say "which severities". */
-.anatomy.is-focus .msg:not(.on) { opacity: 0.35; }
-.anatomy .msg.on .msg-body { background: var(--active); }
-.msg.flash .msg-body, .pcard.flash, .cf.flash { animation: flash 1.2s ease-out; }
+.anatomy.is-focus .msg:not(.on), .anatomy.is-focus .user-ctx:not(.on) { opacity: 0.35; }
+.anatomy .msg.on .msg-body, .anatomy .user-ctx.on .uctx-card { background: var(--active); }
+.msg.flash .msg-body, .user-ctx.flash .uctx-card, .pcard.flash, .cf.flash { animation: flash 1.2s ease-out; }
 @keyframes flash { 0%, 30% { box-shadow: 0 0 0 2px var(--accent); } 100% { box-shadow: 0 0 0 2px transparent; } }
 
 .msg-top {
@@ -400,6 +400,45 @@
 }
 .blk-pager button.is-current.has-ev::after { background: var(--card); }
 .blk-pager-gap { padding: 0 2px; color: var(--faint); user-select: none; }
+
+/* 用户问句附带的系统注入上下文：抽离蓝色用户气泡，独立默认收起在问句与中间链路之间。 */
+.user-ctx { padding-left: 28px; scroll-margin-top: 90px; transition: opacity 180ms ease; }
+.uctx-card {
+  border-radius: var(--r-well); background: var(--well); overflow: hidden;
+  transition: background var(--snap), box-shadow var(--snap);
+}
+.uctx-head {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 12px;
+  text-align: left; font-size: var(--fs-small); color: var(--ink-2);
+  transition: background var(--snap), color var(--snap);
+}
+.uctx-head:hover { background: var(--hover); color: var(--ink); }
+.uctx-head[aria-expanded="true"] .fold-caret,
+.uctx-sub-head[aria-expanded="true"] .fold-caret { transform: rotate(90deg); }
+.uctx-title { font-weight: var(--w-medium); color: var(--ink-2); white-space: nowrap; }
+.uctx-badge.is-att {
+  display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: var(--r-chip);
+  background: var(--accent-soft); color: var(--accent); font-size: var(--fs-meta); font-weight: var(--w-medium); white-space: nowrap;
+}
+.uctx-meta { font-size: var(--fs-meta); color: var(--muted); white-space: nowrap; }
+.uctx-head .evs, .uctx-sec-head .evs, .uctx-sub-head .evs { display: inline-flex; gap: 4px; align-items: center; }
+.uctx-head .evs i, .uctx-sec-head .evs i, .uctx-sub-head .evs i { width: 10px; height: 10px; border-radius: 2px; background: var(--c); }
+.uctx-act { margin-left: auto; font-size: var(--fs-meta); color: var(--muted); white-space: nowrap; }
+.uctx-head:hover .uctx-act, .uctx-sub-head:hover .uctx-act { color: var(--accent); }
+.uctx-body { display: grid; gap: 10px; padding: 2px 12px 12px; border-top: 1px solid var(--well-2); }
+.uctx-sec { display: grid; gap: 6px; padding-top: 8px; min-width: 0; }
+.uctx-sec + .uctx-sec { border-top: 1px dashed var(--t4); }
+.uctx-sec-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: var(--fs-meta); }
+.uctx-sec-title { font-weight: var(--w-medium); color: var(--ink-2); }
+.uctx-sec.is-att .uctx-sec-title { color: var(--accent); }
+.uctx-sec.is-empty { padding-top: 6px; }
+.uctx-sub-head {
+  display: flex; align-items: center; gap: 7px; width: 100%; padding: 4px 6px; margin: 0 -6px;
+  border-radius: 6px; text-align: left; font-size: var(--fs-meta); color: var(--muted);
+  transition: background var(--snap), color var(--snap);
+}
+.uctx-sub-head:hover { background: var(--hover); color: var(--ink-2); }
+.uctx-sec.is-empty .uctx-sec-title { font-weight: var(--w-regular, 400); color: var(--muted); }
 
 /* The think / call / result chain between a question and its answer scrolls in its own box,
    so hundreds of steps never push the answer off screen. */

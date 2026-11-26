@@ -88,25 +88,34 @@ def encode(kind: str, filter_key: str, page_size: int, last_key) -> str:
     )
 
 
-def encode_since(dataset: str, seq: int) -> str:
-    """同步位点：只绑定 dataset 与 seq，不设有效期（客户端要长期保存）。"""
-    return _pack({"k": "since", "f": dataset, "s": int(seq)})
+def encode_since(dataset: str, seq: int, text_mode: str = "raw") -> str:
+    """同步位点：绑定 dataset、seq 与 text_mode，不设有效期（客户端要长期保存）。"""
+    body = {"k": "since", "f": dataset, "s": int(seq)}
+    if text_mode != "raw":
+        body["m"] = text_mode
+    return _pack(body)
 
 
-def decode_since(token: str, dataset: str) -> int:
-    """解析同步位点；也接受纯数字 seq，方便手工排查。"""
+def decode_since_with_mode(token: str, dataset: str) -> tuple[int, str | None]:
+    """解析同步位点，返回 (seq, text_mode|None)；纯数字 seq 仅用于手工排查，不绑定模式。"""
     text = str(token).strip()
     if text.isdigit():
-        return int(text)
+        return int(text), None
     body = _unpack(text)
     if body.get("k") != "since":
         raise CursorError("token 不是同步位点")
     if body.get("f") != dataset:
         raise CursorError("同步位点与 dataset 不匹配")
     try:
-        return int(body.get("s"))
+        seq = int(body.get("s"))
     except (TypeError, ValueError) as exc:
         raise CursorError("同步位点内容损坏") from exc
+    return seq, str(body.get("m") or "raw")
+
+
+def decode_since(token: str, dataset: str) -> int:
+    """解析同步位点；也接受纯数字 seq，方便手工排查。"""
+    return decode_since_with_mode(token, dataset)[0]
 
 
 class CursorError(ValueError):

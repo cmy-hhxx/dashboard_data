@@ -875,7 +875,7 @@ class InputLister:
         out = self.cache / f"detail-{key}.json"
         stamp = ""
         try:
-            stamp = f"full-v1:{path.stat().st_mtime}"
+            stamp = f"full-v2:{path.stat().st_mtime}"
         except OSError:
             return None
         try:

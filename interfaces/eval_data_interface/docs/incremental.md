@@ -3,19 +3,23 @@
 本地已有数据时，按服务端单调递增变更序号 `seq` 只拉新增、变更与删除，替代按天全量重拉。
 
 ```text
-首次：GET /changes?dataset=aime_eval&page_size=500                     → 当前全量 + next_since
+首次：GET /changes?dataset=aime_eval&page_size=500                     → 当前全量 + next_since（默认 text_mode=raw）
 增量：GET /changes?dataset=aime_eval&since=<next_since>&page_size=500  → 新增/变更/删除
+人话：GET /changes?dataset=aime_eval&text_mode=human&page_size=500     → 人话版本全量 + 绑定 human 的 next_since
 ```
 
 ## 1. 设计与核心概念
 
 归因文件会补数、重跑或整份重写，mtime 不可靠；`/changes` 仅在业务字段（问句、用户、来源、意图、问题条目、编码、严重度）真正变化时写入新 `seq`（`file`/`line`/`analyzed_at`/`analysis_id` 变动不触发重发）。
 
+- **文本版本与异步补译（`text_mode=raw|human`，默认 `raw`）**：人话译文晚于归因产出；当某条 trace 的人话译文首次补齐或重译更新时，服务端写入人话专属事件——`text_mode=raw` 消费方完全跳过且 `meta.latest_seq` 静止（零噪音），`text_mode=human` 消费方收到 `upsert` 自动将本地 `fallback_raw` 刷新为 `human`。
+- **位点隔离**：`since` 绑定 `text_mode`（旧版无模式标记的位点视为 `raw`）；从 `raw` 切换至 `human`（或反之）时若传入另一模式的位点，接口返回 `409 SYNC_RESET`，清空 `since` 重新全量同步即可，防止本地库原文与人话混脏。
+
 | 字段 | 说明 |
 |---|---|
 | 主键 | `(trace_id, day, app_version)` —— **`trace_id` 不唯一，本地必须用三元组落库** |
-| `since` / `next_since` | 客户端位点（不透明字符串，首次不传等价于 0；亦兼容纯数字 `seq` 排查） |
-| `items[]` | 与 `/traces` 同构，多一个 `change: {seq, op: "upsert", changed_at}` |
+| `since` / `next_since` | 客户端位点（绑定 `dataset` + `text_mode`，首次不传等价于 0；亦兼容纯数字 `seq` 排查） |
+| `items[]` | 与 `/traces` 同构，含 `text_mode`（`raw`/`human`/`fallback_raw`）与 `change: {seq, op: "upsert", changed_at}` |
 | `deleted[]` | 删除墓碑：`{trace_id, day, app_version, seq, op: "delete", changed_at}` |
 | 测试用户 | 与 `/traces` 一致，测试账号不出现在 `items` 或 `deleted` 中 |
 

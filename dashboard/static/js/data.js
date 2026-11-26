@@ -1136,8 +1136,10 @@ const loadSample = (slug) => {
 
 const blockText = (b) => (b.x || []).map((x) => (typeof x === "string" ? x : "\u2026")).join("");
 
-function blocksHTML(m) {
-  return (m.blocks || []).map((b) => {
+const isCtxBlk = (b) => typeof b?.l === "string" && (b.l === "context" || b.l.startsWith("context:"));
+
+function blocksHTML(m, list = null) {
+  return (list || m.blocks || []).map((b) => {
     const text = blockText(b);
     if (!text.trim()) return "";
     return `<div class="ed-block">${renderContent(text, b.f)}</div>`;
@@ -1168,6 +1170,27 @@ function stepHTML(m) {
 }
 
 function mainMsgHTML(m, cls) {
+  if (m.k === "user" && (m.blocks || []).some(isCtxBlk)) {
+    const main = (m.blocks || []).filter((b) => !isCtxBlk(b));
+    const ctx = (m.blocks || []).filter(isCtxBlk);
+    const chars = ctx.reduce((sum, b) => sum + (b.n || blockText(b).length), 0);
+    const hasAtt = ctx.some((b) => b.l === "context:attachments");
+    const nonEmpty = ctx.filter((b) => b.l !== "context:attachments_empty");
+    const shown = nonEmpty.length ? nonEmpty : ctx;
+    return `<div class="ed-msg ${cls}">
+      <div class="ed-msg-head"><span class="ed-role">${esc(KIND[m.k] || m.k)}</span></div>
+      <div class="ed-msg-body">${blocksHTML(m, main)}</div>
+    </div>
+    <div class="ed-step">
+      <button type="button" class="ed-step-head" aria-expanded="false">
+        <span class="ed-caret" aria-hidden="true"></span>
+        <span class="ed-step-role">注入上下文</span>
+        <span class="ed-step-name">${hasAtt ? "含附件/URL · " : ""}共 ${fmt(chars)} 字</span>
+        <span class="ed-step-dur"></span>
+      </button>
+      <div class="ed-step-body">${blocksHTML(m, shown)}</div>
+    </div>`;
+  }
   return `<div class="ed-msg ${cls}">
     <div class="ed-msg-head"><span class="ed-role">${esc(KIND[m.k] || m.k)}</span></div>
     <div class="ed-msg-body">${blocksHTML(m)}</div>

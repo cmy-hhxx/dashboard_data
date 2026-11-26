@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import unquote
 
-from . import config, timeutil
+from . import config, human_read, timeutil
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS files(
@@ -52,6 +52,8 @@ CREATE TABLE IF NOT EXISTS traces(
     file TEXT,
     line INTEGER,
     offset INTEGER,
+    hr_labels TEXT,
+    hr_hash TEXT,
     PRIMARY KEY (trace_id, day, app_version)
 );
 CREATE INDEX IF NOT EXISTS traces_file ON traces(file);
@@ -107,7 +109,8 @@ CREATE TABLE IF NOT EXISTS changes(
     day TEXT NOT NULL,
     app_version TEXT NOT NULL,
     op TEXT NOT NULL,
-    changed_at TEXT NOT NULL
+    changed_at TEXT NOT NULL,
+    human_only INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS changes_key ON changes(trace_id, day, app_version, seq);
 """
@@ -117,15 +120,19 @@ SCHEMA_VERSION = 3
 
 # 旧库没有的列：input 续扫需要上次提交到的字节、行数和文件头指纹
 FILE_COLUMNS = {"committed": "INTEGER", "lines": "INTEGER", "prefix": "TEXT"}
-# v1 只索引了 error_codes / has_error；v2 改为 problem_codes + 问题数组 + 严重度
+# v1 只索引了 error_codes / has_error；v2 改为 problem_codes + 问题数组 + 严重度；
+# 人话层增量加 hr_labels / hr_hash，就地 ALTER TABLE 不触发删表重建。
 TRACE_COLUMNS = {
     "problem_codes": "TEXT",
     "problem_count": "INTEGER",
     "problems": "TEXT",
     "severity": "TEXT",
     "is_correct": "INTEGER",
+    "hr_labels": "TEXT",
+    "hr_hash": "TEXT",
 }
 HISTORY_COLUMNS = {"problem_codes": "TEXT"}
+CHANGES_COLUMNS = {"human_only": "INTEGER NOT NULL DEFAULT 0"}
 PREFIX_BYTES = 65536
 
 TRACE_ID_RE = re.compile(rb'"trace_id"\s*:\s*"([^"\s]{4,80})"')
@@ -147,7 +154,7 @@ def connect(path):
     for name, kind in FILE_COLUMNS.items():
         if name not in have:
             conn.execute(f"ALTER TABLE files ADD COLUMN {name} {kind}")
-    for table, columns in (("traces", TRACE_COLUMNS), ("history", HISTORY_COLUMNS)):
+    for table, columns in (("traces", TRACE_COLUMNS), ("history", HISTORY_COLUMNS), ("changes", CHANGES_COLUMNS)):
         have = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
         for name, kind in columns.items():
             if name not in have:
@@ -374,13 +381,28 @@ def _trace_state(conn, key):
     return _row_state(row) if row else None
 
 
-def _emit_changes(conn, upserts, deletes, changed_at) -> int:
-    """写入变更流：upserts/deletes 都是 (trace_id, day, app_version) 序列。"""
-    rows = [(trace_id, day, app, "upsert", changed_at) for trace_id, day, app in upserts]
-    rows += [(trace_id, day, app, "delete", changed_at) for trace_id, day, app in deletes]
+def _trace_hr_hashes(conn, where="", params=()):
+    """按 (trace_id, day, app_version) 取库里现有的人话译文指纹。"""
+    sql = "SELECT trace_id, day, app_version, hr_hash FROM traces " + where
+    return {(row[0], row[1], row[2]): row[3] for row in conn.execute(sql, params)}
+
+
+def _trace_hr_hash(conn, key):
+    row = conn.execute(
+        "SELECT hr_hash FROM traces WHERE trace_id = ? AND day = ? AND app_version = ?",
+        key,
+    ).fetchone()
+    return row[0] if row else None
+
+
+def _emit_changes(conn, upserts, deletes, changed_at, human_upserts=()) -> int:
+    """写入变更流：upserts/deletes 为通用变更（human_only=0），human_upserts 仅对 text_mode=human 可见。"""
+    rows = [(trace_id, day, app, "upsert", changed_at, 0) for trace_id, day, app in upserts]
+    rows += [(trace_id, day, app, "delete", changed_at, 0) for trace_id, day, app in deletes]
+    rows += [(trace_id, day, app, "upsert", changed_at, 1) for trace_id, day, app in human_upserts]
     if rows:
         conn.executemany(
-            "INSERT INTO changes(trace_id, day, app_version, op, changed_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO changes(trace_id, day, app_version, op, changed_at, human_only) VALUES (?, ?, ?, ?, ?, ?)",
             rows,
         )
     return len(rows)
@@ -618,15 +640,29 @@ def ingest_attribution(
     """把一个 attribution 文件读进 traces / history；同一 trace 保留行号最大的一行。"""
     by_pair, by_label = _intent_lookup(intent_tree)
     category_meta = category_meta or {}
-    stats = {"files": 0, "skipped": 0, "traces": 0, "history": 0, "problems": 0, "unclustered": 0, "changes": 0}
+    stats = {
+        "files": 0,
+        "skipped": 0,
+        "traces": 0,
+        "history": 0,
+        "problems": 0,
+        "unclustered": 0,
+        "changes": 0,
+        "human_changes": 0,
+    }
     codes_by_model = {k: c for k, (c, _) in item_codes_by_model.items()}
+    hr_reader = human_read.reader_for(product)
 
     for path, source, model_dir in _attribution_files(product):
         codes = codes_by_model.get(model_dir) or ItemCodes()
-        # 依赖签名包含 item_index 属于本文件的指纹 + category_meta 全局内容指纹
+        rel_path = human_read.rel_path_for(path)
+        hr_sig = hr_reader.file_sig(rel_path)
+        # 依赖签名包含 item_index 属于本文件的指纹 + category_meta 全局内容指纹 + 本文件 human_read 聚合指纹
         sig = f"{_file_sig(path)}|{codes.sig_for(path.name)}"
         if category_sig:
             sig += f"|{category_sig}"
+        if hr_sig:
+            sig += f"|{hr_sig}"
         if _cached_sig(conn, path) == sig:
             stats["skipped"] += 1
             continue
@@ -642,152 +678,181 @@ def ingest_attribution(
         kept: dict[str, dict] = {}
         order: list[str] = []
         line_offset = 0
-        for line_no, raw in enumerate(_lines(path), 1):
-            current_offset = line_offset
-            line_offset += len(raw)
-            try:
-                record = json.loads(raw)
-            except ValueError:
-                log(f"[warn] {basename}:{line_no} 不是合法 JSON，已跳过")
-                continue
-            smeta = record.get("session_meta") or {}
-            session_id = _text(smeta.get("session_id") or smeta.get("thread_id"))
-            # 上游字段漂移：老记录写 question，新记录（2026-11-11 起）只写同义的 question_text
-            question = _decoded(smeta.get("question") or smeta.get("question_text"))
-            session_problems = record.get("session_problem") or []
-            turns = record.get("turns") or []
-            for turn_index, turn in enumerate(turns):
-                meta = turn.get("meta") or {}
-                trace_id = _text(meta.get("trace_id"))
-                if not trace_id:
+        with hr_reader.open_file(rel_path) as hr_index:
+            for line_no, raw in enumerate(_lines(path), 1):
+                current_offset = line_offset
+                line_offset += len(raw)
+                try:
+                    record = json.loads(raw)
+                except ValueError:
+                    log(f"[warn] {basename}:{line_no} 不是合法 JSON，已跳过")
                     continue
-                # session 是外层 meta；session_meta 缺失时用每轮 trace meta 的 session_id 兜底。
-                turn_session_id = session_id or _text(meta.get("session_id"))
-                stamp = timeutil.parse_iso(meta.get("timestamp")) or timeutil.parse_iso(smeta.get("request_time"))
-                day = timeutil.local_day(stamp, config.DAY_TZ) or default_day
-                # 意图优先按 trace_id 查上游 category_meta.json（避免多轮 session 冲突，且自动追新），
-                # 查不到再兜底归因行里的轮次/会话级字段；最终只保留当前新版树里的意图，旧体系标签清空。
-                cat_pair = category_meta.get(trace_id)
-                if cat_pair is not None:
-                    raw_task, raw_subtask = cat_pair
-                else:
-                    raw_task = _clean(
-                        meta.get("task")
-                        or meta.get("task_category")
-                        or smeta.get("task")
-                        or smeta.get("task_category")
-                    )
-                    raw_subtask = _clean(
-                        meta.get("subtask")
-                        or meta.get("subtask_category")
-                        or smeta.get("subtask")
-                        or smeta.get("subtask_category")
-                    )
-                intent_code, task, subtask = _resolve_intent(
-                    raw_task, raw_subtask, intent_tree, by_pair, by_label
-                )
-
-                turn_problems = list(turn.get("problem") or [])
-                problems = list(turn_problems)
-                session_level = False
-                if turn_index == len(turns) - 1 and session_problems:
-                    problems = problems + list(session_problems)
-                    session_level = True
-
-                found = []
-                code_rows = []
-                compact = []
-                severity = {}
-                for problem_index, problem in enumerate(problems):
-                    is_session = session_level and problem_index >= len(turn_problems)
-                    local_index = problem_index - len(turn_problems) if is_session else problem_index
-                    code = codes.code_for(
-                        trace_id,
-                        basename,
-                        line_no,
-                        turn_index,
-                        local_index,
-                        problem.get("label"),
-                        session_level=is_session,
-                    )
-                    level = _severity(problem.get("severity"))
-                    compact.append(
-                        {
-                            "code": code,
-                            "label": problem.get("label"),
-                            "severity": level,
-                            "component": problem.get("component_family") or problem.get("component"),
-                            "session_level": is_session,
-                        }
-                    )
-                    stats["problems"] += 1
-                    if level:
-                        severity[level] = severity.get(level, 0) + 1
-                    if code:
-                        found.append(code)
-                        code_rows.append(("session" if is_session else "turn", local_index, code))
+                hr_record = hr_index.lookup(record) if hr_index else None
+                smeta = record.get("session_meta") or {}
+                session_id = _text(smeta.get("session_id") or smeta.get("thread_id"))
+                # 上游字段漂移：老记录写 question，新记录（2026-11-11 起）只写同义的 question_text
+                question = _decoded(smeta.get("question") or smeta.get("question_text"))
+                session_problems = record.get("session_problem") or []
+                turns = record.get("turns") or []
+                for turn_index, turn in enumerate(turns):
+                    meta = turn.get("meta") or {}
+                    trace_id = _text(meta.get("trace_id"))
+                    if not trace_id:
+                        continue
+                    # session 是外层 meta；session_meta 缺失时用每轮 trace meta 的 session_id 兜底。
+                    turn_session_id = session_id or _text(meta.get("session_id"))
+                    stamp = timeutil.parse_iso(meta.get("timestamp")) or timeutil.parse_iso(smeta.get("request_time"))
+                    day = timeutil.local_day(stamp, config.DAY_TZ) or default_day
+                    # 意图优先按 trace_id 查上游 category_meta.json（避免多轮 session 冲突，且自动追新），
+                    # 查不到再兜底归因行里的轮次/会话级字段；最终只保留当前新版树里的意图，旧体系标签清空。
+                    cat_pair = category_meta.get(trace_id)
+                    if cat_pair is not None:
+                        raw_task, raw_subtask = cat_pair
                     else:
-                        stats["unclustered"] += 1
-                problem_codes = sorted(set(found))
-
-                entry = {
-                    "trace_id": trace_id,
-                    "day": day,
-                    "app_version": config.LAYOUT.app_version(model_dir, meta),
-                    "asked_at": timeutil.utc_rfc3339(stamp),
-                    "source": source,
-                    "user_id": _text(meta.get("user_id")),
-                    "question": question,
-                    "session_id": turn_session_id,
-                    "intent_code": intent_code,
-                    "task": task,
-                    "subtask": subtask,
-                    "problem_codes": problem_codes,
-                    "problem_count": len(compact),
-                    "problems": compact,
-                    "severity": severity,
-                    "is_correct": _tri_state(turn.get("is_correct")),
-                    "analysis_id": _analysis_id(basename, line_no),
-                    "analyzed_at": analyzed_at,
-                    "file": str(path),
-                    "line": line_no,
-                    "offset": current_offset,
-                    "code_rows": code_rows,
-                }
-                if trace_id in kept:
-                    old = kept[trace_id]
-                    conn.execute(
-                        "INSERT INTO history(trace_id, day, app_version, analysis_id, analyzed_at, file, line, offset, intent_code, problem_codes) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            old["trace_id"],
-                            old["day"],
-                            old["app_version"],
-                            old["analysis_id"],
-                            old["analyzed_at"],
-                            old["file"],
-                            old["line"],
-                            old["offset"],
-                            old["intent_code"],
-                            json.dumps(old["problem_codes"], ensure_ascii=False),
-                        ),
+                        raw_task = _clean(
+                            meta.get("task")
+                            or meta.get("task_category")
+                            or smeta.get("task")
+                            or smeta.get("task_category")
+                        )
+                        raw_subtask = _clean(
+                            meta.get("subtask")
+                            or meta.get("subtask_category")
+                            or smeta.get("subtask")
+                            or smeta.get("subtask_category")
+                        )
+                    intent_code, task, subtask = _resolve_intent(
+                        raw_task, raw_subtask, intent_tree, by_pair, by_label
                     )
-                    stats["history"] += 1
-                else:
-                    order.append(trace_id)
-                kept[trace_id] = entry
+
+                    turn_problems = list(turn.get("problem") or [])
+                    problems = list(turn_problems)
+                    session_level = False
+                    if turn_index == len(turns) - 1 and session_problems:
+                        problems = problems + list(session_problems)
+                        session_level = True
+
+                    matched_hr = human_read.match_turn(record, hr_record, turn_index) if hr_record else None
+                    if matched_hr is not None:
+                        hr_turn, hr_turn_probs, hr_sprobs = matched_hr
+                        hr_combined = hr_turn_probs + (hr_sprobs if session_level else [])
+                        hr_labels = [
+                            ((hp.get("label") or "").strip() or op.get("label"))
+                            for op, hp in zip(problems, hr_combined)
+                        ]
+                        hr_hash = human_read.turn_hr_fingerprint(
+                            hr_record, hr_turn, include_session=(turn_index == len(turns) - 1)
+                        )
+                    else:
+                        hr_labels = None
+                        hr_hash = None
+
+                    found = []
+                    code_rows = []
+                    compact = []
+                    severity = {}
+                    for problem_index, problem in enumerate(problems):
+                        is_session = session_level and problem_index >= len(turn_problems)
+                        local_index = problem_index - len(turn_problems) if is_session else problem_index
+                        code = codes.code_for(
+                            trace_id,
+                            basename,
+                            line_no,
+                            turn_index,
+                            local_index,
+                            problem.get("label"),
+                            session_level=is_session,
+                        )
+                        level = _severity(problem.get("severity"))
+                        compact.append(
+                            {
+                                "code": code,
+                                "label": problem.get("label"),
+                                "severity": level,
+                                "component": problem.get("component_family") or problem.get("component"),
+                                "session_level": is_session,
+                            }
+                        )
+                        stats["problems"] += 1
+                        if level:
+                            severity[level] = severity.get(level, 0) + 1
+                        if code:
+                            found.append(code)
+                            code_rows.append(("session" if is_session else "turn", local_index, code))
+                        else:
+                            stats["unclustered"] += 1
+                    problem_codes = sorted(set(found))
+
+                    entry = {
+                        "trace_id": trace_id,
+                        "day": day,
+                        "app_version": config.LAYOUT.app_version(model_dir, meta),
+                        "asked_at": timeutil.utc_rfc3339(stamp),
+                        "source": source,
+                        "user_id": _text(meta.get("user_id")),
+                        "question": question,
+                        "session_id": turn_session_id,
+                        "intent_code": intent_code,
+                        "task": task,
+                        "subtask": subtask,
+                        "problem_codes": problem_codes,
+                        "problem_count": len(compact),
+                        "problems": compact,
+                        "severity": severity,
+                        "is_correct": _tri_state(turn.get("is_correct")),
+                        "analysis_id": _analysis_id(basename, line_no),
+                        "analyzed_at": analyzed_at,
+                        "file": str(path),
+                        "line": line_no,
+                        "offset": current_offset,
+                        "hr_labels": hr_labels,
+                        "hr_hash": hr_hash,
+                        "code_rows": code_rows,
+                    }
+                    if trace_id in kept:
+                        old = kept[trace_id]
+                        conn.execute(
+                            "INSERT INTO history(trace_id, day, app_version, analysis_id, analyzed_at, file, line, offset, intent_code, problem_codes) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            (
+                                old["trace_id"],
+                                old["day"],
+                                old["app_version"],
+                                old["analysis_id"],
+                                old["analyzed_at"],
+                                old["file"],
+                                old["line"],
+                                old["offset"],
+                                old["intent_code"],
+                                json.dumps(old["problem_codes"], ensure_ascii=False),
+                            ),
+                        )
+                        stats["history"] += 1
+                    else:
+                        order.append(trace_id)
+                    kept[trace_id] = entry
 
         # 新旧内容对比要在删除前取：PK 是 (trace_id, day, app_version)，
         # 同一个 key 可能被别的归因文件写过，只看本文件会漏判。
         old_states = _trace_states(conn, "WHERE file = ?", (str(path),))
+        old_hr = _trace_hr_hashes(conn, "WHERE file = ?", (str(path),))
         new_states = {
             (tid, kept[tid]["day"], kept[tid]["app_version"]): _entry_state(kept[tid])
+            for tid in order
+        }
+        new_hr = {
+            (tid, kept[tid]["day"], kept[tid]["app_version"]): kept[tid]["hr_hash"]
             for tid in order
         }
         carry = {
             key: _trace_state(conn, key)
             for key in new_states
             if key not in old_states
+        }
+        carry_hr = {
+            key: _trace_hr_hash(conn, key)
+            for key in new_hr
+            if key not in old_hr
         }
 
         conn.execute("DELETE FROM traces WHERE file = ?", (str(path),))
@@ -796,16 +861,21 @@ def ingest_attribution(
         conn.executemany(
             "INSERT OR REPLACE INTO traces(trace_id, day, app_version, asked_at, source, user_id, question, session_id, "
             "intent_code, task, subtask, problem_codes, problem_count, problems, severity, is_correct, "
-            "analysis_id, analyzed_at, file, line, offset) "
+            "analysis_id, analyzed_at, file, line, offset, hr_labels, hr_hash) "
             "VALUES (:trace_id, :day, :app_version, :asked_at, :source, :user_id, :question, :session_id, "
             ":intent_code, :task, :subtask, :problem_codes, :problem_count, :problems, :severity, :is_correct, "
-            ":analysis_id, :analyzed_at, :file, :line, :offset)",
+            ":analysis_id, :analyzed_at, :file, :line, :offset, :hr_labels, :hr_hash)",
             [
                 {
                     **kept[tid],
                     "problem_codes": json.dumps(kept[tid]["problem_codes"], ensure_ascii=False),
                     "problems": json.dumps(kept[tid]["problems"], ensure_ascii=False),
                     "severity": json.dumps(kept[tid]["severity"], ensure_ascii=False, sort_keys=True),
+                    "hr_labels": (
+                        json.dumps(kept[tid]["hr_labels"], ensure_ascii=False)
+                        if kept[tid]["hr_labels"] is not None
+                        else None
+                    ),
                 }
                 for tid in order
             ],
@@ -819,20 +889,30 @@ def ingest_attribution(
             "INSERT INTO problem_codes(trace_id, day, app_version, scope, idx, code, file) VALUES (?, ?, ?, ?, ?, ?, ?)",
             code_rows,
         )
+        base_upserts = [
+            key for key, state in new_states.items()
+            if _content_changed(old_states.get(key) or carry.get(key), state)
+        ]
+        base_upsert_set = set(base_upserts)
+        human_upserts = [
+            key for key, hhash in new_hr.items()
+            if key not in base_upsert_set
+            and hhash != (old_hr[key] if key in old_hr else carry_hr.get(key))
+        ]
+        deletes = [key for key in old_states if key not in new_states]
         changed = _emit_changes(
             conn,
-            [
-                key for key, state in new_states.items()
-                if _content_changed(old_states.get(key) or carry.get(key), state)
-            ],
-            [key for key in old_states if key not in new_states],
+            base_upserts,
+            deletes,
             timeutil.utc_rfc3339(datetime.now(timezone.utc)),
+            human_upserts=human_upserts,
         )
         _store_sig(conn, path, sig, "attribution")
         conn.commit()
         stats["files"] += 1
         stats["traces"] += len(order)
         stats["changes"] += changed
+        stats["human_changes"] += len(human_upserts)
     return stats
 
 
@@ -1069,6 +1149,10 @@ def build(root: Path | None = None, log=None) -> dict:
         inputs_total = conn.execute("SELECT COUNT(*) FROM input_index").fetchone()[0]
         changes_total = conn.execute("SELECT COUNT(*) FROM changes").fetchone()[0]
         latest_seq = conn.execute("SELECT COALESCE(MAX(seq), 0) FROM changes").fetchone()[0]
+        latest_seq_raw = conn.execute(
+            "SELECT COALESCE(MAX(seq), 0) FROM changes WHERE COALESCE(human_only, 0) = 0"
+        ).fetchone()[0]
+        hr_traces = conn.execute("SELECT COUNT(*) FROM traces WHERE hr_hash IS NOT NULL").fetchone()[0]
         newest = conn.execute("SELECT MAX(analyzed_at) FROM traces").fetchone()[0]
         # 汇总以库里全量为准（增量构建时 stats 只覆盖本轮重扫的文件）
         severity = {level: 0 for level in config.SEVERITIES}
@@ -1108,8 +1192,11 @@ def build(root: Path | None = None, log=None) -> dict:
             "pruned": removed,
             "changes": changes_total,
             "changes_emitted": attribution["changes"] + pruned_changes + filled,
+            "human_changes_emitted": attribution["human_changes"],
             "changes_seeded": seeded,
             "latest_seq": latest_seq,
+            "latest_seq_raw": latest_seq_raw,
+            "human_read_traces": hr_traces,
             "data_updated_at": newest,
             "state_dir": str(config.STATE_DIR),
         }

@@ -14,6 +14,7 @@ const {
   mergeSessionDetails, dropSubsetParts, hasSessionComment, roundQuestionOf,
   sortSessionRows, canLazyLoadSession, pickLazyRound, buildLazyRoundDetail,
   blockPageLimit, splitBlockPages, pageIndexForOffset, pageWindow,
+  isContextBlock, splitUserBlocks, contextMeta,
 } = await import("../static/js/sample_detail.js");
 const { sessionRows } = await import("../static/js/compare.js");
 
@@ -225,4 +226,37 @@ test("pageWindow keeps page navigation compact for large blocks", () => {
   assert.deepEqual(pageWindow(0, 12), [0, 1, 2, 3, "…", 11]);
   assert.deepEqual(pageWindow(5, 12), [0, "…", 4, 5, 6, "…", 11]);
   assert.deepEqual(pageWindow(11, 12), [0, "…", 8, 9, 10, 11]);
+});
+
+test("splitUserBlocks and contextMeta separate injected context and exclude it from roundQuestionOf", () => {
+  const blocks = [
+    { l: null, x: ["Ok noted"], n: 8 },
+    { l: "context:attachments_empty", x: ["# Content of attachments...\n"], n: 558 },
+    { l: "context:internal", x: ["# Context (internal)\nUser KYC..."], n: 4700 },
+  ];
+  assert.equal(isContextBlock(blocks[0]), false);
+  assert.equal(isContextBlock(blocks[1]), true);
+  assert.equal(isContextBlock("context:planning"), true);
+  assert.equal(blockPageLimit("user", "context:internal"), 4000);
+
+  const { main, context } = splitUserBlocks(blocks);
+  assert.deepEqual(main.map((x) => x.bi), [0]);
+  assert.deepEqual(context.map((x) => x.bi), [1, 2]);
+
+  const meta = contextMeta(context);
+  assert.equal(meta.totalChars, 5258);
+  assert.equal(meta.hasAttachments, false);
+  assert.equal(meta.sections[0].empty, true);
+  assert.equal(meta.sections[1].empty, false);
+  assert.equal(meta.sections[1].label, "内部上下文");
+
+  const withAtt = contextMeta([{ b: { l: "context:attachments", x: ["file content"], n: 12 }, bi: 1 }]);
+  assert.equal(withAtt.hasAttachments, true);
+  assert.equal(withAtt.sections[0].empty, false);
+
+  const D = {
+    question: "Fallback",
+    input: { traces: [{ messages: [{ k: "user", blocks }] }] },
+  };
+  assert.equal(roundQuestionOf(D, 0, false), "Ok noted");
 });

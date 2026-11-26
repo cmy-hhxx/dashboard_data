@@ -7,12 +7,24 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from . import config, cursors, errors, timeutil, users
+from . import config, cursors, errors, human_read, timeutil, users
 from .taxonomy import Tree
 
 GROUP_DIMS = ("intent", "problem", "day", "user", "app_version", "source")
 LEVELS = ("top", "leaf", "children")
 SORTS = ("traces", "users", "rate")
+
+
+def parse_text_mode(value) -> str:
+    """解析文本版本参数：raw（默认）| human；非法值抛 422。"""
+    if value is None:
+        return "raw"
+    text = str(value).strip()
+    if not text:
+        return "raw"
+    if text not in human_read.TEXT_MODES:
+        raise errors.unknown_value("text_mode", text, list(human_read.TEXT_MODES))
+    return text
 
 
 @dataclass(slots=True)
@@ -38,6 +50,8 @@ class Trace:
     file: str
     line: int
     offset: int
+    hr_labels: tuple | None = None
+    hr_ready: bool = False
 
 
 def _trace_order(trace):
@@ -45,15 +59,27 @@ def _trace_order(trace):
 
 
 class Snapshot:
-    def __init__(self, traces, intent_tree, problem_trees, data_updated_at, build_summary=None, latest_seq=0):
+    def __init__(
+        self,
+        traces,
+        intent_tree,
+        problem_trees,
+        data_updated_at,
+        build_summary=None,
+        latest_seq=0,
+        latest_seq_raw=None,
+    ):
         self.traces: list[Trace] = traces
         self.intent: Tree | None = intent_tree
         self.problem_trees: dict[str, Tree] = problem_trees
         self.data_updated_at = data_updated_at
         self.build_summary = build_summary or {}
         self.built_at = timeutil.utc_rfc3339(datetime.now(timezone.utc))
-        # 变更流的最新 seq：/changes 只发这个位点之前的变化，避免快照和变更表不同步
+        # 变更流的最新 seq：/changes 只发这个位点之前的变化，避免快照和变更表不同步。
+        # latest_seq_raw 排除 human_only 补译事件，保证 raw 消费方在无原文变动时位点静止。
         self.latest_seq = int(latest_seq or 0)
+        self.latest_seq_raw = int(latest_seq if latest_seq_raw is None else (latest_seq_raw or 0))
+        self.human_read_traces = sum(1 for t in traces if t.hr_ready)
         # /traces 的固定顺序 (asked_at DESC, trace_id DESC)，排一次，筛选后保持
         traces.sort(key=_trace_order, reverse=True)
         self.by_id: dict[str, list[Trace]] = {}
@@ -94,13 +120,18 @@ def load(conn, intent_tree, problem_trees, build_summary=None) -> Snapshot:
     # 先取变更位点再读 trace：变更行与 trace 行同一事务提交，
     # 这样 latest_seq 以内的变更一定能在本次快照里找到对应 trace。
     latest_seq = conn.execute("SELECT COALESCE(MAX(seq), 0) FROM changes").fetchone()[0]
+    latest_seq_raw = conn.execute(
+        "SELECT COALESCE(MAX(seq), 0) FROM changes WHERE COALESCE(human_only, 0) = 0"
+    ).fetchone()[0]
     rows = conn.execute(
         "SELECT trace_id, day, app_version, asked_at, source, user_id, question, session_id, intent_code, "
         "task, subtask, problem_codes, problem_count, problems, severity, is_correct, "
-        "analysis_id, analyzed_at, file, line, offset FROM traces"
+        "analysis_id, analyzed_at, file, line, offset, hr_labels, hr_hash FROM traces"
     ).fetchall()
     traces = []
     for row in rows:
+        raw_hr_labels = row[21]
+        hr_labels = tuple(_json_value(raw_hr_labels, [])) if raw_hr_labels is not None else None
         traces.append(
             Trace(
                 trace_id=row[0],
@@ -124,6 +155,8 @@ def load(conn, intent_tree, problem_trees, build_summary=None) -> Snapshot:
                 file=row[18],
                 line=row[19],
                 offset=row[20] or 0,
+                hr_labels=hr_labels,
+                hr_ready=bool(row[22]),
             )
         )
     # 供数接口不提供测试账号的问句：测试账号的 trace 整条不进入快照，
@@ -144,7 +177,15 @@ def load(conn, intent_tree, problem_trees, build_summary=None) -> Snapshot:
     if build_summary is not None:
         build_summary["test_excluded"] = excluded
     newest = max((t.analyzed_at for t in traces if t.analyzed_at), default=None)
-    snap = Snapshot(traces, intent_tree, problem_trees, newest, build_summary, latest_seq=latest_seq)
+    snap = Snapshot(
+        traces,
+        intent_tree,
+        problem_trees,
+        newest,
+        build_summary,
+        latest_seq=latest_seq,
+        latest_seq_raw=latest_seq_raw,
+    )
     snap.hidden = hidden
     return snap
 
@@ -873,10 +914,30 @@ def user_summary(snap: Snapshot, filters: Filters, sort=None, limit=100, cursor=
 
 # --------------------------------------------------------------------------- /traces
 
-def _item(snap: Snapshot, trace: Trace):
+def _summary_problems(snap: Snapshot, trace: Trace, text_mode: str = "raw", override_labels=None):
+    """返回摘要 problems[] 及实际 text_mode（raw / human / fallback_raw）。"""
+    if text_mode != "human":
+        return _current_problems(snap, trace), "raw"
+    labels = override_labels
+    ready = override_labels is not None
+    if not ready and trace.hr_ready:
+        labels = trace.hr_labels
+        ready = True
+    if not ready:
+        return _current_problems(snap, trace), "fallback_raw"
+    base = _current_problems(snap, trace)
+    if labels is not None and len(labels) == len(base):
+        for item, new_label in zip(base, labels):
+            if isinstance(new_label, str) and new_label.strip():
+                item["label"] = new_label.strip()
+    return base, "human"
+
+
+def _item(snap: Snapshot, trace: Trace, text_mode: str = "raw"):
     preview = trace.question or ""
     if len(preview) > config.QUERY_PREVIEW_CHARS:
         preview = preview[: config.QUERY_PREVIEW_CHARS]
+    problems, actual_mode = _summary_problems(snap, trace, text_mode=text_mode)
     return {
         "trace_id": trace.trace_id,
         "day": trace.day,
@@ -893,7 +954,8 @@ def _item(snap: Snapshot, trace: Trace):
         "problem_count": trace.problem_count,
         "problem_codes": list(trace.problem_codes),
         "problem_current_codes": _current_codes(snap, trace),
-        "problems": _current_problems(snap, trace),
+        "problems": problems,
+        "text_mode": actual_mode,
         "analysis_id": trace.analysis_id,
         "analyzed_at": trace.analyzed_at,
         # 该 trace 各等级的问题条目数：列表页不必再逐条数 problems[]
@@ -901,7 +963,8 @@ def _item(snap: Snapshot, trace: Trace):
     }
 
 
-def traces(snap: Snapshot, filters: Filters, page_size=20, cursor=None, ids_only=False):
+def traces(snap: Snapshot, filters: Filters, page_size=20, cursor=None, ids_only=False, text_mode="raw"):
+    text_mode = parse_text_mode(text_mode)
     matcher = Matcher(snap, filters)
     # snap.traces 已按 (asked_at, trace_id) 倒序
     selected = [t for t in snap.traces if matcher.match(t, with_problem=True)]
@@ -911,7 +974,7 @@ def traces(snap: Snapshot, filters: Filters, page_size=20, cursor=None, ids_only
     if page_size < 1 or page_size > upper:
         raise errors.invalid(f"page_size 必须在 1..{upper} 之间", "page_size")
 
-    filter_key = filters.cache_key()
+    filter_key = filters.cache_key() if text_mode == "raw" else f"{filters.cache_key()}|tm={text_mode}"
     if cursor:
         try:
             body = cursors.decode(cursor, "traces", filter_key)
@@ -927,7 +990,7 @@ def traces(snap: Snapshot, filters: Filters, page_size=20, cursor=None, ids_only
         tail = page[-1]
         next_cursor = cursors.encode("traces", filter_key, page_size, [tail.asked_at or "", tail.trace_id])
 
-    items = [t.trace_id for t in page] if ids_only else [_item(snap, t) for t in page]
+    items = [t.trace_id for t in page] if ids_only else [_item(snap, t, text_mode=text_mode) for t in page]
     return {
         "items": items,
         "total": total,
@@ -939,7 +1002,8 @@ def traces(snap: Snapshot, filters: Filters, page_size=20, cursor=None, ids_only
 
 # --------------------------------------------------------------------------- /traces/batch
 
-def batch(snap: Snapshot, trace_ids, filters: Filters):
+def batch(snap: Snapshot, trace_ids, filters: Filters, text_mode="raw"):
+    text_mode = parse_text_mode(text_mode)
     if len(trace_ids) > config.MAX_TRACE_IDS:
         raise errors.too_many_ids("trace_ids", config.MAX_TRACE_IDS, len(trace_ids))
     items = []
@@ -964,13 +1028,14 @@ def batch(snap: Snapshot, trace_ids, filters: Filters):
                     "problem_count": 0,
                     "problem_codes": [],
                     "problems": [],
+                    "text_mode": None,
                     "analysis_id": None,
                     "analyzed_at": None,
                 }
             )
             continue
         trace = max(candidates, key=lambda t: (t.analyzed_at or "", t.day))
-        item = _item(snap, trace)
+        item = _item(snap, trace, text_mode=text_mode)
         item["status"] = "analyzed"
         items.append(item)
     return {"items": items}
@@ -978,20 +1043,31 @@ def batch(snap: Snapshot, trace_ids, filters: Filters):
 
 # --------------------------------------------------------------------------- /changes
 
-def _changes_rows(conn, since_seq, head_seq, after_seq):
+def _changes_rows(conn, since_seq, head_seq, after_seq, include_human=False):
     """窗口内的「每个 key 只取最新一条变更」，按 seq 升序。"""
+    if include_human:
+        return conn.execute(
+            "SELECT c.trace_id, c.day, c.app_version, c.seq, c.op, c.changed_at FROM changes c "
+            "WHERE c.seq > ? AND c.seq <= ? AND c.seq > ? AND c.seq = ("
+            "  SELECT MAX(d.seq) FROM changes d WHERE d.trace_id = c.trace_id AND d.day = c.day "
+            "  AND d.app_version = c.app_version AND d.seq <= ?"
+            ") ORDER BY c.seq",
+            (since_seq, head_seq, after_seq, head_seq),
+        ).fetchall()
     return conn.execute(
         "SELECT c.trace_id, c.day, c.app_version, c.seq, c.op, c.changed_at FROM changes c "
-        "WHERE c.seq > ? AND c.seq <= ? AND c.seq > ? AND c.seq = ("
-        "  SELECT MAX(d.seq) FROM changes d WHERE d.trace_id = c.trace_id AND d.day = c.day "
+        "WHERE COALESCE(c.human_only, 0) = 0 AND c.seq > ? AND c.seq <= ? AND c.seq > ? AND c.seq = ("
+        "  SELECT MAX(d.seq) FROM changes d WHERE COALESCE(d.human_only, 0) = 0 "
+        "  AND d.trace_id = c.trace_id AND d.day = c.day "
         "  AND d.app_version = c.app_version AND d.seq <= ?"
         ") ORDER BY c.seq",
         (since_seq, head_seq, after_seq, head_seq),
     ).fetchall()
 
 
-def changes(snap: Snapshot, db_path, dataset: str, since, page_size=100, cursor=None):
+def changes(snap: Snapshot, db_path, dataset: str, since, page_size=100, cursor=None, text_mode="raw"):
     """增量同步：按服务端变更序号发放新增/变更/删除，不依赖时间戳。"""
+    text_mode = parse_text_mode(text_mode)
     if dataset not in config.DATASET_ALIASES:
         raise errors.unknown_value("dataset", dataset, sorted(config.DATASET_ALIASES))
     if page_size < 1 or page_size > config.MAX_CHANGES_PAGE:
@@ -1000,15 +1076,23 @@ def changes(snap: Snapshot, db_path, dataset: str, since, page_size=100, cursor=
     since_seq = 0
     if since not in (None, ""):
         try:
-            since_seq = cursors.decode_since(since, dataset)
+            since_seq, token_mode = cursors.decode_since_with_mode(since, dataset)
         except cursors.CursorError as exc:
             raise errors.invalid(f"since 不合法：{exc}", "since") from exc
+        if token_mode is not None and token_mode != text_mode:
+            raise errors.ApiError(
+                409,
+                "SYNC_RESET",
+                f"同步位点模式不匹配：位点属于 {token_mode}，当前请求为 {text_mode}，请清空 since 重新全量同步",
+                {"since_text_mode": token_mode, "text_mode": text_mode},
+            )
     if since_seq < 0:
         raise errors.invalid("since 不能为负数", "since")
 
-    latest = snap.latest_seq
+    include_human = text_mode == "human"
+    latest = snap.latest_seq if include_human else snap.latest_seq_raw
     head, after = latest, since_seq
-    filter_key = cursors.filter_hash({"dataset": dataset, "since": since_seq})
+    filter_key = cursors.filter_hash({"dataset": dataset, "since": since_seq, "text_mode": text_mode})
     if cursor:
         try:
             body = cursors.decode(cursor, "changes", filter_key)
@@ -1033,7 +1117,7 @@ def changes(snap: Snapshot, db_path, dataset: str, since, page_size=100, cursor=
     except sqlite3.Error as exc:
         raise errors.unavailable("索引不可用，请稍后重试", error=str(exc)) from exc
     try:
-        rows = _changes_rows(conn, since_seq, head, after)
+        rows = _changes_rows(conn, since_seq, head, after, include_human=include_human)
     except sqlite3.Error as exc:
         raise errors.unavailable("变更流不可用，请稍后重试", error=str(exc)) from exc
     finally:
@@ -1060,7 +1144,7 @@ def changes(snap: Snapshot, db_path, dataset: str, since, page_size=100, cursor=
             # 变更行存在但当前快照没有（例如文件在两次构建之间被删）：不对外提供半状态
             if trace is None:
                 continue
-            entry = _item(snap, trace)
+            entry = _item(snap, trace, text_mode=text_mode)
             entry["change"] = {"seq": seq, "op": "upsert", "changed_at": changed_at}
         if len(items) + len(deleted) == page_size:
             has_more = True
@@ -1077,7 +1161,7 @@ def changes(snap: Snapshot, db_path, dataset: str, since, page_size=100, cursor=
         "page_size": page_size,
         "has_more": has_more,
         "next_cursor": next_cursor,
-        "next_since": None if has_more else cursors.encode_since(dataset, head),
+        "next_since": None if has_more else cursors.encode_since(dataset, head, text_mode=text_mode),
         "since_seq": since_seq,
         "head_seq": head,
         "latest_seq": latest,
@@ -1117,15 +1201,29 @@ def _read_offset_line(path: str, offset: int):
     return parsed
 
 
-def _pick_turn(record, trace_id):
-    for turn in record.get("turns") or []:
+def _pick_turn_with_index(record, trace_id):
+    for idx, turn in enumerate(record.get("turns") or []):
         meta = turn.get("meta") or {}
         if meta.get("trace_id") == trace_id:
-            return turn
-    return None
+            return idx, turn
+    return None, None
 
 
-def detail(snap: Snapshot, db_path, dataset: str, trace_id: str, day: str | None, taxonomy_version=None):
+def _pick_turn(record, trace_id):
+    _, turn = _pick_turn_with_index(record, trace_id)
+    return turn
+
+
+def detail(
+    snap: Snapshot,
+    db_path,
+    dataset: str,
+    trace_id: str,
+    day: str | None,
+    taxonomy_version=None,
+    text_mode: str = "raw",
+):
+    text_mode = parse_text_mode(text_mode)
     if dataset not in config.DATASET_ALIASES:
         raise errors.unknown_value("dataset", dataset, sorted(config.DATASET_ALIASES))
     if not day:
@@ -1141,7 +1239,17 @@ def detail(snap: Snapshot, db_path, dataset: str, trace_id: str, day: str | None
     trace = max(candidates, key=lambda t: (t.analyzed_at or "", t.line))
 
     attribution = _read_offset_line(trace.file, trace.offset)
-    turn = _pick_turn(attribution, trace_id) if attribution else None
+    turn_index, turn = _pick_turn_with_index(attribution, trace_id) if attribution else (None, None)
+
+    # 详情模式实时查人话镜像（O(1) pread，与 5001 看板同源），避免把长段译文塞进 SQLite
+    matched_hr = None
+    hr_record = None
+    if text_mode == "human" and attribution is not None and turn is not None and turn_index is not None:
+        pdir = human_read.product_dir_for(trace.file) or (config.datasets_root() / config.PRODUCT_DIR)
+        hr_reader = human_read.reader_for(pdir)
+        hr_record = hr_reader.lookup(trace.file, attribution)
+        if hr_record is not None:
+            matched_hr = human_read.match_turn(attribution, hr_record, turn_index)
 
     # 编码、原始输入、历史版本：一个只读连接查完
     codes, input_row, history = {}, None, []
@@ -1159,21 +1267,52 @@ def detail(snap: Snapshot, db_path, dataset: str, trace_id: str, day: str | None
         finally:
             conn.close()
 
+    raw_session_summary = human_read.session_summary_text(attribution)
+    summary_text = (turn or {}).get("summary")
+    session_summary = raw_session_summary
+    hr_turn_probs = None
+    hr_sprobs = None
+    if matched_hr is not None:
+        hr_turn, hr_turn_probs, hr_sprobs = matched_hr
+        hr_summary = (hr_turn.get("summary") or "").strip()
+        if hr_summary:
+            summary_text = hr_summary
+        hr_session_summary = human_read.session_summary_text(hr_record)
+        if hr_session_summary:
+            session_summary = hr_session_summary
+
     problems = []
     if turn:
         for idx, problem in enumerate(turn.get("problem") or []):
-            problems.append(_problem_payload(problem, codes.get(("turn", idx)), session_level=False))
+            hr_p = hr_turn_probs[idx] if hr_turn_probs is not None else None
+            problems.append(_problem_payload(problem, codes.get(("turn", idx)), session_level=False, hr_problem=hr_p))
         # 跨轮问题只在会话最后一轮计数（与 ingest 一致），否则同一问题会在每条 trace 上重复出现
         turns = (attribution or {}).get("turns") or []
         if turns and turn is turns[-1]:
             for idx, problem in enumerate((attribution or {}).get("session_problem") or []):
-                problems.append(_problem_payload(problem, codes.get(("session", idx)), session_level=True))
+                hr_p = hr_sprobs[idx] if hr_sprobs is not None else None
+                problems.append(
+                    _problem_payload(problem, codes.get(("session", idx)), session_level=True, hr_problem=hr_p)
+                )
     else:
         problems = [
             {"code": code, "label": code, "severity": None, "evidence": [], "session_level": False}
             for code in trace.problem_codes
         ]
     problems = _current_problems(snap, trace, problems)
+
+    if text_mode == "raw":
+        summary_problems, item_text_mode = _summary_problems(snap, trace, text_mode="raw")
+    elif matched_hr is not None:
+        live_labels = [p.get("label") for p in problems]
+        summary_problems, item_text_mode = _summary_problems(
+            snap, trace, text_mode="human", override_labels=live_labels
+        )
+    elif turn is not None:
+        # 归因行可读但人话镜像暂无译文：明确回退原文
+        summary_problems, item_text_mode = _current_problems(snap, trace), "fallback_raw"
+    else:
+        summary_problems, item_text_mode = _summary_problems(snap, trace, text_mode="human")
 
     return {
         "trace_id": trace.trace_id,
@@ -1190,7 +1329,8 @@ def detail(snap: Snapshot, db_path, dataset: str, trace_id: str, day: str | None
         "problem_count": trace.problem_count,
         "problem_codes": list(trace.problem_codes),
         "problem_current_codes": _current_codes(snap, trace),
-        "problems": _current_problems(snap, trace),
+        "problems": summary_problems,
+        "text_mode": item_text_mode,
         "analysis_id": trace.analysis_id,
         "analyzed_at": trace.analyzed_at,
         # 来源归因文件（批次日期）：day 是北京时间，批次文件按评测日命名，两者可能跨日。
@@ -1200,7 +1340,8 @@ def detail(snap: Snapshot, db_path, dataset: str, trace_id: str, day: str | None
         "trace": _find_trace_object(input_row, trace_id) if input_row else None,
         "analysis": {
             "intent": {"task": trace.task, "subtask": trace.subtask, "code": trace.intent_code},
-            "summary": (turn or {}).get("summary"),
+            "summary": summary_text,
+            "session_summary": session_summary,
             "is_correct": trace.is_correct,
             "problems": problems,
             "history": history,
@@ -1216,15 +1357,23 @@ def _problem_codes(conn, trace_id, day, app_version):
     return {(scope, idx): code for scope, idx, code in rows}
 
 
-def _problem_payload(problem, code, session_level=False):
-    label = problem.get("label")
+def _hr_text(hr_problem, field_name, fallback):
+    if isinstance(hr_problem, dict):
+        val = hr_problem.get(field_name)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return fallback
+
+
+def _problem_payload(problem, code, session_level=False, hr_problem=None):
     return {
         "code": code,
-        "label": label,
+        "label": _hr_text(hr_problem, "label", problem.get("label")),
         "severity": problem.get("severity"),
+        "severity_reason": _hr_text(hr_problem, "severity_reason", problem.get("severity_reason")),
         "definition": problem.get("definition"),
-        "phenomena": problem.get("problem_phenomena"),
-        "reason": problem.get("reason"),
+        "phenomena": _hr_text(hr_problem, "problem_phenomena", problem.get("problem_phenomena")),
+        "reason": _hr_text(hr_problem, "reason", problem.get("reason")),
         "component": problem.get("component_family") or problem.get("component"),
         "evidence": problem.get("evidence") or [],
         "session_level": session_level,

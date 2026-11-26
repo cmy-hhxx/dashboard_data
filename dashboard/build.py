@@ -1563,16 +1563,72 @@ LF_USER_STAMP_RE = re.compile(
     re.IGNORECASE,
 )
 # `aime_fast` appends attachment/internal-context sections after the user's actual text
-# in `llm_turn.input_messages`; each planner/answer turn injects a different tail.
+# in `user_question` and `llm_turn.input_messages`; each planner/answer turn injects a tail.
 _INJECTED_USER_SUFFIX_RE = re.compile(
-    r"\n+--- ---\n+#\s*(?:Content of attachments and URLs provided in this turn|Context\s*\(internal)",
+    r"\n+--- ---\n+(?=#\s*(?:Content of attachments and URLs provided in this turn|Context\s*\(internal|Multi-turn(?:\s+\S+)*\s+planning note\s*\(internal))",
     re.IGNORECASE,
 )
+_INJECTED_SECTION_SPLIT_RE = re.compile(r"\n+--- ---\n+(?=#\s*)")
+_ATTACH_HEADING_RE = re.compile(r"^#\s*Content of attachments and URLs provided in this turn\b", re.IGNORECASE)
+_ATTACH_EMPTY_RE = re.compile(
+    r"^#\s*Content of attachments and URLs provided in this turn\b[\s\S]*?"
+    r"Content of the user['’]s uploaded attachments and referenced URLs:\s*$",
+    re.IGNORECASE,
+)
+_INTERNAL_CTX_HEADING_RE = re.compile(r"^#\s*Context\s*\(internal", re.IGNORECASE)
+_PLANNING_NOTE_HEADING_RE = re.compile(r"^#\s*Multi-turn(?:\s+\S+)*\s+planning note\s*\(internal", re.IGNORECASE)
+
+
+def split_injected_user_context(text: str) -> tuple[str, list[tuple[str, str]]]:
+    """Split a user message into ``(question_text, [(label, section_text), ...])``.
+
+    Preserves every top-level ``--- ---`` injected section verbatim so evidence
+    citations targeting internal context (e.g. NER / KYC / attachments) still
+    anchor with exact character offsets inside the same ``message_index``.
+    """
+    if not isinstance(text, str) or not text:
+        return "", []
+    m = _INJECTED_USER_SUFFIX_RE.search(text)
+    if not m:
+        return text, []
+    question = text[:m.start()].strip()
+    tail = text[m.end():].strip()
+    sections: list[tuple[str, str]] = []
+    for part in _INJECTED_SECTION_SPLIT_RE.split(tail):
+        sec = part.strip()
+        if not sec:
+            continue
+        if _ATTACH_HEADING_RE.match(sec):
+            label = "context:attachments_empty" if _ATTACH_EMPTY_RE.match(sec) else "context:attachments"
+        elif _INTERNAL_CTX_HEADING_RE.match(sec):
+            label = "context:internal"
+        elif _PLANNING_NOTE_HEADING_RE.match(sec):
+            label = "context:planning"
+        else:
+            label = "context"
+        sections.append((label, sec))
+    return question, sections
 
 
 def _strip_injected_user_suffix(text: str) -> str:
-    m = _INJECTED_USER_SUFFIX_RE.search(text)
-    return text[:m.start()].strip() if m else text.strip()
+    q, _ = split_injected_user_context(text)
+    return q.strip()
+
+
+def split_user_message_blocks(raw_blocks: list[tuple]) -> list[tuple]:
+    """Expand injected context suffixes on user text blocks into tagged context blocks."""
+    out = []
+    for path, text, fmt, label in raw_blocks:
+        if fmt == "text" and label is None and isinstance(text, str):
+            q, sections = split_injected_user_context(text)
+            if sections:
+                if q:
+                    out.append((path, q, fmt, None))
+                for sec_label, sec_text in sections:
+                    out.append((path, sec_text, "text", sec_label))
+                continue
+        out.append((path, text, fmt, label))
+    return out
 
 
 def _extract_user_text(content) -> str:
@@ -1712,7 +1768,7 @@ def session_question(inp, attr):
                 if m.get("type") == "user_question":
                     q = m.get("content")
                     break
-    return decode_question(q)
+    return _strip_injected_user_suffix(decode_question(q))
 
 
 def build_sample(pair, inp, attr, comp, clusters, stats):
@@ -1775,7 +1831,10 @@ def build_sample(pair, inp, attr, comp, clusters, stats):
                 blocks = [Block("/content", recovered_q, "text", None)]
                 replaced_user = True
             else:
-                blocks = [Block(*b) for b in message_blocks(m, kind)]
+                raw_blocks = message_blocks(m, kind)
+                if kind == "user":
+                    raw_blocks = split_user_message_blocks(raw_blocks)
+                blocks = [Block(*b) for b in raw_blocks]
             rows.append({"raw": m, "kind": kind, "name": name, "blocks": blocks, "ev": []})
         traces.append((tmeta, rows))
 

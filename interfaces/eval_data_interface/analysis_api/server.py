@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from . import config, cursors, errors, snapshot, store, timeutil
+from . import config, cursors, errors, human_read, snapshot, store, timeutil
 from .taxonomy import load_cluster, load_intent, severity_tree
 
 MULTI_PARAMS = {"source", "intent", "problem", "severity", "app_version", "user_ids", "group_by", "trace_ids"}
@@ -42,6 +42,7 @@ KNOWN_PARAMS = {
     "kind",
     "version",
     "since",
+    "text_mode",
 }
 
 
@@ -295,7 +296,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # noqa: A003
         print(f"[http] {self.address_string()} {fmt % args}", flush=True)
 
-    def _envelope(self, data, filters=None, snapshot_obj=None, extra_meta=None):
+    def _envelope(self, data, filters=None, snapshot_obj=None, extra_meta=None, latest_seq=None):
         snap = snapshot_obj or APP.current()
         cluster_updated_at = None
         if snap and snap.problem_trees:
@@ -303,6 +304,7 @@ class Handler(BaseHTTPRequestHandler):
                 (tree.released_at for tree in snap.problem_trees.values() if tree.released_at),
                 default=None,
             )
+        resolved_seq = latest_seq if latest_seq is not None else (snap.latest_seq_raw if snap else None)
         meta = {
             "taxonomy_version": snap.taxonomy_version() if snap else None,
             "taxonomy_versions": snap.taxonomy_versions() if snap else None,
@@ -312,7 +314,7 @@ class Handler(BaseHTTPRequestHandler):
             "cluster_updated_at": cluster_updated_at,
             "cluster_through": (snap.build_summary or {}).get("cluster_through") if snap else None,
             # 增量同步的最新位点：客户端可与自己保存的 since 对比判断是否落后
-            "latest_seq": snap.latest_seq if snap else None,
+            "latest_seq": resolved_seq,
             "filters": filters or {},
         }
         if extra_meta:
@@ -439,6 +441,8 @@ class Handler(BaseHTTPRequestHandler):
         snap = APP.current()
         with APP.lock:
             build = dict(APP.last_build)
+        hr_stats = human_read.reader_for(config.datasets_root() / config.PRODUCT_DIR).stats()
+        hr_stats["traces"] = snap.human_read_traces if snap else 0
         _json_response(
             self,
             200,
@@ -451,6 +455,8 @@ class Handler(BaseHTTPRequestHandler):
                 "traces": len(snap.traces) if snap else 0,
                 "problems": sum(t.problem_count for t in snap.traces) if snap else 0,
                 "latest_seq": snap.latest_seq if snap else 0,
+                "latest_seq_raw": snap.latest_seq_raw if snap else 0,
+                "human_read": hr_stats,
                 "building": APP.building,
                 "build": build,
                 "state_dir": str(config.STATE_DIR),
@@ -509,6 +515,7 @@ class Handler(BaseHTTPRequestHandler):
     def _traces(self, params):
         snap = self._snapshot()
         filters = snapshot.parse_filters(params, snap)
+        text_mode = snapshot.parse_text_mode(params.get("text_mode"))
         page_size = _int_param(params, "page_size", 20)
         ids_only = params.get("ids_only")
         ids_only = str(ids_only).lower() in ("true", "1") if ids_only else False
@@ -518,8 +525,11 @@ class Handler(BaseHTTPRequestHandler):
             page_size=page_size,
             cursor=(params.get("cursor") or None),
             ids_only=ids_only,
+            text_mode=text_mode,
         )
-        _json_response(self, 200, self._envelope(data, filters.echo, snap))
+        echo = {**filters.echo, "text_mode": text_mode}
+        seq = snap.latest_seq if text_mode == "human" else snap.latest_seq_raw
+        _json_response(self, 200, self._envelope(data, echo, snap, latest_seq=seq))
 
     def _users(self, params):
         snap = self._snapshot()
@@ -539,20 +549,27 @@ class Handler(BaseHTTPRequestHandler):
         dataset = str(body.get("dataset") or "").strip()
         if dataset not in config.DATASET_ALIASES:
             raise errors.unknown_value("dataset", dataset, sorted(config.DATASET_ALIASES))
+        text_mode = snapshot.parse_text_mode(body.get("text_mode") or params.get("text_mode"))
         trace_ids = body.get("trace_ids")
         if isinstance(trace_ids, str):
             trace_ids = [trace_ids]
         trace_ids = [str(tid) for tid in (trace_ids or [])]
         if not trace_ids:
             raise errors.invalid("trace_ids 不能为空", "trace_ids")
-        data = snapshot.batch(snap, trace_ids, None)
-        _json_response(self, 200, self._envelope(data, {"dataset": dataset}, snap))
+        data = snapshot.batch(snap, trace_ids, None, text_mode=text_mode)
+        seq = snap.latest_seq if text_mode == "human" else snap.latest_seq_raw
+        _json_response(
+            self,
+            200,
+            self._envelope(data, {"dataset": dataset, "text_mode": text_mode}, snap, latest_seq=seq),
+        )
 
     def _changes(self, params):
         snap = self._snapshot()
         dataset = params.get("dataset") or ""
         if not dataset:
             raise errors.invalid("缺少必填参数 dataset", "dataset")
+        text_mode = snapshot.parse_text_mode(params.get("text_mode"))
         page_size = _int_param(params, "page_size", 100)
         since = params.get("since") or None
         data = snapshot.changes(
@@ -562,14 +579,21 @@ class Handler(BaseHTTPRequestHandler):
             since,
             page_size=page_size,
             cursor=(params.get("cursor") or None),
+            text_mode=text_mode,
         )
         _json_response(
             self,
             200,
             self._envelope(
                 data,
-                {"dataset": dataset, "since_seq": data["since_seq"], "head_seq": data["head_seq"]},
+                {
+                    "dataset": dataset,
+                    "text_mode": text_mode,
+                    "since_seq": data["since_seq"],
+                    "head_seq": data["head_seq"],
+                },
                 snap,
+                latest_seq=data["latest_seq"],
             ),
         )
 
@@ -613,6 +637,7 @@ class Handler(BaseHTTPRequestHandler):
         dataset = params.get("dataset") or ""
         if not dataset:
             raise errors.invalid("缺少必填参数 dataset", "dataset")
+        text_mode = snapshot.parse_text_mode(params.get("text_mode"))
         data = snapshot.detail(
             snap,
             APP.db_path,
@@ -620,14 +645,22 @@ class Handler(BaseHTTPRequestHandler):
             trace_id,
             params.get("day") or None,
             params.get("taxonomy_version") or None,
+            text_mode=text_mode,
         )
+        seq = snap.latest_seq if text_mode == "human" else snap.latest_seq_raw
         _json_response(
             self,
             200,
             self._envelope(
                 data,
-                {"dataset": params.get("dataset"), "day": params.get("day"), "trace_id": trace_id},
+                {
+                    "dataset": params.get("dataset"),
+                    "day": params.get("day"),
+                    "trace_id": trace_id,
+                    "text_mode": text_mode,
+                },
                 snap,
+                latest_seq=seq,
             ),
         )
 

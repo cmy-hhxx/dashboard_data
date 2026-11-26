@@ -18,6 +18,7 @@ const DETAIL_CACHE_LIMIT = 128;
 /* 长消息块分页：后端保留完整文本，前端按字符窗口（就近贴合换行）分页，不再省略中间内容。 */
 const BLOCK_PAGE_LIMIT = {
   user: 4000,
+  context: 4000,
   answer: 14000,
   system: 2400,
   llm: 3200,
@@ -27,8 +28,52 @@ const BLOCK_PAGE_LIMIT = {
   other: 3200,
 };
 
+const CTX_SECTION_LABEL = {
+  "context:attachments": "附件与 URL",
+  "context:attachments_empty": "附件与 URL（本轮无附件）",
+  "context:internal": "内部上下文",
+  "context:planning": "多轮规划提示",
+  context: "注入上下文",
+};
+
+export function isContextBlock(b) {
+  const lab = typeof b === "string" ? b : b?.l;
+  return typeof lab === "string" && (lab === "context" || lab.startsWith("context:"));
+}
+
+export function splitUserBlocks(blocks = []) {
+  const main = [];
+  const context = [];
+  (blocks || []).forEach((b, bi) => {
+    if (isContextBlock(b)) context.push({ b, bi });
+    else main.push({ b, bi });
+  });
+  return { main, context };
+}
+
+export function contextMeta(ctxEntries = []) {
+  let totalChars = 0;
+  let hasAttachments = false;
+  const sections = (ctxEntries || []).map(({ b, bi }) => {
+    const text = (b.x || []).map((x) => (typeof x === "string" ? x : "")).join("");
+    const chars = b.n || text.length;
+    totalChars += chars;
+    if (b.l === "context:attachments") hasAttachments = true;
+    return {
+      b,
+      bi,
+      label: CTX_SECTION_LABEL[b.l] || "注入上下文",
+      empty: b.l === "context:attachments_empty",
+      chars,
+    };
+  });
+  return { totalChars, hasAttachments, sections };
+}
+
 export function blockPageLimit(kind, label = "") {
-  return BLOCK_PAGE_LIMIT[label === "think" ? "think" : kind] || 3200;
+  if (label === "think") return BLOCK_PAGE_LIMIT.think;
+  if (isContextBlock(label)) return BLOCK_PAGE_LIMIT.context;
+  return BLOCK_PAGE_LIMIT[kind] || 3200;
 }
 
 export function splitBlockPages(text, pageSize = 3200) {
@@ -309,6 +354,7 @@ export function roundQuestionOf(D, traceIndex = 0, sessionView = false) {
     const turn = D?.input?.traces?.[traceIndex];
     const user = (turn?.messages || []).find((m) => m.k === "user");
     const text = (user?.blocks || [])
+      .filter((b) => !isContextBlock(b))
       .map((b) => (b.x || []).filter((x) => typeof x === "string").join(""))
       .join(" ")
       .replace(/\s+/g, " ")
@@ -390,7 +436,7 @@ export function createSampleDetail(host, ctxArg, opts = {}) {
   const S = {
     product: opts.product, prod: opts.prod, all: opts.sessions || [],
     cache: new Map(), loadSeq: 0, roundSeq: 0, D: null, sessionKey: null, session: null,
-    round: 0, trace: 0, turn: 0, cturn: 0, sessionView: false, tabPage: 0, open: new Set(), blockPages: new Map(),
+    round: 0, trace: 0, turn: 0, cturn: 0, sessionView: false, tabPage: 0, open: new Set(), openCtx: new Set(), openCtxSub: new Set(), blockPages: new Map(),
     folds: { traj: true, chain: false, ...(opts.folds || {}) }, closedAnswers: new Set(),
     active: null, bandOpen: false, traceMiss: null,
   };
@@ -507,6 +553,8 @@ async function loadSession(session, focusSlug, focusTrace, sev) {
     S.turn = 0;
     S.cturn = 0;
     S.open = new Set();
+    S.openCtx = new Set();
+    S.openCtxSub = new Set();
     S.blockPages = new Map();
     S.active = null;
     renderIn();
@@ -565,6 +613,8 @@ async function loadSession(session, focusSlug, focusTrace, sev) {
   S.turn = init?.turn ?? S.round;
   S.cturn = init?.compact ?? S.round;
   S.open = new Set();
+  S.openCtx = new Set();
+  S.openCtxSub = new Set();
   S.blockPages = new Map();
   S.active = null;
   renderIn();
@@ -640,6 +690,8 @@ function selectRound(i, { scroll = true } = {}) {
       S.turn = 0;
       S.cturn = 0;
       S.open = new Set();
+      S.openCtx = new Set();
+      S.openCtxSub = new Set();
       S.blockPages = new Map();
       S.active = null;
       syncTraceParam();
@@ -955,6 +1007,10 @@ function timelineHTML(t, messages, ui = {}) {
     if (CHAIN_KINDS.has(m.k)) {
       flush();
       out.push(msgHTML(t, i, m));
+      if (m.k === "user" && !S.sessionView) {
+        const uctx = userCtxHTML(t, i, m);
+        if (uctx) out.push(uctx);
+      }
       // 系统提示原本在问句之前：挪到问句下面，作为这条链路的第一段
       if (pending.length) {
         run = pending;
@@ -983,6 +1039,15 @@ function qaHTML(D) {
   return rows.join("") || `<div class="empty">这一组没有 QA 消息</div>`;
 }
 
+function isCtxEvidence(ev) {
+  if (!ev || ev.m == null || ev.b == null) return false;
+  const blk = S.D?.input?.traces?.[ev.t]?.messages?.[ev.m]?.blocks?.[ev.b];
+  return isContextBlock(blk);
+}
+
+const evSevs = (eids) => [...new Set((eids || []).map((e) => S.D._ix.sev.get(e)).filter(Boolean))]
+  .sort((a, b) => SEV.indexOf(b) - SEV.indexOf(a));
+
 /* Chat scene: the user speaks on the right, the answer answers on the left,
    everything the agent did in between is a compact step row. */
 function msgHTML(t, i, m) {
@@ -991,8 +1056,11 @@ function msgHTML(t, i, m) {
   // 单轮视图里只有问句是气泡：回答和链路步骤共用一条轨道，读作「链路 → 回答」；
   // session 总评本来就是 Q→A 对话，回答继续按对话气泡排。
   const chat = m.k === "user" || (m.k === "answer" && S.sessionView);
-  const sevs = [...new Set((m.ev || []).map((e) => D._ix.sev.get(e)).filter(Boolean))]
-    .sort((a, b) => SEV.indexOf(b) - SEV.indexOf(a));
+  const hasCtx = m.k === "user" && (m.blocks || []).some(isContextBlock);
+  const evIds = hasCtx && !S.sessionView
+    ? (m.ev || []).filter((e) => !isCtxEvidence(D.evidence[e]))
+    : (m.ev || []);
+  const sevs = evSevs(evIds);
   const answerFold = compareFolds && m.k === "answer";
   const foldable = answerFold || !FOLD_OPEN.has(m.k);
   const folded = answerFold ? S.closedAnswers.has(key) : (!FOLD_OPEN.has(m.k) && !S.open.has(key));
@@ -1000,7 +1068,7 @@ function msgHTML(t, i, m) {
   const who = KIND[m.k] || m.k;
   const firstUser = t === 0 ? S.D.input.traces[0].messages.findIndex((x) => x.k === "user") : -1;
   const trans = t === 0 && i === firstUser && S.D.question_zh && S.D.question_zh !== S.D.question ? S.D.question_zh : "";
-  const body = blockHTML(t, i, m);
+  const body = blockHTML(t, i, m, hasCtx);
   const hasBody = body || trans;
   return `<div class="msg k-${m.k}${chat ? " is-chat" : ""}${folded ? " is-folded" : ""}" id="${prefix}m-${t}-${i}" data-key="${key}">
     ${chat ? "" : '<span class="msg-dot" aria-hidden="true"></span>'}
@@ -1015,10 +1083,66 @@ function msgHTML(t, i, m) {
       ${body}${trans ? `<div class="msg-zh">${esc(trans)}</div>` : ""}</div></div>`;
 }
 
-function blockHTML(t, mi, m) {
-  const blocks = m.blocks
+function userCtxHTML(t, i, m) {
+  const { context } = splitUserBlocks(m.blocks);
+  if (!context.length) return "";
+  const D = S.D;
+  const key = `${t}:${i}`;
+  const open = S.openCtx.has(key);
+  const meta = contextMeta(context);
+  const ctxEvIds = (m.ev || []).filter((e) => isCtxEvidence(D.evidence[e]));
+  const sevs = evSevs(ctxEvIds);
+  const body = open
+    ? `<div class="uctx-body">${meta.sections.map((sec) => {
+        const blkKey = `${t}:${i}:${sec.bi}`;
+        const secEvs = (D._ix.byBlock.get(blkKey) || []).filter((e) => D.evidence[e].src === "attr");
+        const secSevs = evSevs(secEvs);
+        const sevHTML = secSevs.length
+          ? `<span class="evs">${secSevs.map((s) => `<i style="--c:${sevColor(s)}" title="${s} 证据"></i>`).join("")}</span>`
+          : "";
+        if (sec.empty) {
+          const subOpen = S.openCtxSub.has(blkKey);
+          return `<div class="uctx-sec is-empty${subOpen ? " is-open" : ""}">
+            <button type="button" class="uctx-sub-head" data-uctx-sub="${blkKey}" aria-expanded="${subOpen}">
+              <span class="fold-caret" aria-hidden="true"></span>
+              <span class="uctx-sec-title">${esc(sec.label)}</span>
+              <span class="num faint">${fmt(sec.chars)} 字</span>
+              ${sevHTML}
+              <span class="uctx-act">${subOpen ? "收起模板" : "查看模板"}</span>
+            </button>
+            ${subOpen ? `<div class="blk" data-blk="${blkKey}">${pieceHTML(t, i, sec.bi, sec.b, "context")}</div>` : ""}
+          </div>`;
+        }
+        return `<div class="uctx-sec${sec.b.l === "context:attachments" ? " is-att" : ""}">
+          <div class="uctx-sec-head">
+            <span class="uctx-sec-title">${esc(sec.label)}</span>
+            <span class="num faint">${fmt(sec.chars)} 字</span>
+            ${sevHTML}
+          </div>
+          <div class="blk" data-blk="${blkKey}">${pieceHTML(t, i, sec.bi, sec.b, "context")}</div>
+        </div>`;
+      }).join("")}</div>`
+    : "";
+  return `<div class="user-ctx${open ? " is-open" : ""}" id="${prefix}uctx-${t}-${i}" data-key="${key}">
+    <div class="uctx-card">
+      <button type="button" class="uctx-head" data-uctx-toggle="${key}" aria-expanded="${open}">
+        <span class="fold-caret" aria-hidden="true"></span>
+        <span class="uctx-title">注入上下文</span>
+        ${meta.hasAttachments ? `<span class="uctx-badge is-att">含附件/URL</span>` : ""}
+        <span class="uctx-meta num">共 ${fmt(meta.totalChars)} 字</span>
+        <span class="evs">${sevs.map((s) => `<i style="--c:${sevColor(s)}" title="${s} 证据"></i>`).join("")}</span>
+        <span class="uctx-act">${open ? "收起" : "展开"}</span>
+      </button>
+      ${body}
+    </div>
+  </div>`;
+}
+
+function blockHTML(t, mi, m, excludeCtx = false) {
+  const blocks = (m.blocks || [])
     .map((b, bi) => ({ b, bi }))
     .filter(({ b }) => {
+      if (excludeCtx && isContextBlock(b)) return false;
       const text = b.x.map((x) => (typeof x === "string" ? x : "")).join("").trim();
       const bare = text.replace(/^```(?:json)?\s*/i, "").replace(/```$/, "").trim();
       return bare && !["[]", "{}", "null"].includes(bare);
@@ -1210,10 +1334,16 @@ function markProse(scope) {
 }
 
 function rerenderMsg(t, i) {
+  const msg = S.D?.input?.traces?.[t]?.messages?.[i];
+  if (!msg) return;
   const el = $(`#${prefix}m-${t}-${i}`, root);
   if (el) {
-    el.outerHTML = msgHTML(t, i, S.D.input.traces[t].messages[i]);
+    el.outerHTML = msgHTML(t, i, msg);
     markProse($(`#${prefix}m-${t}-${i}`, root));
+  }
+  const uctx = $(`#${prefix}uctx-${t}-${i}`, root);
+  if (uctx) {
+    uctx.outerHTML = userCtxHTML(t, i, msg);
   }
   // 中间链路盒子高度封顶后，展开/收起某一步不会改变盒子高度（也就不会触发 ResizeObserver），
   // 里面步骤的位置变了，连线得手动重画一次。
@@ -1300,6 +1430,22 @@ function onInputClick(e) {
     restore();
     return;
   }
+  const uctxToggle = e.target.closest("[data-uctx-toggle]");
+  if (uctxToggle) {
+    const key = uctxToggle.dataset.uctxToggle;
+    const [t, i] = key.split(":").map(Number);
+    S.openCtx.has(key) ? S.openCtx.delete(key) : S.openCtx.add(key);
+    rerenderMsg(t, i);
+    return;
+  }
+  const uctxSub = e.target.closest("[data-uctx-sub]");
+  if (uctxSub) {
+    const blkKey = uctxSub.dataset.uctxSub;
+    const [t, i] = blkKey.split(":").map(Number);
+    S.openCtxSub.has(blkKey) ? S.openCtxSub.delete(blkKey) : S.openCtxSub.add(blkKey);
+    rerenderMsg(t, i);
+    return;
+  }
   const blkPage = e.target.closest("[data-blk-page]");
   if (blkPage && !blkPage.disabled) {
     const blkKey = blkPage.dataset.blk || "";
@@ -1310,7 +1456,7 @@ function onInputClick(e) {
     S.blockPages.set(blkKey, nextPage);
     rerenderMsg(t, mi);
     if (fromBottom) {
-      const blkEl = $(`#${prefix}m-${t}-${mi} .blk[data-blk="${blkKey}"]`, root);
+      const blkEl = $(`#${prefix}m-${t}-${mi} .blk[data-blk="${blkKey}"], #${prefix}uctx-${t}-${mi} .blk[data-blk="${blkKey}"]`, root);
       blkEl?.scrollIntoView({ block: "nearest", behavior: REDUCED ? "auto" : "smooth" });
     }
     return;
@@ -1395,13 +1541,20 @@ function jump(eid) {
   const prev = S.active;
   S.active = eid;
   if (prev != null && S.D.evidence[prev]) rerenderMsg(S.D.evidence[prev].t, S.D.evidence[prev].m);
-  S.open.add(`${ev.t}:${ev.m}`);
+  const ctxEv = isCtxEvidence(ev);
+  if (ctxEv) {
+    S.openCtx.add(`${ev.t}:${ev.m}`);
+    const blk = S.D.input?.traces?.[ev.t]?.messages?.[ev.m]?.blocks?.[ev.b];
+    if (blk?.l === "context:attachments_empty") S.openCtxSub.add(`${ev.t}:${ev.m}:${ev.b}`);
+  } else {
+    S.open.add(`${ev.t}:${ev.m}`);
+  }
   if (compareFolds && S.D.input?.traces?.[ev.t]?.messages?.[ev.m]?.k === "answer") {
     S.closedAnswers.delete(`${ev.t}:${ev.m}`);
   }
   focusEvidencePage(ev);
   rerenderMsg(ev.t, ev.m);
-  const el = $(`#${prefix}m-${ev.t}-${ev.m}`, root);
+  const el = $(ctxEv ? `#${prefix}uctx-${ev.t}-${ev.m}` : `#${prefix}m-${ev.t}-${ev.m}`, root);
   if (!el) { threadFocus?.(hoverPid); return; }   // 数据里点到一条这一轮没渲染出来的消息
   // 证据落在被「收起」的渐隐里时，先展开整条带：否则跳过去看到的是被遮住的步骤。
   if (underClip(el)) S.bandOpen = true;
@@ -1468,15 +1621,23 @@ function wireThreads() {
     if (!svg) return;
     const prob = pid == null || !S.D ? null : S.D.attribution.problems.find((p) => p.id === pid);
     // 证据按「轮次:消息」定位，session 总评里同一张卡可能落在多轮上。
-    const msgs = new Set(prob ? prob.ev.map((e) => S.D.evidence[e]).filter((ev) => ev && ev.m != null).map((ev) => `${ev.t}:${ev.m}`) : []);
+    const msgs = new Set();
+    const uctxs = new Set();
+    const addTarget = (ev) => {
+      if (!ev || ev.m == null) return;
+      if (isCtxEvidence(ev)) uctxs.add(`${ev.t}:${ev.m}`);
+      else msgs.add(`${ev.t}:${ev.m}`);
+    };
+    if (prob) prob.ev.forEach((e) => addTarget(S.D.evidence[e]));
     const evs = new Set(prob ? prob.ev.map(String) : []);
     // 跳转过来的那条证据一直保持高亮：跳转后的滚动会触发 pointerleave / scroll，把悬停焦点清掉，
     // 不能因此把用户刚点开的那句话一起弄丢。
     const pin = S.active != null ? S.D && S.D.evidence[S.active] : null;
-    if (pin && pin.m != null) msgs.add(`${pin.t}:${pin.m}`);
+    addTarget(pin);
     if (S.active != null) evs.add(String(S.active));
     box.classList.toggle("is-focus", !!prob);
     $$(".msg", box).forEach((m) => m.classList.toggle("on", msgs.has(m.dataset.key)));
+    $$(".user-ctx", box).forEach((c) => c.classList.toggle("on", uctxs.has(c.dataset.key)));
     $$("mark.ev", box).forEach((m) => m.classList.toggle("on", m.dataset.e.split(" ").some((e) => evs.has(e))));
     $$("path", svg).forEach((p) => p.classList.toggle("on", p.dataset.p === String(pid)));
   };
@@ -1706,14 +1867,15 @@ function drawThreads(realign = true) {
     const seen = new Set();
     prob.ev.forEach((e) => {
       const ev = S.D.evidence[e];
-      const key = ev && `${ev.t}:${ev.m}`;
+      const ctxEv = isCtxEvidence(ev);
+      const key = ev && `${ev.t}:${ev.m}:${ctxEv ? "ctx" : "msg"}`;
       // 消息 id 自带轮次（m-<trace>-<index>），session 总评把多轮消息铺在同一条时间线上，
       // 所以按证据自己的轮次找，而不是当前选中轮；找不到（该轮这类消息没进总评）就跳过。
       if (!ev || ev.m == null || seen.has(key)) return;
-      const msg = $(`#${prefix}m-${ev.t}-${ev.m}`, root);
+      const msg = $(ctxEv ? `#${prefix}uctx-${ev.t}-${ev.m}` : `#${prefix}m-${ev.t}-${ev.m}`, root);
       if (!msg || msg.closest(".is-collapsed")) return;
       seen.add(key);
-      const body = $(".msg-body", msg) || msg;
+      const body = $(".msg-body, .uctx-card", msg) || msg;
       const r = body.getBoundingClientRect();
       const clip = clippedBottom(msg);
       if (r.top >= clip) return;   // 被收进渐隐里的步骤
