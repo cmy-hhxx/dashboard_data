@@ -751,9 +751,19 @@ function computeHrStats(f) {
     [r.q, r.lb, r.s, r.sid, r.tid, r.case, r.task, r.sub, r.skill].some((x) => x && String(x).toLowerCase().includes(needle)) ||
     (r.rows || []).some((x) => [x.q, x.sid, x.tid, x.case, x.task, x.sub, x.skill].some((v) => v && String(v).toLowerCase().includes(needle)));
   const pool = S.all.filter((r) => listHit(r, f, "hr") && dateHit(r, f) && hit(r));
-  const hr = pool.filter((r) => r.hr).length;
-  const hrTotal = S.all.filter((r) => r.hr).length;
-  return { hr, raw: Math.max(0, pool.length - hr), total: pool.length, hr_total: hrTotal };
+  let hr = 0;
+  let total = 0;
+  pool.forEach((s) => {
+    const items = Array.isArray(s.rows) && s.rows.length ? s.rows : [s];
+    total += items.length;
+    items.forEach((x) => { if (x.hr) hr += 1; });
+  });
+  let hrTotal = 0;
+  S.all.forEach((s) => {
+    const items = Array.isArray(s.rows) && s.rows.length ? s.rows : [s];
+    items.forEach((x) => { if (x.hr) hrTotal += 1; });
+  });
+  return { hr, raw: Math.max(0, total - hr), total, hr_total: hrTotal };
 }
 
 function shouldShowHr(stats) {
@@ -776,14 +786,15 @@ function renderHrBar(f, stats) {
   const rawPct = total > 0 ? Math.round((100 - pct) * 10) / 10 : 0;
   const fmtPct = (v) => `${v % 1 === 0 ? v.toFixed(0) : v.toFixed(1)}%`;
   const arc = total > 0 ? Math.max(hr > 0 ? 1.5 : 0, Math.min(100, (100 * hr) / total)) : 0;
-  el.innerHTML = `<span class="hr-ring" title="human_read ${fmt(hr)} · raw ${fmt(raw)}">
+  const tip = `human_read ${fmt(hr)} · raw ${fmt(raw)} / ${fmt(total)}`;
+  el.innerHTML = `<span class="hr-ring" title="${tip}">
       <svg viewBox="0 0 20 20" aria-hidden="true">
         <circle class="hr-ring-track" cx="10" cy="10" r="7.5" pathLength="100"></circle>
         <circle class="hr-ring-arc" cx="10" cy="10" r="7.5" pathLength="100" stroke-dasharray="${arc.toFixed(2)} 100"></circle>
       </svg>
     </span>
-    <button type="button" class="hr-stat is-hr" data-k="hr" data-v="human_read" aria-pressed="${f.hr === "human_read"}" title="human_read ${fmt(hr)} / ${fmt(total)}"><i aria-hidden="true"></i><span>human_read</span><b class="num">${fmtPct(pct)}</b></button>
-    <button type="button" class="hr-stat is-raw" data-k="hr" data-v="raw" aria-pressed="${f.hr === "raw"}" title="raw ${fmt(raw)} / ${fmt(total)}"><i aria-hidden="true"></i><span>raw</span><b class="num">${fmtPct(rawPct)}</b></button>`;
+    <span class="hr-stat is-hr" title="${tip}"><i aria-hidden="true"></i><span>human_read</span><b class="num">${fmtPct(pct)}</b></span>
+    <span class="hr-stat is-raw" title="${tip}"><i aria-hidden="true"></i><span>raw</span><b class="num">${fmtPct(rawPct)}</b></span>`;
 }
 
 function renderList() {
@@ -856,7 +867,6 @@ function renderList() {
   }
   $("#slist", root).removeAttribute("aria-busy");
   const hrStats = computeHrStats(f);
-  const showHr = shouldShowHr(hrStats);
   renderHrBar(f, hrStats);
   const resColor = { correct: "var(--accent)", wrong: "var(--sev-1)", pending: "var(--muted)" };
   $("#slist", root).innerHTML = S.pageRows.length
@@ -871,7 +881,7 @@ function renderList() {
       <span class="bar"></span><span class="srow-body"><span class="q">${esc(r.q || "（无提问）")}</span>
       <span class="m num"><span class="srow-model">${esc(label(r.m))}</span><span>${rowDate(r, f).slice(5)}</span>${r.tr > 1 ? `<span>${r.tr} 轮</span>` : ""}<span class="srow-sev" style="color:${r.w === "none" ? "var(--muted)" : sevColor(r.w)}">${r.w === "none" ? "无问题" : r.w}</span>${
             isLostRow(r) ? '<span class="tag-lost">流失</span>' : ""
-          }${showHr ? `<span class="tag-hr ${r.hr ? "is-hr" : "is-raw"}">${r.hr ? "human_read" : "raw"}</span>` : ""}</span></span></button>`,
+          }</span></span></button>`,
         )
         .join("")
     : `<div class="empty">没有符合条件的会话<br><button type="button" class="link" id="sclear">清除筛选</button></div>`;

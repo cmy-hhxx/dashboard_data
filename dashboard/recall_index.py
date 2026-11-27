@@ -239,6 +239,8 @@ def _group_sessions(rows: list[dict]) -> tuple[list[dict], dict[str, dict], dict
             "_scene": g["sc"] or g["task"] or "未接入分类体系",
             "_ut": g["ut"] if g["ut"] in USER_TYPE_KEYS else "unknown",
             "_lost": bool(g["ul"] or g["sp"] == "lost"),
+            "_tr_total": len(g_rows),
+            "_tr_hr": sum(1 for x in g_rows if x.get("hr")),
         }
         sessions.append(sess)
         by_key[g["key"]] = sess
@@ -461,7 +463,8 @@ class RecallEntry:
 
         self.sorted_dates = sorted(self.by_date.keys())
         self.sessions, self.session_by_key, self.session_by_slug = _group_sessions(rows)
-        self.hr_total = sum(1 for s in self.sessions if s.get("hr"))
+        self.trace_total = sum(s["_tr_total"] for s in self.sessions)
+        self.hr_total = sum(s["_tr_hr"] for s in self.sessions)
         self.session_pos: dict[str, int] = {s["key"]: i for i, s in enumerate(self.sessions)}
         self._query_lock = threading.Lock()
         self._order_cache: OrderedDict[tuple, list[dict]] = OrderedDict()
@@ -562,14 +565,17 @@ class RecallEntry:
         matched_total = len(ordered)
         recalled = matched_total
         pages = max(1, math.ceil(matched_total / size))
-        # Proportion for the sidebar mini ring is computed over the current slice BEFORE the hr filter,
-        # so selecting human_read or raw keeps showing the true split rather than snapping to 100%.
+        # Trace-level proportion over the current filtered slice (before optional hr filter).
         if f["hr"]:
             base_pool = self._ordered_sessions({**f, "hr": ""}, "sev")
         else:
             base_pool = ordered
-        base_total = len(base_pool)
-        hr_cnt = sum(1 for s in base_pool if s.get("hr")) if base_pool is not self.sessions else self.hr_total
+        if base_pool is self.sessions:
+            base_total = self.trace_total
+            hr_cnt = self.hr_total
+        else:
+            base_total = sum(s["_tr_total"] for s in base_pool)
+            hr_cnt = sum(s["_tr_hr"] for s in base_pool)
 
         target_sess = None
         target_page = None

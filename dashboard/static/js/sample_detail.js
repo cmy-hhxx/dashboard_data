@@ -866,9 +866,9 @@ function renderIn() {
       </div>
       <div class="chip-groups">
         ${isLostRow(session) ? `<span class="cg"><span class="pill lost">流失用户</span></span>` : ""}
-        ${hrBadge ? `<span class="cg is-hr-cg" id="${prefix}hrTag">${hrBadge}</span>` : ""}
         ${group("会话模型", "is-model", [sessionLabel])}
         ${group("当前 trace", "is-model", [traceLabel])}
+        ${hrBadge ? `<span class="cg is-hr-cg" id="${prefix}hrTag">${hrBadge}</span>` : ""}
         ${group("日期", "is-plain", [D.date])}
         ${group("App", "is-plain", [m.app])}
         ${group("来源", "is-plain", [m.comefrom])}
@@ -911,7 +911,10 @@ function hasChat(D) {
 function roundTabHTML(D, i) {
   const r = D.rounds[i];
   const t = D.input.traces?.[r.trace];
-  return `<button type="button" class="pill" data-t="${i}" aria-pressed="${!S.sessionView && i === S.round}"${t?.agent ? ` title="${esc(t.agent)}"` : ""}>第 ${i + 1} 轮</button>`;
+  const isHr = Boolean(r?.hr);
+  const showHr = !ctx.forecast && ((D.product || S.product) !== "wencai" || isHr);
+  const tag = showHr ? `<span class="rt-hr ${isHr ? "is-hr" : "is-raw"}">${isHr ? "human_read" : "raw"}</span>` : "";
+  return `<button type="button" class="pill" data-t="${i}" aria-pressed="${!S.sessionView && i === S.round}"${t?.agent ? ` title="${esc(t.agent)}"` : ""}><span>第 ${i + 1} 轮</span>${tag}</button>`;
 }
 
 function traceTabsInner(rounds, D) {

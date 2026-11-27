@@ -202,9 +202,8 @@
   transition: stroke-dasharray 360ms var(--ss-arrive);
 }
 .samples-list-head .hr-stat {
-  display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 7px;
-  border-radius: var(--r-chip); font-size: var(--fs-micro); color: var(--muted); white-space: nowrap;
-  transition: background var(--snap), color var(--snap), transform var(--spring);
+  display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 2px;
+  font-size: var(--fs-micro); color: var(--muted); white-space: nowrap;
 }
 .samples-list-head .hr-stat i {
   width: 6px; height: 6px; border-radius: 50%; flex: none;
@@ -214,12 +213,6 @@
 .samples-list-head .hr-stat span { font-family: var(--mono); letter-spacing: 0.01em; }
 .samples-list-head .hr-stat b { font-weight: var(--w-medium); color: var(--ink-2); }
 .samples-list-head .hr-stat.is-raw { margin-left: auto; }
-.samples-list-head .hr-stat:hover { background: var(--well); color: var(--ink-2); }
-.samples-list-head .hr-stat:active { transform: scale(0.96); }
-.samples-list-head .hr-stat.is-hr[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
-.samples-list-head .hr-stat.is-hr[aria-pressed="true"] b { color: var(--accent); }
-.samples-list-head .hr-stat.is-raw[aria-pressed="true"] { background: var(--well-2); color: var(--ink); }
-.samples-list-head .hr-stat.is-raw[aria-pressed="true"] b { color: var(--ink); }
 
 /* Active folded filter chips (visible when collapsed or when date jump is applied) */
 .samples-list-head .fchips { display: flex; flex-wrap: wrap; gap: 4px; width: 100%; }
@@ -328,13 +321,6 @@
   font-size: var(--fs-meta); font-weight: var(--w-medium); letter-spacing: 0.02em;
 }
 :root[data-mode="dark"] .tag-lost { background: color-mix(in oklab, var(--sev-1) 22%, transparent); }
-.tag-hr {
-  display: inline-flex; align-items: center; height: 16px; margin-left: auto; padding: 0 5px;
-  border-radius: var(--r-chip); font-family: var(--mono); font-size: var(--fs-micro);
-  line-height: 16px; letter-spacing: 0.01em; white-space: nowrap;
-}
-.tag-hr.is-hr { background: var(--accent-soft); color: var(--accent); font-weight: var(--w-medium); }
-.tag-hr.is-raw { background: var(--well); color: var(--faint); }
 
 /* ---------------------------------------------------------------- sample head */
 .sample-head {
@@ -391,7 +377,7 @@
 :root[data-mode="dark"] .utag.is-test { background: color-mix(in oklab, var(--sev-1) 22%, transparent); }
 .trace-tabs { display: flex; flex-wrap: wrap; gap: 8px; }
 .trace-tabs .pill {
-  width: auto; max-width: 280px; min-width: 0; justify-content: flex-start; height: 28px; padding: 0 12px;
+  width: auto; max-width: 280px; min-width: 0; justify-content: flex-start; gap: 6px; height: 28px; padding: 0 10px 0 12px;
   font-size: var(--fs-body); border-radius: var(--r-chip); background: var(--well);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   transition: background var(--snap), color var(--snap), transform var(--spring);
@@ -399,6 +385,18 @@
 .trace-tabs .pill:hover { background: var(--well-2); transform: translateY(-1px); }
 .trace-tabs .pill:active { transform: translateY(0); }
 .trace-tabs .pill[aria-pressed="true"] { background: var(--ink); color: var(--card); font-weight: var(--w-medium); }
+.trace-tabs .rt-hr {
+  display: inline-flex; align-items: center; height: 16px; padding: 0 5px; border-radius: var(--r-knob);
+  font-family: var(--mono); font-size: 10px; line-height: 1; letter-spacing: 0.01em;
+}
+.trace-tabs .rt-hr.is-hr { background: var(--accent-soft); color: var(--accent); font-weight: var(--w-medium); }
+.trace-tabs .rt-hr.is-raw { background: color-mix(in oklab, var(--ink) 6%, transparent); color: var(--faint); }
+.trace-tabs .pill[aria-pressed="true"] .rt-hr.is-hr {
+  background: color-mix(in oklab, var(--card) 18%, transparent); color: var(--card);
+}
+.trace-tabs .pill[aria-pressed="true"] .rt-hr.is-raw {
+  background: color-mix(in oklab, var(--card) 10%, transparent); color: color-mix(in oklab, var(--card) 66%, transparent);
+}
 .trace-tabs-pager { display: inline-flex; align-items: center; gap: 2px; height: 28px; color: var(--muted); font-size: var(--fs-meta); }
 .trace-tabs-pager button { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; color: var(--muted); }
 .trace-tabs-pager button:hover:not([disabled]) { background: var(--well-2); color: var(--ink); }

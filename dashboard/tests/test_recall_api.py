@@ -128,16 +128,17 @@ class RecallIndexUnitTests(unittest.TestCase):
             self.assertEqual(lost["matched"], 1)
             self.assertEqual(lost["rows"][0]["sid"], "sess-lost")
 
-            # human_read / raw filter and proportion stats (stats stay over pre-hr slice)
-            self.assertEqual(p1["hr_stats"], {"hr": 1, "raw": 702, "total": 703, "hr_total": 1})
+            # Trace-level human_read / raw stats (704 traces across 703 sessions: s0001 has hr=1, s0002 raw)
+            self.assertEqual(p1["hr_stats"], {"hr": 1, "raw": 703, "total": 704, "hr_total": 1})
             self.assertEqual(p1["rows"][0].get("hr"), 1)
+            self.assertEqual([r.get("hr") for r in p1["rows"][0]["rows"]], [1, None])
             hr_only = entry.query_sessions({"hr": "human_read"})
             self.assertEqual(hr_only["matched"], 1)
             self.assertEqual(hr_only["rows"][0]["sid"], "sess-shared")
-            self.assertEqual(hr_only["hr_stats"], {"hr": 1, "raw": 702, "total": 703, "hr_total": 1})
+            self.assertEqual(hr_only["hr_stats"], {"hr": 1, "raw": 703, "total": 704, "hr_total": 1})
             raw_only = entry.query_sessions({"hr": "raw"})
             self.assertEqual(raw_only["matched"], 702)
-            self.assertEqual(raw_only["hr_stats"], {"hr": 1, "raw": 702, "total": 703, "hr_total": 1})
+            self.assertEqual(raw_only["hr_stats"], {"hr": 1, "raw": 703, "total": 704, "hr_total": 1})
 
             # Galaxy slice stratifies and caps at 500 while reporting exact total & severity parts
             gx = entry.query_galaxy({"card": "vol", "model": "aime_fast"})
