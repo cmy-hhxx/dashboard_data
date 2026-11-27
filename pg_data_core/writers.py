@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -25,13 +26,15 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from .config import load_config
-from .core import DataCore
-from .db import connect_direct
+from .core import DataCore, emit_trace_changes
+from .db import connect_direct, get_or_init_db_epoch
 from .etl.migrate_cluster import DELIVERABLE_FILES, _flatten_cluster_nodes
 from .etl.migrate_users import migrate_users
 from .models import clean_str, parse_timestamp, split_cluster_code
 from .reconcile import reconcile_tails
 from .zst_pack import json_loads_bytes, pread_json
+
+MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 def cmd_ingest_inputs(args: argparse.Namespace) -> dict[str, Any]:
@@ -230,7 +233,11 @@ def cmd_publish_cluster(args: argparse.Namespace) -> dict[str, Any]:
     """Publish one model's cluster output dir into versioned `cluster_tree/` + PG + `eval_problems`."""
     cfg = load_config(role="rw", data_root=args.data_root)
     src_dir = Path(args.cluster_dir)
-    model = args.model
+    model = str(args.model or "").strip()
+    if not MODEL_NAME_RE.match(model):
+        raise ValueError(f"Invalid --model={model!r}; expected ^[A-Za-z0-9_.-]+$")
+    skip_bind = bool(getattr(args, "skip_bind", False))
+
     tree_file = src_dir / "cluster_tree.json"
     if not tree_file.is_file():
         raise FileNotFoundError(f"Missing {tree_file}")
@@ -241,6 +248,7 @@ def cmd_publish_cluster(args: argparse.Namespace) -> dict[str, Any]:
 
     pv = manifest_doc.get("pipeline_version")
     version = str(meta.get("pipeline_version") or (pv.get("version") if isinstance(pv, dict) else pv) or "unknown")
+    tax_desc = pv.get("taxonomy") if isinstance(pv, dict) else None
     gen_dt = parse_timestamp(meta.get("generated_at")) or datetime.fromtimestamp(tree_file.stat().st_mtime, tz=timezone.utc)
     release_tag = args.release_tag or f"v{version}_{gen_dt.strftime('%Y%m%d')}"
     artifact_rel_dir = f"cluster_tree/{model}/{release_tag}"
@@ -258,24 +266,37 @@ def cmd_publish_cluster(args: argparse.Namespace) -> dict[str, Any]:
     os.replace(tmp_link, cur_link)
 
     nodes = _flatten_cluster_nodes(tree_doc)
+    bound = 0
+    changes_emitted = 0
     with connect_direct(cfg, autocommit=False, app_name="publish_cluster") as conn:
         conn.execute("UPDATE public.cluster_trees SET is_current = FALSE WHERE product=%s AND model=%s AND is_current", (cfg.product, model))
         trow = conn.execute(
             """
             INSERT INTO public.cluster_trees(
-                product, model, version, release_tag, is_current, total_items, total_traces,
+                product, model, version, release_tag, taxonomy_desc, is_current, total_items, total_traces,
                 total_sessions, leaf_count, verify_errors, verify_mismatch, edge_flagged,
                 data_cutoff, artifact_rel_dir, generated_at, extra
             )
-            VALUES (%s,%s,%s,%s,TRUE,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,TRUE,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (product, model, release_tag) DO UPDATE SET
-                is_current = TRUE, total_items = EXCLUDED.total_items,
-                artifact_rel_dir = EXCLUDED.artifact_rel_dir, generated_at = EXCLUDED.generated_at,
-                extra = EXCLUDED.extra
+                version          = EXCLUDED.version,
+                taxonomy_desc    = COALESCE(EXCLUDED.taxonomy_desc, public.cluster_trees.taxonomy_desc),
+                is_current       = TRUE,
+                total_items      = EXCLUDED.total_items,
+                total_traces     = EXCLUDED.total_traces,
+                total_sessions   = EXCLUDED.total_sessions,
+                leaf_count       = EXCLUDED.leaf_count,
+                verify_errors    = EXCLUDED.verify_errors,
+                verify_mismatch  = EXCLUDED.verify_mismatch,
+                edge_flagged     = EXCLUDED.edge_flagged,
+                data_cutoff      = EXCLUDED.data_cutoff,
+                artifact_rel_dir = EXCLUDED.artifact_rel_dir,
+                generated_at     = EXCLUDED.generated_at,
+                extra            = EXCLUDED.extra
             RETURNING tree_id
             """,
             (
-                cfg.product, model, version, release_tag,
+                cfg.product, model, version, release_tag, tax_desc,
                 int(meta.get("total_items") or verify_doc.get("total") or 0),
                 int(meta.get("total_traces") or 0), int(meta.get("total_sessions") or 0),
                 int(verify_doc.get("leaves") or 0), int(verify_doc.get("errors") or 0),
@@ -308,9 +329,8 @@ def cmd_publish_cluster(args: argparse.Namespace) -> dict[str, Any]:
                     for n in nodes
                 ],
             )
-        bound = 0
         idx_path = src_dir / "item_index.jsonl"
-        if idx_path.is_file():
+        if not skip_bind and idx_path.is_file():
             conn.execute(
                 """
                 CREATE TEMP TABLE _stage_cl (
@@ -333,8 +353,7 @@ def cmd_publish_cluster(args: argparse.Namespace) -> dict[str, Any]:
                     code, tid = clean_str(it.get("path")), clean_str(it.get("trace_id"))
                     if not code or not tid:
                         continue
-                    jp = str(it.get("json_path") or "")
-                    scope = "session" if jp.startswith("session_problem") else "turn"
+                    scope = clean_str(it.get("scope")) or ("session" if str(it.get("json_path") or "").startswith("session_problem") else "turn")
                     tidx, pidx = int(it.get("turn_index") or 0), int(it.get("problem_index") or 0)
                     l1, l2, l3, l4 = split_cluster_code(code)
                     seen[(tid, scope, tidx, pidx)] = (
@@ -347,21 +366,50 @@ def cmd_publish_cluster(args: argparse.Namespace) -> dict[str, Any]:
                 for rec in seen.values():
                     cp.write_row(rec)
             conn.execute("CREATE INDEX ON _stage_cl (trace_id, scope, turn_index, problem_index)")
-            r1 = conn.execute(
+            rows = conn.execute(
                 """
                 UPDATE public.eval_problems p
-                SET cluster_tree_id=%s, cluster_version=%s, cluster_code=s.cluster_code,
-                    l1_stage=s.l1_stage, l2_mechanism=s.l2_mechanism, l3_leaf=s.l3_leaf,
-                    l4_subleaf=s.l4_subleaf, is_edge=s.is_edge, tags=s.tags, clustered_at=%s
+                SET cluster_tree_id = %s,
+                    cluster_version = %s,
+                    cluster_code = s.cluster_code,
+                    l1_stage = s.l1_stage,
+                    l2_mechanism = s.l2_mechanism,
+                    l3_leaf = s.l3_leaf,
+                    l4_subleaf = s.l4_subleaf,
+                    is_edge = s.is_edge,
+                    tags = s.tags,
+                    clustered_at = %s
                 FROM _stage_cl s
-                WHERE p.model=%s AND p.trace_id=s.trace_id AND p.scope=s.scope
-                  AND p.turn_index=s.turn_index AND p.problem_index=s.problem_index
+                JOIN public.eval_outputs o
+                    ON o.is_latest = TRUE AND o.model = %s AND o.trace_id = s.trace_id
+                WHERE p.output_id = o.output_id
+                  AND p.scope = s.scope
+                  AND p.turn_index = s.turn_index
+                  AND p.problem_index = s.problem_index
+                  AND (
+                      p.cluster_code IS DISTINCT FROM s.cluster_code
+                      OR p.is_edge IS DISTINCT FROM s.is_edge
+                      OR p.tags IS DISTINCT FROM s.tags
+                  )
+                RETURNING p.output_id
                 """,
                 (tree_id, version, gen_dt, model),
-            )
-            bound = r1.rowcount or 0
+            ).fetchall()
+            bound = len(rows)
+            if rows:
+                db_epoch = get_or_init_db_epoch(conn, cfg.db_epoch)
+                output_ids = sorted({int(r["output_id"]) for r in rows})
+                changes_emitted = emit_trace_changes(conn, db_epoch, output_ids)
         conn.commit()
-    return {"cmd": "publish-cluster", "model": model, "tree_id": tree_id, "release_tag": release_tag, "nodes": len(nodes), "bound": bound}
+    return {
+        "cmd": "publish-cluster",
+        "model": model,
+        "tree_id": tree_id,
+        "release_tag": release_tag,
+        "nodes": len(nodes),
+        "bound": bound,
+        "changes_emitted": changes_emitted,
+    }
 
 
 def cmd_sync_kyc(args: argparse.Namespace) -> dict[str, Any]:
@@ -413,9 +461,10 @@ def main(argv: list[str] | None = None) -> int:
     p4.set_defaults(func=cmd_sync_human_read)
 
     p5 = sub.add_parser("publish-cluster")
-    p5.add_argument("--model", required=True, choices=["aime_expert", "aime_fast"])
+    p5.add_argument("--model", required=True)
     p5.add_argument("--cluster-dir", required=True)
     p5.add_argument("--release-tag", default=None)
+    p5.add_argument("--skip-bind", action="store_true")
     p5.set_defaults(func=cmd_publish_cluster)
 
     p6 = sub.add_parser("sync-kyc")

@@ -50,6 +50,72 @@ def _advisory_lock_key(name: str) -> int:
     return int.from_bytes(digest, "big", signed=True)
 
 
+def _strict_int(value: Any, name: str) -> int:
+    if isinstance(value, bool) or value is None:
+        raise ValueError(f"{name} must be an integer")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+
+
+def _normalize_models(model: str | None = None, models: list[str] | None = None) -> list[str]:
+    if models is not None:
+        if not isinstance(models, list):
+            raise ValueError("models must be a list of strings")
+        cleaned = list(dict.fromkeys(str(m).strip() for m in models if m is not None and str(m).strip()))
+        if cleaned:
+            return cleaned
+    if model is not None and str(model).strip():
+        return [str(model).strip()]
+    raise ValueError("model or models is required")
+
+
+def _parse_iso_day(value: date | str | None, name: str = "biz_day") -> date | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value).strip())
+    except ValueError as exc:
+        raise ValueError(f"invalid {name}: {value!r}") from exc
+
+
+def _normalize_id_list(input_ids: Any, *, max_len: int = 500) -> list[int]:
+    if not isinstance(input_ids, list):
+        raise ValueError("input_ids must be a list of integers")
+    if len(input_ids) > max_len:
+        raise ValueError(f"input_ids length exceeds max {max_len}")
+    return [_strict_int(x, "input_id") for x in input_ids]
+
+
+def emit_trace_changes(conn: psycopg.Connection, db_epoch: str, output_ids: list[int]) -> int:
+    """Emit deduplicated `trace` upsert change events for latest, non-deleted outputs."""
+    if not output_ids:
+        return 0
+    res = conn.execute(
+        """
+        INSERT INTO public.changes(
+            db_epoch, entity_type, op, human_only,
+            input_id, output_id, product, model, app_version, biz_day, trace_id
+        )
+        SELECT DISTINCT
+            %s, 'trace', 'upsert', FALSE,
+            i.input_id, o.output_id, i.product, i.model, i.app_version, i.biz_day, i.trace_id
+        FROM public.eval_outputs o
+        JOIN public.eval_inputs i ON i.input_id = o.input_id
+        WHERE o.output_id = ANY(%s)
+          AND o.is_latest = TRUE
+          AND NOT i.is_deleted
+        """,
+        (db_epoch, output_ids),
+    )
+    return res.rowcount or 0
+
+
 class DataCore:
     """Single-writer Data Core engine backed by PG 16 + Multi-Frame Zstd."""
 
@@ -312,36 +378,48 @@ class DataCore:
                 "pointer": FramePointer(pack["rel_path"], offset, length, raw_len),
             }
 
-    # ------------------------------------------------------------------ Step 2: Claim & Commit Output
+    # ------------------------------------------------------------------ Step 2: Claim, Lease & Commit Output
 
-    def claim_pending_inputs(
+    def _claim_batch(
         self,
-        model: str,
-        worker_id: str,
+        conn: psycopg.Connection,
         *,
-        limit: int = 10,
-        lease_seconds: int = 600,
+        models: list[str],
+        now: datetime,
+        expires: datetime,
+        worker_id: str,
+        limit: int,
+        biz_day: date | None = None,
+        max_biz_day_lt: date | None = None,
     ) -> list[dict[str, Any]]:
-        """Atomically claim pending or lease-expired inputs via FOR UPDATE SKIP LOCKED."""
-        now = datetime.now(timezone.utc)
-        expires = now + timedelta(seconds=lease_seconds)
-        with self.db.transaction() as conn:
-            rows = conn.execute(
-                """
-                WITH picked AS (
-                    SELECT input_id
-                    FROM public.eval_inputs
-                    WHERE model = %s
-                      AND NOT is_deleted
-                      AND has_input_blob
-                      AND (
-                          eval_status = 'pending'
-                          OR (eval_status = 'claimed' AND lease_expires_at < %s)
-                      )
-                    ORDER BY biz_day DESC, input_id ASC
-                    LIMIT %s
-                    FOR UPDATE SKIP LOCKED
-                )
+        if limit <= 0:
+            return []
+        clauses = [
+            "model = ANY(%s)",
+            "NOT is_deleted",
+            "has_input_blob",
+            "(eval_status = 'pending' OR (eval_status = 'claimed' AND lease_expires_at < %s))",
+        ]
+        params: list[Any] = [models, now]
+        if biz_day is not None:
+            clauses.append("biz_day = %s")
+            params.append(biz_day)
+        if max_biz_day_lt is not None:
+            clauses.append("biz_day < %s")
+            params.append(max_biz_day_lt)
+        params.extend([limit, worker_id, expires])
+
+        rows = conn.execute(
+            f"""
+            WITH picked AS (
+                SELECT input_id
+                FROM public.eval_inputs
+                WHERE {' AND '.join(clauses)}
+                ORDER BY biz_day DESC, input_id ASC
+                LIMIT %s
+                FOR UPDATE SKIP LOCKED
+            ),
+            claimed AS (
                 UPDATE public.eval_inputs i
                 SET eval_status = 'claimed',
                     claimed_by = %s,
@@ -351,11 +429,362 @@ class DataCore:
                 FROM picked
                 WHERE i.input_id = picked.input_id
                 RETURNING i.input_id, i.model, i.trace_id, i.session_id, i.biz_day,
-                          i.input_file_id, i.input_offset, i.input_len
+                          i.batch_id, i.input_file_id, i.input_offset, i.input_len,
+                          i.eval_attempts, i.lease_expires_at
+            )
+            SELECT c.input_id, c.model, c.trace_id, c.session_id, c.biz_day,
+                   c.batch_id, c.input_file_id, pf.rel_path, c.input_offset, c.input_len,
+                   c.eval_attempts, c.lease_expires_at
+            FROM claimed c
+            LEFT JOIN public.pack_files pf ON pf.file_id = c.input_file_id
+            ORDER BY c.biz_day DESC, c.input_id ASC
+            """,
+            params,
+        ).fetchall()
+
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            item = dict(r)
+            if isinstance(item.get("biz_day"), date):
+                item["biz_day"] = item["biz_day"].isoformat()
+            if isinstance(item.get("lease_expires_at"), datetime):
+                item["lease_expires_at"] = item["lease_expires_at"].isoformat()
+            out.append(item)
+        return out
+
+    def claim_pending_inputs(
+        self,
+        model: str | None = None,
+        worker_id: str = "worker",
+        *,
+        models: list[str] | None = None,
+        limit: int = 10,
+        lease_seconds: int = 600,
+        strategy: str = "newest_first",
+        priority_days: int = 7,
+        biz_day: date | str | None = None,
+        include_payload: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Atomically claim pending or lease-expired inputs via FOR UPDATE SKIP LOCKED."""
+        target_models = _normalize_models(model, models)
+        worker = str(worker_id or "worker").strip() or "worker"
+        limit = max(1, min(_strict_int(limit, "limit"), 200))
+        lease_seconds = max(30, min(_strict_int(lease_seconds, "lease_seconds"), 86400))
+        priority_days = max(1, min(_strict_int(priority_days, "priority_days"), 60))
+        if strategy not in ("newest_first", "date_even"):
+            raise ValueError(f"Unsupported strategy={strategy!r}")
+        target_day = _parse_iso_day(biz_day, "biz_day")
+
+        now = datetime.now(timezone.utc)
+        expires = now + timedelta(seconds=lease_seconds)
+        claimed: list[dict[str, Any]] = []
+
+        with self.db.transaction() as conn:
+            if target_day is not None or strategy == "newest_first":
+                claimed = self._claim_batch(
+                    conn,
+                    models=target_models,
+                    now=now,
+                    expires=expires,
+                    worker_id=worker,
+                    limit=limit,
+                    biz_day=target_day,
+                )
+            else:
+                latest_row = conn.execute(
+                    """
+                    SELECT MAX(biz_day) AS latest_day
+                    FROM public.eval_inputs
+                    WHERE model = ANY(%s) AND NOT is_deleted AND has_input_blob
+                    """,
+                    (target_models,),
+                ).fetchone()
+                latest_day = latest_row["latest_day"] if latest_row else None
+                if latest_day is None:
+                    return []
+
+                priority_from = latest_day - timedelta(days=priority_days - 1)
+                stats = conn.execute(
+                    """
+                    SELECT
+                        biz_day,
+                        model,
+                        COUNT(*) AS total,
+                        COUNT(*) FILTER (
+                            WHERE eval_status IN ('evaluated', 'skipped', 'failed')
+                               OR (eval_status = 'claimed' AND lease_expires_at >= %s)
+                        ) AS prog,
+                        COUNT(*) FILTER (
+                            WHERE eval_status = 'pending'
+                               OR (eval_status = 'claimed' AND lease_expires_at < %s)
+                        ) AS claimable
+                    FROM public.eval_inputs
+                    WHERE model = ANY(%s)
+                      AND NOT is_deleted
+                      AND has_input_blob
+                      AND biz_day >= %s
+                    GROUP BY biz_day, model
+                    """,
+                    (now, now, target_models, priority_from),
+                ).fetchall()
+
+                day_prog: dict[date, int] = {}
+                day_total: dict[date, int] = {}
+                for s in stats:
+                    d = s["biz_day"]
+                    day_prog[d] = day_prog.get(d, 0) + int(s["prog"])
+                    day_total[d] = day_total.get(d, 0) + int(s["total"])
+
+                candidates = [s for s in stats if int(s["claimable"]) > 0]
+                candidates.sort(
+                    key=lambda s: (
+                        day_prog[s["biz_day"]] / max(1, day_total[s["biz_day"]]),
+                        int(s["prog"]) / max(1, int(s["total"])),
+                        -s["biz_day"].toordinal(),
+                        s["model"],
+                    )
+                )
+
+                for s in candidates:
+                    remaining = limit - len(claimed)
+                    if remaining <= 0:
+                        break
+                    claimed.extend(
+                        self._claim_batch(
+                            conn,
+                            models=[s["model"]],
+                            now=now,
+                            expires=expires,
+                            worker_id=worker,
+                            limit=remaining,
+                            biz_day=s["biz_day"],
+                        )
+                    )
+
+                if len(claimed) < limit:
+                    claimed.extend(
+                        self._claim_batch(
+                            conn,
+                            models=target_models,
+                            now=now,
+                            expires=expires,
+                            worker_id=worker,
+                            limit=limit - len(claimed),
+                            max_biz_day_lt=priority_from,
+                        )
+                    )
+
+        if include_payload:
+            for item in claimed:
+                if item.get("rel_path") and item.get("input_len"):
+                    item["input"] = pread_json(
+                        self.cfg.data_root / item["rel_path"],
+                        int(item["input_offset"]),
+                        int(item["input_len"]),
+                    )
+                else:
+                    item["input"] = None
+        return claimed
+
+    def heartbeat_inputs(
+        self,
+        worker_id: str,
+        input_ids: list[int],
+        *,
+        lease_seconds: int = 900,
+    ) -> dict[str, Any]:
+        """Extend leases for in-flight claimed inputs owned by `worker_id`."""
+        worker = str(worker_id or "").strip()
+        if not worker:
+            raise ValueError("worker_id is required")
+        ids = _normalize_id_list(input_ids, max_len=500)
+        lease_seconds = max(30, min(_strict_int(lease_seconds, "lease_seconds"), 86400))
+        expires = datetime.now(timezone.utc) + timedelta(seconds=lease_seconds)
+
+        if not ids:
+            return {
+                "requested": 0,
+                "renewed": 0,
+                "renewed_ids": [],
+                "lease_expires_at": expires.isoformat(),
+            }
+
+        with self.db.transaction() as conn:
+            rows = conn.execute(
+                """
+                UPDATE public.eval_inputs
+                SET lease_expires_at = %s,
+                    updated_at = now()
+                WHERE input_id = ANY(%s)
+                  AND eval_status = 'claimed'
+                  AND claimed_by = %s
+                RETURNING input_id
                 """,
-                (model, now, limit, worker_id, expires),
+                (expires, ids, worker),
             ).fetchall()
-            return list(rows)
+        renewed_ids = [int(r["input_id"]) for r in rows]
+        return {
+            "requested": len(ids),
+            "renewed": len(renewed_ids),
+            "renewed_ids": renewed_ids,
+            "lease_expires_at": expires.isoformat(),
+        }
+
+    def release_inputs(
+        self,
+        worker_id: str,
+        input_ids: list[int],
+        *,
+        decrement_attempts: bool = True,
+    ) -> dict[str, Any]:
+        """Release claimed leases owned by `worker_id` immediately back to `pending`."""
+        worker = str(worker_id or "").strip()
+        if not worker:
+            raise ValueError("worker_id is required")
+        ids = _normalize_id_list(input_ids, max_len=500)
+        if not ids:
+            return {"requested": 0, "released": 0, "released_ids": []}
+
+        with self.db.transaction() as conn:
+            rows = conn.execute(
+                """
+                UPDATE public.eval_inputs
+                SET eval_status = 'pending',
+                    claimed_by = NULL,
+                    lease_expires_at = NULL,
+                    eval_attempts = CASE WHEN %s THEN GREATEST(0, eval_attempts - 1) ELSE eval_attempts END,
+                    updated_at = now()
+                WHERE input_id = ANY(%s)
+                  AND eval_status = 'claimed'
+                  AND claimed_by = %s
+                RETURNING input_id
+                """,
+                (bool(decrement_attempts), ids, worker),
+            ).fetchall()
+        released_ids = [int(r["input_id"]) for r in rows]
+        return {
+            "requested": len(ids),
+            "released": len(released_ids),
+            "released_ids": released_ids,
+        }
+
+    def fail_inputs(
+        self,
+        worker_id: str,
+        items: list[dict[str, Any]],
+        *,
+        max_attempts: int = 3,
+    ) -> list[dict[str, Any]]:
+        """Record permanent `skipped` or transient/terminal `failed` transitions for claimed inputs."""
+        worker = str(worker_id or "").strip()
+        if not worker:
+            raise ValueError("worker_id is required")
+        default_max = max(1, _strict_int(max_attempts, "max_attempts"))
+        if not isinstance(items, list) or not items:
+            raise ValueError("items must be a non-empty list")
+        if len(items) > 200:
+            raise ValueError("items length exceeds max 200")
+
+        validated: list[dict[str, Any]] = []
+        for raw in items:
+            if not isinstance(raw, dict):
+                raise ValueError("each item must be an object")
+            iid = _strict_int(raw.get("input_id"), "items[].input_id")
+            status = str(raw.get("status") or "").strip()
+            if status not in ("skipped", "failed"):
+                raise ValueError(f"Unsupported items[].status={status!r}")
+            err = str(raw.get("error") or "")[:2000]
+            raw_retry = raw.get("retry_after_seconds")
+            retry_sec = 600 if raw_retry is None else max(0, _strict_int(raw_retry, "retry_after_seconds"))
+            raw_max = raw.get("max_attempts")
+            eff_max = default_max if raw_max is None else max(1, _strict_int(raw_max, "max_attempts"))
+            validated.append(
+                {
+                    "input_id": iid,
+                    "status": status,
+                    "error": err,
+                    "retry_after_seconds": retry_sec,
+                    "max_attempts": eff_max,
+                }
+            )
+
+        now = datetime.now(timezone.utc)
+        results: list[dict[str, Any]] = []
+        with self.db.transaction() as conn:
+            for it in validated:
+                row = conn.execute(
+                    """
+                    SELECT input_id, eval_status, claimed_by, eval_attempts
+                    FROM public.eval_inputs
+                    WHERE input_id = %s
+                    FOR UPDATE
+                    """,
+                    (it["input_id"],),
+                ).fetchone()
+                if row is None or row["eval_status"] != "claimed" or row["claimed_by"] != worker:
+                    results.append(
+                        {
+                            "input_id": it["input_id"],
+                            "applied": False,
+                            "eval_status": row["eval_status"] if row else None,
+                            "eval_attempts": int(row["eval_attempts"]) if row else 0,
+                        }
+                    )
+                    continue
+
+                attempts = int(row["eval_attempts"])
+                if it["status"] == "skipped":
+                    db_status, resp_status, lease_exp = "skipped", "skipped", None
+                elif it["retry_after_seconds"] > 0 and attempts < it["max_attempts"]:
+                    db_status, resp_status = "claimed", "retrying"
+                    lease_exp = now + timedelta(seconds=it["retry_after_seconds"])
+                else:
+                    db_status, resp_status, lease_exp = "failed", "failed", None
+
+                conn.execute(
+                    """
+                    UPDATE public.eval_inputs
+                    SET eval_status = %s,
+                        claimed_by = NULL,
+                        lease_expires_at = %s,
+                        eval_error = %s,
+                        updated_at = now()
+                    WHERE input_id = %s
+                    """,
+                    (db_status, lease_exp, it["error"], it["input_id"]),
+                )
+                entry: dict[str, Any] = {
+                    "input_id": it["input_id"],
+                    "applied": True,
+                    "eval_status": resp_status,
+                    "eval_attempts": attempts,
+                }
+                if lease_exp is not None:
+                    entry["next_retry_at"] = lease_exp.isoformat()
+                results.append(entry)
+        return results
+
+    def _lookup_eval_input(
+        self,
+        conn: psycopg.Connection,
+        *,
+        model: str,
+        trace_id: str,
+        input_id: int | None = None,
+        for_update: bool = False,
+    ) -> dict[str, Any] | None:
+        lock_sql = " FOR UPDATE" if for_update else ""
+        if input_id is not None:
+            cand = conn.execute(
+                f"SELECT input_id, trace_id, biz_day, app_version FROM public.eval_inputs WHERE input_id = %s AND model = %s{lock_sql}",
+                (input_id, model),
+            ).fetchone()
+            if cand is not None and cand["trace_id"] == trace_id:
+                return cand
+        return conn.execute(
+            f"SELECT input_id, trace_id, biz_day, app_version FROM public.eval_inputs WHERE product = %s AND model = %s AND trace_id = %s{lock_sql}",
+            (self.cfg.product, model, trace_id),
+        ).fetchone()
 
     def commit_daily_output(
         self,
@@ -367,12 +796,21 @@ class DataCore:
         judge_model: str | None = None,
         eval_duration_ms: float | None = None,
         eval_cost_usd: float | None = None,
+        input_id: int | None = None,
+        fallback_day: str | None = None,
     ) -> list[int]:
         """Blob-First write of attribution (+ optional compact) and transactional PG commit."""
-        parsed_list = extract_attribution_fields(attr_record, model, intent_tax=self.intent_tax)
+        parsed_fallback = _parse_iso_day(fallback_day, "fallback_day")
+        parsed_list = extract_attribution_fields(
+            attr_record,
+            model,
+            fallback_day=parsed_fallback.isoformat() if parsed_fallback else None,
+            intent_tax=self.intent_tax,
+        )
         if not parsed_list:
             raise ValueError("Attribution record contains no valid turns with trace_id")
 
+        preferred_input_id = _strict_int(input_id, "input_id") if input_id is not None else None
         attr_frame, attr_raw_len = compress_record_line(attr_record, level=self.cfg.zstd_level)
         comp_frame, comp_raw_len = (
             compress_record_line(compact_record, level=self.cfg.zstd_level) if compact_record is not None else (None, 0)
@@ -381,6 +819,16 @@ class DataCore:
         output_ids: list[int] = []
 
         with self._local_lock, self.db.transaction() as conn:
+            if preferred_input_id is not None or biz_day == date(1970, 1, 1):
+                day_row = self._lookup_eval_input(
+                    conn,
+                    model=model,
+                    trace_id=parsed_list[0]["trace_id"],
+                    input_id=preferred_input_id,
+                )
+                if day_row is not None and day_row["biz_day"] is not None:
+                    biz_day = day_row["biz_day"]
+
             attr_pack = self._select_active_pack(conn, domain="daily", kind="attribution", model=model, biz_day=biz_day)
             attr_off, attr_len = append_frame_file(self.cfg.data_root / attr_pack["rel_path"], attr_frame, fsync=True)
             conn.execute(
@@ -412,16 +860,15 @@ class DataCore:
                     (comp_off + comp_len, comp_raw_len, comp_file_id),
                 )
 
+            use_input_id = preferred_input_id if len(parsed_list) == 1 else None
             for item in parsed_list:
-                inp = conn.execute(
-                    """
-                    SELECT input_id, biz_day, app_version
-                    FROM public.eval_inputs
-                    WHERE product = %s AND model = %s AND trace_id = %s
-                    FOR UPDATE
-                    """,
-                    (self.cfg.product, model, item["trace_id"]),
-                ).fetchone()
+                inp = self._lookup_eval_input(
+                    conn,
+                    model=model,
+                    trace_id=item["trace_id"],
+                    input_id=use_input_id,
+                    for_update=True,
+                )
                 if inp is None:
                     self._ensure_user(conn, item["user_id"], item["biz_day"], model)
                     inp = conn.execute(
@@ -689,6 +1136,376 @@ class DataCore:
             )
             return {"overlay_id": row["overlay_id"], "hr_hash": hr_hash}
 
+    def list_pending_human_read(
+        self,
+        *,
+        models: list[str] | None = None,
+        dates: list[date | str] | None = None,
+        kinds: list[str] | None = None,
+        prompt_version: str = "",
+        include_failed: bool = False,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """List latest daily outputs needing human_read translation (`attribution` / `compact`)."""
+        req_kinds = list(dict.fromkeys(kinds or ["attribution", "compact"]))
+        if not req_kinds or any(k not in ("attribution", "compact") for k in req_kinds):
+            raise ValueError(f"Unsupported kinds={req_kinds!r}; expected subset of ('attribution', 'compact')")
+        filter_models = list(dict.fromkeys(str(m).strip() for m in (models or []) if str(m).strip())) or None
+        filter_dates = [_parse_iso_day(d, "dates") for d in (dates or []) if d not in (None, "")]
+        filter_dates = [d for d in filter_dates if d is not None] or None
+        limit = max(1, min(_strict_int(limit, "limit"), 500))
+        pv = str(prompt_version or "").strip()
+        excluded_statuses = ["done"] if include_failed else ["done", "failed"]
+
+        kind_cols = {
+            "attribution": ("o.attr_file_id", "o.attr_offset", "o.attr_len"),
+            "compact": ("o.compact_file_id", "o.compact_offset", "o.compact_len"),
+        }
+        branches: list[str] = []
+        params: list[Any] = []
+        for kind in req_kinds:
+            file_col, off_col, len_col = kind_cols[kind]
+            where_parts = [
+                "o.is_latest = TRUE",
+                f"{file_col} IS NOT NULL",
+                f"{len_col} > 0",
+                "(h.overlay_id IS NULL OR NOT (h.status = ANY(%s) AND (%s = '' OR COALESCE(h.prompt_version, '') = %s)))",
+            ]
+            branch_params: list[Any] = [kind, kind, excluded_statuses, pv, pv]
+            if filter_models:
+                where_parts.append("o.model = ANY(%s)")
+                branch_params.append(filter_models)
+            if filter_dates:
+                where_parts.append("o.biz_day = ANY(%s)")
+                branch_params.append(filter_dates)
+            branches.append(
+                f"""
+                SELECT
+                    o.output_id,
+                    o.input_id,
+                    o.model,
+                    o.trace_id,
+                    o.biz_day,
+                    %s::TEXT AS target_kind,
+                    pf_in.rel_path AS input_rel_path,
+                    i.input_offset,
+                    i.input_len,
+                    pf_t.rel_path AS target_rel_path,
+                    {off_col} AS target_offset,
+                    {len_col} AS target_len
+                FROM public.eval_outputs o
+                JOIN public.eval_inputs i ON i.input_id = o.input_id AND NOT i.is_deleted
+                LEFT JOIN public.pack_files pf_in ON pf_in.file_id = i.input_file_id
+                JOIN public.pack_files pf_t ON pf_t.file_id = {file_col}
+                LEFT JOIN public.human_read_overlays h
+                    ON h.output_id = o.output_id AND h.target_kind = %s
+                WHERE {' AND '.join(where_parts)}
+                """
+            )
+            params.extend(branch_params)
+
+        sql = f"""
+            SELECT
+                output_id, input_id, model, trace_id, biz_day, target_kind,
+                input_rel_path, input_offset, input_len,
+                target_rel_path, target_offset, target_len
+            FROM ({' UNION ALL '.join(branches)}) pending
+            ORDER BY
+                biz_day DESC,
+                CASE WHEN target_kind = 'attribution' THEN 0 ELSE 1 END ASC,
+                CASE WHEN model LIKE '%%expert%%' THEN 0 ELSE 1 END ASC,
+                model ASC,
+                output_id ASC
+            LIMIT %s
+        """
+        params.append(limit)
+
+        with self.db.connection() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            item = dict(r)
+            if isinstance(item.get("biz_day"), date):
+                item["biz_day"] = item["biz_day"].isoformat()
+            out.append(item)
+        return out
+
+    def fail_human_read_overlay(
+        self,
+        *,
+        output_id: int,
+        target_kind: str,
+        prompt_version: str | None = None,
+        translator_model: str | None = None,
+        source_hash: str | None = None,
+        error: str = "",
+    ) -> dict[str, Any]:
+        """Record a failed human_read translation attempt without clobbering an up-to-date `done` overlay."""
+        oid = _strict_int(output_id, "output_id")
+        if target_kind not in ("attribution", "compact"):
+            raise ValueError(f"Unsupported target_kind={target_kind!r}")
+        err_msg = str(error or "")[:2000]
+
+        with self.db.transaction() as conn:
+            out = conn.execute(
+                "SELECT output_id, input_id FROM public.eval_outputs WHERE output_id = %s",
+                (oid,),
+            ).fetchone()
+            if out is None:
+                raise KeyError(f"eval_outputs.output_id={oid} not found")
+
+            row = conn.execute(
+                """
+                INSERT INTO public.human_read_overlays (
+                    output_id, input_id, target_kind, status,
+                    prompt_version, translator_model, source_hash, extra, updated_at
+                )
+                VALUES (%s, %s, %s, 'failed', %s, %s, %s, %s, now())
+                ON CONFLICT (output_id, target_kind) DO UPDATE SET
+                    status = 'failed',
+                    prompt_version = EXCLUDED.prompt_version,
+                    translator_model = EXCLUDED.translator_model,
+                    source_hash = EXCLUDED.source_hash,
+                    extra = public.human_read_overlays.extra || EXCLUDED.extra,
+                    updated_at = now()
+                WHERE public.human_read_overlays.status <> 'done'
+                   OR COALESCE(public.human_read_overlays.prompt_version, '') <> COALESCE(EXCLUDED.prompt_version, '')
+                RETURNING status
+                """,
+                (
+                    out["output_id"],
+                    out["input_id"],
+                    target_kind,
+                    (str(prompt_version).strip() or None) if prompt_version is not None else None,
+                    (str(translator_model).strip() or None) if translator_model is not None else None,
+                    (str(source_hash).strip() or None) if source_hash is not None else None,
+                    Jsonb({"error": err_msg}),
+                ),
+            ).fetchone()
+        return {
+            "output_id": int(out["output_id"]),
+            "target_kind": target_kind,
+            "status": str(row["status"]) if row else "done",
+        }
+
+    # ------------------------------------------------------------------ Realtime Monitor Summary
+
+    def get_monitor_summary(self, *, models: list[str] | None = None) -> dict[str, Any]:
+        """Live base-table aggregation for `server_monitor` (never reads stale materialized views)."""
+        filter_models = list(dict.fromkeys(str(m).strip() for m in (models or []) if str(m).strip())) or None
+        now = datetime.now(timezone.utc)
+        model_filter_i = " AND i.model = ANY(%s)" if filter_models else ""
+        model_filter_o = " AND o.model = ANY(%s)" if filter_models else ""
+        model_filter_p = " AND p.model = ANY(%s)" if filter_models else ""
+
+        with self.db.connection() as conn:
+            # 1. Inputs + latest outputs + 6-bucket queue stats via single GROUPING SETS scan
+            main_params: list[Any] = [now, now, now]
+            if filter_models:
+                main_params.append(filter_models)
+            main_rows = conn.execute(
+                f"""
+                SELECT
+                    i.model,
+                    i.biz_day,
+                    GROUPING(i.model) AS g_model,
+                    GROUPING(i.biz_day) AS g_day,
+                    COUNT(*)::BIGINT AS input_traces,
+                    COUNT(DISTINCT COALESCE(NULLIF(i.session_id, ''), i.trace_id))::BIGINT AS input_sessions,
+                    COUNT(o.output_id)::BIGINT AS evaluated_traces,
+                    COUNT(DISTINCT COALESCE(NULLIF(i.session_id, ''), i.trace_id))
+                        FILTER (WHERE o.output_id IS NOT NULL)::BIGINT AS evaluated_sessions,
+                    COUNT(o.output_id) FILTER (WHERE o.compact_file_id IS NOT NULL)::BIGINT AS compact_traces,
+                    COALESCE(SUM(o.problem_count), 0)::BIGINT AS problem_count,
+                    COUNT(*) FILTER (WHERE i.has_input_blob)::BIGINT AS q_total,
+                    COUNT(*) FILTER (WHERE i.has_input_blob AND i.eval_status = 'evaluated')::BIGINT AS q_evaluated,
+                    COUNT(*) FILTER (
+                        WHERE i.has_input_blob
+                          AND (
+                              i.eval_status = 'pending'
+                              OR (i.eval_status = 'claimed' AND (i.lease_expires_at IS NULL OR i.lease_expires_at < %s))
+                          )
+                    )::BIGINT AS q_pending,
+                    COUNT(*) FILTER (
+                        WHERE i.has_input_blob
+                          AND i.eval_status = 'claimed'
+                          AND i.claimed_by IS NOT NULL
+                          AND i.lease_expires_at >= %s
+                    )::BIGINT AS q_claimed,
+                    COUNT(*) FILTER (
+                        WHERE i.has_input_blob
+                          AND i.eval_status = 'claimed'
+                          AND i.claimed_by IS NULL
+                          AND i.lease_expires_at >= %s
+                    )::BIGINT AS q_retrying,
+                    COUNT(*) FILTER (WHERE i.has_input_blob AND i.eval_status = 'failed')::BIGINT AS q_failed,
+                    COUNT(*) FILTER (WHERE i.has_input_blob AND i.eval_status = 'skipped')::BIGINT AS q_skipped
+                FROM public.eval_inputs i
+                LEFT JOIN public.eval_outputs o
+                    ON o.input_id = i.input_id AND o.is_latest = TRUE
+                WHERE NOT i.is_deleted{model_filter_i}
+                GROUP BY GROUPING SETS ((i.model, i.biz_day), (i.model), ())
+                """,
+                main_params,
+            ).fetchall()
+
+            # 2. Human-read overlay counts by model
+            hr_params = [filter_models] if filter_models else []
+            hr_rows = conn.execute(
+                f"""
+                SELECT
+                    o.model,
+                    COUNT(*) FILTER (WHERE h.target_kind = 'attribution' AND h.status = 'done')::BIGINT AS hr_attr_done,
+                    COUNT(*) FILTER (WHERE h.target_kind = 'compact' AND h.status = 'done')::BIGINT AS hr_compact_done,
+                    COUNT(*) FILTER (WHERE h.status = 'failed')::BIGINT AS hr_failed
+                FROM public.human_read_overlays h
+                JOIN public.eval_outputs o ON o.output_id = h.output_id AND o.is_latest = TRUE
+                JOIN public.eval_inputs i ON i.input_id = o.input_id AND NOT i.is_deleted
+                WHERE TRUE{model_filter_o}
+                GROUP BY o.model
+                """,
+                hr_params,
+            ).fetchall()
+
+            # 3. Lost user metrics
+            lost_params = [filter_models] if filter_models else []
+            lost_row = conn.execute(
+                f"""
+                SELECT
+                    COUNT(*)::BIGINT AS input_traces,
+                    COUNT(DISTINCT COALESCE(NULLIF(i.session_id, ''), i.trace_id))::BIGINT AS input_sessions,
+                    COUNT(o.output_id)::BIGINT AS evaluated_traces,
+                    COUNT(DISTINCT COALESCE(NULLIF(i.session_id, ''), i.trace_id))
+                        FILTER (WHERE o.output_id IS NOT NULL)::BIGINT AS evaluated_sessions,
+                    COALESCE(SUM(o.problem_count), 0)::BIGINT AS problem_count
+                FROM public.eval_inputs i
+                JOIN public.users u ON u.user_id = i.user_id AND u.is_lost = TRUE
+                LEFT JOIN public.eval_outputs o ON o.input_id = i.input_id AND o.is_latest = TRUE
+                WHERE NOT i.is_deleted{model_filter_i}
+                """,
+                lost_params,
+            ).fetchone()
+
+            # 4. Pending (unclustered) problems & traces via partial index `idx_eval_problems_unclustered`
+            cl_params = [filter_models] if filter_models else []
+            cl_rows = conn.execute(
+                f"""
+                SELECT
+                    p.model,
+                    COUNT(*)::BIGINT AS pending_problems,
+                    COUNT(DISTINCT p.input_id)::BIGINT AS pending_traces
+                FROM public.eval_problems p
+                JOIN public.eval_outputs o ON o.output_id = p.output_id AND o.is_latest = TRUE
+                JOIN public.eval_inputs i ON i.input_id = p.input_id AND NOT i.is_deleted
+                WHERE p.cluster_code IS NULL{model_filter_p}
+                GROUP BY p.model
+                """,
+                cl_params,
+            ).fetchall()
+
+        def _queue_buckets(row: dict[str, Any]) -> dict[str, int]:
+            return {
+                "total": int(row.get("q_total", 0)),
+                "evaluated": int(row.get("q_evaluated", 0)),
+                "pending": int(row.get("q_pending", 0)),
+                "claimed": int(row.get("q_claimed", 0)),
+                "retrying": int(row.get("q_retrying", 0)),
+                "failed": int(row.get("q_failed", 0)),
+                "skipped": int(row.get("q_skipped", 0)),
+            }
+
+        def _trace_counts(row: dict[str, Any]) -> dict[str, int]:
+            return {
+                "input_traces": int(row.get("input_traces", 0)),
+                "input_sessions": int(row.get("input_sessions", 0)),
+                "evaluated_traces": int(row.get("evaluated_traces", 0)),
+                "evaluated_sessions": int(row.get("evaluated_sessions", 0)),
+                "compact_traces": int(row.get("compact_traces", 0)),
+            }
+
+        grand: dict[str, Any] = {}
+        model_totals: dict[str, dict[str, Any]] = {}
+        model_dates: dict[str, list[dict[str, Any]]] = {}
+        for r in main_rows:
+            gm, gd = int(r["g_model"]), int(r["g_day"])
+            if gm == 1 and gd == 1:
+                grand = r
+            elif gm == 0 and gd == 1:
+                model_totals[r["model"]] = r
+            elif gm == 0 and gd == 0:
+                model_dates.setdefault(r["model"], []).append(
+                    {
+                        "date": r["biz_day"].isoformat() if isinstance(r["biz_day"], date) else str(r["biz_day"]),
+                        **_trace_counts(r),
+                        "pending": int(r["q_pending"]),
+                        "claimed": int(r["q_claimed"]),
+                        "retrying": int(r["q_retrying"]),
+                        "failed": int(r["q_failed"]),
+                        "skipped": int(r["q_skipped"]),
+                    }
+                )
+
+        hr_by_model = {r["model"]: r for r in hr_rows}
+        cl_by_model = {r["model"]: r for r in cl_rows}
+        queue_models: list[dict[str, Any]] = []
+        models_out: list[dict[str, Any]] = []
+        cluster_models: list[dict[str, Any]] = []
+
+        for m in sorted(model_totals.keys()):
+            mt = model_totals[m]
+            hr = hr_by_model.get(m) or {}
+            cl = cl_by_model.get(m) or {}
+            out_traces = int(mt["evaluated_traces"])
+            pending_traces = int(cl.get("pending_traces", 0))
+            tot_probs = int(mt["problem_count"])
+            pending_probs = int(cl.get("pending_problems", 0))
+
+            queue_models.append({"name": m, **_queue_buckets(mt)})
+            models_out.append(
+                {
+                    "name": m,
+                    **_trace_counts(mt),
+                    "problem_count": tot_probs,
+                    "hr_attr_done": int(hr.get("hr_attr_done", 0)),
+                    "hr_compact_done": int(hr.get("hr_compact_done", 0)),
+                    "dates": sorted(model_dates.get(m, []), key=lambda d: d["date"], reverse=True),
+                }
+            )
+            cluster_models.append(
+                {
+                    "name": m,
+                    "output_traces": out_traces,
+                    "clustered_traces": max(0, out_traces - pending_traces),
+                    "pending_traces": pending_traces,
+                    "total_problems": tot_probs,
+                    "clustered_problems": max(0, tot_probs - pending_probs),
+                    "pending_problems": pending_probs,
+                }
+            )
+
+        lr = lost_row or {}
+        return {
+            "generated_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "db_epoch": self.db_epoch,
+            "totals": {
+                **_trace_counts(grand),
+                "problem_count": int(grand.get("problem_count", 0)),
+                "hr_attr_done": sum(int(r["hr_attr_done"]) for r in hr_rows),
+                "hr_compact_done": sum(int(r["hr_compact_done"]) for r in hr_rows),
+                "hr_failed": sum(int(r["hr_failed"]) for r in hr_rows),
+            },
+            "queue": {**_queue_buckets(grand), "models": queue_models},
+            "models": models_out,
+            "lost_user": {
+                "input_traces": int(lr.get("input_traces", 0)),
+                "input_sessions": int(lr.get("input_sessions", 0)),
+                "evaluated_traces": int(lr.get("evaluated_traces", 0)),
+                "evaluated_sessions": int(lr.get("evaluated_sessions", 0)),
+                "problem_count": int(lr.get("problem_count", 0)),
+            },
+            "cluster": {"models": cluster_models},
+        }
+
     # ------------------------------------------------------------------ Step 4 & Step 3 Updates
 
     def update_category(
@@ -750,42 +1567,104 @@ class DataCore:
         *,
         tree_id: int | None = None,
         cluster_version: str | None = None,
-    ) -> int:
-        """Step 3 incremental cluster binding on `eval_problems`."""
+        data_cutoff: str | None = None,
+        return_stats: bool = False,
+    ) -> int | dict[str, int]:
+        """Step 3 incremental cluster binding on `eval_problems` with diff guard, change events, and cutoff advance."""
+        if not isinstance(bindings, list):
+            raise ValueError("bindings must be a list")
+        tid_val = _strict_int(tree_id, "tree_id") if tree_id is not None else None
+        cutoff = str(data_cutoff).strip() if data_cutoff is not None else ""
+
+        dedup: dict[int, dict[str, Any]] = {}
+        for item in bindings:
+            if not isinstance(item, dict):
+                raise ValueError("each binding must be an object")
+            pid = _strict_int(item.get("problem_id"), "bindings[].problem_id")
+            code = item.get("cluster_code")
+            l1, l2, l3, l4 = split_cluster_code(code)
+            raw_tags = item.get("tags")
+            tags = [str(t) for t in raw_tags if t] if isinstance(raw_tags, list) else None
+            dedup[pid] = {
+                "problem_id": pid,
+                "cluster_code": code,
+                "l1_stage": l1,
+                "l2_mechanism": l2,
+                "l3_leaf": l3,
+                "l4_subleaf": l4,
+                "is_edge": bool(item.get("is_edge", False)),
+                "tags": tags,
+            }
+
         updated = 0
-        with self.db.transaction() as conn:
-            for item in bindings:
-                code = item.get("cluster_code")
-                l1, l2, l3, l4 = split_cluster_code(code)
-                res = conn.execute(
-                    """
-                    UPDATE public.eval_problems
-                    SET cluster_tree_id = COALESCE(%s, cluster_tree_id),
-                        cluster_version = COALESCE(%s, cluster_version),
-                        cluster_code = %s,
-                        l1_stage = %s,
-                        l2_mechanism = %s,
-                        l3_leaf = %s,
-                        l4_subleaf = %s,
-                        is_edge = %s,
-                        tags = COALESCE(%s, tags),
-                        clustered_at = now()
-                    WHERE problem_id = %s
-                    """,
-                    (
-                        tree_id,
-                        cluster_version,
-                        code,
-                        l1,
-                        l2,
-                        l3,
-                        l4,
-                        bool(item.get("is_edge", False)),
-                        item.get("tags"),
-                        item["problem_id"],
-                    ),
-                )
-                updated += res.rowcount or 0
+        changes_emitted = 0
+        if dedup or (tid_val is not None and cutoff):
+            with self.db.transaction() as conn:
+                if dedup:
+                    rows = conn.execute(
+                        """
+                        WITH incoming AS (
+                            SELECT
+                                x.problem_id,
+                                x.cluster_code,
+                                x.l1_stage,
+                                x.l2_mechanism,
+                                x.l3_leaf,
+                                x.l4_subleaf,
+                                x.is_edge,
+                                CASE
+                                    WHEN x.tags IS NULL OR jsonb_typeof(x.tags) <> 'array' THEN NULL
+                                    ELSE ARRAY(SELECT jsonb_array_elements_text(x.tags))
+                                END AS tags
+                            FROM jsonb_to_recordset(%s::jsonb) AS x(
+                                problem_id BIGINT,
+                                cluster_code TEXT,
+                                l1_stage TEXT,
+                                l2_mechanism TEXT,
+                                l3_leaf TEXT,
+                                l4_subleaf TEXT,
+                                is_edge BOOLEAN,
+                                tags JSONB
+                            )
+                        )
+                        UPDATE public.eval_problems p
+                        SET cluster_tree_id = COALESCE(%s, p.cluster_tree_id),
+                            cluster_version = COALESCE(%s, p.cluster_version),
+                            cluster_code = s.cluster_code,
+                            l1_stage = s.l1_stage,
+                            l2_mechanism = s.l2_mechanism,
+                            l3_leaf = s.l3_leaf,
+                            l4_subleaf = s.l4_subleaf,
+                            is_edge = s.is_edge,
+                            tags = COALESCE(s.tags, p.tags),
+                            clustered_at = now()
+                        FROM incoming s
+                        WHERE p.problem_id = s.problem_id
+                          AND (
+                              p.cluster_code IS DISTINCT FROM s.cluster_code
+                              OR p.is_edge IS DISTINCT FROM s.is_edge
+                              OR p.tags IS DISTINCT FROM COALESCE(s.tags, p.tags)
+                          )
+                        RETURNING p.output_id
+                        """,
+                        (Jsonb(list(dedup.values())), tid_val, cluster_version),
+                    ).fetchall()
+                    updated = len(rows)
+                    output_ids = sorted({int(r["output_id"]) for r in rows})
+                    changes_emitted = emit_trace_changes(conn, self.db_epoch, output_ids)
+
+                if tid_val is not None and cutoff:
+                    conn.execute(
+                        """
+                        UPDATE public.cluster_trees
+                        SET data_cutoff = GREATEST(COALESCE(data_cutoff, ''), %s)
+                        WHERE tree_id = %s AND is_current = TRUE
+                        """,
+                        (cutoff, tid_val),
+                    )
+
+        if return_stats:
+            return {"updated": updated, "changes_emitted": changes_emitted}
         return updated
 
     # ------------------------------------------------------------------ O(1) Random Read

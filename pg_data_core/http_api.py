@@ -12,6 +12,7 @@ import json
 import os
 import secrets
 import traceback
+from datetime import date, datetime
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -20,6 +21,43 @@ from .core import DataCore
 from .reconcile import reconcile_tails
 
 PREFIX = "/api/v1/data-core"
+
+
+def _json_default(obj: Any) -> str:
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    return str(obj)
+
+
+def _parse_csv(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    return list(dict.fromkeys(p.strip() for p in str(raw).split(",") if p.strip()))
+
+
+def _parse_bool(val: Any, default: bool = False) -> bool:
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    return str(val).strip().lower() in ("1", "true", "yes")
+
+
+def _parse_int(val: Any, default: int, *, lo: int | None = None, hi: int | None = None, name: str = "param") -> int:
+    if val is None or val == "":
+        n = default
+    elif isinstance(val, bool):
+        raise ValueError(f"{name} must be an integer")
+    else:
+        try:
+            n = int(val)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{name} must be an integer") from exc
+    if lo is not None:
+        n = max(lo, n)
+    if hi is not None:
+        n = min(hi, n)
+    return n
 
 
 def _parse_tokens(raw: str) -> set[str]:
@@ -75,7 +113,7 @@ class DataCoreHTTPApp:
 
     @staticmethod
     def _send_json(handler, status: int, payload: dict[str, Any]) -> None:
-        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8", "replace")
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=_json_default).encode("utf-8", "replace")
         handler.send_response(status)
         handler.send_header("Content-Type", "application/json; charset=utf-8")
         handler.send_header("Content-Length", str(len(body)))
@@ -143,6 +181,23 @@ class DataCoreHTTPApp:
                 self._send_json(handler, 200, {"request_id": req_id, "data": detail})
                 return
 
+            if handler.command == "GET" and tail == "/human-read/pending":
+                items = self.dc.list_pending_human_read(
+                    models=_parse_csv(query.get("models")) or None,
+                    dates=_parse_csv(query.get("dates")) or None,
+                    kinds=_parse_csv(query.get("kinds")) or None,
+                    prompt_version=query.get("prompt_version") or "",
+                    include_failed=_parse_bool(query.get("include_failed"), False),
+                    limit=_parse_int(query.get("limit"), 100, lo=1, hi=500, name="limit"),
+                )
+                self._send_json(handler, 200, {"request_id": req_id, "data": {"items": items}})
+                return
+
+            if handler.command == "GET" and tail == "/monitor/summary":
+                summary = self.dc.get_monitor_summary(models=_parse_csv(query.get("models")) or None)
+                self._send_json(handler, 200, {"request_id": req_id, "data": summary})
+                return
+
             if handler.command != "POST":
                 self._send_json(handler, 405, {"request_id": req_id, "error": {"code": "METHOD_NOT_ALLOWED", "message": handler.command}})
                 return
@@ -163,12 +218,45 @@ class DataCoreHTTPApp:
                 return
 
             if tail == "/inputs/claim":
-                model = str(body.get("model") or "").strip()
-                worker_id = str(body.get("worker_id") or "worker")
-                limit = max(1, min(int(body.get("limit") or 10), 200))
-                lease_sec = max(30, int(body.get("lease_seconds") or 600))
-                claimed = self.dc.claim_pending_inputs(model, worker_id, limit=limit, lease_seconds=lease_sec)
+                claimed = self.dc.claim_pending_inputs(
+                    model=body.get("model"),
+                    models=body.get("models"),
+                    worker_id=str(body.get("worker_id") or "worker"),
+                    limit=_parse_int(body.get("limit"), 10, lo=1, hi=200, name="limit"),
+                    lease_seconds=_parse_int(body.get("lease_seconds"), 600, lo=30, hi=86400, name="lease_seconds"),
+                    strategy=str(body.get("strategy") or "newest_first"),
+                    priority_days=_parse_int(body.get("priority_days"), 7, lo=1, hi=60, name="priority_days"),
+                    biz_day=body.get("biz_day"),
+                    include_payload=_parse_bool(body.get("include_payload"), False),
+                )
                 self._send_json(handler, 200, {"request_id": req_id, "data": {"claimed": claimed}})
+                return
+
+            if tail == "/inputs/heartbeat":
+                res = self.dc.heartbeat_inputs(
+                    worker_id=str(body.get("worker_id") or ""),
+                    input_ids=body.get("input_ids"),
+                    lease_seconds=_parse_int(body.get("lease_seconds"), 900, lo=30, hi=86400, name="lease_seconds"),
+                )
+                self._send_json(handler, 200, {"request_id": req_id, "data": res})
+                return
+
+            if tail == "/inputs/release":
+                res = self.dc.release_inputs(
+                    worker_id=str(body.get("worker_id") or ""),
+                    input_ids=body.get("input_ids"),
+                    decrement_attempts=_parse_bool(body.get("decrement_attempts"), True),
+                )
+                self._send_json(handler, 200, {"request_id": req_id, "data": res})
+                return
+
+            if tail == "/inputs/fail":
+                results = self.dc.fail_inputs(
+                    worker_id=str(body.get("worker_id") or ""),
+                    items=body.get("items"),
+                    max_attempts=_parse_int(body.get("max_attempts"), 3, lo=1, name="max_attempts"),
+                )
+                self._send_json(handler, 200, {"request_id": req_id, "data": {"results": results}})
                 return
 
             if tail == "/outputs":
@@ -183,6 +271,8 @@ class DataCoreHTTPApp:
                     judge_model=body.get("judge_model"),
                     eval_duration_ms=body.get("eval_duration_ms"),
                     eval_cost_usd=body.get("eval_cost_usd"),
+                    input_id=body.get("input_id"),
+                    fallback_day=body.get("fallback_day"),
                 )
                 self._send_json(handler, 200, {"request_id": req_id, "data": {"output_ids": oids}})
                 return
@@ -210,6 +300,18 @@ class DataCoreHTTPApp:
                 self._send_json(handler, 200, {"request_id": req_id, "data": res})
                 return
 
+            if tail == "/human-read/fail":
+                res = self.dc.fail_human_read_overlay(
+                    output_id=body.get("output_id"),
+                    target_kind=str(body.get("target_kind") or "").strip(),
+                    prompt_version=body.get("prompt_version"),
+                    translator_model=body.get("translator_model"),
+                    source_hash=body.get("source_hash"),
+                    error=str(body.get("error") or ""),
+                )
+                self._send_json(handler, 200, {"request_id": req_id, "data": res})
+                return
+
             if tail == "/categories":
                 items = body.get("items") or []
                 overwrite = bool(body.get("overwrite", False))
@@ -229,12 +331,14 @@ class DataCoreHTTPApp:
 
             if tail == "/clusters/bind":
                 bindings = body.get("bindings") or []
-                updated = self.dc.bind_problem_clusters(
+                stats = self.dc.bind_problem_clusters(
                     bindings,
                     tree_id=body.get("tree_id"),
                     cluster_version=body.get("cluster_version"),
+                    data_cutoff=body.get("data_cutoff"),
+                    return_stats=True,
                 )
-                self._send_json(handler, 200, {"request_id": req_id, "data": {"updated": updated}})
+                self._send_json(handler, 200, {"request_id": req_id, "data": stats})
                 return
 
             if tail == "/reconcile":
