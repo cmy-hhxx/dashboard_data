@@ -90,7 +90,7 @@ restore() {
   local snap="$1" items="$2"
   if sshx "test -d '$snap/opt'"; then
     # 整棵 /opt（代码 + deploy.env + 产物 + cache + 5003 索引），--update 只补缺的/旧的
-    log "从 $snap/opt 回填 /opt（缺失：$items）"
+    log "从 ${snap}/opt 回填 /opt（缺失：${items}）"
     sshx "rsync -a --update '$snap/opt/' /opt/ && echo '[restore] opt tree ok'"
     return 0
   fi

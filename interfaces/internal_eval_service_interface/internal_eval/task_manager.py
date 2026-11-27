@@ -102,11 +102,21 @@ def _sanitize_step_key(raw: str, fallback: str) -> str:
     return cleaned[:64] if cleaned else fallback
 
 
-def format_abtest_task_name(now: datetime | None = None) -> str:
-    """Return canonical TaskManager task name `AIME_RSI_ABTEST_{YYYYMMDD-HHMMSS}` in UTC+8."""
+_DATE_TIME_PLACEHOLDER_RE = re.compile(r"\{DATE_TIME\}", re.IGNORECASE)
+
+
+def format_abtest_task_name(now: datetime | None = None, *, template_task_name: str = "") -> str:
+    """Render TaskManager task name in UTC+8 from template `{DATE_TIME}` or default `AIME_RSI_ABTEST_{YYYYMMDD-HHMMSS}`."""
     tz_cn = timezone(timedelta(hours=8))
     dt = (now or datetime.now(tz_cn)).astimezone(tz_cn)
-    return f"AIME_RSI_ABTEST_{dt.strftime('%Y%m%d-%H%M%S')}"
+    stamp = dt.strftime("%Y%m%d-%H%M%S")
+    tpl = (template_task_name or "").strip()
+    if tpl and _DATE_TIME_PLACEHOLDER_RE.search(tpl):
+        # Legacy template `AIME_RSI_ABTEST_{DATE_TIME}_test` strips trailing `_test`
+        if re.search(r"\{DATE_TIME\}_test$", tpl, re.IGNORECASE):
+            tpl = re.sub(r"_test$", "", tpl, flags=re.IGNORECASE)
+        return _DATE_TIME_PLACEHOLDER_RE.sub(stamp, tpl)
+    return f"AIME_RSI_ABTEST_{stamp}"
 
 
 def _normalize_timestamp_to_rfc3339(
@@ -853,6 +863,9 @@ def build_task_spec_from_template(
         tpl_cs = tpl_doc.get("concurrency_schedule")
         if isinstance(tpl_cs, dict) and tpl_cs:
             template_defaults["concurrency_schedule"] = dict(tpl_cs)
+        tpl_name = str(tpl_doc.get("task_name") or "").strip()
+        if tpl_name:
+            template_defaults["template_task_name"] = tpl_name
 
     pipe_overrides = tm_meta.get("pipeline") if isinstance(tm_meta.get("pipeline"), dict) else {}
     for field in PIPELINE_OVERRIDE_FIELDS:

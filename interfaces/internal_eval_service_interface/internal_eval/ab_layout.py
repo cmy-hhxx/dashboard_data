@@ -40,7 +40,8 @@ from typing import Any
 
 from .timeutil import today_iso, utc_rfc3339
 
-ROUND_DIR_RE = re.compile(r"^version_(\d{8})_(aime_(?:expert|fast))$")
+ROUND_DIR_RE = re.compile(r"^version_(\d{8})_(aime_(?:expert|fast))(?:_([0-9A-Za-z_-]+))?$")
+_ROUND_TAG_SAFE_RE = re.compile(r"[^0-9A-Za-z_-]+")
 SIDE_DIR = {
     "before": "agent_before_opt",
     "after": "agent_after_opt",
@@ -105,19 +106,41 @@ def _normalize_date_token(version: str) -> str:
     raise ValueError("version 必须为 YYYYMMDD 或 MMDD 日期格式（例如 20261126 或 1126）")
 
 
-def resolve_round_dir_name(version: str, model: str = "aime_expert") -> str:
-    """Validate `(version, model)` and return canonical `version_<YYYYMMDD>_<model>` dir name."""
+def _sanitize_round_tag(round_tag: str | None) -> str:
+    raw = str(round_tag or "").strip()
+    if not raw:
+        return ""
+    cleaned = _ROUND_TAG_SAFE_RE.sub("_", raw).strip("_-")
+    if not cleaned:
+        raise ValueError(f"round_tag 不合法：{round_tag!r}")
+    return cleaned[:40]
+
+
+def resolve_round_dir_name(
+    version: str,
+    model: str = "aime_expert",
+    *,
+    round_tag: str | None = None,
+) -> str:
+    """Validate `(version, model, round_tag)` and return canonical `version_<YYYYMMDD>_<model>[_<tag>]` dir name."""
     date_tok = _normalize_date_token(version)
     clean_model = (model or "aime_expert").strip().lower()
     if clean_model not in ("aime_expert", "aime_fast"):
         raise ValueError(f"model 必须为 aime_expert 或 aime_fast，收到：{model!r}")
-    return f"version_{date_tok}_{clean_model}"
+    tag = _sanitize_round_tag(round_tag)
+    return f"version_{date_tok}_{clean_model}_{tag}" if tag else f"version_{date_tok}_{clean_model}"
 
 
-def allocate_round_dir(ab_test_root: Path, version: str, model: str = "aime_expert") -> tuple[int, str, Path]:
-    """Allocate strict `version_<YYYYMMDD>_aime_<expert|fast>` dir; reject same-day duplicates."""
+def allocate_round_dir(
+    ab_test_root: Path,
+    version: str,
+    model: str = "aime_expert",
+    *,
+    round_tag: str | None = None,
+) -> tuple[int, str, Path]:
+    """Allocate strict `version_<YYYYMMDD>_aime_<expert|fast>[_<tag>]` dir; reject duplicate round dirs."""
     ab_test_root.mkdir(parents=True, exist_ok=True)
-    dir_name = resolve_round_dir_name(version, model)
+    dir_name = resolve_round_dir_name(version, model, round_tag=round_tag)
 
     with _ALLOC_LOCK:
         existing_names = {
@@ -144,6 +167,8 @@ def init_round_layout(
     after_agent_label: str,
     run_id: str,
     base_taxonomy_dir: Path,
+    label: str | None = None,
+    title: str | None = None,
 ) -> dict[str, Path]:
     """Create the canonical directory skeleton and copy isolated round taxonomy into `.work/taxonomy`."""
     work_dir = round_dir / ".work"
@@ -186,8 +211,9 @@ def init_round_layout(
             "version": version,
             "model": model,
             "released_at": released_at,
-            "label": f"{version} 内部评测",
-            "title": f"AIME v{version} 内部评测（{before_agent_label} vs {after_agent_label} · {tier} 题）",
+            "label": (label or "").strip() or f"{version} 内部评测",
+            "title": (title or "").strip()
+            or f"AIME v{version} 内部评测（{before_agent_label} vs {after_agent_label} · {tier} 题）",
             "before_label": before_agent_label,
             "after_label": after_agent_label,
             "tier": tier,
@@ -224,14 +250,23 @@ def sync_round_manifests(
     except ValueError:
         date_tok = ""
     default_rel = f"{date_tok[:4]}-{date_tok[4:6]}-{date_tok[6:8]}" if len(date_tok) == 8 else today_iso()
+    run_meta = run.get("meta") if isinstance(run.get("meta"), dict) else {}
+    custom_label = str(run_meta.get("label") or "").strip()
+    custom_title = str(run_meta.get("title") or "").strip()
     meta_doc.setdefault("version", run["version"])
     meta_doc.setdefault("model", run["model"])
     meta_doc.setdefault("released_at", default_rel)
-    meta_doc.setdefault("label", f"{run['version']} 内部评测")
-    meta_doc.setdefault(
-        "title",
-        f"AIME v{run['version']} 内部评测（{run['before_agent_label']} vs {run['after_agent_label']} · {run['tier']} 题）",
-    )
+    if custom_label:
+        meta_doc["label"] = custom_label
+    else:
+        meta_doc.setdefault("label", f"{run['version']} 内部评测")
+    if custom_title:
+        meta_doc["title"] = custom_title
+    else:
+        meta_doc.setdefault(
+            "title",
+            f"AIME v{run['version']} 内部评测（{run['before_agent_label']} vs {run['after_agent_label']} · {len(targets) or run['tier']} 题）",
+        )
     meta_doc["before_label"] = run["before_agent_label"]
     meta_doc["after_label"] = run["after_agent_label"]
     meta_doc["tier"] = len(targets) or run["tier"]

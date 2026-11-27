@@ -196,6 +196,7 @@ class ServiceConfig:
     task_manager_max_history_turns: int = 0
     task_manager_judge_source: str = "drop_dir"  # drop_dir | auto | api
     task_manager_drop_wait_timeout_sec: float = 3600.0
+    task_manager_drop_root: Path | None = None
 
     # Orchestrator & HTTP API settings
     max_concurrent_runs: int = 1
@@ -255,6 +256,7 @@ class ServiceConfig:
             "task_manager_max_recovery_rounds": self.task_manager_max_recovery_rounds,
             "task_manager_judge_source": self.task_manager_judge_source,
             "task_manager_drop_wait_timeout_sec": self.task_manager_drop_wait_timeout_sec,
+            "task_manager_drop_root": str(self.task_manager_drop_root) if self.task_manager_drop_root else None,
             "max_concurrent_runs": self.max_concurrent_runs,
             "max_queued_runs": self.max_queued_runs,
             "auth_enabled": bool(tokens),
@@ -410,6 +412,11 @@ def load_config(
         task_manager_judge_source=judge_source,
         task_manager_drop_wait_timeout_sec=_as_float(
             merged.get("INTERNAL_EVAL_TASK_MANAGER_DROP_WAIT_TIMEOUT_SEC"), 3600.0, minimum=1.0
+        ),
+        task_manager_drop_root=(
+            Path(get("INTERNAL_EVAL_TASK_MANAGER_DROP_ROOT")).expanduser()
+            if get("INTERNAL_EVAL_TASK_MANAGER_DROP_ROOT")
+            else None
         ),
         max_concurrent_runs=_as_int(merged.get("INTERNAL_EVAL_MAX_CONCURRENT_RUNS"), 1, minimum=1),
         max_queued_runs=_as_int(merged.get("INTERNAL_EVAL_MAX_QUEUED_RUNS"), 0, minimum=0),

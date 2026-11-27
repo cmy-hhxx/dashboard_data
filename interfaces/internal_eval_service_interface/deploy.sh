@@ -23,6 +23,7 @@ rsync -az --delete -e "ssh ${SSH_OPTS[*]}" \
   --exclude '*.env' \
   --exclude 'logs' \
   --exclude 'state' \
+  --exclude 'work_ab' \
   --exclude '__pycache__' \
   --exclude '*.pyc' \
   --exclude '.DS_Store' \

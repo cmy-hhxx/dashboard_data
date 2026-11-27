@@ -283,6 +283,8 @@ class TaskManagerCollectorAdapter(TraceCollectorAdapter):
         raw = str((state or {}).get("task_drop_dir") or tm_meta.get("task_drop_dir") or "").strip()
         if raw:
             return Path(raw).expanduser()
+        if self.cfg.task_manager_drop_root is not None:
+            return self.cfg.task_manager_drop_root / run["round_dir_name"] / task_id
         return Path(run["round_dir_path"]) / task_id
 
     @staticmethod
@@ -641,7 +643,10 @@ class TaskManagerCollectorAdapter(TraceCollectorAdapter):
             if isinstance(tm_meta.get("concurrency_schedule"), dict)
             else tpl_defaults.get("concurrency_schedule")
         )
-        task_name = str(tm_meta.get("task_name") or format_abtest_task_name())
+        task_name = str(
+            tm_meta.get("task_name")
+            or format_abtest_task_name(template_task_name=str(tpl_defaults.get("template_task_name") or ""))
+        )
         task_res = client.create_task(
             task_name=task_name,
             testset_selections=[{"testset_id": testset_id, "limit": None}],

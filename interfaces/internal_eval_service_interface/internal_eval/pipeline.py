@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -33,7 +34,7 @@ from .ab_layout import (
     resolve_round_dir_name,
     sync_round_manifests,
 )
-from .bench_sampler import sample_bench_targets, write_targets_and_dispatch_files
+from .bench_sampler import normalize_extra_traces, sample_bench_targets, write_targets_and_dispatch_files
 from .collectors import RawDirTailer, TraceCollectorAdapter, create_collector_adapter
 from .compare import build_compare_payload
 from .config import ALLOWED_MODELS, ALLOWED_SIDES, ServiceConfig
@@ -46,6 +47,27 @@ from .engines import (
 )
 from .state_store import ACTIVE_RUN_STATUSES, TERMINAL_RUN_STATUSES, StateStore
 from .timeutil import today_mmdd, utc_rfc3339
+
+
+_EVAL_IDENT_BAD_RE = re.compile(r"[^0-9A-Za-z._-]+")
+_EVAL_IDENT_OK_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]{0,120}$")
+
+
+def _eval_identifier(raw: str, fallback: str) -> str:
+    """Return an identifier matching eval_harness `^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,180}$` without `..`."""
+    cleaned = _EVAL_IDENT_BAD_RE.sub("_", (raw or "").strip())
+    while ".." in cleaned:
+        cleaned = cleaned.replace("..", ".")
+    cleaned = cleaned.strip("._-")[:120]
+    if cleaned and _EVAL_IDENT_OK_RE.match(cleaned) and ".." not in cleaned:
+        return cleaned
+    return fallback
+
+
+def _eval_version_id(run: dict[str, Any], side: str) -> str:
+    raw = str(run["before_agent_label"] if side == "before" else run["after_agent_label"])
+    fallback = f"{run.get('model') or 'aime'}_{side}"
+    return _eval_identifier(raw, fallback)
 
 
 def _normalize_agent_spec(raw: Any, fallback_name: str) -> tuple[dict[str, Any], str]:
@@ -190,17 +212,31 @@ class PipelineManager:
                 if existing:
                     return existing, False
 
-            # Validate tier
+            # Validate extra_traces (optional list of trace_ids / {trace_id} / {question})
+            raw_extra = payload.get("extra_traces", payload.get("extra_trace_ids"))
+            extra_traces = normalize_extra_traces(raw_extra) if raw_extra is not None else []
+            dedupe_extra = bool(payload.get("dedupe_extra_traces", True))
+            ignore_missing_extra = bool(payload.get("ignore_missing_extra_traces", False))
+
+            # Validate tier (allow tier=0 ONLY when extra_traces is non-empty)
             raw_tier = payload.get("tier", payload.get("count", payload.get("question_count")))
-            if raw_tier is None or isinstance(raw_tier, bool):
+            if raw_tier is None:
+                if extra_traces:
+                    tier = 0
+                else:
+                    raise ValueError("缺少必填参数 tier（允许值：500、1000、5000、10000）")
+            elif isinstance(raw_tier, bool):
                 raise ValueError("缺少必填参数 tier（允许值：500、1000、5000、10000）")
-            try:
-                tier = int(raw_tier)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"tier 必须是整数，收到：{raw_tier!r}") from exc
-            if tier not in self.cfg.allowed_tiers:
-                if not (self.cfg.allow_custom_tier and tier >= 1):
-                    raise ValueError(f"tier={tier} 不在允许范围 {list(self.cfg.allowed_tiers)} 内")
+            else:
+                try:
+                    tier = int(raw_tier)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"tier 必须是整数，收到：{raw_tier!r}") from exc
+                if tier == 0 and extra_traces:
+                    pass
+                elif tier not in self.cfg.allowed_tiers:
+                    if not (self.cfg.allow_custom_tier and tier >= 1):
+                        raise ValueError(f"tier={tier} 不在允许范围 {list(self.cfg.allowed_tiers)} 内")
 
             # Validate model
             model = str(payload.get("model") or "aime_expert").strip()
@@ -231,21 +267,37 @@ class PipelineManager:
             if "after" in sides and payload.get("after_agent") is None:
                 raise ValueError("缺少必填参数 after_agent（改版后 agent 标识）")
 
+            before_fallback = "线上旧版" if before_mode == "historical" else "before_release_agent"
             before_agent, before_label = _normalize_agent_spec(
-                payload.get("before_agent"), "before_release_agent"
+                payload.get("before_agent"), before_fallback
             )
             after_agent, after_label = _normalize_agent_spec(
                 payload.get("after_agent"), "after_release_agent"
             )
 
             version = str(payload.get("version") or today_mmdd()).strip()
+            round_tag = str(payload.get("round_tag") or "").strip() or None
+            custom_label = str(payload.get("label") or "").strip()
+            custom_title = str(payload.get("title") or "").strip()
+            backfill_hist_hr = bool(payload.get("backfill_historical_human_read", True))
             callback_url = str(payload.get("callback_url") or "").strip() or None
             if callback_url and not (callback_url.startswith("http://") or callback_url.startswith("https://")):
                 raise ValueError("callback_url 必须是有效的 http(s) URL")
 
-            expected_dir_name = resolve_round_dir_name(version, model)
+            expected_dir_name = resolve_round_dir_name(version, model, round_tag=round_tag)
             if (self.cfg.ab_test_root / expected_dir_name).exists():
                 raise FileExistsError(f"轮次目录已存在：{expected_dir_name}，请先归档或更换日期版本")
+
+            # Fail fast on missing PG extra trace_ids before creating round dir
+            if extra_traces and not ignore_missing_extra:
+                from . import pg_ab_sync
+
+                if pg_ab_sync.is_pg_enabled():
+                    missing_tids = pg_ab_sync.validate_extra_traces_pg(extra_traces, model=model)
+                    if missing_tids:
+                        raise ValueError(
+                            f"以下 {len(missing_tids)} 条 extra_traces 在 PG 中不存在：{missing_tids[:20]}"
+                        )
 
             active = self.store.list_runs_by_statuses(tuple(ACTIVE_RUN_STATUSES))
             max_allowed = self.cfg.max_concurrent_runs + self.cfg.max_queued_runs
@@ -257,13 +309,26 @@ class PipelineManager:
                 )
 
             run_id = _generate_run_id()
-            round_order, round_dir_name, round_dir = allocate_round_dir(self.cfg.ab_test_root, version, model)
+            round_order, round_dir_name, round_dir = allocate_round_dir(
+                self.cfg.ab_test_root, version, model, round_tag=round_tag
+            )
 
             meta_payload = dict(payload["meta"]) if isinstance(payload.get("meta"), dict) else {}
             if isinstance(payload.get("task_manager"), dict):
                 existing_tm = dict(meta_payload["task_manager"]) if isinstance(meta_payload.get("task_manager"), dict) else {}
                 merged_tm = {**payload["task_manager"], **existing_tm}
                 meta_payload["task_manager"] = merged_tm
+            if extra_traces:
+                meta_payload["extra_traces"] = extra_traces
+            meta_payload["dedupe_extra_traces"] = dedupe_extra
+            meta_payload["ignore_missing_extra_traces"] = ignore_missing_extra
+            meta_payload["backfill_historical_human_read"] = backfill_hist_hr
+            if round_tag:
+                meta_payload["round_tag"] = round_tag
+            if custom_label:
+                meta_payload["label"] = custom_label
+            if custom_title:
+                meta_payload["title"] = custom_title
 
             run = self.store.create_run(
                 {
@@ -328,6 +393,97 @@ class PipelineManager:
         if result["reset_total"] > 0:
             self._wake.set()
         return result
+
+    def trigger_after(self, run_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Trigger Candidate 2 (`after`) inference/eval on an existing baseline-prepared run."""
+        body = payload if isinstance(payload, dict) else {}
+        with self._submit_lock:
+            run = self.store.get_run(run_id)
+            if not run:
+                raise KeyError(run_id)
+            if run["status"] in ACTIVE_RUN_STATUSES:
+                raise RuntimeError(f"任务当前处于 {run['status']} 状态，请等待基线准备完成后再触发 after")
+            active_others = [
+                r["run_id"]
+                for r in self.store.list_runs_by_statuses(tuple(ACTIVE_RUN_STATUSES))
+                if r["run_id"] != run_id
+            ]
+            max_allowed = self.cfg.max_concurrent_runs + self.cfg.max_queued_runs
+            if len(active_others) >= max_allowed:
+                raise RunConcurrencyLimitError(
+                    active_run_ids=active_others,
+                    max_concurrent_runs=self.cfg.max_concurrent_runs,
+                    max_queued_runs=self.cfg.max_queued_runs,
+                )
+
+            after_agent_spec = None
+            after_label = None
+            if body.get("after_agent") is not None:
+                after_agent_spec, after_label = _normalize_agent_spec(
+                    body.get("after_agent"), run["after_agent_label"] or "after_release_agent"
+                )
+            tm_override = body.get("task_manager") if isinstance(body.get("task_manager"), dict) else None
+            custom_label = str(body.get("label") or "").strip() or None
+            custom_title = str(body.get("title") or "").strip() or None
+
+            updated_run = self.store.enable_after_side(
+                run_id,
+                after_agent=after_agent_spec,
+                after_agent_label=after_label,
+                task_manager=tm_override,
+                label=custom_label,
+                title=custom_title,
+            )
+
+            # Ensure dispatch/after_questions.jsonl exists (preserving history_messages from before_questions.jsonl if any)
+            round_dir = Path(updated_run["round_dir_path"])
+            dispatch_dir = round_dir / ".work" / "dispatch"
+            dispatch_dir.mkdir(parents=True, exist_ok=True)
+            hist_by_ck: dict[str, list[dict[str, Any]]] = {}
+            before_q_path = dispatch_dir / "before_questions.jsonl"
+            if before_q_path.is_file():
+                for raw_ln in before_q_path.read_text(encoding="utf-8", errors="replace").splitlines():
+                    raw_ln = raw_ln.strip()
+                    if not raw_ln:
+                        continue
+                    try:
+                        obj = json.loads(raw_ln)
+                    except ValueError:
+                        continue
+                    if isinstance(obj, dict) and obj.get("case_key") and isinstance(obj.get("history_messages"), list):
+                        hist_by_ck[str(obj["case_key"])] = obj["history_messages"]
+
+            targets = self.store.get_targets(run_id)
+            after_q_path = dispatch_dir / "after_questions.jsonl"
+            with after_q_path.open("w", encoding="utf-8") as fh:
+                for t in targets:
+                    ck = t["case_key"]
+                    row_out = {
+                        "run_id": run_id,
+                        "version": updated_run["version"],
+                        "side": "after",
+                        "agent": updated_run["after_agent"],
+                        "model": updated_run["model"],
+                        "case_key": ck,
+                        "eq_index": t["eq_index"],
+                        "case_id": f"{run_id}_after_{ck}",
+                        "source_trace_id": t["source_trace_id"],
+                        "source_session_id": t["source_session_id"],
+                        "source_origin": t.get("source_origin") or "bench",
+                        "question": t["question"],
+                        "turn": t["turn"],
+                        "session_round": t["session_round"],
+                        "history_messages": hist_by_ck.get(ck, []),
+                    }
+                    fh.write(json.dumps(row_out, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+            df = dict(updated_run.get("dispatch_files") or {})
+            df["after"] = str(after_q_path)
+            self.store.update_run(run_id, dispatch_files=df)
+            updated_run = self.store.get_run(run_id) or updated_run
+
+        self._wake.set()
+        return updated_run
 
     def ingest_traces(
         self,
@@ -409,9 +565,10 @@ class PipelineManager:
                     normalized["case_key"] = case_key
                     normalized.setdefault("trace_id", trace_id)
                     normalized.setdefault("session_id", session_id)
-                    normalized.setdefault("batch_id", run["version"])
                     agent_label = run["before_agent_label"] if side == "before" else run["after_agent_label"]
-                    normalized.setdefault("version", agent_label)
+                    eval_version = _eval_version_id(run, side)
+                    normalized["version"] = eval_version
+                    normalized["batch_id"] = _eval_identifier(str(run["version"]), "batch")
                     normalized.setdefault("request_time", req_time)
                     meta = dict(normalized.get("meta")) if isinstance(normalized.get("meta"), dict) else {}
                     meta["case_id"] = canonical_case_id
@@ -618,6 +775,7 @@ class PipelineManager:
         wake = self._get_run_wake(run_id)
 
         # ---- Stage 1: Prepare questions & ab_test layout --------------------
+        run_meta = run.get("meta") if isinstance(run.get("meta"), dict) else {}
         layout = init_round_layout(
             round_dir=round_dir,
             version=run["version"],
@@ -627,17 +785,26 @@ class PipelineManager:
             after_agent_label=run["after_agent_label"],
             run_id=run_id,
             base_taxonomy_dir=self.cfg.base_taxonomy_dir,
+            label=str(run_meta.get("label") or "").strip() or None,
+            title=str(run_meta.get("title") or "").strip() or None,
         )
 
         existing_targets = self.store.get_targets(run_id)
         if not existing_targets:
             from . import pg_ab_sync
 
+            extra_traces = run_meta.get("extra_traces") if isinstance(run_meta.get("extra_traces"), list) else None
+            dedupe_extra = bool(run_meta.get("dedupe_extra_traces", True))
+            ignore_missing = bool(run_meta.get("ignore_missing_extra_traces", False))
+
             if pg_ab_sync.is_pg_enabled():
                 targets, bench_meta = pg_ab_sync.sample_bench_targets_pg(
                     model,
                     run["tier"],
                     limit_override=run["requested_count"],
+                    extra_traces=extra_traces,
+                    dedupe=dedupe_extra,
+                    ignore_missing=ignore_missing,
                 )
             else:
                 targets, bench_meta = sample_bench_targets(
@@ -645,12 +812,15 @@ class PipelineManager:
                     model,
                     run["tier"],
                     limit_override=run["requested_count"],
+                    extra_traces=extra_traces,
+                    dedupe=dedupe_extra,
+                    ignore_missing=ignore_missing,
                 )
             dispatch_files = write_targets_and_dispatch_files(
                 run_id=run_id,
                 version=run["version"],
                 model=model,
-                tier=run["tier"],
+                tier=len(targets) or run["tier"],
                 sides=sides,
                 before_agent=run["before_agent"],
                 after_agent=run["after_agent"],
@@ -667,11 +837,16 @@ class PipelineManager:
                 dispatch_files=dispatch_files,
                 meta=merged_meta,
             )
+            extra_info = (
+                f"（bench {bench_meta.get('bench_count', len(targets))} + 算法提供新增 {bench_meta.get('extra_added_count', 0)}，重叠 {bench_meta.get('overlap_count', 0)}）"
+                if extra_traces
+                else ""
+            )
             self.store.add_event(
                 run_id,
                 "prepare_questions",
                 "targets_ready",
-                f"已从 bench 采样 {len(targets)} 题（单轮 {bench_meta['single_turn']} / 多轮 {bench_meta['multi_turn']}），生成下发文件 {list(dispatch_files.keys())}",
+                f"已完成抽题共 {len(targets)} 题{extra_info}（单轮 {bench_meta['single_turn']} / 多轮 {bench_meta['multi_turn']}），生成下发文件 {list(dispatch_files.keys())}",
                 details={"bench_sampling": bench_meta, "dispatch_files": dispatch_files},
             )
             self._refresh_manifests(run_id)
@@ -686,7 +861,8 @@ class PipelineManager:
         # ---- Optional Historical Baseline for `before` ----------------------
         live_sides = list(sides)
         if "before" in live_sides and run["before_mode"] == "historical":
-            self._populate_historical_before(run_id)
+            if run["side_collector_status"].get("before") != "completed":
+                self._populate_historical_before(run_id)
             live_sides.remove("before")
 
         # ---- Stage 2: Dispatch to TraceCollectorAdapter ---------------------
@@ -907,6 +1083,9 @@ class PipelineManager:
             )
             self._run_human_read_side(run_id=run_id, side=side, round_dir=round_dir)
 
+        if "before" in sides and run["before_mode"] == "historical":
+            self._backfill_historical_before_human_read(run_id=run_id, round_dir=round_dir)
+
         self._refresh_manifests(run_id)
         prog = self.store.get_run_progress(run_id)
         assert prog is not None
@@ -967,52 +1146,71 @@ class PipelineManager:
     # ---- Stage Helpers -----------------------------------------------------
 
     def _populate_historical_before(self, run_id: str) -> None:
-        """Optional `before_mode=historical` support: reuse frozen bench severity/primary as before baseline."""
+        """Populate Candidate 1 (`before_mode=historical`) from PG existing eval records or frozen bench fallback."""
         run = self.store.get_run(run_id)
         if not run:
             return
         targets = self.store.get_targets(run_id)
+        from . import pg_ab_sync
+
+        if pg_ab_sync.is_pg_enabled():
+            ready_cases, missing_targets, summary = pg_ab_sync.load_historical_cases_pg(targets, run["model"])
+            self.store.save_historical_cases_bulk(run_id, "before", ready_cases)
+            for mt in missing_targets:
+                self.store.mark_case_failed(
+                    run_id,
+                    "before",
+                    mt["case_key"],
+                    stage="fetch",
+                    error_code="NO_HISTORICAL_BASELINE",
+                    error_message="该题为无历史评测记录的新问句，Candidate 1 置空",
+                    trace_id=mt.get("source_trace_id") or None,
+                )
+            self.store.set_side_collector_status(run_id, "before", "completed")
+            self.store.add_event(
+                run_id,
+                "before_historical",
+                "historical_loaded",
+                (
+                    f"已从 PG 完整克隆 Candidate 1 基线：{summary['cloned_count']}/{summary['total_targets']} 题"
+                    f"（已有 human_read {summary['hr_already_done']} 条，待补译 {summary['hr_missing']} 条）"
+                ),
+                side="before",
+                details=summary,
+            )
+            self._refresh_manifests(run_id)
+            return
+
+        # Non-PG file-mode fallback (for local/CI unit tests)
+        fallback_cases: list[dict[str, Any]] = []
         for t in targets:
             sev = t.get("bench_severity") or "GOLD"
             primary = t.get("bench_primary") or {}
             ck = t["case_key"]
-            self.store.mark_fetched(
-                run_id,
-                "before",
-                ck,
-                trace_id=t["source_trace_id"] or f"hist_{ck}",
-                session_id=t.get("source_session_id") or "",
-                raw_file="historical_bench",
-            )
-            self.store.mark_prepared(run_id, "before", ck, prepared_file="historical_bench")
             if sev == "GOLD" or not primary.get("l3"):
-                self.store.mark_evaluated(
-                    run_id,
-                    "before",
-                    ck,
-                    trace_id=t["source_trace_id"] or f"hist_{ck}",
-                    session_id=t.get("source_session_id") or "",
-                    attribution_file="historical_bench",
-                    problems=[],
-                )
+                probs: list[dict[str, Any]] = []
             else:
                 path = str(primary.get("l3") or primary.get("l2") or primary.get("l1") or "")
-                self.store.mark_evaluated(
-                    run_id,
-                    "before",
-                    ck,
-                    trace_id=t["source_trace_id"] or f"hist_{ck}",
-                    session_id=t.get("source_session_id") or "",
-                    attribution_file="historical_bench",
-                    problems=[{"severity": sev, "label": path, "component": "historical"}],
-                )
-                self.store.mark_clustered_ready(
-                    run_id,
-                    "before",
-                    ck,
-                    {0: {"path": path, "name": path, "edge": False}},
-                    {path: path},
-                )
+                probs = [
+                    {
+                        "severity": sev,
+                        "label": path,
+                        "component": "historical",
+                        "cluster_path": path,
+                        "cluster_name": path,
+                    }
+                ]
+            fallback_cases.append(
+                {
+                    "case_key": ck,
+                    "trace_id": t["source_trace_id"] or f"hist_{ck}",
+                    "session_id": t.get("source_session_id") or "",
+                    "request_time": t.get("request_time") or "",
+                    "problems": probs,
+                    "source_tag": "historical_bench",
+                }
+            )
+        self.store.save_historical_cases_bulk(run_id, "before", fallback_cases)
         self.store.set_side_collector_status(run_id, "before", "completed")
         self.store.add_event(
             run_id,
@@ -1022,6 +1220,69 @@ class PipelineManager:
             side="before",
         )
         self._refresh_manifests(run_id)
+
+    def _backfill_historical_before_human_read(self, *, run_id: str, round_dir: Path) -> None:
+        """Backfill missing PG `human_read_overlays` for cloned Candidate 1 baseline cases before PG publish."""
+        run = self.store.get_run(run_id)
+        if not run or not self.cfg.human_read_enabled:
+            return
+        run_meta = run.get("meta") if isinstance(run.get("meta"), dict) else {}
+        if not run_meta.get("backfill_historical_human_read", True):
+            return
+        from . import pg_ab_sync
+
+        if not pg_ab_sync.is_pg_enabled():
+            return
+
+        before_cases = self.store.get_side_cases(run_id, side="before")
+        output_ids = [
+            int(c["linked_output_id"])
+            for c in before_cases
+            if c.get("linked_output_id") is not None
+        ]
+        if not output_ids:
+            return
+
+        work_root = round_dir / ".work" / "human_read" / "before_backfill"
+        try:
+            exp = pg_ab_sync.export_missing_historical_hr_inputs_pg(output_ids, work_root / "export")
+            missing_n = int(exp.get("missing_count") or 0)
+            if missing_n <= 0:
+                self.store.add_event(
+                    run_id,
+                    "human_read",
+                    "historical_human_read_skipped",
+                    "Candidate 1 全部基线样本均已有 PG human_read 译文，跳过补译",
+                    side="before",
+                )
+                return
+
+            hr_out = work_root / "attribution_human_read.jsonl"
+            summary = self.engine.human_read(
+                input_path=exp["input_path"],
+                attribution_path=exp["attribution_path"],
+                output_path=hr_out,
+                work_dir=work_root / "run",
+                compact_path=exp.get("compact_path"),
+            )
+            commit_res = pg_ab_sync.commit_historical_human_read_pg(hr_out, exp["output_id_by_trace"])
+            self.store.add_event(
+                run_id,
+                "human_read",
+                "historical_human_read_done",
+                f"Candidate 1 基线人话补译完成：待补 {missing_n} 条，已入库 PG {commit_res['committed']} 条",
+                side="before",
+                details={"missing": missing_n, **commit_res, "engine_summary": summary},
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.store.add_event(
+                run_id,
+                "human_read",
+                "historical_human_read_warn",
+                f"Candidate 1 基线人话补译异常（不影响主评测收敛）：{exc}",
+                level="warn",
+                side="before",
+            )
 
     def _prepare_side_batch(
         self,
@@ -1071,18 +1332,22 @@ class PipelineManager:
         if not matched_records:
             return
 
+        eval_version = _eval_version_id(run, side)
+        eval_batch_id = _eval_identifier(str(run["version"]), "batch")
         with batch_raw.open("w", encoding="utf-8") as fh:
             for ck in sorted(matched_records):
-                fh.write(json.dumps(matched_records[ck], ensure_ascii=False, separators=(",", ":")) + "\n")
+                rec = dict(matched_records[ck])
+                rec["version"] = eval_version
+                rec["batch_id"] = eval_batch_id
+                fh.write(json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n")
 
-        agent_label = run["before_agent_label"] if side == "before" else run["after_agent_label"]
         try:
             report = self.engine.prepare(
                 raw_input_path=batch_raw,
                 output_path=prepared_out,
                 audit_path=audit_out,
-                batch_id=run["version"],
-                version=agent_label,
+                batch_id=eval_batch_id,
+                version=eval_version,
             )
         except Exception as exc:  # noqa: BLE001
             for ck in matched_records:
@@ -1203,7 +1468,8 @@ class PipelineManager:
                     error_message="清洗后的输入文件不存在，无法评测",
                 )
 
-        agent_label = run["before_agent_label"] if side == "before" else run["after_agent_label"]
+        eval_version = _eval_version_id(run, side)
+        eval_batch_id = _eval_identifier(str(run["version"]), "batch")
 
         for prepared_file, batch_cases in by_file.items():
             if self.store.is_cancel_requested(run_id) or self._stop.is_set():
@@ -1266,8 +1532,8 @@ class PipelineManager:
                     output_path=attr_path,
                     compact_output=compact_path,
                     audit_path=eval_audit,
-                    batch_id=run["version"],
-                    version=agent_label,
+                    batch_id=eval_batch_id,
+                    version=eval_version,
                     on_row=_on_row,
                     on_case_error=_on_case_error,
                     cancel_check=lambda: self.store.is_cancel_requested(run_id) or self._stop.is_set(),

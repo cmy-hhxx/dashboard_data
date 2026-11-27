@@ -65,9 +65,15 @@ CREATE TABLE IF NOT EXISTS targets (
     run_id TEXT NOT NULL,
     case_key TEXT NOT NULL,
     eq_index INTEGER NOT NULL,
+    source_input_id INTEGER,
     source_trace_id TEXT NOT NULL,
     source_session_id TEXT NOT NULL DEFAULT '',
+    source_model TEXT NOT NULL DEFAULT '',
+    source_origin TEXT NOT NULL DEFAULT 'bench',
     question TEXT NOT NULL,
+    task TEXT NOT NULL DEFAULT '',
+    subtask TEXT NOT NULL DEFAULT '',
+    request_time TEXT NOT NULL DEFAULT '',
     turn TEXT NOT NULL DEFAULT 'single',
     session_round INTEGER NOT NULL DEFAULT 1,
     bench_rank INTEGER NOT NULL DEFAULT 0,
@@ -88,6 +94,8 @@ CREATE TABLE IF NOT EXISTS side_cases (
     error_code TEXT,
     error_message TEXT,
     retry_count INTEGER NOT NULL DEFAULT 0,
+    linked_input_id INTEGER,
+    linked_output_id INTEGER,
     trace_id TEXT,
     session_id TEXT,
     request_time TEXT,
@@ -230,6 +238,36 @@ class StateStore:
             # Use DELETE journal mode once at init (avoids WAL -shm mmap `disk I/O error` on overlayfs/CephFS)
             conn.execute("PRAGMA journal_mode=DELETE")
             conn.executescript(SCHEMA_SQL)
+            self._ensure_columns(
+                conn,
+                "targets",
+                {
+                    "source_input_id": "INTEGER",
+                    "source_model": "TEXT NOT NULL DEFAULT ''",
+                    "source_origin": "TEXT NOT NULL DEFAULT 'bench'",
+                    "task": "TEXT NOT NULL DEFAULT ''",
+                    "subtask": "TEXT NOT NULL DEFAULT ''",
+                    "request_time": "TEXT NOT NULL DEFAULT ''",
+                },
+            )
+            self._ensure_columns(
+                conn,
+                "side_cases",
+                {
+                    "linked_input_id": "INTEGER",
+                    "linked_output_id": "INTEGER",
+                },
+            )
+
+    @staticmethod
+    def _ensure_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+        existing = {
+            str(r["name"])
+            for r in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        for col, ddl in columns.items():
+            if col not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
 
     def _next_seq(self, conn: sqlite3.Connection, run_id: str) -> int:
         conn.execute(
@@ -472,18 +510,25 @@ class StateStore:
             conn.executemany(
                 """
                 INSERT OR REPLACE INTO targets (
-                    run_id, case_key, eq_index, source_trace_id, source_session_id,
-                    question, turn, session_round, bench_rank, bench_severity, bench_primary_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    run_id, case_key, eq_index, source_input_id, source_trace_id, source_session_id,
+                    source_model, source_origin, question, task, subtask, request_time,
+                    turn, session_round, bench_rank, bench_severity, bench_primary_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
                         run_id,
                         t["case_key"],
                         int(t["eq_index"]),
+                        int(t["source_input_id"]) if t.get("source_input_id") is not None else None,
                         str(t.get("source_trace_id") or ""),
                         str(t.get("source_session_id") or ""),
+                        str(t.get("source_model") or t.get("model") or ""),
+                        str(t.get("source_origin") or "bench"),
                         str(t.get("question") or ""),
+                        str(t.get("task") or ""),
+                        str(t.get("subtask") or ""),
+                        str(t.get("request_time") or ""),
                         str(t.get("turn") or "single"),
                         int(t.get("session_round") or 1),
                         int(t.get("bench_rank") or 0),
@@ -519,9 +564,15 @@ class StateStore:
             {
                 "case_key": r["case_key"],
                 "eq_index": r["eq_index"],
+                "source_input_id": r["source_input_id"],
                 "source_trace_id": r["source_trace_id"],
                 "source_session_id": r["source_session_id"],
+                "source_model": r["source_model"] or "",
+                "source_origin": r["source_origin"] or "bench",
                 "question": r["question"],
+                "task": r["task"] or "",
+                "subtask": r["subtask"] or "",
+                "request_time": r["request_time"] or "",
                 "turn": r["turn"],
                 "session_round": r["session_round"],
                 "bench_rank": r["bench_rank"],
@@ -851,6 +902,133 @@ class StateStore:
             )
             return True
 
+    def save_historical_cases_bulk(
+        self,
+        run_id: str,
+        side: str,
+        cases: list[dict[str, Any]],
+    ) -> int:
+        """Atomically populate cloned historical baseline cases (already evaluated & clustered) as `ready`."""
+        if not cases:
+            return 0
+        now = utc_rfc3339()
+        updated = 0
+        with self._tx() as conn:
+            for item in cases:
+                ck = str(item["case_key"])
+                raw_problems = list(item.get("problems") or [])
+                is_gold, max_sev, sev_counts = compute_severity_stats(raw_problems)
+                if item.get("max_severity") in ("GOLD", "P0", "P1", "P2", "P3", "P4") and not raw_problems:
+                    max_sev = str(item["max_severity"])
+                    is_gold = max_sev == "GOLD"
+                norm_probs: list[dict[str, Any]] = []
+                paths: list[str] = []
+                labels: list[str] = []
+                for idx, prob in enumerate(raw_problems):
+                    cpath = str(prob.get("cluster_path") or "").strip() or None
+                    cname = str(prob.get("cluster_name") or cpath or "").strip() or None
+                    parts = cpath.split(".") if cpath else []
+                    norm_probs.append(
+                        {
+                            "scope": str(prob.get("scope") or "turn"),
+                            "turn_index": int(prob.get("turn_index") or 0),
+                            "problem_index": int(prob.get("problem_index") if prob.get("problem_index") is not None else idx),
+                            "label": str(prob.get("label") or ""),
+                            "definition": str(prob.get("definition") or ""),
+                            "reason": str(prob.get("reason") or ""),
+                            "evidence": prob.get("evidence") or "",
+                            "severity": str(prob.get("severity") or ""),
+                            "component": str(prob.get("component") or ""),
+                            "component_role": str(prob.get("component_role") or ""),
+                            "cluster_path": cpath,
+                            "cluster_name": cname,
+                            "l1": parts[0] if len(parts) >= 1 else None,
+                            "l2": ".".join(parts[:2]) if len(parts) >= 2 else None,
+                            "l3": ".".join(parts[:3]) if len(parts) >= 3 else None,
+                            "l4": cpath if len(parts) >= 4 else None,
+                            "is_edge": bool(prob.get("is_edge", False)),
+                            "pending_leaf": cpath is None,
+                        }
+                    )
+                    if cpath and cpath not in paths:
+                        paths.append(cpath)
+                    if prob.get("label"):
+                        labels.append(str(prob["label"]))
+
+                seq = self._next_seq(conn, run_id)
+                is_correct_raw = item.get("is_correct")
+                is_correct_val = None if is_correct_raw is None else (1 if is_correct_raw else 0)
+                conn.execute(
+                    """
+                    UPDATE side_cases
+                    SET status = 'ready',
+                        failed_stage = NULL,
+                        error_code = NULL,
+                        error_message = NULL,
+                        linked_input_id = ?,
+                        linked_output_id = ?,
+                        trace_id = ?,
+                        session_id = ?,
+                        request_time = ?,
+                        raw_file = ?,
+                        prepared_file = ?,
+                        attribution_file = ?,
+                        is_gold = ?,
+                        problem_count = ?,
+                        max_severity = ?,
+                        severity_counts_json = ?,
+                        problems_json = ?,
+                        cluster_paths_json = ?,
+                        cluster_labels_json = ?,
+                        attribution_summary = ?,
+                        is_correct = ?,
+                        fetched_at = COALESCE(fetched_at, ?),
+                        prepared_at = COALESCE(prepared_at, ?),
+                        evaluated_at = COALESCE(evaluated_at, ?),
+                        clustered_at = COALESCE(clustered_at, ?),
+                        ready_at = COALESCE(ready_at, ?),
+                        change_seq = ?,
+                        updated_at = ?
+                    WHERE run_id = ? AND side = ? AND case_key = ?
+                    """,
+                    (
+                        int(item["linked_input_id"]) if item.get("linked_input_id") is not None else None,
+                        int(item["linked_output_id"]) if item.get("linked_output_id") is not None else None,
+                        str(item.get("trace_id") or ""),
+                        str(item.get("session_id") or ""),
+                        str(item.get("request_time") or ""),
+                        str(item.get("source_tag") or "historical_pg"),
+                        str(item.get("source_tag") or "historical_pg"),
+                        str(item.get("source_tag") or "historical_pg"),
+                        1 if is_gold else 0,
+                        len(norm_probs),
+                        max_sev,
+                        _jdumps(sev_counts),
+                        _jdumps(norm_probs),
+                        _jdumps(paths),
+                        _jdumps(labels),
+                        str(item.get("attribution_summary") or ""),
+                        is_correct_val,
+                        now,
+                        now,
+                        now,
+                        now,
+                        now,
+                        seq,
+                        now,
+                        run_id,
+                        side,
+                        ck,
+                    ),
+                )
+                updated += 1
+            if updated > 0:
+                conn.execute(
+                    "UPDATE runs SET first_ready_at = COALESCE(first_ready_at, ?), updated_at = ? WHERE run_id = ?",
+                    (now, now, run_id),
+                )
+        return updated
+
     def mark_case_failed(
         self,
         run_id: str,
@@ -1001,6 +1179,103 @@ class StateStore:
                     (run_id, f"已重置 {total_reset} 条失败样本并重新入队", _jdumps(reset_counts), now),
                 )
         return {"reset_total": sum(reset_counts.values()), "by_stage": reset_counts}
+
+    def enable_after_side(
+        self,
+        run_id: str,
+        *,
+        after_agent: dict[str, Any] | None = None,
+        after_agent_label: str | None = None,
+        task_manager: dict[str, Any] | None = None,
+        label: str | None = None,
+        title: str | None = None,
+    ) -> dict[str, Any]:
+        """Add/activate the `after` side on an existing baseline-prepared run and re-queue it."""
+        now = utc_rfc3339()
+        with self._tx() as conn:
+            row = conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+            if not row:
+                raise KeyError(run_id)
+            sides = _jloads(row["sides_json"], [])
+            if "after" not in sides:
+                sides.append("after")
+            cs = _jloads(row["side_collector_status_json"], {})
+            cs["after"] = "pending"
+            meta = _jloads(row["meta_json"], {})
+            if isinstance(task_manager, dict) and task_manager:
+                old_tm = dict(meta.get("task_manager") or {}) if isinstance(meta.get("task_manager"), dict) else {}
+                old_tm.update(task_manager)
+                meta["task_manager"] = old_tm
+            if label:
+                meta["label"] = label
+            if title:
+                meta["title"] = title
+
+            new_after_agent = _jdumps(after_agent) if after_agent is not None else row["after_agent_json"]
+            new_after_label = after_agent_label if after_agent_label else row["after_agent_label"]
+
+            targets = conn.execute(
+                "SELECT case_key, eq_index FROM targets WHERE run_id = ? ORDER BY eq_index ASC",
+                (run_id,),
+            ).fetchall()
+            if not targets:
+                raise RuntimeError(f"任务 {run_id} 尚未生成目标题单，无法触发 after")
+
+            existing_after = conn.execute(
+                "SELECT COUNT(*) FROM side_cases WHERE run_id = ? AND side = 'after' AND status = 'ready'",
+                (run_id,),
+            ).fetchone()[0]
+            if int(existing_after or 0) > 0:
+                raise RuntimeError(f"任务 {run_id} 的 after 侧已有 {existing_after} 条 ready 结果，请改用 /retry-failed 补跑")
+
+            conn.execute("DELETE FROM side_cases WHERE run_id = ? AND side = 'after'", (run_id,))
+            conn.executemany(
+                """
+                INSERT INTO side_cases (run_id, side, case_key, eq_index, status, updated_at)
+                VALUES (?, 'after', ?, ?, 'pending_fetch', ?)
+                """,
+                [(run_id, r["case_key"], int(r["eq_index"]), now) for r in targets],
+            )
+            conn.execute(
+                """
+                UPDATE runs
+                SET sides_json = ?,
+                    after_agent_json = ?,
+                    after_agent_label = ?,
+                    side_collector_status_json = ?,
+                    meta_json = ?,
+                    status = 'queued',
+                    stage = 'after_queued',
+                    cancel_requested = 0,
+                    error_code = NULL,
+                    error_message = NULL,
+                    finished_at = NULL,
+                    updated_at = ?
+                WHERE run_id = ?
+                """,
+                (
+                    _jdumps(sides),
+                    new_after_agent,
+                    new_after_label,
+                    _jdumps(cs),
+                    _jdumps(meta),
+                    now,
+                    run_id,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO events(run_id, level, stage, side, event_type, message, details_json, created_at)
+                VALUES (?, 'info', 'queued', 'after', 'after_side_triggered', ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    f"已触发 Candidate 2（{new_after_label}）推理与评测，共 {len(targets)} 题重新入队",
+                    _jdumps({"after_agent_label": new_after_label, "target_count": len(targets)}),
+                    now,
+                ),
+            )
+        return self.get_run(run_id)  # type: ignore[return-value]
 
     # ---- Events & Failures Queries -----------------------------------------
 
@@ -1294,6 +1569,7 @@ class StateStore:
         severity: str | None = None,
         problem_code: str | None = None,
         case_key: str | None = None,
+        source_origin: str | None = None,
         only_ready: bool = True,
         paired_only: bool = False,
         limit: int = 50,
@@ -1312,6 +1588,15 @@ class StateStore:
         if case_key:
             where.append("sc.case_key = ?")
             args.append(case_key)
+        if source_origin:
+            so = source_origin.strip()
+            if so == "bench":
+                where.append("t.source_origin IN ('bench', 'bench+算法提供')")
+            elif so == "算法提供":
+                where.append("t.source_origin IN ('算法提供', 'bench+算法提供')")
+            else:
+                where.append("t.source_origin = ?")
+                args.append(so)
         if paired_only:
             where.append(
                 "EXISTS (SELECT 1 FROM side_cases o WHERE o.run_id = sc.run_id AND o.case_key = sc.case_key AND o.side != sc.side AND o.status = 'ready')"
@@ -1321,7 +1606,8 @@ class StateStore:
         with self._read() as conn:
             rows = conn.execute(
                 f"""
-                SELECT sc.*, t.question, t.source_trace_id, t.turn, t.session_round, t.bench_severity
+                SELECT sc.*, t.question, t.source_trace_id, t.source_model, t.source_origin,
+                       t.turn, t.session_round, t.bench_severity
                 FROM side_cases sc
                 JOIN targets t ON t.run_id = sc.run_id AND t.case_key = sc.case_key
                 WHERE {clause}
@@ -1355,7 +1641,8 @@ class StateStore:
             head_seq = int(seq_row["latest_seq"]) if seq_row else 0
             rows = conn.execute(
                 """
-                SELECT sc.*, t.question, t.source_trace_id, t.turn, t.session_round, t.bench_severity
+                SELECT sc.*, t.question, t.source_trace_id, t.source_model, t.source_origin,
+                       t.turn, t.session_round, t.bench_severity
                 FROM side_cases sc
                 JOIN targets t ON t.run_id = sc.run_id AND t.case_key = sc.case_key
                 WHERE sc.run_id = ? AND sc.status = 'ready' AND sc.change_seq > ?
@@ -1436,6 +1723,8 @@ class StateStore:
             "error_code": r["error_code"],
             "error_message": r["error_message"],
             "retry_count": r["retry_count"],
+            "linked_input_id": r["linked_input_id"],
+            "linked_output_id": r["linked_output_id"],
             "trace_id": r["trace_id"],
             "session_id": r["session_id"],
             "request_time": r["request_time"],
@@ -1467,6 +1756,8 @@ class StateStore:
             {
                 "question": r["question"],
                 "source_trace_id": r["source_trace_id"],
+                "source_model": r["source_model"] or "",
+                "source_origin": r["source_origin"] or "bench",
                 "turn": r["turn"],
                 "session_round": r["session_round"],
                 "bench_severity": r["bench_severity"],

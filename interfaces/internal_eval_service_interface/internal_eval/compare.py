@@ -71,6 +71,76 @@ def _stage_mechanism_counts(cases: list[dict[str, Any]]) -> Counter[tuple[str, s
     return counts
 
 
+def _match_source_origin(target_origin: str, wanted: str | None) -> bool:
+    if not wanted:
+        return True
+    w = wanted.strip()
+    if not w:
+        return True
+    o = (target_origin or "bench").strip() or "bench"
+    if w == "bench":
+        return o in ("bench", "bench+算法提供")
+    if w == "算法提供":
+        return o in ("算法提供", "bench+算法提供")
+    return o == w
+
+
+def _compute_subset_metrics(
+    subset_targets: list[dict[str, Any]],
+    before_cases: dict[str, dict[str, Any]],
+    after_cases: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    paired_keys = [
+        t["case_key"]
+        for t in subset_targets
+        if (bc := before_cases.get(t["case_key"]))
+        and (ac := after_cases.get(t["case_key"]))
+        and bc["status"] == "ready"
+        and ac["status"] == "ready"
+    ]
+    paired_n = len(paired_keys)
+    improved = regressed = unchanged = 0
+    b_gold = a_gold = b_p0p1 = a_p0p1 = 0
+    for ck in paired_keys:
+        bc = before_cases[ck]
+        ac = after_cases[ck]
+        b_sev = bc["max_severity"] or ("GOLD" if bc["is_gold"] else "P4")
+        a_sev = ac["max_severity"] or ("GOLD" if ac["is_gold"] else "P4")
+        if b_sev == "GOLD":
+            b_gold += 1
+        if a_sev == "GOLD":
+            a_gold += 1
+        if b_sev in ("P0", "P1"):
+            b_p0p1 += 1
+        if a_sev in ("P0", "P1"):
+            a_p0p1 += 1
+        b_rank = SEVERITY_RANK.get(b_sev, 4)
+        a_rank = SEVERITY_RANK.get(a_sev, 4)
+        if a_rank > b_rank or (a_rank == b_rank and ac["problem_count"] < bc["problem_count"]):
+            improved += 1
+        elif a_rank < b_rank or (a_rank == b_rank and ac["problem_count"] > bc["problem_count"]):
+            regressed += 1
+        else:
+            unchanged += 1
+    b_pass = round(b_gold / paired_n, 4) if paired_n else 0.0
+    a_pass = round(a_gold / paired_n, 4) if paired_n else 0.0
+    b_p = round(b_p0p1 / paired_n, 4) if paired_n else 0.0
+    a_p = round(a_p0p1 / paired_n, 4) if paired_n else 0.0
+    return {
+        "total_targets": len(subset_targets),
+        "paired_ready_count": paired_n,
+        "improved": improved,
+        "regressed": regressed,
+        "unchanged": unchanged,
+        "before_pass_rate": b_pass,
+        "after_pass_rate": a_pass,
+        "pass_rate_delta": round(a_pass - b_pass, 4),
+        "before_p0p1_rate": b_p,
+        "after_p0p1_rate": a_p,
+        "p0p1_rate_delta": round(a_p - b_p, 4),
+    }
+
+
 def build_compare_payload(
     *,
     run: dict[str, Any],
@@ -79,8 +149,18 @@ def build_compare_payload(
     after_cases: dict[str, dict[str, Any]],
     paired_only_for_distribution: bool = False,
     top_leaves: int = 30,
+    source_origin: str | None = None,
 ) -> dict[str, Any]:
     """Compute real-time visual comparison metrics for before vs after agents."""
+    all_targets = list(targets)
+    all_before_cases = before_cases
+    all_after_cases = after_cases
+    if source_origin:
+        targets = [t for t in all_targets if _match_source_origin(str(t.get("source_origin") or "bench"), source_origin)]
+        allowed_keys = {t["case_key"] for t in targets}
+        before_cases = {k: v for k, v in all_before_cases.items() if k in allowed_keys}
+        after_cases = {k: v for k, v in all_after_cases.items() if k in allowed_keys}
+
     total_targets = len(targets)
     target_by_key = {t["case_key"]: t for t in targets}
 
@@ -261,6 +341,16 @@ def build_compare_payload(
         "p0p1_rate_delta": round(a_p0p1_p - b_p0p1_p, 4),
     }
 
+    source_breakdown: dict[str, dict[str, Any]] = {}
+    origin_buckets = {
+        "bench": [t for t in all_targets if _match_source_origin(str(t.get("source_origin") or "bench"), "bench")],
+        "算法提供": [t for t in all_targets if _match_source_origin(str(t.get("source_origin") or "bench"), "算法提供")],
+        "bench+算法提供": [t for t in all_targets if str(t.get("source_origin") or "bench") == "bench+算法提供"],
+    }
+    for label, sub in origin_buckets.items():
+        if sub:
+            source_breakdown[label] = _compute_subset_metrics(sub, all_before_cases, all_after_cases)
+
     return {
         "run_id": run["run_id"],
         "version": run["version"],
@@ -270,6 +360,8 @@ def build_compare_payload(
         "before_agent": run["before_agent_label"],
         "after_agent": run["after_agent_label"],
         "paired_only": paired_only_for_distribution,
+        "source_origin_filter": source_origin or None,
+        "source_breakdown": source_breakdown,
         "before_summary": before_summary,
         "after_summary": after_summary,
         "paired_summary": paired_summary,

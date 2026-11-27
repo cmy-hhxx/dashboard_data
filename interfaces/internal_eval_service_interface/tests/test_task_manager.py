@@ -116,6 +116,39 @@ class _MockTaskManagerServer:
                 ],
             },
         }
+        self.tasks["d2f68436629c4ac9"] = {
+            "task_id": "d2f68436629c4ac9",
+            "task_name": "AIME_RSI_ONLINETEST_{DATE_TIME}",
+            "status": "created",
+            "concurrency_limit": 1,
+            "concurrency_schedule": {"0": 5, "9": 1, "18": 5},
+            "pipeline": {
+                "is_cn": False,
+                "is_deep": False,
+                "run_source": "",
+                "raw_dir": "",
+                "with_pic": False,
+                "add_history": False,
+                "parallel": True,
+                "steps": [
+                    {
+                        "key": "online-expert",
+                        "fetcher": "new",
+                        "is_pre": False,
+                        "is_deep": False,
+                        "mode": "expert",
+                        "runtime": None,
+                        "user_id": "1817014354",
+                        "schedule_user_id": "1817014354",
+                        "history": False,
+                        "agent_id": "",
+                        "event_name": None,
+                        "ab_test_content": None,
+                        "lumi_profile_id": None,
+                    }
+                ],
+            },
+        }
         # Programmable test hooks
         self.behavior: str = "recovery_demo"  # "recovery_demo" | "hang_running" | "always_partial"
         self._server: ThreadingHTTPServer | None = None
@@ -1043,6 +1076,203 @@ class TaskManagerIntegrationTests(unittest.TestCase):
                 srv.shutdown()
                 srv.server_close()
                 mock_tm.stop()
+
+    def test_online_single_side_template_and_external_drop_root(self) -> None:
+        self.assertRegex(
+            format_abtest_task_name(template_task_name="AIME_RSI_ONLINETEST_{DATE_TIME}"),
+            r"^AIME_RSI_ONLINETEST_\d{8}-\d{6}$",
+        )
+        self.assertRegex(
+            format_abtest_task_name(template_task_name="AIME_RSI_ABTEST_{DATE_TIME}_test"),
+            r"^AIME_RSI_ABTEST_\d{8}-\d{6}$",
+        )
+
+        mock_tm = _MockTaskManagerServer(allowed_user="tester")
+        mock_tm.behavior = "clean_all"
+        tm_url = mock_tm.start()
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                bench_root = root / "bench"
+                _write_fake_bench(bench_root, "aime_expert", count=6)
+                ab_root = root / "work_ab"
+                drop_root = root / "shared_ab_test"
+                cfg = ServiceConfig(
+                    datasets_root=root,
+                    ab_test_root=ab_root,
+                    bench_root=bench_root,
+                    state_db_path=root / "state.sqlite3",
+                    base_taxonomy_dir=root / "tax",
+                    collector_mode="task_manager",
+                    task_manager_base_url=tm_url,
+                    task_manager_user_id="tester",
+                    task_manager_template_task_id="2740e85cb7b34909",
+                    task_manager_poll_interval_sec=0.08,
+                    task_manager_recovery_interval_sec=0.5,
+                    task_manager_max_recovery_rounds=2,
+                    task_manager_judge_source="drop_dir",
+                    task_manager_drop_wait_timeout_sec=5.0,
+                    task_manager_drop_root=drop_root,
+                    allow_custom_tier=True,
+                    collector_poll_interval_sec=0.05,
+                    cluster_microbatch_size=1,
+                    cluster_microbatch_interval_sec=0.1,
+                    eval_poll_interval_sec=0.05,
+                )
+                store = StateStore(cfg.state_db_path)
+                pipeline = PipelineManager(cfg, store, engine=FakeStreamingEngine())
+                app = InternalEvalApp(cfg, store, pipeline)
+
+                class _H(BaseHTTPRequestHandler):
+                    def log_message(self, fmt: str, *args: Any) -> None:
+                        pass
+
+                    def do_GET(self) -> None:
+                        app.handle_http(self)
+
+                    def do_POST(self) -> None:
+                        app.handle_http(self)
+
+                srv = ThreadingHTTPServer(("127.0.0.1", 0), _H)
+                srv_thread = threading.Thread(target=srv.serve_forever, daemon=True)
+                srv_thread.start()
+                base_url = f"http://127.0.0.1:{srv.server_address[1]}/api/v1/internal-eval"
+                try:
+                    st, created = _http_json(
+                        f"{base_url}/runs",
+                        method="POST",
+                        body={
+                            "version": "20261127",
+                            "round_tag": "smoke",
+                            "tier": 1,
+                            "extra_traces": ["src_tid_0003"],
+                            "model": "aime_expert",
+                            "before_mode": "historical",
+                            "before_agent": "线上旧版",
+                            "after_agent": "线上新版(20261127 online-expert)",
+                            "label": "20261127 冒烟测试",
+                            "task_manager": {"template_task_id": "d2f68436629c4ac9"},
+                        },
+                    )
+                    self.assertEqual(st, 201, created)
+                    run_id = created["data"]["run_id"]
+                    round_dir = Path(created["data"]["round_dir_path"])
+                    self.assertEqual(round_dir.name, "version_20261127_aime_expert_smoke")
+
+                    state_file = round_dir / ".work" / "dispatch" / "TASK_MANAGER_STATE.json"
+                    self.assertTrue(_wait_until(lambda: state_file.is_file(), timeout=8.0))
+                    tm_state = json.loads(state_file.read_text(encoding="utf-8"))
+                    tm_id = tm_state["task_id"]
+                    drop_dir = Path(tm_state["task_drop_dir"])
+                    self.assertEqual(drop_dir, drop_root / "version_20261127_aime_expert_smoke" / tm_id)
+                    self.assertTrue(drop_dir.is_dir())
+                    self.assertRegex(mock_tm.tasks[tm_id]["task_name"], r"^AIME_RSI_ONLINETEST_\d{8}-\d{6}$")
+                    self.assertEqual(tm_state["side_to_step_key"], {"after": "online-expert"})
+                    self.assertEqual(mock_tm.tasks[tm_id]["concurrency_limit"], 1)
+                    self.assertEqual(mock_tm.tasks[tm_id]["concurrency_schedule"], {"0": 5, "9": 1, "18": 5})
+
+                    # Drop online-expert.jsonl for both cases (eq_00001 bench + eq_00002 extra)
+                    rows = [
+                        {
+                            "case_key": "eq_00001",
+                            "trace_id": "live_t1",
+                            "session_id": "live_s1",
+                            "messages": [
+                                {"role": "user", "type": "user_question", "content": "Target question 0"},
+                                {"role": "assistant", "type": "final_answer", "content": "Online answer 1"},
+                            ],
+                        },
+                        {
+                            "case_key": "eq_00002",
+                            "trace_id": "live_t2",
+                            "session_id": "live_s2",
+                            "messages": [
+                                {"role": "user", "type": "user_question", "content": "Target question 3"},
+                                {"role": "assistant", "type": "final_answer", "content": "Online answer 2"},
+                            ],
+                        },
+                    ]
+                    (drop_dir / "online-expert.jsonl").write_text(
+                        "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
+                    )
+                    (drop_dir / "_DONE").write_text("", encoding="utf-8")
+
+                    self.assertTrue(
+                        _wait_until(
+                            lambda: _http_json(f"{base_url}/runs/{run_id}")[1]["data"]["status"] == "succeeded",
+                            timeout=15.0,
+                        ),
+                        f"online run failed: {_http_json(f'{base_url}/runs/{run_id}')[1]['data']}",
+                    )
+                    st_c, cmp_doc = _http_json(f"{base_url}/runs/{run_id}/compare")
+                    self.assertEqual(st_c, 200)
+                    self.assertEqual(cmp_doc["data"]["paired_summary"]["paired_ready_count"], 2)
+                    self.assertEqual(cmp_doc["data"]["source_breakdown"]["bench"]["total_targets"], 1)
+                    self.assertEqual(cmp_doc["data"]["source_breakdown"]["算法提供"]["total_targets"], 1)
+
+                    # Two-phase workflow: prepare Candidate 1 (`sides=["before"]`) first without TM calls, then trigger-after!
+                    st2, created2 = _http_json(
+                        f"{base_url}/runs",
+                        method="POST",
+                        body={
+                            "version": "20261128",
+                            "tier": 1,
+                            "extra_traces": ["src_tid_0003"],
+                            "model": "aime_expert",
+                            "sides": ["before"],
+                            "before_mode": "historical",
+                            "before_agent": "线上旧版",
+                            "after_agent": "线上新版(待发版)",
+                            "task_manager": {"template_task_id": "d2f68436629c4ac9"},
+                        },
+                    )
+                    self.assertEqual(st2, 201, created2)
+                    run2_id = created2["data"]["run_id"]
+                    r2_dir = Path(created2["data"]["round_dir_path"])
+                    self.assertTrue(
+                        _wait_until(
+                            lambda: _http_json(f"{base_url}/runs/{run2_id}")[1]["data"]["status"] == "succeeded",
+                            timeout=10.0,
+                        )
+                    )
+                    # Phase 1 MUST NOT have created any TaskManager task
+                    self.assertFalse((r2_dir / ".work" / "dispatch" / "TASK_MANAGER_STATE.json").exists())
+                    r2_info = _http_json(f"{base_url}/runs/{run2_id}")[1]["data"]
+                    self.assertEqual(r2_info["sides"], ["before"])
+                    self.assertEqual(r2_info["sides_detail"]["before"]["ready"], 2)
+
+                    # Phase 2: trigger-after dispatches Candidate 2 on the exact same run/targets!
+                    st_tr, trig = _http_json(
+                        f"{base_url}/runs/{run2_id}/trigger-after",
+                        method="POST",
+                        body={"after_agent": "线上新版(20261128 online-expert)"},
+                    )
+                    self.assertEqual(st_tr, 200, trig)
+                    r2_state = r2_dir / ".work" / "dispatch" / "TASK_MANAGER_STATE.json"
+                    self.assertTrue(_wait_until(lambda: r2_state.is_file(), timeout=8.0))
+                    tm2 = json.loads(r2_state.read_text(encoding="utf-8"))
+                    d2 = Path(tm2["task_drop_dir"])
+                    self.assertEqual(tm2["side_to_step_key"], {"after": "online-expert"})
+                    (d2 / "online-expert.jsonl").write_text(
+                        "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
+                    )
+                    (d2 / "_DONE").write_text("", encoding="utf-8")
+                    self.assertTrue(
+                        _wait_until(
+                            lambda: _http_json(f"{base_url}/runs/{run2_id}")[1]["data"]["status"] == "succeeded",
+                            timeout=15.0,
+                        )
+                    )
+                    cmp2 = _http_json(f"{base_url}/runs/{run2_id}/compare")[1]["data"]
+                    self.assertEqual(cmp2["before_agent"], "线上旧版")
+                    self.assertEqual(cmp2["after_agent"], "线上新版(20261128 online-expert)")
+                    self.assertEqual(cmp2["paired_summary"]["paired_ready_count"], 2)
+                finally:
+                    pipeline.stop()
+                    srv.shutdown()
+                    srv.server_close()
+        finally:
+            mock_tm.stop()
 
 
 if __name__ == "__main__":

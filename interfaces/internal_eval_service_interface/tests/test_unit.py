@@ -271,6 +271,123 @@ class UnitTests(unittest.TestCase):
             self.assertTrue((round_dir / "index_stats" / "pairs_index.csv").is_file())
             self.assertTrue((round_dir / "index_stats" / "stats.json").is_file())
 
+    def test_mixed_bench_and_extra_traces_dedupe_and_source_breakdown(self) -> None:
+        from internal_eval.ab_layout import resolve_round_dir_name
+        from internal_eval.bench_sampler import normalize_extra_traces
+        from internal_eval.pipeline import _eval_version_id
+
+        self.assertEqual(
+            _eval_version_id({"model": "aime_expert", "before_agent_label": "线上旧版", "after_agent_label": "线上新版(20261127 online-expert)"}, "before"),
+            "aime_expert_before",
+        )
+        self.assertEqual(
+            _eval_version_id({"model": "aime_expert", "before_agent_label": "线上旧版", "after_agent_label": "线上新版(20261127 online-expert)"}, "after"),
+            "20261127_online-expert",
+        )
+
+        self.assertEqual(
+            resolve_round_dir_name("20261127", "aime_expert", round_tag="smoke"),
+            "version_20261127_aime_expert_smoke",
+        )
+        norm = normalize_extra_traces([
+            "src_tid_0001",
+            {"trace_id": "src_tid_0005", "group": "ignored-tag"},
+            {"trace_id": "src_tid_0001"},
+            {"question": "Brand new custom query"},
+        ])
+        self.assertEqual(len(norm), 3)
+        self.assertEqual(norm[0], {"trace_id": "src_tid_0001"})
+        self.assertEqual(norm[1], {"trace_id": "src_tid_0005"})
+        self.assertEqual(norm[2], {"question": "Brand new custom query"})
+
+        with tempfile.TemporaryDirectory() as td:
+            bench_root = Path(td) / "bench"
+            _write_fake_bench(bench_root, "aime_expert", count=8)
+
+            # 3 from bench (src_tid_0000..0002) + 1 overlap (src_tid_0001) + 1 extra in bench pool (src_tid_0005) + 1 pure question
+            targets, meta = sample_bench_targets(
+                bench_root,
+                "aime_expert",
+                tier=3,
+                extra_traces=[
+                    {"trace_id": "src_tid_0001"},
+                    {"trace_id": "src_tid_0005"},
+                    {"question": "Brand new custom query"},
+                ],
+            )
+            self.assertEqual(len(targets), 5)
+            self.assertEqual(meta["bench_count"], 3)
+            self.assertEqual(meta["extra_added_count"], 2)
+            self.assertEqual(meta["overlap_count"], 1)
+            origins = [t["source_origin"] for t in targets]
+            self.assertEqual(origins, ["bench", "bench+算法提供", "bench", "算法提供", "算法提供"])
+
+            # Strict missing trace_id raises ValueError by default
+            with self.assertRaises(ValueError):
+                sample_bench_targets(
+                    bench_root,
+                    "aime_expert",
+                    tier=2,
+                    extra_traces=[{"trace_id": "nonexistent_tid_999"}],
+                )
+
+            # Verify compare source_breakdown + source_origin filtering
+            store = StateStore(Path(td) / "state.sqlite3")
+            run = store.create_run(
+                {
+                    "run_id": "run_mix",
+                    "version": "20261127",
+                    "round_order": 0,
+                    "round_dir_name": "version_20261127_aime_expert",
+                    "round_dir_path": str(Path(td) / "version_20261127_aime_expert"),
+                    "model": "aime_expert",
+                    "tier": 3,
+                    "requested_count": 3,
+                    "sides": ["before", "after"],
+                    "before_mode": "historical",
+                    "before_agent": {"name": "线上旧版"},
+                    "after_agent": {"name": "线上新版"},
+                    "before_agent_label": "线上旧版",
+                    "after_agent_label": "线上新版",
+                }
+            )
+            store.save_targets("run_mix", targets, ["before", "after"])
+            store.save_historical_cases_bulk(
+                "run_mix",
+                "before",
+                [
+                    {
+                        "case_key": t["case_key"],
+                        "linked_input_id": idx + 100,
+                        "linked_output_id": idx + 200,
+                        "trace_id": t["source_trace_id"] or f"h_{idx}",
+                        "problems": [{"severity": "P0", "label": "err", "component": "c", "cluster_path": "S1.M1.1", "cluster_name": "n"}],
+                    }
+                    for idx, t in enumerate(targets)
+                ],
+            )
+            for idx, t in enumerate(targets):
+                store.mark_fetched("run_mix", "after", t["case_key"], trace_id=f"a_{idx}")
+                store.mark_evaluated("run_mix", "after", t["case_key"], trace_id=f"a_{idx}", session_id="", attribution_file="", problems=[])
+
+            saved_targets = store.get_targets("run_mix")
+            bmap = {c["case_key"]: c for c in store.get_side_cases("run_mix", side="before")}
+            amap = {c["case_key"]: c for c in store.get_side_cases("run_mix", side="after")}
+            self.assertEqual(bmap["eq_00001"]["linked_output_id"], 200)
+            cmp_all = build_compare_payload(run=run, targets=saved_targets, before_cases=bmap, after_cases=amap)
+            self.assertEqual(cmp_all["source_breakdown"]["bench"]["total_targets"], 3)
+            self.assertEqual(cmp_all["source_breakdown"]["算法提供"]["total_targets"], 3)
+            self.assertEqual(cmp_all["source_breakdown"]["bench+算法提供"]["total_targets"], 1)
+
+            cmp_extra = build_compare_payload(
+                run=run, targets=saved_targets, before_cases=bmap, after_cases=amap, source_origin="算法提供"
+            )
+            self.assertEqual(cmp_extra["paired_summary"]["paired_ready_count"], 3)
+            self.assertEqual(cmp_extra["source_breakdown"]["bench"]["total_targets"], 3)
+
+            res_extra = store.query_results("run_mix", side="before", source_origin="算法提供")
+            self.assertEqual(res_extra["total"], 3)
+
 
 if __name__ == "__main__":
     unittest.main()

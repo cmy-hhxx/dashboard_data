@@ -346,6 +346,9 @@ class InternalEvalApp:
                 if sub == "retry-failed" and method == "POST":
                     body = self._read_json_body(handler)
                     return 200, self._retry_failed(run_id, body), {"run_id": run_id}
+                if sub == "trigger-after" and method == "POST":
+                    body = self._read_json_body(handler)
+                    return 200, self._trigger_after(run_id, body), {"run_id": run_id}
                 if sub == "ingest" and method == "POST":
                     body = self._read_json_body(handler)
                     return 200, self._ingest(run_id, body), {"run_id": run_id}
@@ -461,6 +464,26 @@ class InternalEvalApp:
             "run": self._decorate_run(self.store.get_run_progress(run_id) or {}),
         }
 
+    def _trigger_after(self, run_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            run = self.pipeline.trigger_after(run_id, body)
+        except KeyError as exc:
+            raise errors.not_found(f"任务不存在：{run_id}", run_id=run_id) from exc
+        except RunConcurrencyLimitError as exc:
+            raise errors.rate_limited(
+                str(exc),
+                retry_after=exc.retry_after,
+                limit_type="run_concurrency",
+                active_run_ids=exc.active_run_ids,
+                max_concurrent_runs=exc.max_concurrent_runs,
+                max_queued_runs=exc.max_queued_runs,
+            ) from exc
+        except RuntimeError as exc:
+            raise errors.conflict(str(exc), run_id=run_id) from exc
+        except ValueError as exc:
+            raise errors.invalid(str(exc)) from exc
+        return self._decorate_run(self.store.get_run_progress(run_id) or run)
+
     def _ingest(self, run_id: str, body: dict[str, Any]) -> dict[str, Any]:
         side = str(body.get("side") or "").strip().lower()
         if side not in ALLOWED_SIDES:
@@ -534,6 +557,7 @@ class InternalEvalApp:
             severity=_str_param(query, "severity"),
             problem_code=_str_param(query, "problem_code"),
             case_key=_str_param(query, "case_key"),
+            source_origin=_str_param(query, "source_origin"),
             only_ready=_bool_param(query, "only_ready", True),
             paired_only=_bool_param(query, "paired_only", False),
             limit=limit,
@@ -562,6 +586,7 @@ class InternalEvalApp:
         after_cases = {c["case_key"]: c for c in self.store.get_side_cases(run_id, side="after")}
         paired_only = _bool_param(query, "paired_only", False)
         top_leaves = _int_param(query, "top_leaves", 30, minimum=1, maximum=500)
+        source_origin = _str_param(query, "source_origin")
         payload = build_compare_payload(
             run=run,
             targets=targets,
@@ -569,6 +594,7 @@ class InternalEvalApp:
             after_cases=after_cases,
             paired_only_for_distribution=paired_only,
             top_leaves=top_leaves,
+            source_origin=source_origin,
         )
         payload["latest_seq"] = self.store.get_latest_seq(run_id)
         return payload
