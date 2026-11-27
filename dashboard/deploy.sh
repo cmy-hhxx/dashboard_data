@@ -51,7 +51,17 @@ RSYNC=(rsync -az --delete --exclude '/static/*.json' --exclude '/static/*.json.g
   -e "ssh ${SSH_OPTS[*]}")
 
 retry "${SSH[@]}" "$HOST" "mkdir -p $REMOTE/static $REMOTE/logs"
-if [ -n "$RUN_ENV" ]; then printf '%s' "$RUN_ENV" | retry "${SSH[@]}" "$HOST" "cat > $REMOTE/deploy.env"; fi
+if [ -n "$RUN_ENV" ]; then
+  # Merge with existing remote deploy.env so passing a subset of vars (e.g. PORT=5001)
+  # never wipes EVAL_STORAGE_BACKEND / AIME_DATA_ROOT / EVAL_DATASETS / EVAL_PRODUCTS.
+  EXISTING="$(retry "${SSH[@]}" "$HOST" "cat $REMOTE/deploy.env 2>/dev/null" || true)"
+  for var in PORT STATS_WORKER BACKUP_STATS REFRESH_SECONDS STATS_REFRESH_SECONDS EVAL_DATASETS EVAL_PRODUCTS EVAL_STORAGE_BACKEND AIME_DATA_ROOT AIME_PG_SECRETS_FILE PG_DATA_CORE_PATH EVAL_MIN_BUILD_HEADROOM_MB EVAL_BUILD_OOM_SCORE_ADJ EVAL_BUILD_RLIMIT_AS_GB; do
+    case "$RUN_ENV" in *"export $var="*) continue ;; esac
+    line="$(printf '%s\n' "$EXISTING" | grep -E "^export ${var}=" | tail -n 1 || true)"
+    if [ -n "$line" ]; then RUN_ENV+="$line"$'\n'; fi
+  done
+  printf '%s' "$RUN_ENV" | retry "${SSH[@]}" "$HOST" "cat > $REMOTE/deploy.env"
+fi
 retry "${RSYNC[@]}" "$HERE/" "$HOST:$REMOTE/"
 # 部署只管「代码上线」：rsync + 预压缩 + 重启，十几秒结束。
 # 数据构建交给 server 自己的刷新循环（重启后 data.json 超过 120s 就会立刻在后台重建），
