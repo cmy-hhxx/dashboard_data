@@ -84,9 +84,11 @@ INPUT_INDEX_VERSION = "2026-11-12.1"
 # rewrites, so every pair cache is recomputed once with the repaired indexes.
 PAIRING_VERSION = "2026-11-21.1"
 # Bump when the aggregate payload shape changes (details can stay cached).
-PAYLOAD_VERSION = "2026-11-20.2"
+PAYLOAD_VERSION = "2026-11-27.1"
 # Bump when load_clusters() starts emitting fields the cached pickle lacks.
 CLUSTER_INDEX_VERSION = 4
+# Inline session-field cells only for small groups; larger groups paginate via /api/field/<product>.json.
+FIELD_INLINE_MAX = 500
 
 
 def default_datasets():
@@ -750,14 +752,26 @@ def daily_input_stats(metas, store, product=""):
     return records, {k: sorted(v) for k, v in sessions.items()}, traces
 
 
-def daily_payload(samples, inputs, input_session_ids=None, input_traces=None):
-    """Per-day input volume plus the evaluated session/trace/token totals.
+DAILY_MODEL_FAMILIES = (
+    "a_fast", "b_fast", "a_expert", "b_expert",
+    "aime_fast", "aime_expert", "fast", "expert",
+)
 
-    ``sids`` is carried alongside the count so the eval card can union sessions
-    across a selected window instead of adding per-day distinct counts.  Only
-    identity matters there, so sessions are small per-product integers rather
-    than 40-character ids (about 400 KB of the AIME payload). ``in_sids`` does
-    the same for inputs; ``input_traces`` is distinct from input JSONL records.
+
+def _daily_model_family(model_id: str | None) -> str | None:
+    low = str(model_id or "").strip().lower()
+    for fam in DAILY_MODEL_FAMILIES:
+        if low.startswith(fam):
+            return fam
+    return None
+
+
+def build_daily(samples, inputs, input_session_ids=None, input_traces=None):
+    """Per-day input/eval volume plus precomputed cross-day deduplicated session totals.
+
+    Replaces shipping raw per-day ``sids`` / ``in_sids`` integer arrays (1.5+ MB for AIME)
+    with a compact ``daily_summary`` map keyed by ``(model_family|"all") -> (YYYY-MM|"all") ->
+    [eval_sessions, in_sessions]`` matching the 评测量 card's exact selectors.
     """
     evaluated = Counter()
     traces = Counter()
@@ -776,24 +790,56 @@ def daily_payload(samples, inputs, input_session_ids=None, input_traces=None):
         sids[key].add(number.setdefault(row["sid"] or slug, len(number)))
     keys = set(inputs) | set(evaluated) | set(input_traces or {})
     out = []
+    # Precompute cross-day deduplicated session sets per (family|"all", month|"all").
+    sum_eval: dict[str, dict[str, set]] = defaultdict(lambda: defaultdict(set))
+    sum_in: dict[str, dict[str, set]] = defaultdict(lambda: defaultdict(set))
     for d, m, sp in sorted(keys):
+        ev_set = sids.get((d, m, sp), ())
+        in_list = input_session_ids.get((d, m, sp), ()) if input_session_ids is not None else None
         item = {
             "d": d, "m": m, "sp": sp,
             "inputs": inputs.get((d, m, sp), 0),
             "evaluated": evaluated.get((d, m, sp), 0),
-            "sessions": len(sids.get((d, m, sp), ())),
+            "sessions": len(ev_set),
             "traces": traces.get((d, m, sp), 0),
             "tokens": tokens.get((d, m, sp), 0),
             "token_records": token_records.get((d, m, sp), 0),
-            "sids": sorted(sids.get((d, m, sp), ())),
         }
-        if input_session_ids is not None:
-            item["in_sids"] = input_session_ids.get((d, m, sp), [])
-            item["in_sessions"] = len(item["in_sids"])
+        if in_list is not None:
+            item["in_sessions"] = len(in_list)
         if input_traces is not None:
             item["input_traces"] = input_traces.get((d, m, sp), 0)
         out.append(item)
-    return out
+
+        ym = str(d or "")[:7]
+        months_to_add = ("all", ym) if len(ym) == 7 and ym[4] == "-" else ("all",)
+        fam = _daily_model_family(m)
+        fams_to_add = ("all", fam) if fam else ("all",)
+        ev_keys = [(sp, m, sid) for sid in ev_set]
+        in_keys = [(sp, m, sid) for sid in in_list] if in_list is not None else None
+        for f in fams_to_add:
+            for mk in months_to_add:
+                sum_eval[f][mk].update(ev_keys)
+                if in_keys is not None:
+                    sum_in[f][mk].update(in_keys)
+
+    summary = {}
+    all_fams = sorted(set(sum_eval) | set(sum_in))
+    for f in all_fams:
+        mkeys = sorted(set(sum_eval.get(f, ())) | set(sum_in.get(f, ())))
+        summary[f] = {
+            mk: [
+                len(sum_eval[f].get(mk, ())),
+                len(sum_in[f].get(mk, ())) if input_session_ids is not None else None,
+            ]
+            for mk in mkeys
+        }
+    return out, summary
+
+
+def daily_payload(samples, inputs, input_session_ids=None, input_traces=None):
+    """Compatibility wrapper returning only the per-day list."""
+    return build_daily(samples, inputs, input_session_ids, input_traces)[0]
 
 
 def debug(message):
@@ -2290,17 +2336,54 @@ def aggregate(product, samples, taxonomy):
         for t in sorted(tags.values(), key=lambda x: -len(x["sessions"]))
     ]
 
-    # 聚类矩阵: one entry per evaluated Trace, clean ones included, so a scene's
-    # trace total is the same number as the eval card's completed-Trace count.
-    # ``pats`` is empty for a clean Trace: it only feeds the denominator, never a cell.
-    # A row without an input Trace (tr == 0) has no Trace to count and is skipped.
-    cross = []
+    # 聚类矩阵: pre-aggregated by (scene, cluster prefix) instead of emitting one row
+    # per evaluated Trace (which grew to 22+ MB for AIME).  Different (task, sub) scenes
+    # have disjoint Trace sets, so summing hits across grouped scenes is exact; direct_n
+    # preserves exact leaf-pattern counts for cell hover tooltips.
+    scene_traces = Counter()
+    scene_probs = Counter()
+    prefix_hits = Counter()
+    prefix_n = Counter()
+    direct_n = Counter()
+    cross_nodes_set = set()
     for slug, detail, row, facts in samples:
-        if row.get("tr", 1) <= 0:
+        tr = row.get("tr", 1)
+        if tr <= 0:
             continue
+        scene = (scene_of(detail), detail["meta"].get("subtask") or "")
+        scene_traces[scene] += tr
         pats = Counter(p["cl"]["path"] for p in detail["attribution"]["problems"] if p["cl"])
-        cross.append([scene_of(detail), detail["meta"].get("subtask") or "",
-                      [[pid, n] for pid, n in pats.most_common()], row.get("tr", 1)])
+        if not pats:
+            continue
+        scene_probs[scene] += sum(pats.values())
+        hit_prefixes = set()
+        for pid, n in pats.items():
+            direct_n[(scene, pid)] += n
+            parts = pid.split(".")
+            for k in range(1, len(parts) + 1):
+                prefix = ".".join(parts[:k])
+                prefix_n[(scene, prefix)] += n
+                hit_prefixes.add(prefix)
+                cross_nodes_set.add(prefix)
+        for prefix in hit_prefixes:
+            prefix_hits[(scene, prefix)] += 1
+
+    cross_scenes = sorted(scene_traces)
+    cross_scene_idx = {sc: i for i, sc in enumerate(cross_scenes)}
+    cross_nodes = sorted(cross_nodes_set)
+    cross_node_idx = {nd: i for i, nd in enumerate(cross_nodes)}
+    cross_cells = []
+    for (sc, nd), hits in sorted(prefix_hits.items()):
+        si, ni = cross_scene_idx[sc], cross_node_idx[nd]
+        cnt = prefix_n[(sc, nd)]
+        dn = direct_n.get((sc, nd), 0)
+        cross_cells.append([si, ni, hits, cnt, dn] if dn else [si, ni, hits, cnt])
+    cross_agg = {
+        "scenes": [[task, sub, scene_traces[(task, sub)], scene_probs[(task, sub)]]
+                   for task, sub in cross_scenes],
+        "nodes": cross_nodes,
+        "cells": cross_cells,
+    }
 
     # Input profile.
     msgs = [s[3]["messages"] for s in samples]
@@ -2397,15 +2480,24 @@ def aggregate(product, samples, taxonomy):
                  and (sp is None or (s[2].get("ul") if sp == "lost" else s[2]["sp"] == sp))]
         group.sort(key=lambda s: (order[s[2]["w"]], -s[2]["n"], s[2]["d"]))
         if group:
-            field.append({
+            worst_counts = [0] * len(WORST_KEYS)
+            for s in group:
+                worst_counts[order[s[2]["w"]]] += 1
+            entry = {
                 "split": sp or "", "model": m,
                 "lost": sum(1 for s in group if s[2].get("ul")),
                 "sessions": len({(s[2]["sp"], s[2]["sid"] or s[0]) for s in group}),
-                "cells": [[s[0], order[s[2]["w"]], s[2]["n"], clip(s[2]["q"], 56),
-                           int(bool(s[2].get("ul")))] for s in group],
+                "total": len(group),
+                "worst": worst_counts,
                 "roles": dict(Counter(p["role"] or "other" for s in group for p in s[1]["attribution"]["problems"])),
                 "tree": task_tree(group),
-            })
+            }
+            if len(group) <= FIELD_INLINE_MAX:
+                entry["cells"] = [[s[0], order[s[2]["w"]], s[2]["n"], clip(s[2]["q"], 56),
+                                   int(bool(s[2].get("ul")))] for s in group]
+            else:
+                entry["paged"] = True
+            field.append(entry)
 
     unique_sessions = len({(s[2]["sp"], s[2]["m"], s[2]["sid"] or s[0]) for s in samples})
     out = {
@@ -2430,7 +2522,7 @@ def aggregate(product, samples, taxonomy):
         "severity": severity, "worst": worst,
         "by_model": by_model, "by_split": by_split,
         "roles": role_list,
-        "matrix": matrix_out, "patterns": pattern_list, "tags": tag_list, "cross": cross,
+        "matrix": matrix_out, "patterns": pattern_list, "tags": tag_list, "cross_agg": cross_agg,
         "profile": profile, "compact": compact_profile,
         "dates": dates, "field": field,
     }
@@ -2677,6 +2769,77 @@ def trend_payload(product, samples, releases=(), generated=None):
         "base": base_out, "cells": cells_out,
         "trace_severity": {"levels": WORST_KEYS, "daily": trace_days, "unresolved": unresolved, "refs": trace_refs, "intraday": intraday},
     }
+
+
+def trend_summary_payload(full_trend: dict) -> dict:
+    """Compact first-screen summary of ``trends-<product>.json`` (~50 KB vs 26+ MB).
+
+    Feeds ``daily_top.js``, ``problem_trends.js``, and ``matrixPerspectiveHTML``,
+    none of which slice by scene/model/user_type or need per-trace ``refs``.
+    Different ``(scene, model, ut)`` cells on the same ``(day, node)`` have disjoint
+    slug sets, so summing ``hAny`` (index 15) is exact.
+    """
+    day_traces = Counter()
+    for row in full_trend.get("base") or ():
+        day_traces[int(row[0])] += int(row[4])
+    base_daily = [[di, 0, 0, 0, day_traces[di]] for di in sorted(day_traces)]
+
+    agg: dict[tuple[int, int], list[int]] = {}
+    for row in full_trend.get("cells") or ():
+        di, ni = int(row[0]), int(row[2])
+        key = (di, ni)
+        cur = agg.get(key)
+        if cur is None:
+            cur = agg[key] = [0, 0, 0, 0, 0, 0]
+        cur[0] += int(row[5])
+        cur[1] += int(row[6])
+        cur[2] += int(row[7])
+        cur[3] += int(row[8])
+        cur[4] += int(row[9])
+        if len(row) > 15:
+            cur[5] += int(row[15])
+    cells_daily = [
+        [di, 0, ni, 0, 0, c[0], c[1], c[2], c[3], c[4], 0, 0, 0, 0, 0, c[5]]
+        for (di, ni), c in sorted(agg.items())
+    ]
+
+    ts = dict(full_trend.get("trace_severity") or {})
+    ts.pop("refs", None)
+    return {
+        "schema": full_trend.get("schema", 2),
+        "generated_at": full_trend.get("generated_at"),
+        "product": full_trend.get("product"),
+        "releases": full_trend.get("releases") or [],
+        "dates": full_trend.get("dates") or [],
+        "uts": full_trend.get("uts") or [],
+        "models": full_trend.get("models") or [],
+        "nodes": full_trend.get("nodes") or [],
+        "base": base_daily,
+        "cells": cells_daily,
+        "trace_severity": ts,
+    }
+
+
+def write_trend_artifacts(out_dir: Path, product: str, full_trend: dict) -> int:
+    """Write lean ``trends-<p>.json``, first-screen ``trends_summary-<p>.json``, and server-only ``trace_refs-<p>.json``."""
+    ts = full_trend.get("trace_severity") or {}
+    refs = ts.pop("refs", None)
+    refs_payload = {
+        "schema": full_trend.get("schema", 2),
+        "generated_at": full_trend.get("generated_at"),
+        "product": product,
+        "dates": full_trend.get("dates") or [],
+        "levels": ts.get("levels") or list(WORST_KEYS),
+        "refs": refs or [],
+    }
+    # Server-only lookup index (like bench_index-<p>.json): never sent directly to browsers.
+    replace_bytes(
+        out_dir / f"trace_refs-{product}.json",
+        json.dumps(refs_payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+    )
+    total_bytes = write_json(out_dir / f"trends-{product}.json", full_trend)
+    total_bytes += write_json(out_dir / f"trends_summary-{product}.json", trend_summary_payload(full_trend))
+    return total_bytes
 
 
 def version_compare(samples, models):
@@ -3882,6 +4045,7 @@ def payload_files_exist(out_dir: Path, ab_products=(), bench_products=()) -> boo
             and all((out_dir / f"labels-{p}.json").exists() for p in (samples.get("products") or {}))
             and all((out_dir / f"recall-{p}.json").exists() for p in (samples.get("products") or {}))
             and all((out_dir / f"trends-{p}.json").exists() for p in (data.get("products") or {}))
+            and all((out_dir / f"trends_summary-{p}.json").exists() for p in (data.get("products") or {}))
             and all((out_dir / f"bench-{p}.json").exists() for p in (samples.get("products") or {}))
             and all((out_dir / f"bench_index-{p}.json").exists() for p in bench_products)
             and all((out_dir / f"abtests-{p}.json").exists() for p in ab_products))
@@ -4219,7 +4383,7 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
             products[product]["kpi"]["inputs"] = payload["records"]
             products[product]["kpi"]["lost"] = payload["lost"]
             input_records, input_sessions, input_traces = daily_input_stats(metas, store, product)
-            products[product]["daily"] = daily_payload(
+            products[product]["daily"], products[product]["daily_summary"] = build_daily(
                 samples[product], input_records, input_sessions, input_traces)
             feed = prediction_feed_path(datasets, product)
             if feed:
@@ -4314,8 +4478,10 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
                 "schema": 2, "generated_at": generated, "product": product,
                 "products": {product: payload},
             })
-            trend_bytes += write_json(out_dir / f"trends-{product}.json", trend_payload(
-                product, samples[product], release_entries(datasets, product), generated))
+            trend_bytes += write_trend_artifacts(
+                out_dir, product,
+                trend_payload(product, samples[product], release_entries(datasets, product), generated),
+            )
         data_bytes += write_json(out_dir / "data.json", shared)
         for stale in out_dir.glob("data-*.json*"):
             product = stale.name[len("data-"):].split(".", 1)[0]
@@ -4380,6 +4546,14 @@ def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
                 stale.unlink(missing_ok=True)
         for stale in out_dir.glob("trends-*.json*"):
             product = stale.name[len("trends-"):].split(".", 1)[0]
+            if product not in products:
+                stale.unlink(missing_ok=True)
+        for stale in out_dir.glob("trends_summary-*.json*"):
+            product = stale.name[len("trends_summary-"):].split(".", 1)[0]
+            if product not in products:
+                stale.unlink(missing_ok=True)
+        for stale in out_dir.glob("trace_refs-*.json*"):
+            product = stale.name[len("trace_refs-"):].split(".", 1)[0]
             if product not in products:
                 stale.unlink(missing_ok=True)
         timers["write"] = round(time.time() - t0, 1)
@@ -4796,7 +4970,10 @@ def run(args):
         sample_dir.mkdir(parents=True, exist_ok=True)
         for stale in out.glob(".samples-*"):
             shutil.rmtree(stale, ignore_errors=True)
-        for stale in list(out.glob("data-*.json*")) + list(out.glob("samples-*.json*")) + list(out.glob("labels-*.json*")) + list(out.glob("trends-*.json*")) + list(out.glob("abtests-*.json*")):
+        for stale in (list(out.glob("data-*.json*")) + list(out.glob("samples-*.json*"))
+                      + list(out.glob("labels-*.json*")) + list(out.glob("trends-*.json*"))
+                      + list(out.glob("trends_summary-*.json*")) + list(out.glob("trace_refs-*.json*"))
+                      + list(out.glob("abtests-*.json*"))):
             stale.unlink(missing_ok=True)
         # build() writes every payload itself; only the empty shell is left to write.
         stats = {**stats, "data_kb": round(write_json(out / "data.json", data) / 1024),

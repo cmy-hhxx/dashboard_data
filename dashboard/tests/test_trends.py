@@ -284,15 +284,26 @@ class TrendBuildTests(unittest.TestCase):
             self.assertNotIn("reused", self.run_build(datasets, static))
             self.assertTrue((static / "trends-wencai.json").exists())
 
-            # 产品消失：正常分支清掉它的 trends 文件（.json + .gz）。
+            # 产品消失：正常分支清掉它的 trends / trends_summary / trace_refs 文件（.json + .gz）。
             self.run_build(datasets, static, env={"EVAL_PRODUCTS": "wencai"})
             self.assertTrue((static / "trends-wencai.json").exists())
+            self.assertTrue((static / "trends_summary-wencai.json").exists())
+            self.assertTrue((static / "trace_refs-wencai.json").exists())
+            self.assertNotIn("refs", self.trends(static, "wencai")["trace_severity"])
+            summary_payload = json.loads((static / "trends_summary-wencai.json").read_text(encoding="utf-8"))
+            self.assertNotIn("refs", summary_payload["trace_severity"])
+            self.assertEqual(summary_payload["trace_severity"]["daily"],
+                             self.trends(static, "wencai")["trace_severity"]["daily"])
             self.assertEqual(list(static.glob("trends-aime.json*")), [])
+            self.assertEqual(list(static.glob("trends_summary-aime.json*")), [])
+            self.assertEqual(list(static.glob("trace_refs-aime.json*")), [])
 
             # 空数据分支同样清理 trends。
             shutil.rmtree(datasets)
             self.assertEqual(self.run_build(datasets, static)["pairs"], 0)
             self.assertEqual(list(static.glob("trends-*.json*")), [])
+            self.assertEqual(list(static.glob("trends_summary-*.json*")), [])
+            self.assertEqual(list(static.glob("trace_refs-*.json*")), [])
 
 
 class TrendPayloadUnitTests(unittest.TestCase):
@@ -394,6 +405,8 @@ class OutputsReadyTests(unittest.TestCase):
                     mock.patch.object(server, "OUTPUTS", outputs):
                 self.assertFalse(server.outputs_ready())
                 (static / "trends-wencai.json").write_text("{}", encoding="utf-8")
+                self.assertFalse(server.outputs_ready())
+                (static / "trends_summary-wencai.json").write_text("{}", encoding="utf-8")
                 self.assertTrue(server.outputs_ready())
 
 

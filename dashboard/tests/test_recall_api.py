@@ -259,6 +259,75 @@ class RecallIndexUnitTests(unittest.TestCase):
                 if st is not None:
                     st.close()
 
+    def test_query_field_proportional_paging(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            static = Path(tmp)
+            rows = [
+                {"s": f"p0-{i}", "sid": f"s0-{i}", "tid": f"t0-{i}", "sp": "daily", "m": "aime_fast",
+                 "d": "2026-11-19", "q": f"P0 问题 {i}", "w": "P0", "n": 3, "tr": 1, "ul": 1 if i == 0 else 0}
+                for i in range(6)
+            ] + [
+                {"s": f"p2-{i}", "sid": f"s2-{i}", "tid": f"t2-{i}", "sp": "daily", "m": "aime_fast",
+                 "d": "2026-11-19", "q": f"P2 问题 {i}", "w": "P2", "n": 1, "tr": 1}
+                for i in range(12)
+            ] + [
+                {"s": "exp-0", "sid": "se-0", "tid": "te-0", "sp": "daily", "m": "aime_expert",
+                 "d": "2026-11-19", "q": "Expert 问题", "w": "P1", "n": 2, "tr": 1}
+            ]
+            _write_fixture(static, "aime", rows)
+            entry = recall_index.RecallStore().get(str(static), "aime")
+            p1 = entry.query_field({"model": "aime_fast", "split": "", "page": "1", "cap": "6"})
+            p2 = entry.query_field({"model": "aime_fast", "split": "", "page": "2", "cap": "6"})
+            p3 = entry.query_field({"model": "aime_fast", "split": "", "page": "3", "cap": "6"})
+            self.assertEqual((p1["total"], p1["pages"], len(p1["cells"])), (18, 3, 6))
+            # Each page keeps the 1:2 mix of P0:P2 (2 P0 + 4 P2).
+            for pg in (p1, p2, p3):
+                self.assertEqual(sum(1 for c in pg["cells"] if c[1] == 0), 2)
+                self.assertEqual(sum(1 for c in pg["cells"] if c[1] == 2), 4)
+            all_slugs = {c[0] for pg in (p1, p2, p3) for c in pg["cells"]}
+            self.assertEqual(len(all_slugs), 18)
+            self.assertEqual(p1["cells"][0][4], 1)
+
+    def test_trend_node_and_trace_sev_indexes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            static = Path(tmp)
+            rows = [
+                {"s": "a1", "sid": "sid1", "tid": "tid1", "sp": "daily", "m": "aime_fast", "d": "2026-11-19",
+                 "q": "问题一", "w": "P0", "n": 1, "tr": 1},
+            ]
+            _write_fixture(static, "aime", rows)
+            (static / "trends-aime.json").write_text(json.dumps({
+                "schema": 2, "generated_at": "2026-11-19T12:00:00Z", "product": "aime",
+                "releases": [], "dates": ["2026-11-19"], "uts": ["real"], "models": ["aime_fast"],
+                "scenes": [["行情", ""]], "nodes": ["S1", "S2"],
+                "base": [[0, 0, 0, 0, 1]],
+                "cells": [
+                    [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 1],
+                    [0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 2, 1],
+                ],
+            }), encoding="utf-8")
+            (static / "trace_refs-aime.json").write_text(json.dumps({
+                "schema": 2, "generated_at": "2026-11-19T12:00:00Z", "product": "aime",
+                "dates": ["2026-11-19"], "levels": ["P0", "P1", "P2", "P3", "P4", "none"],
+                "refs": [[0, "a1", 0, 0, "tid1"]],
+            }), encoding="utf-8")
+            old_static = server.STATIC
+            server.STATIC = str(static)
+            server._TREND_NODE_CACHE.clear()
+            server._TRACE_REFS_CACHE.clear()
+            try:
+                tidx = server.trend_node_index("aime")
+                self.assertEqual(len(tidx["by_node"]["S2"]), 1)
+                self.assertEqual(tidx["by_node"]["S2"][0][2], 0)
+                entry = recall_index.RecallStore().get(str(static), "aime")
+                res = server.Handler._query_trace_sev("aime", entry, {"date": "2026-11-19", "level": "P0", "cap": "50"})
+                self.assertEqual(res["total"], 1)
+                self.assertEqual((res["items"][0]["s"], res["items"][0]["trace"], res["items"][0]["w"]), ("a1", "tid1", 0))
+            finally:
+                server.STATIC = old_static
+                server._TREND_NODE_CACHE.clear()
+                server._TRACE_REFS_CACHE.clear()
+
 
 class RecallHttpEndpointTests(unittest.TestCase):
     def test_http_endpoints_etag_and_lookup_post(self):

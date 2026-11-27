@@ -114,4 +114,23 @@ assert.match(allHtml, /data-jump-month="2026-11"/);
 const allTotals = plain(context.calc(historical, "all", "all"));
 assert.equal(allTotals.month, "all");
 assert.deepEqual(allTotals.traces, [3299, 3377]);
+
+// Precomputed daily_summary replaces raw sids/in_sids arrays with identical deduplicated counts.
+const compactDaily = {
+  kpi: { unique_sessions: 2, traces: 5, tokens: 150 },
+  input: { sessions: 3, traces: 9, models: { fast: { sessions: 2, traces: 7 }, expert: { sessions: 1, traces: 2 } } },
+  daily: [
+    { d: "2026-11-01", m: "fast", sp: "daily", inputs: 1, input_traces: 3, evaluated: 1, traces: 2, tokens: 50, sessions: 1, in_sessions: 2 },
+    { d: "2026-11-02", m: "fast", sp: "daily", inputs: 1, input_traces: 4, evaluated: 1, traces: 2, tokens: 60, sessions: 1, in_sessions: 1 },
+    { d: "2026-11-02", m: "expert", sp: "daily", inputs: 1, input_traces: 2, evaluated: 1, traces: 1, tokens: 40, sessions: 1, in_sessions: 1 },
+  ],
+  daily_summary: {
+    all: { all: [2, 3], "2026-11": [2, 3] },
+    fast: { all: [1, 2], "2026-11": [1, 2] },
+    expert: { all: [1, 1], "2026-11": [1, 1] },
+  },
+};
+assert.deepEqual(plain(context.calc(compactDaily, "2026-11", "all")).sessions, [2, 3]);
+assert.deepEqual(plain(context.calc(compactDaily, "2026-11", "fast")).sessions, [1, 2]);
+assert.deepEqual(plain(context.calc(compactDaily, "all", "all")).sessions, [2, 3]);
 console.log("PASS: 2-row 15-bar monthly chart, all-time mode, model filters, trace units, cross-day session deduplication, model families");

@@ -62,11 +62,11 @@ class MatrixTraceTests(unittest.TestCase):
 
             build(datasets, static)
             product = json.loads((static / "data-wencai.json").read_text())["products"]["wencai"]
-            cross = product["cross"]
+            self.assertNotIn("cross", product)
+            cross_agg = product["cross_agg"]
             self.assertEqual((product["kpi"]["sessions"], product["kpi"]["traces"]), (3, 2))
-            self.assertEqual(len(cross), 2)
-            self.assertEqual(sum(int(row[3]) for row in cross), product["kpi"]["traces"])
-            self.assertTrue(all(not row[2] for row in cross))  # 没有聚类树：只验证分母口径
+            self.assertEqual(sum(int(sc[2]) for sc in cross_agg["scenes"]), product["kpi"]["traces"])
+            self.assertEqual(cross_agg["cells"], [])  # 没有聚类树：只验证分母口径
 
 
 class ProductSplitTests(unittest.TestCase):
@@ -237,7 +237,9 @@ class ProductSplitTests(unittest.TestCase):
             self.assertEqual((volume()["records"], volume()["sessions"]), (2, 1))
             product = json.loads((static / "data-wencai.json").read_text())["products"]["wencai"]
             self.assertEqual(product["input"]["models"]["a_fast"]["sessions"], 1)
-            self.assertEqual(product["daily"][0]["in_sids"], product["daily"][1]["in_sids"])
+            self.assertNotIn("in_sids", product["daily"][0])
+            self.assertEqual(product["daily_summary"]["all"]["2026-11"][1], 1)
+            self.assertEqual(product["daily_summary"]["a_fast"]["2026-11"][1], 1)
 
     def test_session_field_separates_records_from_sessions_and_problems(self):
         """会话场一格一条评测记录；场数按 (split, sid) 去重，问题数按记录内条目累加。"""

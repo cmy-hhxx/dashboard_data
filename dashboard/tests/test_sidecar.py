@@ -64,7 +64,8 @@ class SidecarTests(unittest.TestCase):
             # The worker's sidecar has aggregates but no join keys; the build must still
             # index the files so the session denominator is not silently dropped.
             self.assertEqual(product["input"]["sessions"], 2)
-            self.assertTrue(all("in_sids" in r for r in product["daily"]))
+            self.assertTrue(all("in_sessions" in r for r in product["daily"]))
+            self.assertEqual(product["daily_summary"]["all"]["all"][1], 2)
             daily = {(r["d"], r["m"]): r for r in product["daily"]}
             self.assertEqual(daily[("2026-11-02", "a_fast")]["inputs"], 1)
 

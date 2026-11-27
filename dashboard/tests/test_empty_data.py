@@ -95,7 +95,9 @@ class BuildTests(unittest.TestCase):
             # 数据量卡的「评测输入 Session」= 去重 session×模型×split，和完成 Session 同口径。
             self.assertEqual(data["products"]["wencai"]["input"]["sessions"], 1)
             daily = data["products"]["wencai"]["daily"][0]
-            self.assertEqual((daily["sessions"], daily["traces"], daily["tokens"], daily["sids"]), (1, 1, 150, [0]))
+            self.assertEqual((daily["sessions"], daily["traces"], daily["tokens"]), (1, 1, 150))
+            self.assertNotIn("sids", daily)
+            self.assertEqual(data["products"]["wencai"]["daily_summary"]["all"]["all"], [1, 1])
             row = index["products"]["wencai"]["rows"][0]
             self.assertEqual((row["w"], row["n"], row["m"]), ("P1", 1, "a_fast"))
             # 用户 ID 与类型（十位以下数字 = 真实用户）随样本行下发。

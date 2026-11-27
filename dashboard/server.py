@@ -71,10 +71,16 @@ RECALL_RE = re.compile(r"^/api/recall/([a-z][a-z0-9_]*)\.json$")
 RECALL_SLICE_RE = re.compile(r"^/api/recall_slice/([a-z][a-z0-9_]*)\.json$")
 RECALL_LOOKUP_RE = re.compile(r"^/api/recall_lookup/([a-z][a-z0-9_]*)\.json$")
 INPUT_SLICE_RE = re.compile(r"^/api/input_slice/([a-z][a-z0-9_]*)\.json$")
+FIELD_RE = re.compile(r"^/api/field/([a-z][a-z0-9_]*)\.json$")
+TREND_NODE_RE = re.compile(r"^/api/trend/([a-z][a-z0-9_]*)\.json$")
 _BENCH_CACHE = {}
 _BENCH_LOCK = threading.Lock()
 _BENCH_INDEX_CACHE = {}
 _BENCH_INDEX_LOCK = threading.Lock()
+_TREND_NODE_CACHE = {}
+_TREND_NODE_LOCK = threading.Lock()
+_TRACE_REFS_CACHE = {}
+_TRACE_REFS_LOCK = threading.Lock()
 _RECALL_STORE = None
 _NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -335,6 +341,94 @@ def bench_index(product):
         if len(_BENCH_INDEX_CACHE) > 4:
             _BENCH_INDEX_CACHE.clear()
         _BENCH_INDEX_CACHE[product] = (key, entry)
+    return entry
+
+
+def trend_node_index(product):
+    """Mtime-cached per-node index of ``trends-<product>.json`` for on-demand cell trend queries."""
+    path = os.path.join(STATIC, f"trends-{product}.json")
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    key = (st.st_mtime_ns, st.st_size)
+    with _TREND_NODE_LOCK:
+        hit = _TREND_NODE_CACHE.get(product)
+        if hit and hit[0] == key:
+            return hit[1]
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    nodes = data.get("nodes") or []
+    by_node = {}
+    for row in data.get("cells") or ():
+        ni = row[2]
+        if 0 <= ni < len(nodes):
+            code = nodes[ni]
+            # Remap node index to 0 in the single-node slice so frontend trendSeries works unchanged.
+            by_node.setdefault(code, []).append([row[0], row[1], 0, *row[3:]])
+    entry = {
+        "key": key,
+        "etag": f'"tn-{st.st_mtime_ns:x}-{st.st_size:x}"',
+        "meta": {
+            "schema": data.get("schema", 2),
+            "generated_at": data.get("generated_at"),
+            "product": data.get("product") or product,
+            "releases": data.get("releases") or [],
+            "dates": data.get("dates") or [],
+            "uts": data.get("uts") or [],
+            "models": data.get("models") or [],
+            "scenes": data.get("scenes") or [],
+            "base": data.get("base") or [],
+        },
+        "by_node": by_node,
+    }
+    with _TREND_NODE_LOCK:
+        if len(_TREND_NODE_CACHE) > 2:
+            _TREND_NODE_CACHE.clear()
+        _TREND_NODE_CACHE[product] = (key, entry)
+    return entry
+
+
+def trace_refs_index(product):
+    """Mtime-cached ``(date, level) -> refs`` index from server-only ``trace_refs-<product>.json``."""
+    path = os.path.join(STATIC, f"trace_refs-{product}.json")
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    key = (st.st_mtime_ns, st.st_size)
+    with _TRACE_REFS_LOCK:
+        hit = _TRACE_REFS_CACHE.get(product)
+        if hit and hit[0] == key:
+            return hit[1]
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    dates = data.get("dates") or []
+    levels = data.get("levels") or ["P0", "P1", "P2", "P3", "P4", "none"]
+    by_key = {}
+    for ref in data.get("refs") or ():
+        if not isinstance(ref, list) or len(ref) < 4:
+            continue
+        di, slug, turn, li = ref[0], ref[1], ref[2], ref[3]
+        tid = ref[4] if len(ref) > 4 else None
+        if 0 <= di < len(dates) and 0 <= li < len(levels):
+            by_key.setdefault((dates[di], levels[li]), []).append((slug, turn, li, tid))
+    entry = {
+        "key": key,
+        "etag": f'"tr-{st.st_mtime_ns:x}-{st.st_size:x}"',
+        "generated_at": data.get("generated_at"),
+        "by_key": by_key,
+    }
+    with _TRACE_REFS_LOCK:
+        if len(_TRACE_REFS_CACHE) > 2:
+            _TRACE_REFS_CACHE.clear()
+        _TRACE_REFS_CACHE[product] = (key, entry)
     return entry
 
 class Handler(SimpleHTTPRequestHandler):
@@ -872,7 +966,7 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_body(404, b'{"error":"recall index unavailable"}', "application/json")
             return True
         mode = "" if m_list else (query.get("mode") or "")
-        if not m_list and mode not in ("galaxy", "trend", "session"):
+        if not m_list and mode not in ("galaxy", "trend", "session", "trace_sev"):
             self._send_body(400, b'{"error":"unknown recall slice mode"}', "application/json")
             return True
         self._cache_policy = "no-cache"
@@ -891,9 +985,124 @@ class Handler(SimpleHTTPRequestHandler):
             result = entry.query_galaxy(query)
         elif mode == "trend":
             result = entry.query_trend(query)
+        elif mode == "trace_sev":
+            result = self._query_trace_sev(product, entry, query)
         else:
             result = entry.query_session(query)
         body = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        self._send_body(200, body, "application/json; charset=utf-8", etag=etag)
+        return True
+
+    @staticmethod
+    def _query_trace_sev(product, entry, query):
+        """Resolve per-trace severity sample drawer items without shipping refs[] in trends-<p>.json."""
+        date = query.get("date") or ""
+        level = query.get("level") or ""
+        try:
+            cap = max(1, min(500, int(query.get("cap") or "500")))
+        except ValueError:
+            cap = 500
+        levels = ("P0", "P1", "P2", "P3", "P4", "none")
+        li = levels.index(level) if level in levels else -1
+        items = []
+        total = 0
+        refs_idx = trace_refs_index(product)
+        if refs_idx is not None and date and li >= 0:
+            refs = refs_idx["by_key"].get((date, level), ())
+            total = len(refs)
+            for slug, turn, sev_i, tid in refs[:cap]:
+                row = entry.by_slug.get(slug)
+                if not row:
+                    continue
+                items.append({
+                    "s": slug,
+                    "w": sev_i,
+                    "n": 0,
+                    "q": f"{row.get('q') or '（无提问）'} · 第 {int(turn) + 1} 轮",
+                    "m": row.get("m") or "",
+                    "sp": row.get("sp") or "",
+                    "d": row.get("d") or date,
+                    "trace": tid,
+                    "turn": int(turn),
+                })
+        elif date and li >= 0:
+            matched = [r for r in entry.by_date.get(date, ()) if (r.get("w") or "none") == level]
+            total = len(matched)
+            for row in matched[:cap]:
+                items.append({
+                    "s": row.get("s") or "",
+                    "w": li,
+                    "n": 0,
+                    "q": f"{row.get('q') or '（无提问）'} · 第 1 轮",
+                    "m": row.get("m") or "",
+                    "sp": row.get("sp") or "",
+                    "d": row.get("d") or date,
+                    "trace": row.get("tid"),
+                    "turn": 0,
+                })
+        return {
+            "product": product,
+            "generated_at": entry.generated_at,
+            "date": date,
+            "level": level,
+            "total": total,
+            "recalled": len(items),
+            "cap": cap,
+            "capped": total > len(items),
+            "items": items,
+        }
+
+    def _serve_field(self, path_only):
+        """Serve paginated 会话场 tiles on demand so data-<p>.json stays small."""
+        match = FIELD_RE.match(path_only)
+        if not match:
+            return False
+        product = match.group(1)
+        parsed = urllib.parse.urlparse(self.path)
+        query = {k: vals[0] for k, vals in urllib.parse.parse_qs(parsed.query).items() if vals}
+        entry = recall_entry(product)
+        up = _data_upstream()
+        if up and (entry is None or len(entry.rows) <= 5):
+            if self._proxy_data_upstream():
+                return True
+        if entry is None:
+            self._send_body(404, b'{"error":"field index unavailable"}', "application/json")
+            return True
+        self._cache_policy = "no-cache"
+        qhash = hashlib.sha1(self.path.encode("utf-8")).hexdigest()[:12]
+        etag = f'{entry.etag[:-1]}-fld-{qhash}"'
+        result = entry.query_field(query)
+        body = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        self._send_body(200, body, "application/json; charset=utf-8", etag=etag)
+        return True
+
+    def _serve_trend_node(self, path_only):
+        """Serve one cluster node's 5D trend slice so matrix cell clicks avoid pulling full trends."""
+        match = TREND_NODE_RE.match(path_only)
+        if not match:
+            return False
+        product = match.group(1)
+        parsed = urllib.parse.urlparse(self.path)
+        query = {k: vals[0] for k, vals in urllib.parse.parse_qs(parsed.query).items() if vals}
+        node = (query.get("node") or "").strip()
+        if not node:
+            self._send_body(400, b'{"error":"missing node"}', "application/json")
+            return True
+        idx = trend_node_index(product)
+        if idx is None:
+            if _data_upstream() and self._proxy_data_upstream():
+                return True
+            self._send_body(404, b'{"error":"trend index unavailable"}', "application/json")
+            return True
+        self._cache_policy = "no-cache"
+        qhash = hashlib.sha1(node.encode("utf-8")).hexdigest()[:12]
+        etag = f'{idx["etag"][:-1]}-{qhash}"'
+        payload = {
+            **idx["meta"],
+            "nodes": [node],
+            "cells": idx["by_node"].get(node, []),
+        }
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         self._send_body(200, body, "application/json; charset=utf-8", etag=etag)
         return True
 
@@ -1163,6 +1372,10 @@ class Handler(SimpleHTTPRequestHandler):
                 return
         if self._serve_input_slice(path_only):
             return
+        if self._serve_field(path_only):
+            return
+        if self._serve_trend_node(path_only):
+            return
         if self._serve_recall(path_only):
             return
         if self._serve_bench_export(path_only) or self._serve_bench(path_only) or self._serve_bench_case(path_only):
@@ -1269,7 +1482,17 @@ def render_index():
         print(f"[serve] sites config {SITES_FILE} unreadable: {exc}", flush=True)
         sites = {}
     script = json.dumps(sites, ensure_ascii=False).replace("</", "<\\/")
-    html = html.replace("</head>", f'<script type="application/json" id="sites">{script}</script>\n</head>', 1)
+    try:
+        enabled = sorted(_products())
+    except Exception:  # noqa: BLE001
+        enabled = []
+    boot = json.dumps({"products": enabled}, ensure_ascii=False).replace("</", "<\\/")
+    html = html.replace(
+        "</head>",
+        f'<script type="application/json" id="sites">{script}</script>\n'
+        f'<script type="application/json" id="boot">{boot}</script>\n</head>',
+        1,
+    )
     body = html.encode("utf-8")
     return body, f'"index-{hashlib.sha1(body).hexdigest()[:16]}"'
 

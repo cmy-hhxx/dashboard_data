@@ -145,12 +145,18 @@ const shade = (i, n) =>
 /* ---------------------------------------------------------------- 会话场 */
 const FIELD_ROWS = 16;
 const FIELD_TILE = 13; // 11px tile + 2px gap
+const FIELD_PAGE_CACHE = new Map();
+const FIELD_PAGE_CACHE_MAX = 48;
+const fieldTotal = (g) => (Number.isFinite(g?.total) ? g.total : (g?.cells || []).length);
 
 function fieldCard(p, u) {
   const groups = p.field
-    .map((g, gi) => `<div class="fgroup" data-g="${gi}"><div class="fgroup-head"><b>${esc(groupName(p, g))}</b><span class="num">${fmt(g.cells.length)} 条 · ${fmt(g.sessions ?? g.cells.length)} 场</span>${
-      g.lost ? `<span class="fgroup-lost"><i></i>流失会话 ${fmt(g.lost)}</span>` : ""
-    }</div><div class="tiles"></div><div class="pager field-pager" data-pager="${gi}" hidden></div></div>`)
+    .map((g, gi) => {
+      const tot = fieldTotal(g);
+      return `<div class="fgroup" data-g="${gi}"><div class="fgroup-head"><b>${esc(groupName(p, g))}</b><span class="num">${fmt(tot)} 条 · ${fmt(g.sessions ?? tot)} 场</span>${
+        g.lost ? `<span class="fgroup-lost"><i></i>流失会话 ${fmt(g.lost)}</span>` : ""
+      }</div><div class="tiles"></div><div class="pager field-pager" data-pager="${gi}" hidden></div></div>`;
+    })
     .join("");
   const legend = `<div class="legend end" id="fieldLegend">${WORST.map(
     (w, i) => `<button type="button" style="--c:${sevColor(i)}" data-w="${i}" aria-pressed="${u.field.w === String(i)}"><i></i>${SEV_NAME[w]}<b class="num">${fmt(p.worst[w])}</b></button>`,
@@ -219,7 +225,42 @@ function dealFieldPages(cells, capacity) {
   return { pages, counts };
 }
 
-function paintField(field, p, filter) {
+function renderFieldTiles(group, tiles, gi, cells, filter) {
+  group._cells = cells || [];
+  tiles.innerHTML = group._cells
+    .map((c, k) => `<span class="${filter && String(c[1]) === String(filter) ? "on" : ""}" style="--c:${sevColor(c[1])};--i:${Math.min(k, 240)}" data-cell="${gi}:${k}" data-w="${c[1]}"></span>`)
+    .join("");
+}
+
+function renderFieldPager(pager, cur, pages, total) {
+  if (!pager) return;
+  pager.hidden = pages <= 1;
+  pager.dataset.page = String(cur);
+  pager.dataset.pages = String(pages);
+  if (pages > 1) {
+    const btn = (key, label, off) => `<button type="button" data-page="${key}"${off ? " disabled" : ""}>${label}</button>`;
+    pager.innerHTML = `${btn("prev", "上一页", cur === 1)}
+      <span class="pager-info">第 <b class="num">${cur}</b> / ${pages} 页 · ${fmt(total)} 条记录</span>
+      ${btn("next", "下一页", cur === pages)}`;
+  }
+}
+
+function loadFieldPage(product, generatedAt, g, page, cap) {
+  const key = `${product}|${generatedAt || ""}|${g.split || ""}|${g.model || ""}|${page}|${cap}`;
+  if (FIELD_PAGE_CACHE.has(key)) return FIELD_PAGE_CACHE.get(key);
+  const qs = new URLSearchParams({ model: g.model || "", split: g.split || "", page: String(page), cap: String(cap) });
+  const req = getJSON(`api/field/${encodeURIComponent(product)}.json?${qs}`, { retries: 1 }).catch(() => {
+    FIELD_PAGE_CACHE.delete(key);
+    return null;
+  });
+  FIELD_PAGE_CACHE.set(key, req);
+  if (FIELD_PAGE_CACHE.size > FIELD_PAGE_CACHE_MAX) {
+    FIELD_PAGE_CACHE.delete(FIELD_PAGE_CACHE.keys().next().value);
+  }
+  return req;
+}
+
+function paintField(field, p, filter, { eager = false } = {}) {
   const groups = $$(".fgroup", field);
   if (!groups.length) return;
   const groupsEl = $(".field-groups", field);
@@ -227,6 +268,8 @@ function paintField(field, p, filter) {
   const groupRows = Math.ceil(p.field.length / cols);
   const rows = Math.max(1, Math.floor(FIELD_ROWS / groupRows));
   field._page = field._page || [];
+  field._filter = filter;
+  field.classList.toggle("is-filtered", !!filter);
   p.field.forEach((g, gi) => {
     const group = groups[gi];
     const tiles = $(".tiles", group);
@@ -234,27 +277,34 @@ function paintField(field, p, filter) {
     if (!tiles) return;
     const perRow = Math.max(1, Math.floor((tiles.clientWidth + 2) / FIELD_TILE));
     const capacity = Math.max(1, perRow * rows);
-    const dealt = dealFieldPages(g.cells, capacity);
-    const pages = dealt.pages.length;
+    const total = fieldTotal(g);
+    tiles.style.minHeight = `${Math.max(0, rows * FIELD_TILE - 2)}px`;
+    if (Array.isArray(g.cells)) {
+      const dealt = dealFieldPages(g.cells, capacity);
+      const pages = dealt.pages.length;
+      const cur = Math.min(Math.max(1, field._page[gi] || 1), pages);
+      field._page[gi] = cur;
+      renderFieldTiles(group, tiles, gi, dealt.pages[cur - 1].map((x) => x.c), filter);
+      renderFieldPager(pager, cur, pages, total);
+      return;
+    }
+    const pages = Math.max(1, Math.ceil(total / capacity));
     const cur = Math.min(Math.max(1, field._page[gi] || 1), pages);
     field._page[gi] = cur;
-    tiles.style.minHeight = `${Math.max(0, rows * FIELD_TILE - 2)}px`;
-    tiles.innerHTML = dealt.pages[cur - 1]
-      .map(({ c, i }, k) => `<span style="--c:${sevColor(c[1])};--i:${Math.min(k, 240)}" data-cell="${gi}:${i}" data-w="${c[1]}"></span>`)
-      .join("");
-    if (!pager) return;
-    pager.hidden = pages <= 1;
-    pager.dataset.page = String(cur);
-    pager.dataset.pages = String(pages);
-    if (pages > 1) {
-      const btn = (key, label, off) => `<button type="button" data-page="${key}"${off ? " disabled" : ""}>${label}</button>`;
-      pager.innerHTML = `${btn("prev", "上一页", cur === 1)}
-        <span class="pager-info">第 <b class="num">${cur}</b> / ${pages} 页 · ${fmt(g.cells.length)} 条记录</span>
-        ${btn("next", "下一页", cur === pages)}`;
+    renderFieldPager(pager, cur, pages, total);
+    if (!eager && !field._visible) {
+      field._deferred = true;
+      return;
     }
+    const tok = (group._ftok = (group._ftok || 0) + 1);
+    loadFieldPage(ctx.product, ctx.data?.generated_at, g, cur, capacity).then((res) => {
+      if (tok !== group._ftok || !tiles.isConnected) return;
+      if (res && Array.isArray(res.cells)) {
+        renderFieldTiles(group, tiles, gi, res.cells, field._filter);
+        renderFieldPager(pager, res.page || cur, res.pages || pages, res.total ?? total);
+      }
+    });
   });
-  field.classList.toggle("is-filtered", !!filter);
-  $$(".tiles span", field).forEach((t) => t.classList.toggle("on", !!filter && t.dataset.w === filter));
 }
 
 /* ---------------------------------------------------------------- 数据量: version → task → subtask */
@@ -452,6 +502,7 @@ function evalWindow(p, model = EV.model, month = EV.month) {
 
   let days = [];
   let monthBars = [];
+  const ds = p.daily_summary?.[model];
   if (isAll) {
     days = [...byDay.entries()]
       .sort((a, b) => a[0].localeCompare(b[0]))
@@ -459,8 +510,9 @@ function evalWindow(p, model = EV.model, month = EV.month) {
     const multiYear = new Set(months.map((m) => m.slice(0, 4))).size > 1;
     monthBars = months.map((ym) => {
       const st = byMonth.get(ym);
-      const stSessions = st ? st.sids.size + st.sessions : 0;
-      const stInSessions = st && st.hasIns ? st.inSids.size : null;
+      const pre = ds?.[ym];
+      const stSessions = Array.isArray(pre) ? pre[0] : (st ? st.sids.size + st.sessions : 0);
+      const stInSessions = Array.isArray(pre) ? pre[1] : (st && st.hasIns ? st.inSids.size : null);
       return { month: ym, label: shortMonthLabel(ym, multiYear), hasData: !!st, ...(st || blank()), totalSessions: stSessions, totalInputSessions: stInSessions };
     });
   } else {
@@ -474,7 +526,8 @@ function evalWindow(p, model = EV.model, month = EV.month) {
     }
   }
   const dataDays = days.filter((x) => x.hasData);
-  const sessions = new Set(dataDays.flatMap((x) => [...x.sids]));
+  const preTotal = ds?.[activeMonth];
+  const sessions = Array.isArray(preTotal) ? null : new Set(dataDays.flatMap((x) => [...x.sids]));
   return {
     month: activeMonth,
     months,
@@ -485,11 +538,13 @@ function evalWindow(p, model = EV.model, month = EV.month) {
     activeDays: dataDays.length,
     totalInputs: sum(dataDays.map((x) => x.inputs)),
     totalEval: sum(dataDays.map((x) => x.evaluated)),
-    totalSessions: sessions.size + sum(dataDays.map((x) => x.sessions)),
+    totalSessions: Array.isArray(preTotal) ? preTotal[0] : sessions.size + sum(dataDays.map((x) => x.sessions)),
     totalTraces: sum(dataDays.map((x) => x.traces)),
     totalTokens: sum(dataDays.map((x) => x.tokens)),
     totalTokenRecords: sum(dataDays.map((x) => x.tokenRecords)),
-    totalInputSessions: dataDays.length && dataDays.every((x) => x.hasIns) ? new Set(dataDays.flatMap((x) => [...x.inSids])).size : null,
+    totalInputSessions: Array.isArray(preTotal)
+      ? preTotal[1]
+      : (dataDays.length && dataDays.every((x) => x.hasIns) ? new Set(dataDays.flatMap((x) => [...x.inSids])).size : null),
     totalInputTraces: dataDays.length && dataDays.every((x) => x.hasTraces) ? sum(dataDays.map((x) => x.inTraces)) : null,
     peakEval: Math.max(0, ...dataDays.map((x) => x.evaluated)),
   };
@@ -1689,7 +1744,7 @@ function predictCard(p) {
     return card(4, "预测体系", miniView(`<span class="cxvoid" aria-hidden="true"></span>`, [["—", "预测题"]], "暂无预测数据"), "", "pred", "is-mini");
   }
   // The export's own bank (questions it scanned) when given, else this product's distinct questions.
-  const allQ = Number.isFinite(pr.bank) ? pr.bank : new Set(p.field.flatMap((g) => g.cells.map((c) => c[3]))).size;
+  const allQ = Number.isFinite(pr.bank) ? pr.bank : new Set(p.field.flatMap((g) => (g.cells || []).map((c) => c[3]))).size;
   const asOf = when(pr.as_of) ?? when(ctx.data.generated_at);
   const qs = Array.isArray(pr.questions) ? pr.questions : [];
   const open = qs.filter((q) => {
@@ -1786,8 +1841,7 @@ const byNum = (a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1));
 
 function sceneTree(p) {
   const tasks = new Map();
-  (p.cross || []).forEach(([task, sub, pats, tr]) => {
-    const n = sum(pats.map((x) => x[1]));
+  const addScene = (task, sub, n, tr) => {
     let t = tasks.get(task);
     if (!t) tasks.set(task, (t = { name: task, n: 0, traces: 0, subs: new Map() }));
     t.n += n;
@@ -1798,7 +1852,12 @@ function sceneTree(p) {
       s.n += n;
       s.traces += Number(tr) || 0;
     }
-  });
+  };
+  if (p.cross_agg && Array.isArray(p.cross_agg.scenes)) {
+    p.cross_agg.scenes.forEach(([task, sub, tr, n]) => addScene(task, sub, Number(n) || 0, tr));
+  } else {
+    (p.cross || []).forEach(([task, sub, pats, tr]) => addScene(task, sub, sum(pats.map((x) => x[1])), tr));
+  }
   return [...tasks.values()]
     .sort((a, b) => b.n - a.n || a.name.localeCompare(b.name))
     .map((t) => {
@@ -1857,6 +1916,41 @@ function matrixView(p, rows, cols) {
   // 分母 = 该场景全部已评测 Trace（含无问题），所以占比不会超过 100%。
   const cells = rows.map(() => cols.map(() => ({ n: 0, hits: 0, pats: new Map() })));
   const traces = rows.map(() => 0);
+  if (p.cross_agg && Array.isArray(p.cross_agg.scenes)) {
+    const { scenes, nodes, cells: aggCells } = p.cross_agg;
+    const sceneRow = scenes.map(([task, sub, tr]) => {
+      const ri = rows.findIndex((r) => sceneMatches(r, task, sub));
+      if (ri >= 0) traces[ri] += Number(tr) || 0;
+      return ri;
+    });
+    const colByPrefix = new Map(cols.map((c, ci) => [c.prefix || c.pat || "", ci]));
+    const prefixCol = nodes.map((nd) => {
+      const ci = colByPrefix.get(nd);
+      return ci == null ? -1 : ci;
+    });
+    const directCol = nodes.map((nd) => cols.findIndex((c) => clusterMatches(c, nd)));
+    (aggCells || []).forEach((entry) => {
+      const ri = sceneRow[entry[0]];
+      if (ri < 0) return;
+      const ni = entry[1];
+      const ci = prefixCol[ni];
+      if (ci >= 0) {
+        const cell = cells[ri][ci];
+        cell.hits += Number(entry[2]) || 0;
+        cell.n += Number(entry[3]) || 0;
+      }
+      const dn = Number(entry[4]) || 0;
+      if (dn > 0) {
+        const dci = directCol[ni];
+        if (dci >= 0) {
+          const cell = cells[ri][dci];
+          const pid = nodes[ni];
+          cell.pats.set(pid, (cell.pats.get(pid) || 0) + dn);
+        }
+      }
+    });
+    return { rows, cols, cells, traces };
+  }
   (p.cross || []).forEach(([task, sub, pats, tr]) => {
     const ri = rows.findIndex((r) => sceneMatches(r, task, sub));
     if (ri < 0) return;
@@ -2420,13 +2514,21 @@ const TREND_MEASURE = { count: "出现数", ratio: "出现比例" };
 const TREND_UT_NAME = { all: "全部来源", real: "真实", test: "测试", internal: "内部", unknown: "未知" };
 const TREND_CACHE = new Map();
 const TREND_READY = new Map();
+const TREND_SUMMARY_CACHE = new Map();
+const TREND_SUMMARY_READY = new Map();
+const TREND_NODE_CACHE = new Map();
+const TREND_NODE_READY = new Map();
 
 /* One payload per (product, build); a rebuild invalidates it through generated_at. */
 const trendKey = (c) => `${c.product}|${c.data.generated_at}`;
 const trendReady = (c) => TREND_READY.get(trendKey(c));
+const trendSummaryReady = (c) => TREND_SUMMARY_READY.get(trendKey(c)) || TREND_READY.get(trendKey(c));
+const trendNodeReady = (c, node) => TREND_NODE_READY.get(`${trendKey(c)}|${node}`) || TREND_READY.get(trendKey(c));
 /* Only the current build's payload is kept: a page left open across many rebuilds must not
-   hold every earlier ~10 MB trends payload in memory. */
+   hold every earlier trends payload in memory. */
 const keepOnly = (map, key) => [...map.keys()].forEach((k) => { if (k !== key) map.delete(k); });
+const keepPrefix = (map, prefix) => [...map.keys()].forEach((k) => { if (!k.startsWith(prefix)) map.delete(k); });
+
 function loadTrend(c) {
   const key = trendKey(c);
   keepOnly(TREND_READY, key);
@@ -2438,6 +2540,44 @@ function loadTrend(c) {
       .catch(() => null));
   }
   return TREND_CACHE.get(key);
+}
+
+/* Compact first-screen summary (trends_summary-<p>.json, ~50 KB vs 26+ MB) for daily top,
+   problem trends, and trace severity analysis; falls back to full trends-<p>.json if absent. */
+function loadTrendSummary(c) {
+  const key = trendKey(c);
+  keepOnly(TREND_SUMMARY_READY, key);
+  keepOnly(TREND_SUMMARY_CACHE, key);
+  const ready = trendSummaryReady(c);
+  if (ready) return Promise.resolve(ready);
+  if (!TREND_SUMMARY_CACHE.has(key)) {
+    const req = (typeof c.loadTrendSummary === "function" ? c.loadTrendSummary(c.product) : getJSON(`trends_summary-${c.product}.json`, { retries: 1 }).catch(() => null))
+      .then((data) => (data && Array.isArray(data.dates) ? data : loadTrend(c)))
+      .then((data) => { if (data) TREND_SUMMARY_READY.set(key, data); return data; })
+      .catch(() => null);
+    TREND_SUMMARY_CACHE.set(key, req);
+  }
+  return TREND_SUMMARY_CACHE.get(key);
+}
+
+/* On-demand per-node 5D slice (/api/trend/<p>.json?node=...) for matrix cell drilldown;
+   falls back to full trends-<p>.json on static mirrors without the API. */
+function loadTrendNode(c, node) {
+  const baseKey = trendKey(c);
+  const nkey = `${baseKey}|${node}`;
+  keepPrefix(TREND_NODE_READY, `${baseKey}|`);
+  keepPrefix(TREND_NODE_CACHE, `${baseKey}|`);
+  const ready = trendNodeReady(c, node);
+  if (ready) return Promise.resolve(ready);
+  if (!TREND_NODE_CACHE.has(nkey)) {
+    const url = `api/trend/${encodeURIComponent(c.product)}.json?node=${encodeURIComponent(node)}`;
+    const req = getJSON(url, { retries: 0 })
+      .catch(() => loadTrend(c))
+      .then((data) => { if (data) TREND_NODE_READY.set(nkey, data); return data; })
+      .catch(() => null);
+    TREND_NODE_CACHE.set(nkey, req);
+  }
+  return TREND_NODE_CACHE.get(nkey);
 }
 
 /* 场景行 → payload.scenes 下标：subtask 行精确匹配，task 行取它下面的全部 subtask；
@@ -2876,7 +3016,7 @@ function pushPull(bento, p, tax, u) {
   /* A card only has a deep state while there is something behind it to open: empty cards keep
      their default size instead of pushing a row mate into a star map with no stars. */
   const openable = {
-    vol: () => (p.input?.traces || p.input?.records || p.kpi?.inputs || 0) > 0 || (p.field || []).some((g) => (g.cells || []).length),
+    vol: () => (p.input?.traces || p.input?.records || p.kpi?.inputs || 0) > 0 || (p.field || []).some((g) => fieldTotal(g) > 0),
     eval: () => evalRows(p).some((r) => (r.evaluated || 0) > 0 || (r.traces || 0) > 0),
     attr: () => attrFlows(p, tax).total > 0,
     clu: () => !!(tax && (p.kpi.clustered || 0) > 0),
@@ -3412,6 +3552,24 @@ function wire(bento, p, tax, u) {
   const push = pushPull(bento, p, tax, u);
   const field = $("#field", bento);
   field._page = u.field.pages;
+  const fieldNeedsRemote = (p.field || []).some((g) => !Array.isArray(g.cells));
+  if (fieldNeedsRemote && "IntersectionObserver" in window) {
+    field._visible = false;
+    const fieldIo = new IntersectionObserver((entries) => {
+      if (!field.isConnected) { fieldIo.disconnect(); return; }
+      if (entries.some((en) => en.isIntersecting)) {
+        field._visible = true;
+        fieldIo.disconnect();
+        if (field._deferred) {
+          field._deferred = false;
+          paintField(field, p, u.field.w, { eager: true });
+        }
+      }
+    }, { rootMargin: "400px 0px" });
+    fieldIo.observe(field);
+  } else {
+    field._visible = true;
+  }
   paintField(field, p, u.field.w);
   setTimeout(() => field.classList.remove("is-intro"), REDUCED || ctx.refresh ? 0 : 1600);
   const legend = $("#fieldLegend", bento);
@@ -3421,6 +3579,7 @@ function wire(bento, p, tax, u) {
     const on = b.getAttribute("aria-pressed") !== "true";
     $$("button", legend).forEach((x) => x.setAttribute("aria-pressed", String(on && x === b)));
     u.field.w = on ? b.dataset.w : null;
+    field._filter = u.field.w;
     field.classList.toggle("is-filtered", on);
     $$(".tiles span", field).forEach((t) => t.classList.toggle("on", on && t.dataset.w === b.dataset.w));
   });
@@ -3428,7 +3587,8 @@ function wire(bento, p, tax, u) {
     const tile = e.target.closest(".tiles span[data-cell]");
     if (tile) {
       const [g, i] = tile.dataset.cell.split(":").map(Number);
-      const c = p.field[g] && p.field[g].cells[i];
+      const groupEl = tile.closest(".fgroup");
+      const c = (groupEl?._cells && groupEl._cells[i]) || (p.field[g]?.cells && p.field[g].cells[i]);
       if (c) openSamples({ case: c[0] });
       return;
     }
@@ -3440,7 +3600,8 @@ function wire(bento, p, tax, u) {
     const pages = Number(pager.dataset.pages);
     const key = b.dataset.page;
     field._page[gi] = key === "prev" ? Math.max(1, cur - 1) : Math.min(pages, cur + 1);
-    paintField(field, p, u.field.w);
+    field._visible = true;
+    paintField(field, p, u.field.w, { eager: true });
   });
   if (window.ResizeObserver) {
     let fieldW = field.clientWidth;
@@ -3750,9 +3911,10 @@ function wire(bento, p, tax, u) {
       cancelPanelMotion = () => { anims.forEach((a) => a.cancel()); clean(); };
     }
 
+    let summaryData = null;
     function renderDailyTop(reveal = true) {
-      if (!dailyEl || !dailyOpen || !trendData) return;
-      const update = () => mountDailyTop(dailyEl, trendData, tax, u.mx, {
+      if (!dailyEl || !dailyOpen || !summaryData) return;
+      const update = () => mountDailyTop(dailyEl, summaryData, tax, u.mx, {
         onPickProblem: ({ code, name, date, source }) => {
           openTrend({ name: "全部场景", all: true }, { name, prefix: code, pat: code }, source, true, date || null);
         },
@@ -3762,19 +3924,19 @@ function wire(bento, p, tax, u) {
     }
 
     async function hydrateDailyTop() {
-      if (!dailyEl || !dailyOpen || trendData || dailyLoading) return;
+      if (!dailyEl || !dailyOpen || summaryData || dailyLoading) return;
       dailyLoading = true;
       const token = ++dailyToken;
-      const data = await loadTrend(ctx);
+      const data = await loadTrendSummary(ctx);
       if (token !== dailyToken) return;
       dailyLoading = false;
       if (data?.dates?.length) {
-        trendData = data;
-        trendData.modelLabels = data.modelLabels || (p.models || []).map((m) => ({ id: m.id, label: m.label }));
+        summaryData = data;
+        summaryData.modelLabels = data.modelLabels || (p.models || []).map((m) => ({ id: m.id, label: m.label }));
         issueData = issueData || data;
       }
       if (dailyOpen && dailyEl.isConnected) {
-        if (trendData) renderDailyTop();
+        if (summaryData) renderDailyTop();
         else layoutPanels(() => { dailyEl.innerHTML = `<div class="mx-issue-loading"><div class="empty">暂无每日问题数据</div></div>`; });
       }
     }
@@ -3786,7 +3948,7 @@ function wire(bento, p, tax, u) {
         if (!dailyEl) return;
         dailyEl.hidden = !open;
         if (open) {
-          if (trendData) renderDailyTop(false);
+          if (summaryData) renderDailyTop(false);
           else dailyEl.innerHTML = `<div class="mx-issue-loading"><div class="empty">正在读取每日问题…</div></div>`;
         }
       }, animate);
@@ -3804,7 +3966,7 @@ function wire(bento, p, tax, u) {
       Object.entries(tax.patterns || {}).forEach(([id, node]) => { if (node?.name) names.set(id, node.name); });
       const update = () => mountProblemTrends(issueEl, issueData, u.mx, names, layoutPanels, {
         mountDetailChart: (plot, node, renderChart, interaction) => mountSampleTrend(plot, renderChart,
-          (pick) => loadTrendSamplePage(issueData, { node, scenes: null }, pick), interaction),
+          (pick) => loadTrendSamplePage(ctx, loadSample, issueData, { node, scenes: null }, pick), interaction),
       });
       if (reveal) layoutPanels(update);
       else update();
@@ -3814,10 +3976,11 @@ function wire(bento, p, tax, u) {
       if (!issueEl || !panelsOpen || issueLoading || issueData) return;
       issueLoading = true;
       const token = ++issueToken;
-      const data = await loadTrend(ctx);
+      const data = summaryData || await loadTrendSummary(ctx);
       if (token !== issueToken) return;
       issueLoading = false;
       issueData = data?.dates?.length ? data : null;
+      if (issueData && !summaryData) summaryData = issueData;
       if (panelsOpen && issueEl.isConnected) {
         if (issueData) renderIssueTrends();
         else layoutPanels(() => { issueEl.innerHTML = `<div class="mx-issue-loading"><div class="empty">暂无问题趋势数据</div></div>`; });
@@ -3831,23 +3994,23 @@ function wire(bento, p, tax, u) {
         const old = perspectiveEl.querySelector(".mxp-rate-chart");
         old?._drawer?.destroy();
         old?._kline?.destroy();
-        perspectiveEl.innerHTML = `<div class="mx-perspective-inner">${matrixPerspectiveHTML(trendData, loading, u.mx)}</div>`;
+        perspectiveEl.innerHTML = `<div class="mx-perspective-inner">${matrixPerspectiveHTML(summaryData, loading, u.mx)}</div>`;
       };
       if (reveal) layoutPanels(update);
       else update();
-      wireMatrixAnalysis(perspectiveEl, traceSeverityModel(trendData), u.mx, trendData);
+      wireMatrixAnalysis(perspectiveEl, traceSeverityModel(summaryData), u.mx, summaryData);
     }
 
     async function hydratePerspective() {
-      if (!perspectiveEl || !panelsOpen || trendData || perspectiveLoading) return;
+      if (!perspectiveEl || !panelsOpen || summaryData || perspectiveLoading) return;
       perspectiveLoading = true;
       const token = ++perspectiveToken;
-      const data = await loadTrend(ctx);
+      const data = await loadTrendSummary(ctx);
       if (token !== perspectiveToken) return;
       perspectiveLoading = false;
       if (data?.dates?.length) {
-        trendData = data;
-        trendData.modelLabels = data.modelLabels || (p.models || []).map((m) => ({ id: m.id, label: m.label }));
+        summaryData = data;
+        summaryData.modelLabels = data.modelLabels || (p.models || []).map((m) => ({ id: m.id, label: m.label }));
       }
       if (panelsOpen && perspectiveEl.isConnected) renderPerspective(false);
     }
@@ -3877,7 +4040,7 @@ function wire(bento, p, tax, u) {
             document.body.classList.remove("is-mxp-full");
           }
           perspectiveEl.hidden = !perspectiveVisible;
-          if (perspectiveVisible) renderPerspective(!trendData, false);
+          if (perspectiveVisible) renderPerspective(!summaryData, false);
         }
       }, animate);
       if (!open) return;
@@ -4186,7 +4349,7 @@ function wire(bento, p, tax, u) {
         backBtn.textContent = "← 返回矩阵";
         backBtn.hidden = false;
       }
-      const ready = trendReady(ctx);
+      const ready = trendNodeReady(ctx, node);
       $$(".mx-trend-probe", shell).forEach((el) => el.remove());
       if (!ready) {
         const status = document.createElement("span");
@@ -4195,7 +4358,7 @@ function wire(bento, p, tax, u) {
         shell.appendChild(status);
       }
       const token = ++trendToken;
-      const data = ready || await loadTrend(ctx);
+      const data = ready || await loadTrendNode(ctx, node);
       if (token !== trendToken || !trend.open || !shell.isConnected) return;
       $$(".mx-trend-probe, .mx-swap-probe", shell).forEach((el) => el.remove());
       if (!data || !data.dates || !data.dates.length) {
@@ -4218,12 +4381,7 @@ function wire(bento, p, tax, u) {
     }
 
     paint(false);
-    // The trend payload is 6-7 MB: fetch it while the matrix is idle so the first cell
-    // click swaps in an already-parsed chart instead of waiting on the network.
-    const preloadTrend = () => loadTrend(ctx);
-    if ("requestIdleCallback" in window) requestIdleCallback(preloadTrend, { timeout: 3000 });
-    else setTimeout(preloadTrend, 1200);
-    // 默认展开每日 TOP 问题面板；进入某个格子的就地趋势时它保持收着。
+    // 默认展开每日 TOP 问题面板（走轻量的 trends_summary-<p>.json，不再预拉 26+ MB 全量 trends）。
     setDailyOpen(!trend.open, false);
     // 就地刷新或切产品回来：路径还在，趋势也重新打开在同一格上。
     if (trend.open && trend.node) {
@@ -4338,12 +4496,14 @@ function wire(bento, p, tax, u) {
             .join("");
       return `<div class="t-head">${esc(row.name)} · ${esc(col.name)}</div>
         <div class="t-row"><span>问题</span><b class="num">${fmt(cell.n)}</b></div>
-        <div class="t-row"><span>会话</span><b class="num">${fmt(cell.sessions)}</b></div>
+        <div class="t-row"><span>命中 Trace</span><b class="num">${fmt(cell.hits ?? cell.sessions ?? 0)}</b></div>
         ${top ? `<div class="mx-tip-pats">${top}</div>` : ""}`;
     }
     if (!t.dataset.cell) return null;
     const [g, i] = t.dataset.cell.split(":").map(Number);
-    const c = p.field[g].cells[i];
+    const groupEl = t.closest(".fgroup");
+    const c = (groupEl?._cells && groupEl._cells[i]) || (p.field[g]?.cells && p.field[g].cells[i]);
+    if (!c) return null;
     return `<div class="t-head">${esc(c[3])}</div>
       <div class="t-row"><span class="sev" style="--c:${sevColor(c[1])}"><i></i>${SEV_NAME[WORST[c[1]]]}</span>
       <span>${esc(groupName(p, p.field[g]))}</span>${c[4] ? `<span class="dim">流失用户</span>` : ""}<b class="num">${c[2]} 个问题</b></div>`;

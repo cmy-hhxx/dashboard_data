@@ -27,7 +27,57 @@ const SITES = (() => {
     return {};
   }
 })();
-const state = { view: "data", product: "wencai", data: null, indexes: {}, indexP: {}, productData: {}, productP: {} };
+// Enabled products on this host, inlined by server.py so boot() can start data-<product>.json
+// and trends_summary-<product>.json in parallel with data.json instead of waiting sequentially.
+const BOOT = (() => {
+  try {
+    return JSON.parse(document.getElementById("boot")?.textContent || "{}");
+  } catch (err) {
+    return {};
+  }
+})();
+// Non-first-screen view stylesheets load on demand so HTTP/1.1 does not queue 7 unrelated CSS files
+// ahead of the active view's data payloads.
+const VIEW_CSS = {
+  speed: ["speed.css"],
+  system: ["system.css"],
+  judge: ["judge.css"],
+  bench: ["samples.css", "bench.css"],
+  samples: ["samples.css"],
+  forecast: ["samples.css"],
+  compare: ["samples.css", "compare.css"],
+  docs: ["docs.css"],
+};
+const CSS_PREFIX = (() => {
+  const link = document.querySelector('link[rel="stylesheet"][href*="css/base.css"]');
+  const href = link ? link.getAttribute("href") || "" : "";
+  return href.replace(/base\.css(?:\?.*)?$/, "") || "css/";
+})();
+const loadedCSS = new Map();
+function ensureCSS(file) {
+  if (loadedCSS.has(file)) return loadedCSS.get(file);
+  const href = `${CSS_PREFIX}${file}`;
+  if (document.querySelector(`link[rel="stylesheet"][href$="/${file}"], link[rel="stylesheet"][href="css/${file}"]`)) {
+    const done = Promise.resolve();
+    loadedCSS.set(file, done);
+    return done;
+  }
+  const p = new Promise((resolve) => {
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = href;
+    link.onload = () => resolve();
+    link.onerror = () => resolve();
+    document.head.appendChild(link);
+  });
+  loadedCSS.set(file, p);
+  return p;
+}
+function ensureViewCSS(view) {
+  const files = VIEW_CSS[view];
+  return files ? Promise.all(files.map(ensureCSS)) : Promise.resolve();
+}
+const state = { view: "data", product: "wencai", data: null, indexes: {}, indexP: {}, productData: {}, productP: {}, trendSummaryP: {} };
 const modules = {};
 // Each view module loads on first visit; a refused connection retries instead of breaking the view.
 const loaders = Object.fromEntries([
@@ -143,6 +193,16 @@ async function loadProductData(product = state.product) {
   }
 }
 
+function loadTrendSummary(product = state.product) {
+  if (!state.trendSummaryP[product]) {
+    state.trendSummaryP[product] = getJSON(`trends_summary-${product}.json`, { retries: 1 }).catch(() => {
+      state.trendSummaryP[product] = null;
+      return null;
+    });
+  }
+  return state.trendSummaryP[product];
+}
+
 async function loadIndex(product = state.product) {
   if (state.indexes[product]) return state.indexes[product];
   state.indexP[product] = state.indexP[product] || getJSON(`samples-${product}.json`);
@@ -248,7 +308,9 @@ async function render({ refresh = false } = {}) {
   const waiting = !modules[state.view] || (state.data && NEEDS_PRODUCT.has(state.view) && state.productData[state.product] !== true);
   if (waiting && !root.firstChild) root.innerHTML = skeletonHTML(state.view);
   try {
+    const cssP = ensureViewCSS(state.view);
     modules[state.view] = modules[state.view] || (await loaders[state.view]());
+    await cssP;
     if (state.data && NEEDS_PRODUCT.has(state.view)) {
       try {
         await loadProductData(state.product);
@@ -256,7 +318,7 @@ async function render({ refresh = false } = {}) {
         console.error(err);
       }
     }
-    await modules[state.view].render(root, { ...state, navigate, loadIndex, peekIndex, loadRecallHead, recallPage, recallSlice, inputSlice, recallLookup, refresh });
+    await modules[state.view].render(root, { ...state, navigate, loadIndex, peekIndex, loadRecallHead, loadTrendSummary, recallPage, recallSlice, inputSlice, recallLookup, refresh });
   } catch (err) {
     console.error(err);
     root.innerHTML = `<div class="bento"><div class="card" style="--span:12"><div class="empty">页面加载失败：${esc(String(err.message || err))}</div></div></div>`;
@@ -321,6 +383,7 @@ async function poll() {
     state.data = fresh;
     state.productData = {};
     state.productP = {};
+    state.trendSummaryP = {};
     state.indexes = {};
     state.indexP = {};
     Object.keys(recallP).forEach((p) => delete recallP[p]);
@@ -415,24 +478,31 @@ async function boot() {
   });
   window.addEventListener("online", () => poll());
   installTips();
-  // Start the initial view's code and data before the shell waits on the JSON.
+  // Start the initial view's code, CSS, and data in parallel — no sequential data.json -> data-<p>.json waterfall.
   readURL();
+  const asked = new URLSearchParams(location.search).get("product");
+  const localProducts = Array.isArray(BOOT.products) ? BOOT.products : [];
+  const eagerProduct = PRODUCTS.includes(asked)
+    ? (localProducts.length && !localProducts.includes(asked) ? null : asked)
+    : (PRODUCTS.find((p) => localProducts.includes(p)) || null);
+  const cssP = ensureViewCSS(state.view);
   const dataP = getJSON("data.json").catch(() => ({ products: {}, source: { pairs: 0 } }));
   const moduleP = loaders[state.view]().catch(() => null);
+  if (eagerProduct && NEEDS_PRODUCT.has(state.view)) {
+    state.productP[eagerProduct] = state.productP[eagerProduct] || getJSON(`data-${eagerProduct}.json`);
+    if (state.view === "data") loadTrendSummary(eagerProduct);
+  }
   state.data = await dataP;
-  const asked = new URLSearchParams(location.search).get("product");
   if (!asked) {
     state.product = PRODUCTS.find((p) => state.data.products[p]) || "wencai";
   }
   // A link to a product served elsewhere (?product=aime on the 问财 server) continues on its server.
   const away = PRODUCTS.includes(asked) && awayURL(asked, new URLSearchParams(location.search));
   if (away) return location.replace(away);
-  // The product payload is the largest first-screen fetch: start it as soon as data.json
-  // names the product, while the view module (and its chart vendor) is still loading.
+  // The product payload is already in flight when eagerProduct matched; await it alongside code + CSS.
   const productP = NEEDS_PRODUCT.has(state.view) ? loadProductData(state.product).catch((err) => console.error(err)) : null;
-  const mod = await moduleP;
+  const [mod] = await Promise.all([moduleP, cssP, productP]);
   if (mod) modules[state.view] = mod;
-  await productP;
   render();
   stamp();
   setInterval(poll, POLL_MS);

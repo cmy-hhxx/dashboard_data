@@ -469,6 +469,7 @@ class RecallEntry:
         self._query_lock = threading.Lock()
         self._order_cache: OrderedDict[tuple, list[dict]] = OrderedDict()
         self._facet_cache: OrderedDict[tuple, dict] = OrderedDict()
+        self._field_cache: dict[tuple[str, str], list[list[dict]]] = {}
         empty_f = {k: "" for k in ("q", "w", "split", "model", "ut", "date", "scene", "sub", "stage", "mech", "pattern", "hr")}
         self.default_facets = _compute_facets(self.sessions, empty_f)
 
@@ -961,6 +962,107 @@ class RecallEntry:
             if len(hits) >= RECALL_CAP:
                 break
         return {"product": self.product, "generated_at": self.generated_at, "rows": hits}
+
+    def _field_buckets(self, split: str, model: str) -> list[list[dict]]:
+        key = (split, model)
+        with self._query_lock:
+            hit = self._field_cache.get(key)
+            if hit is not None:
+                return hit
+        buckets: list[list[dict]] = [[] for _ in WORST]
+        candidates = self.by_model.get(model, ()) if model else self.rows
+        for r in candidates:
+            if split:
+                if split == "lost":
+                    if not r.get("ul"):
+                        continue
+                elif r.get("sp") != split:
+                    continue
+            buckets[sev_idx(r.get("w"))].append(r)
+        for b in buckets:
+            b.sort(key=lambda r: (-int(r.get("n") or 0), str(r.get("d") or "")))
+        with self._query_lock:
+            self._field_cache[key] = buckets
+        return buckets
+
+    def query_field(self, q: dict[str, str]) -> dict:
+        """Serve one proportional page of 会话场 tiles without shipping all cells in data-<p>.json."""
+        model = q.get("model") or ""
+        split = q.get("split") or ""
+        try:
+            cap = max(1, min(2000, int(q.get("cap") or "300")))
+        except ValueError:
+            cap = 300
+        try:
+            page = max(1, int(q.get("page") or "1"))
+        except ValueError:
+            page = 1
+
+        buckets = self._field_buckets(split, model)
+        total = sum(len(b) for b in buckets)
+        pages = max(1, math.ceil(total / cap)) if total else 1
+        page = min(page, pages)
+
+        rem = [len(b) for b in buckets]
+        offsets = [0] * len(WORST)
+        page_alloc = [0] * len(WORST)
+        for p_idx in range(page):
+            need = min(cap, total - p_idx * cap) if total else 0
+            if p_idx == pages - 1:
+                alloc = rem[:]
+            elif need <= 0:
+                alloc = [0] * len(WORST)
+            else:
+                total_rem = sum(rem)
+                quotas = [(need * n) / total_rem if total_rem else 0.0 for n in rem]
+                base = [math.floor(x) for x in quotas]
+                left = need - sum(base)
+                order = sorted(range(len(WORST)), key=lambda s: quotas[s] - base[s], reverse=True)
+                while left > 0:
+                    moved = False
+                    for s in order:
+                        if left <= 0:
+                            break
+                        if base[s] < rem[s]:
+                            base[s] += 1
+                            left -= 1
+                            moved = True
+                    if not moved:
+                        break
+                alloc = base
+            if p_idx == page - 1:
+                page_alloc = alloc
+            else:
+                for s in range(len(WORST)):
+                    offsets[s] += alloc[s]
+                    rem[s] -= alloc[s]
+
+        cells = []
+        for s, take in enumerate(page_alloc):
+            if take <= 0:
+                continue
+            start = offsets[s]
+            for r in buckets[s][start:start + take]:
+                raw_q = " ".join(str(r.get("q") or "").split())
+                q_clip = (raw_q[:55].rstrip() + "…") if len(raw_q) > 56 else raw_q
+                cells.append([
+                    r.get("s") or "",
+                    s,
+                    int(r.get("n") or 0),
+                    q_clip,
+                    1 if r.get("ul") else 0,
+                ])
+        return {
+            "product": self.product,
+            "generated_at": self.generated_at,
+            "model": model,
+            "split": split,
+            "total": total,
+            "pages": pages,
+            "page": page,
+            "cap": cap,
+            "cells": cells,
+        }
 
     def lookup(self, slugs: list[str], tids: list[str], cap: int = RECALL_CAP) -> dict:
         cap = max(1, min(RECALL_CAP, int(cap or RECALL_CAP)))

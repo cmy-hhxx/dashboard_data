@@ -487,6 +487,18 @@ export async function loadTrendSamplePage(ctx, loadSample, trend, spec, pick) {
 
 export async function loadTraceSamplePage(ctx, trend, pick) {
   const product = ctx.product;
+  const hasLocalRefs = Array.isArray(trend?.trace_severity?.refs);
+  if (!hasLocalRefs && typeof ctx.recallSlice === "function") {
+    const res = await ctx.recallSlice(product, {
+      mode: "trace_sev",
+      date: pick.date,
+      level: pick.series.level,
+      cap: RECALL_CAP,
+    });
+    if (res && Array.isArray(res.items)) {
+      return { items: res.items, unit: "条 Trace", done: true, canScan: false, scanMore: null };
+    }
+  }
   const refs = traceSampleRefs(trend, pick.date, pick.series.level).slice(0, RECALL_CAP);
   const slugs = [...new Set(refs.map(([, slug]) => slug).filter(Boolean))];
   let rows = null;

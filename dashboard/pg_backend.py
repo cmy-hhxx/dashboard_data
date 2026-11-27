@@ -1663,7 +1663,7 @@ def build_from_pg(datasets: Path, out_dir: Path, log=print):
         product_payload["kpi"]["inputs"] = input_vol_payload["records"]
         product_payload["kpi"]["lost"] = input_vol_payload["lost"]
         product_payload["kpi"]["compacted"] = compacted_cnt
-        product_payload["daily"] = build.daily_payload(
+        product_payload["daily"], product_payload["daily_summary"] = build.build_daily(
             samples_list, daily_in_records, daily_in_sids_sorted, daily_in_traces
         )
         used_patterns = {
@@ -1763,8 +1763,8 @@ def build_from_pg(datasets: Path, out_dir: Path, log=print):
             out_dir / "data-aime.json",
             {"schema": 2, "generated_at": generated, "product": "aime", "products": {"aime": product_payload}},
         )
-        trend_bytes = build.write_json(
-            out_dir / "trends-aime.json",
+        trend_bytes = build.write_trend_artifacts(
+            out_dir, "aime",
             build.trend_payload("aime", samples_list, _release_entries_pg(data_root, datasets, "aime"), generated),
         )
         data_bytes += build.write_json(out_dir / "data.json", shared)
