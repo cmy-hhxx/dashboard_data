@@ -1266,11 +1266,14 @@ class PipelineManager:
                 compact_path=exp.get("compact_path"),
             )
             commit_res = pg_ab_sync.commit_historical_human_read_pg(hr_out, exp["output_id_by_trace"])
+            failed_n = int(summary.get("failed") or 0) if summary.get("partial_failures") else 0
+            suffix = f"（未通过硬校验 {failed_n} 条）" if failed_n > 0 else ""
             self.store.add_event(
                 run_id,
                 "human_read",
                 "historical_human_read_done",
-                f"Candidate 1 基线人话补译完成：待补 {missing_n} 条，已入库 PG {commit_res['committed']} 条",
+                f"Candidate 1 基线人话补译完成：待补 {missing_n} 条，已入库 PG {commit_res['committed']} 条{suffix}",
+                level="warn" if failed_n > 0 else "info",
                 side="before",
                 details={"missing": missing_n, **commit_res, "engine_summary": summary},
             )
@@ -1718,11 +1721,14 @@ class PipelineManager:
                 compact_path=compact_file if compact_file.is_file() else None,
             )
             if not summary.get("skipped"):
+                failed_n = int(summary.get("failed") or 0) if summary.get("partial_failures") else 0
+                suffix = f"（未通过硬校验 {failed_n} 条）" if failed_n > 0 else ""
                 self.store.add_event(
                     run_id,
                     "human_read",
                     "human_read_done",
-                    f"{side} 人话归因翻译完成（copied={bool(summary.get('copied'))}）",
+                    f"{side} 人话归因翻译完成（copied={bool(summary.get('copied'))}）{suffix}",
+                    level="warn" if failed_n > 0 else "info",
                     side=side,
                     details=summary,
                 )

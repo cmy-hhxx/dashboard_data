@@ -704,42 +704,48 @@ def commit_historical_human_read_pg(
     from pg_data_core.core import DataCore
 
     cfg = load_config(role="rw", data_root=os.environ.get("AIME_DATA_ROOT") or None)
-    committed = 0
+    # Keep last translated record per output_id so retry/re-append files never commit duplicates
+    latest_by_oid: dict[int, dict[str, Any]] = {}
     skipped = 0
-    with DataCore(cfg) as core:
-        with hr_jsonl_path.open("r", encoding="utf-8", errors="replace") as fh:
-            for raw_line in fh:
-                line = raw_line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except ValueError:
-                    skipped += 1
-                    continue
-                if not isinstance(rec, dict):
-                    skipped += 1
-                    continue
-                smeta = rec.get("session_meta") if isinstance(rec.get("session_meta"), dict) else {}
-                turns = rec.get("turns") if isinstance(rec.get("turns"), list) else []
-                tmeta = (
-                    turns[0].get("meta")
-                    if turns and isinstance(turns[0], dict) and isinstance(turns[0].get("meta"), dict)
-                    else {}
+    with hr_jsonl_path.open("r", encoding="utf-8", errors="replace") as fh:
+        for raw_line in fh:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                skipped += 1
+                continue
+            if not isinstance(rec, dict):
+                skipped += 1
+                continue
+            smeta = rec.get("session_meta") if isinstance(rec.get("session_meta"), dict) else {}
+            turns = rec.get("turns") if isinstance(rec.get("turns"), list) else []
+            tmeta = (
+                turns[0].get("meta")
+                if turns and isinstance(turns[0], dict) and isinstance(turns[0].get("meta"), dict)
+                else {}
+            )
+            cand_tids = [
+                str(x).strip()
+                for x in (
+                    tmeta.get("trace_id"),
+                    smeta.get("trace_id"),
+                    rec.get("trace_id"),
                 )
-                cand_tids = [
-                    str(x).strip()
-                    for x in (
-                        tmeta.get("trace_id"),
-                        smeta.get("trace_id"),
-                        rec.get("trace_id"),
-                    )
-                    if x
-                ]
-                oid = next((output_id_by_trace[t] for t in cand_tids if t in output_id_by_trace), None)
-                if oid is None:
-                    skipped += 1
-                    continue
+                if x
+            ]
+            oid = next((output_id_by_trace[t] for t in cand_tids if t in output_id_by_trace), None)
+            if oid is None:
+                skipped += 1
+                continue
+            latest_by_oid[oid] = rec
+
+    committed = 0
+    if latest_by_oid:
+        with DataCore(cfg) as core:
+            for oid, rec in latest_by_oid.items():
                 core.commit_human_read_overlay(output_id=oid, hr_record=rec, target_kind="attribution")
                 committed += 1
     return {"committed": committed, "skipped": skipped}

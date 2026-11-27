@@ -521,7 +521,7 @@ class VendoredEngineBackend(EngineBackend):
             raise RuntimeError("未配置人话翻译网关密钥（INTERNAL_EVAL_GATEWAY_API_KEY）")
 
         ensure_vendor_on_path()
-        from eval_harness import human_read_eval  # type: ignore
+        from eval_harness import EvalRunError, human_read_eval  # type: ignore
 
         work_dir.mkdir(parents=True, exist_ok=True)
         cfg_dict: dict[str, Any] = {
@@ -545,7 +545,22 @@ class VendoredEngineBackend(EngineBackend):
         if compact_path is not None and compact_path.is_file():
             cfg_dict["human_read"]["compact_input"] = str(compact_path)
 
-        summary = dict(human_read_eval(cfg_dict, quiet=True) or {})
+        partial_error: str | None = None
+        retried_failed = False
+        try:
+            summary = dict(human_read_eval(cfg_dict, quiet=True) or {})
+        except EvalRunError as exc:
+            if getattr(exc, "returncode", None) != 2:
+                raise
+            retried_failed = True
+            try:
+                summary = dict(human_read_eval(cfg_dict, retry_failed=True, quiet=True) or {})
+            except EvalRunError as exc2:
+                if getattr(exc2, "returncode", None) != 2:
+                    raise
+                summary = dict(getattr(exc2, "summary", None) or getattr(exc, "summary", None) or {})
+                partial_error = str(exc2)
+
         translated = work_dir / attribution_path.name
         copied = False
         if translated.is_file() and translated.stat().st_size > 0:
@@ -556,6 +571,10 @@ class VendoredEngineBackend(EngineBackend):
             copied = True
         summary["output_path"] = str(output_path)
         summary["copied"] = copied
+        summary["retried_failed"] = retried_failed
+        if partial_error:
+            summary["partial_failures"] = True
+            summary["partial_error"] = partial_error
         return summary
 
 

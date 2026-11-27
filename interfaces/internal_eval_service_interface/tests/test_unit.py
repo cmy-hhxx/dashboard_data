@@ -388,6 +388,56 @@ class UnitTests(unittest.TestCase):
             res_extra = store.query_results("run_mix", side="before", source_origin="算法提供")
             self.assertEqual(res_extra["total"], 3)
 
+    def test_human_read_retries_and_salvages_partial_failures(self) -> None:
+        from unittest.mock import patch
+        from internal_eval.config import load_config
+        from internal_eval.engines import VendoredEngineBackend, ensure_vendor_on_path
+
+        ensure_vendor_on_path()
+        import eval_harness
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            inp = root / "in.jsonl"
+            attr = root / "pg_attribution.jsonl"
+            out = root / "out.jsonl"
+            work = root / "work"
+            inp.write_text('{"trace_id":"t1"}\n', encoding="utf-8")
+            attr.write_text('{"trace_id":"t1"}\n{"trace_id":"t2"}\n', encoding="utf-8")
+
+            calls: list[dict] = []
+
+            def fake_hr(cfg_dict, *, retry_failed=None, quiet=False):
+                calls.append({"retry_failed": retry_failed, "quiet": quiet})
+                out_file = Path(cfg_dict["human_read"]["output_root"]) / "pg_attribution.jsonl"
+                out_file.parent.mkdir(parents=True, exist_ok=True)
+                out_file.write_text('{"trace_id":"t1","_human_read":{"model":"m"}}\n', encoding="utf-8")
+                raise eval_harness.EvalRunError(
+                    "Human-read translation finished with failures (failed=1)",
+                    returncode=2,
+                    summary={"ok": 1, "failed": 1},
+                )
+
+            cfg = load_config(env={"INTERNAL_EVAL_GATEWAY_API_KEY": "test-key"})
+            adapter = VendoredEngineBackend(cfg)
+            with patch.object(eval_harness, "human_read_eval", side_effect=fake_hr):
+                res = adapter.human_read(
+                    input_path=inp,
+                    attribution_path=attr,
+                    output_path=out,
+                    work_dir=work,
+                )
+
+            self.assertEqual(len(calls), 2)
+            self.assertIsNone(calls[0]["retry_failed"])
+            self.assertTrue(calls[1]["retry_failed"])
+            self.assertTrue(res["copied"])
+            self.assertTrue(res["partial_failures"])
+            self.assertTrue(res["retried_failed"])
+            self.assertEqual(res["failed"], 1)
+            self.assertTrue(out.is_file())
+            self.assertIn("_human_read", out.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()
