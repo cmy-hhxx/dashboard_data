@@ -460,6 +460,122 @@ class SpeedMonitorTests(unittest.TestCase):
         self.assertEqual(by_name2["gw-1"]["rpm"], 175.0)
         self.assertEqual(by_name2["gw-2"]["rpm"], 175.0)
 
+    def test_pg_payload_exposes_live_gateway_rpm_and_utilization(self):
+        from unittest import mock
+
+        gw = ThreadingHTTPServer(("127.0.0.1", 0), _MockGateway)
+        gw_thread = threading.Thread(target=gw.serve_forever, daemon=True)
+        gw_thread.start()
+        try:
+            port = gw.server_address[1]
+            gw_base = f"http://127.0.0.1:{port}/ai-gateway/v1"
+            now = time.time()
+            cur_min = (int(now) // 60) * 60
+            with tempfile.TemporaryDirectory() as folder:
+                rt = Path(folder) / "runtime"
+                (rt / "config").mkdir(parents=True)
+                (rt / "config/config.ini").write_text(
+                    f"[channel.evaluation-gateway]\nbase_url = {gw_base}\napi_key = secret-test-key\nmodels = deepseek-v4.1-flash\n",
+                    encoding="utf-8",
+                )
+                (rt / "control.json").write_text(
+                    json.dumps({"modelRequests": 200, "concurrency": 150, "paused": False, "channels": {"evaluation-gateway": 200}}),
+                    encoding="utf-8",
+                )
+                (rt / "rpm-limit.json").write_text(
+                    json.dumps({"rpm": 500, "replicas": 3, "target_rpm": 475.0}),
+                    encoding="utf-8",
+                )
+
+                class _FakeCursor:
+                    def __init__(self):
+                        self._rows = []
+
+                    def __enter__(self):
+                        return self
+
+                    def __exit__(self, *a):
+                        return False
+
+                    def execute(self, sql, params=None):
+                        s = " ".join(sql.split())
+                        if "GROUP BY i.model, i.biz_day" in s:
+                            self._rows = [{
+                                "model": "aime_fast", "biz_day": "2026-11-27",
+                                "input_traces": 100, "input_sessions": 50,
+                                "attr_traces": 80, "attr_sessions": 40,
+                                "compact_cnt": 80, "items_cnt": 160,
+                                "pending_cnt": 15, "claimed_cnt": 5, "failed_cnt": 0,
+                            }]
+                        elif "GROUP BY i.model" in s:
+                            self._rows = [{"model": "aime_fast", "input_sessions": 50, "attr_sessions": 40}]
+                        elif "COALESCE(u.is_lost" in s:
+                            self._rows = [{"input_sessions": 0, "input_traces": 0, "attr_sessions": 0, "attr_traces": 0, "attr_items": 0}]
+                        elif "WHERE p.cluster_code IS NULL" in s:
+                            self._rows = [{"model": "aime_fast", "biz_day": "2026-11-27", "pending_traces": 10, "pending_problems": 20}]
+                        elif "probs_g1" in s:
+                            # 10 traces/min over 4 recent minutes: each trace has 2 probs -> (1 + 2*3 + 13) = 20 reqs/trace -> 200 reqs/min
+                            self._rows = [
+                                {"b_s": cur_min - 180, "attr_cnt": 10, "comp_cnt": 10, "probs_g1": 20},
+                                {"b_s": cur_min - 120, "attr_cnt": 10, "comp_cnt": 10, "probs_g1": 20},
+                                {"b_s": cur_min - 60, "attr_cnt": 10, "comp_cnt": 10, "probs_g1": 20},
+                                {"b_s": cur_min, "attr_cnt": 10, "comp_cnt": 10, "probs_g1": 20},
+                            ]
+                        elif "MAX(evaluated_at)" in s:
+                            self._rows = [{"max_eval": None}]
+                        elif "clustered_at" in s and "GROUP BY 1" in s:
+                            self._rows = []
+                        elif "MAX(clustered_at)" in s:
+                            self._rows = [{"max_cl": None}]
+                        elif "human_read_overlays" in s:
+                            self._rows = [{"b_s": cur_min - 60, "hr_attr": 10, "hr_comp": 5}]
+                        elif "eval_status = 'claimed'" in s:
+                            self._rows = [{"model": "aime_fast", "worker": "va-0", "claimed_cnt": 5, "expired_cnt": 0, "last_upd": None}]
+                        else:
+                            self._rows = []
+
+                    def fetchall(self):
+                        return list(self._rows)
+
+                    def fetchone(self):
+                        return self._rows[0] if self._rows else None
+
+                class _FakeConn:
+                    def __enter__(self):
+                        return self
+
+                    def __exit__(self, *a):
+                        return False
+
+                    def cursor(self):
+                        return _FakeCursor()
+
+                fake_pg = mock.MagicMock()
+                fake_pg._ensure_pg.return_value = (None, lambda cfg, app_name="": _FakeConn(), None, None)
+                fake_pg._load_pg_config.return_value = {}
+
+                speed_monitor.reset_for_test(overrides={"runtime_root": str(rt), "conf_ini": str(rt / "config/config.ini")})
+                with speed_monitor._PG_CACHE_LOCK:
+                    speed_monitor._PG_CACHE["ts"] = 0.0
+                    speed_monitor._PG_CACHE["payload"] = None
+                with mock.patch.dict(sys.modules, {"pg_backend": fake_pg}):
+                    data = speed_monitor._pg_payload()
+
+                self.assertEqual(data["mode"], "pg")
+                self.assertTrue(data["ok"])
+                gw_block = data["gateways"]
+                self.assertEqual((gw_block["count"], gw_block["healthy"], gw_block["rpm_limit"]), (1, 1, 500))
+                self.assertEqual(gw_block["rpm_source"], "key")
+                self.assertGreater(gw_block["realtime_rpm"], 100.0)
+                self.assertIsNotNone(gw_block["rpm_utilization"])
+                self.assertAlmostEqual(gw_block["rpm_utilization"], gw_block["realtime_rpm"] / 500.0, places=3)
+                self.assertEqual(len(gw_block["items"]), 1)
+                self.assertAlmostEqual(gw_block["items"][0]["rpm_utilization"], gw_block["rpm_utilization"], places=3)
+                self.assertGreaterEqual(len(data["rpm_history"]), 4)
+        finally:
+            gw.shutdown()
+            gw.server_close()
+
 
 if __name__ == "__main__":
     unittest.main()

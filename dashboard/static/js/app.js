@@ -39,7 +39,7 @@ const BOOT = (() => {
 // Non-first-screen view stylesheets load on demand so HTTP/1.1 does not queue 7 unrelated CSS files
 // ahead of the active view's data payloads.
 const VIEW_CSS = {
-  speed: ["speed.css"],
+  speed: ["system.css", "speed.css"],
   system: ["system.css"],
   judge: ["judge.css"],
   bench: ["samples.css", "bench.css"],
@@ -90,7 +90,7 @@ const loaders = Object.fromEntries([
    so the page never flashes empty; the view's render replaces it. */
 const SKELETON = {
   data: [[3, 132], [3, 132], [3, 132], [3, 132], [8, 360], [4, 360], [12, 420]],
-  speed: [[12, 168], [12, 168], [4, 124], [4, 124], [4, 124], [12, 280], [12, 240]],
+  speed: [[12, 168], [12, 168], [3, 124], [3, 124], [3, 124], [3, 124], [12, 280], [12, 240]],
   system: [[12, 420], [12, 520]],
   judge: [[12, 64], [4, 380], [4, 380], [4, 380], [12, 150], [7, 320], [5, 320]],
   bench: [[12, 168], [5, 390], [7, 390], [7, 360], [5, 360], [12, 420]],
@@ -425,8 +425,8 @@ async function boot() {
     const cmpBtn = e.target.closest('button[data-value="compare"]');
     if (cmpBtn) {
       const sp = new URLSearchParams(location.search);
-      if (sp.get("face") || sp.get("pair")) {
-        navigate({ view: "compare", face: null, pair: null });
+      if (sp.get("round") || sp.get("face") || sp.get("pair")) {
+        navigate({ view: "compare", round: null, face: null, pair: null });
       }
     }
   });

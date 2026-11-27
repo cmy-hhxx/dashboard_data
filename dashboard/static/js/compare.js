@@ -37,7 +37,8 @@ export function resolveCompareFace(search, { hasAB = true, isStandalone = false 
   if (isStandalone || !hasAB) return "detail";
   const q = new URLSearchParams(search || "");
   if (q.get("face") === "detail" || q.get("pair")) return "detail";
-  return "ab";
+  if (q.get("round") || q.get("face") === "ab") return "ab";
+  return "timeline";
 }
 
 export function pickRound(rounds, id) {
@@ -109,7 +110,7 @@ export function timelineModel(rounds, width = 1200) {
   }));
   const lo = (inset / width) * 100;
   const hi = 100 - lo;
-  const gap = (Math.max(150, Math.min(190, width * 0.13)) / width) * 100;
+  const gap = (Math.max(150, Math.min(224, width * 0.165)) / width) * 100;
   const spread = (side) => {
     const items = nodes.filter((node) => node.side === side).sort((a, b) => a.x - b.x);
     if (items.length < 2) return;
@@ -147,32 +148,88 @@ export function timelineModel(rounds, width = 1200) {
   return { nodes, months };
 }
 
-const timelineShell = (single, still) => `<section class="compare-tl${single ? " is-single" : ""}${still ? " is-still" : ""}" aria-label="测试集时间轴"><div class="compare-tl-plot"></div></section>`;
+const timelineShell = (count, single, still) => `<section class="compare-tl${single ? " is-single" : ""}${still ? " is-still" : ""}" aria-label="版本对比时间轴">
+  <header class="card-head compare-tl-head">
+    <h2>版本对比</h2>
+    <span class="compare-tl-total num">${fmt(count)} 期</span>
+  </header>
+  <div class="compare-tl-plot"></div>
+</section>`;
+
+function roundDeltaSummary(round) {
+  const b = round?.sides?.before;
+  const a = round?.sides?.after;
+  const bHits = b && b.hits != null ? Number(b.hits) : null;
+  const aHits = a && a.hits != null ? Number(a.hits) : null;
+  if (bHits != null && aHits != null) {
+    const delta = aHits - bHits;
+    const pctNum = bHits > 0 ? (100 * Math.abs(delta)) / bHits : null;
+    const sign = delta > 0 ? "+" : delta < 0 ? "−" : "";
+    const pctText = pctNum == null
+      ? (delta === 0 ? "0%" : `${sign}${fmt(Math.abs(delta))}`)
+      : `${sign}${pctNum >= 100 ? fmt(pctNum, 0) : fmt(pctNum, 1)}%`;
+    const tone = delta < 0 ? "is-better" : delta > 0 ? "is-worse" : "is-flat";
+    return { ready: true, bHits, aHits, delta, pctText, tone };
+  }
+  if (bHits != null) {
+    return { ready: false, bHits, aHits: null, delta: null, pctText: fmt(bHits), tone: "is-flat" };
+  }
+  return null;
+}
+
+function timelineModelTag(round) {
+  const models = new Set((Array.isArray(round?.models) ? round.models : []).map((m) => String(m || "").toLowerCase()));
+  const fast = models.has("fast");
+  const expert = models.has("expert");
+  if (fast && expert) return "fast+expert";
+  if (expert) return "expert";
+  if (fast) return "fast";
+  return (Array.isArray(round?.models) ? round.models : []).filter(Boolean).join("+");
+}
 
 function timelinePlotHTML(model) {
-  const ticks = model.months.map((month, i) => `<span class="compare-tl-tick" style="--x:${month.x.toFixed(3)}%;--i:${i}" aria-hidden="true"><i></i><b>${esc(month.label || "")}</b></span>`).join("");
+  const ticks = model.months.map((month, i) => `<span class="compare-tl-tick" style="--x:${month.x.toFixed(3)}%;--i:${i}" aria-hidden="true"><i></i><b${month.label ? "" : " hidden"}>${esc(month.label || "")}</b></span>`).join("");
+  const lastIdx = model.nodes.length - 1;
   const nodes = model.nodes.map((node, i) => {
     const round = node.round;
     const name = roundName(round, i);
     const date = roundDate(round);
-    const models = (Array.isArray(round.models) ? round.models : []).join(" + ");
-    const pairs = Array.isArray(round.pairs) ? round.pairs.length : 0;
-    const meta = [models, pairs ? `${fmt(pairs)} 道同题` : ""].filter(Boolean).join(" · ");
-    return `<button type="button" class="compare-tl-node" data-round="${esc(round.id)}" data-side="${node.side}" style="--x:${node.x.toFixed(3)}%;--i:${i};--dir:${node.side === "up" ? -1 : 1}" aria-label="${esc([name, date, meta].filter(Boolean).join("，"))}">
+    const tag = timelineModelTag(round);
+    const qCount = Number(round?.common?.total) || (Array.isArray(round?.pairs) ? round.pairs.length : 0) || Number(round?.targets) || 0;
+    const stat = roundDeltaSummary(round);
+    const isLatest = i === lastIdx;
+    const metricHTML = stat
+      ? (stat.ready
+        ? `<span class="compare-tl-metric">
+            <b class="compare-tl-pct num ${stat.tone}">${esc(stat.pctText)}</b>
+            <span class="compare-tl-io num">${fmt(stat.bHits)} → ${fmt(stat.aHits)}</span>
+          </span>`
+        : `<span class="compare-tl-metric"><b class="compare-tl-pct num">${esc(stat.pctText)}</b></span>`)
+      : "";
+    const footHTML = (date || qCount)
+      ? `<span class="compare-tl-foot num">${date ? `<span class="compare-tl-date">${esc(date)}</span>` : ""}${qCount ? `<span class="compare-tl-qcount">${fmt(qCount)} 题</span>` : ""}</span>`
+      : "";
+    const aria = [name, tag, stat?.ready ? `${stat.pctText}（${fmt(stat.bHits)} → ${fmt(stat.aHits)}）` : "", date, qCount ? `${fmt(qCount)} 题` : ""].filter(Boolean).join("，");
+    return `<button type="button" class="compare-tl-node${isLatest ? " is-latest" : ""}" data-round="${esc(round.id)}" data-side="${node.side}" style="--x:${node.x.toFixed(3)}%;--i:${i};--dir:${node.side === "up" ? -1 : 1}" aria-label="${esc(aria)}">
       <span class="compare-tl-body">
-        <span class="compare-tl-name">${esc(name)}</span>
-        ${date ? `<span class="compare-tl-date num">${esc(date)}</span>` : ""}
-        ${meta ? `<span class="compare-tl-meta">${esc(meta)}</span>` : ""}
+        <span class="compare-tl-top">
+          <span class="compare-tl-name">${esc(name)}</span>
+          ${tag ? `<span class="compare-tl-model">${esc(tag)}</span>` : ""}
+        </span>
+        ${metricHTML}
+        ${footHTML}
       </span>
       <span class="compare-tl-stem" aria-hidden="true"></span>
       <span class="compare-tl-dot" aria-hidden="true"></span>
     </button>`;
   }).join("");
-  // 只有一个 round 时，一条贯穿高度的淡竖线把这一天钉在轴上，避免上下留白显得空。
   const guide = model.nodes.length === 1
     ? `<span class="compare-tl-guide" style="--x:${model.nodes[0].x.toFixed(3)}%" aria-hidden="true"></span>`
     : "";
-  return `<span class="compare-tl-axis" aria-hidden="true"></span>${guide}
+  const spanBar = model.nodes.length >= 2
+    ? `<span class="compare-tl-span" style="--x0:${model.nodes[0].x.toFixed(3)}%;--x1:${model.nodes[lastIdx].x.toFixed(3)}%" aria-hidden="true"></span>`
+    : "";
+  return `<span class="compare-tl-axis" aria-hidden="true"></span>${spanBar}${guide}
     <div class="compare-tl-ruler" aria-hidden="true">${ticks}</div>
     <div class="compare-tl-nodes">${nodes}</div>`;
 }
@@ -186,6 +243,11 @@ function positionTimeline(root, model) {
   });
   const guide = $(".compare-tl-guide", plot);
   if (guide && model.nodes.length === 1) guide.style.setProperty("--x", `${model.nodes[0].x.toFixed(3)}%`);
+  const spanBar = $(".compare-tl-span", plot);
+  if (spanBar && model.nodes.length >= 2) {
+    spanBar.style.setProperty("--x0", `${model.nodes[0].x.toFixed(3)}%`);
+    spanBar.style.setProperty("--x1", `${model.nodes[model.nodes.length - 1].x.toFixed(3)}%`);
+  }
   $$(".compare-tl-tick", plot).forEach((el, i) => {
     const month = model.months[i];
     const label = el.lastElementChild;
@@ -201,21 +263,33 @@ function stopPickerObserver() {
   if (pickerRO) { pickerRO.disconnect(); pickerRO = null; }
 }
 
-function testsetPicker(root, ctx, rounds) {
+function testsetPicker(root, ctx, rounds, { toAb = false } = {}) {
   destroyDetails();
+  root._cmpAbApi?.destroy?.();
+  root._cmpAbApi = null;
   C.skelKey = ""; C.listKey = ""; C.sidesKey = "";
   stopPickerObserver();
   const list = Array.isArray(rounds) ? rounds : [];
   if (!list.length) {
-    root.innerHTML = `<section class="compare-tl compare-tl-empty"><div class="empty">暂无测试集</div></section>`;
+    root.innerHTML = `<section class="compare-tl compare-tl-empty"><div class="empty">暂无版本对比数据</div></section>`;
     return;
   }
-  root.innerHTML = timelineShell(list.length === 1, !!ctx?.refresh);
+  root.innerHTML = timelineShell(list.length, list.length === 1, !!ctx?.refresh);
   const plot = $(".compare-tl-plot", root);
   plot.innerHTML = timelinePlotHTML(timelineModel(list, plot.clientWidth || 1200));
-  $(".compare-tl", root).addEventListener("click", (event) => {
+  const tl = $(".compare-tl", root);
+  tl.addEventListener("click", (event) => {
     const node = event.target.closest("[data-round]");
-    if (node && C.ctx) C.ctx.navigate({ round: node.dataset.round, pair: null });
+    if (node && C.ctx) C.ctx.navigate({ round: node.dataset.round, face: toAb ? "ab" : null, pair: null });
+  });
+  tl.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    const nodes = $$(".compare-tl-node", tl);
+    const idx = nodes.indexOf(document.activeElement);
+    if (idx < 0 || nodes.length < 2) return;
+    event.preventDefault();
+    const next = nodes[(idx + (event.key === "ArrowRight" ? 1 : -1) + nodes.length) % nodes.length];
+    next?.focus();
   });
   pickerRO = new ResizeObserver(() => {
     if (!C.root || C.root !== root) return;
@@ -449,7 +523,7 @@ function wireSkeleton(host) {
   $(".bench-compare", host).addEventListener("click", (e) => {
     const act = e.target.closest("[data-act]");
     if (act?.dataset.act === "to-ab") {
-      C.ctx?.navigate({ face: null, pair: null });
+      C.ctx?.navigate({ face: "ab", round: C.round?.id || null, pair: null });
       return;
     }
     if (act?.dataset.act === "toggle-list") {
@@ -914,9 +988,9 @@ async function mountBackDetail(backHost, ctx, payload, round, url, hasAB) {
     </div><div class="bento"><div class="card" style="--span:12"><div class="empty">暂无同题详情</div></div></div>`;
     $(".compare-empty-head", backHost).addEventListener("click", (event) => {
       if (hasAB && event.target.closest("[data-act='to-ab']")) {
-        ctx.navigate({ face: null, pair: null });
+        ctx.navigate({ face: "ab", round: round?.id || null, pair: null });
       } else if (event.target.closest("[data-act='testsets']")) {
-        ctx.navigate({ round: null, pair: null });
+        ctx.navigate({ round: null, face: null, pair: null });
       }
     });
     return;
@@ -987,6 +1061,14 @@ export async function render(root, ctx) {
   const tax = ctx.data?.taxonomy || null;
   const abState = abStateFor(ctx.product, rounds);
   const targetFace = resolveCompareFace(location.search, { hasAB: true, isStandalone: false });
+  if (targetFace === "timeline") {
+    testsetPicker(root, ctx, rounds, { toAb: true });
+    return;
+  }
+  if (url.round) {
+    const preIdx = rounds.findIndex((r) => String(r.id) === String(url.round));
+    if (preIdx >= 0) abState.round = preIdx;
+  }
   const stageKey = `${ctx.product}|${payload?.generated_at || ""}`;
   let stage = root.querySelector("#cmpStage");
 
@@ -999,6 +1081,7 @@ export async function render(root, ctx) {
         <article class="card cmp-ab-card" id="cmpAbCard">
           <div class="cmp-ab-inner">
             <header class="card-head ab-card-head">
+              <button type="button" class="compare-back compare-to-tl" id="cmpBackTl" title="返回时间轴" aria-label="返回时间轴">${CHEV_LEFT}<span>时间轴</span></button>
               <h2>版本对比</h2>
               <div class="ab-rounds" id="abRounds" role="group" aria-label="AB 测试期次"></div>
               <div class="ab-head-actions">
@@ -1028,6 +1111,12 @@ export async function render(root, ctx) {
     const roundsHost = $("#abRounds", stage);
     const abFullBtn = $("#abFull", stage);
     const faceSegEl = $("#cmpFaceSeg", stage);
+    const backTlBtn = $("#cmpBackTl", stage);
+
+    backTlBtn?.addEventListener("click", () => {
+      if (abCard.classList.contains("is-full")) setAbFull(false, false);
+      C.ctx?.navigate({ round: null, face: null, pair: null });
+    });
 
     const setAbFull = (on, animate = true) => {
       const had = abCard.classList.contains("is-full");
@@ -1059,13 +1148,13 @@ export async function render(root, ctx) {
       if (abCard.classList.contains("is-full")) setAbFull(false, false);
       const activeRound = rounds[abState.round];
       const nextRound = patch.round || activeRound?.id || null;
-      ctx.navigate({ face: "detail", round: nextRound, pair: patch.pair ?? null });
+      C.ctx?.navigate({ face: "detail", round: nextRound, pair: patch.pair ?? null });
     };
 
     const faceSeg = faceSegEl
       ? segmented(faceSegEl, (v) => {
           if (v === "detail") openDetailPatch({});
-          else ctx.navigate({ face: null, pair: null });
+          else C.ctx?.navigate({ face: "ab", round: rounds[abState.round]?.id || null, pair: null });
         })
       : null;
     root._cmpFaceSeg = faceSeg;
@@ -1073,6 +1162,9 @@ export async function render(root, ctx) {
     const prodObj = ctx.data?.products?.[ctx.product] || { id: ctx.product, unified: false };
     const abApi = mountAB(abBody, payload, abState, tax, prodObj, {
       roundsHost,
+      onRoundChange: (nextRound) => {
+        if (nextRound?.id && C.ctx) C.ctx.navigate({ round: nextRound.id, face: "ab", pair: null }, { replace: true });
+      },
       openCompare: openDetailPatch,
       mountCellTrend: (plot, spec) => mountABCellTrend(plot, spec, C.ctx, openDetailPatch),
     });

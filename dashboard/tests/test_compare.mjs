@@ -112,8 +112,10 @@ test("an empty payload or rounds without a release date still produce a usable t
   assert.ok(model.nodes.every((node) => Number.isFinite(node.x)));
 });
 
-test("resolveCompareFace defaults to AB front face and flips to detail on explicit params or standalone", () => {
-  assert.equal(resolveCompareFace("?view=compare&product=aime", { hasAB: true, isStandalone: false }), "ab");
+test("resolveCompareFace defaults to timeline and enters ab / detail on explicit params or standalone", () => {
+  assert.equal(resolveCompareFace("?view=compare&product=aime", { hasAB: true, isStandalone: false }), "timeline");
+  assert.equal(resolveCompareFace("?view=compare&product=aime&round=v1106", { hasAB: true, isStandalone: false }), "ab");
+  assert.equal(resolveCompareFace("?view=compare&product=aime&face=ab", { hasAB: true, isStandalone: false }), "ab");
   assert.equal(resolveCompareFace("?view=compare&face=detail", { hasAB: true, isStandalone: false }), "detail");
   assert.equal(resolveCompareFace("?view=compare&pair=t7", { hasAB: true, isStandalone: false }), "detail");
   assert.equal(resolveCompareFace("?view=compare", { hasAB: true, isStandalone: true }), "detail");

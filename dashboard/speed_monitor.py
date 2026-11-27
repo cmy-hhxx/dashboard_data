@@ -1850,8 +1850,16 @@ def _dt_to_epoch(val) -> float | None:
     return None
 
 
+def _pg_gateway_snapshot(cfg: dict) -> tuple[dict, dict, dict]:
+    """Probe configured local gateways safely without blocking or failing PG speed telemetry."""
+    try:
+        return collect_gateway_local(cfg)
+    except Exception:  # noqa: BLE001
+        return {}, {}, {}
+
+
 def _pg_payload() -> dict:
-    """Serve live evaluation & clustering throughput directly from PostgreSQL 16."""
+    """Serve live evaluation, clustering & gateway RPM telemetry directly from PostgreSQL 16."""
     now = time.time()
     ttl = max(5.0, float(_CONFIG.get("refresh_seconds", 15)))
     with _PG_CACHE_LOCK:
@@ -1859,6 +1867,17 @@ def _pg_payload() -> dict:
         if cached is not None and (now - float(_PG_CACHE.get("ts") or 0.0)) < ttl:
             return cached
 
+    # Probe local gateway health & /key/info concurrently with PG queries so it adds zero latency.
+    gw_box: dict = {"res": ({}, {}, {})}
+    gw_cfg = dict(_CONFIG)
+
+    def _run_gw() -> None:
+        gw_box["res"] = _pg_gateway_snapshot(gw_cfg)
+
+    gw_thread = threading.Thread(target=_run_gw, name="speed-pg-gw", daemon=True)
+    gw_thread.start()
+
+    hr_bucket_rows: list[dict] = []
     try:
         import pg_backend
 
@@ -1942,13 +1961,14 @@ def _pg_payload() -> dict:
                 )
                 uncl_rows = cur.fetchall()
 
-                # 48h minute-bucket evaluation throughput (uses idx_eval_outputs_evaluated_at)
+                # 48h minute-bucket evaluation throughput + problem volume for RPM calculation
                 cur.execute(
                     """
                     SELECT
                         FLOOR(EXTRACT(EPOCH FROM date_trunc('minute', evaluated_at)))::BIGINT AS b_s,
                         COUNT(*)::BIGINT AS attr_cnt,
-                        COUNT(*) FILTER (WHERE compact_file_id IS NOT NULL)::BIGINT AS comp_cnt
+                        COUNT(*) FILTER (WHERE compact_file_id IS NOT NULL)::BIGINT AS comp_cnt,
+                        COALESCE(SUM(GREATEST(1, problem_count)), 0)::BIGINT AS probs_g1
                     FROM public.eval_outputs
                     WHERE is_latest = TRUE
                       AND evaluated_at IS NOT NULL
@@ -1995,6 +2015,25 @@ def _pg_payload() -> dict:
                 )
                 max_cl_row = cur.fetchone() or {}
 
+                # 48h minute-bucket human-read translations sharing the gateway key
+                try:
+                    cur.execute(
+                        """
+                        SELECT
+                            FLOOR(EXTRACT(EPOCH FROM date_trunc('minute', translated_at)))::BIGINT AS b_s,
+                            COUNT(*) FILTER (WHERE target_kind = 'attribution')::BIGINT AS hr_attr,
+                            COUNT(*) FILTER (WHERE target_kind = 'compact')::BIGINT AS hr_comp
+                        FROM public.human_read_overlays
+                        WHERE translated_at IS NOT NULL
+                          AND translated_at >= now() - interval '48 hours'
+                        GROUP BY 1
+                        ORDER BY 1 ASC
+                        """
+                    )
+                    hr_bucket_rows = cur.fetchall()
+                except Exception:  # noqa: BLE001
+                    hr_bucket_rows = []
+
                 # Active PG Step 2 leases / workers (uses idx_eval_inputs_claim)
                 cur.execute(
                     """
@@ -2021,6 +2060,9 @@ def _pg_payload() -> dict:
             "updated_at": _to_iso(now),
             "models": [],
         }
+
+    gw_thread.join(timeout=4.0)
+    gateway_rows, control, rpm_limit_info = gw_box["res"]
 
     cluster_pending_map: dict[str, int] = collections.defaultdict(int)
     day_uncl_map: dict[tuple[str, str], int] = {}
@@ -2114,11 +2156,19 @@ def _pg_payload() -> dict:
     cluster_traces_total = sum(cm["traces"] for cm in cluster_models)
     cluster_pending_total = sum(cm["pending"] for cm in cluster_models)
 
-    # Merge 48h minute buckets for eval & cluster speed charts + rolling window KPIs
+    # Merge 48h minute buckets for eval, cluster & gateway RPM charts + rolling window KPIs
     buckets: dict[int, list[int]] = {}
+    rpm_buckets: dict[int, list[float]] = {}
     for r in eval_bucket_rows:
         ts = int(r["b_s"])
-        buckets[ts] = [int(r["attr_cnt"] or 0), int(r["comp_cnt"] or 0), 0, 0]
+        ea = int(r["attr_cnt"] or 0)
+        ec = int(r["comp_cnt"] or 0)
+        pg1 = int(r.get("probs_g1") or ea)
+        buckets[ts] = [ea, ec, 0, 0]
+        # Same LLM request accounting as harness .parts scanner:
+        # attribution = 1 + max(1, problems) * 3, compact = ~13 calls/trace.
+        eval_reqs = float(ea + pg1 * 3 + ec * 13)
+        rpm_buckets[ts] = [eval_reqs, float(ea), float(ec)]
     for r in cl_bucket_rows:
         ts = int(r["b_s"])
         rec = buckets.get(ts)
@@ -2127,10 +2177,24 @@ def _pg_payload() -> dict:
         else:
             rec[2] = int(r["cl_traces"] or 0)
             rec[3] = int(r["cl_probs"] or 0)
+    for r in hr_bucket_rows:
+        ts = int(r["b_s"])
+        hr_reqs = float(int(r.get("hr_attr") or 0) * 2 + int(r.get("hr_comp") or 0))
+        if hr_reqs <= 0:
+            continue
+        rrec = rpm_buckets.get(ts)
+        if rrec is None:
+            rpm_buckets[ts] = [hr_reqs, 0.0, 0.0]
+        else:
+            rrec[0] += hr_reqs
 
     series = [[ts, v[0], v[1], v[2], v[3]] for ts, v in sorted(buckets.items())]
+    pg_rpm_history = [[ts, round(v[0], 1), round(v[1], 1), round(v[2], 1)] for ts, v in sorted(rpm_buckets.items())]
 
-    cut_5m = now - 300.0
+    # Align the rolling 5-minute window to the start of the earliest included minute bucket
+    # so rates stay smooth across :00 minute rollovers (span is always 4.0..5.0 min).
+    win_start_ts = (int(now) // 60 - 4) * 60
+    win_min = max(1.0, (now - win_start_ts) / 60.0)
     cut_1h = now - 3600.0
     cut_24h = now - 86400.0
     ev_5m = cp_5m = cl_5m = clp_5m = 0
@@ -2146,19 +2210,30 @@ def _pg_payload() -> dict:
                 ev_1h += ea
                 cp_1h += ec
                 cl_1h += ct
-                if ts >= cut_5m:
+                if ts >= win_start_ts:
                     ev_5m += ea
                     cp_5m += ec
                     cl_5m += ct
                     clp_5m += cp
 
-    eval_rate_5m = round(ev_5m / 5.0, 2)
-    comp_rate_5m = round(cp_5m / 5.0, 2)
-    cl_rate_5m = round(cl_5m / 5.0, 2)
-    cl_prob_rate_5m = round(clp_5m / 5.0, 2)
+    reqs_5m = 0.0
+    reqs_1h = 0.0
+    for ts, req_cnt, _pa, _pc in pg_rpm_history:
+        if ts >= cut_1h:
+            reqs_1h += req_cnt
+            if ts >= win_start_ts:
+                reqs_5m += req_cnt
+
+    eval_rate_5m = round(ev_5m / win_min, 2)
+    comp_rate_5m = round(cp_5m / win_min, 2)
+    cl_rate_5m = round(cl_5m / win_min, 2)
+    cl_prob_rate_5m = round(clp_5m / win_min, 2)
     eval_rate_1h = round(ev_1h / 60.0, 2)
     comp_rate_1h = round(cp_1h / 60.0, 2)
     cl_rate_1h = round(cl_1h / 60.0, 2)
+    realtime_rpm = round(reqs_5m / win_min, 1)
+    rpm_1h = round(reqs_1h / 60.0, 1)
+    rpm_window_s = int(round(win_min * 60.0))
 
     if remaining_traces == 0:
         eta = 0
@@ -2229,6 +2304,78 @@ def _pg_payload() -> dict:
 
     active_worker_cnt = len(active_worker_names)
 
+    # Assemble live gateway RPM, ceiling, and utilization from probed gateways + runtime control.
+    active_gw_rows = [g for g in gateway_rows.values() if g.get("ok")] or list(gateway_rows.values())
+    rpm_limits = [g["rpm_limit"] for g in active_gw_rows if isinstance(g.get("rpm_limit"), int) and g["rpm_limit"] > 0]
+    rt_rpm = rpm_limit_info.get("rpm") if isinstance(rpm_limit_info.get("rpm"), int) and rpm_limit_info.get("rpm") > 0 else None
+    total_rpm_limit = sum(rpm_limits) if rpm_limits else rt_rpm
+    rpm_sources = [g.get("rpm_source") for g in active_gw_rows
+                   if isinstance(g.get("rpm_limit"), int) and g["rpm_limit"] > 0]
+    total_rpm_source = "key" if rpm_sources and all(x == "key" for x in rpm_sources) else (
+        "runtime" if total_rpm_limit else "none")
+    rpm_util = round(realtime_rpm / total_rpm_limit, 4) if (realtime_rpm is not None and total_rpm_limit) else None
+
+    ctrl_channels = control.get("channels") if isinstance(control.get("channels"), dict) else {}
+    sorted_gws = sorted(gateway_rows.items())
+    total_gw = len(sorted_gws)
+    healthy_names = [name for name, row in sorted_gws if row.get("ok")]
+    healthy_count = len(healthy_names)
+    alloc_names = healthy_names if healthy_count > 0 else [name for name, _ in sorted_gws]
+    alloc_set = set(alloc_names)
+    all_have_own_limit = bool(alloc_names) and all(
+        isinstance(gateway_rows[n].get("rpm_limit"), int) and gateway_rows[n]["rpm_limit"] > 0
+        for n in alloc_names
+    )
+    alloc_weight_sum = sum(gateway_rows[n]["rpm_limit"] for n in alloc_names) if all_have_own_limit else len(alloc_names)
+    eff_replicas = rpm_limit_info.get("replicas") or active_worker_cnt or None
+
+    gateway_items = []
+    for name, row in sorted_gws:
+        ok = bool(row.get("ok"))
+        ch_list = row.get("channels") or [name]
+        permits = sum(int(ctrl_channels[c]) for c in ch_list if isinstance(ctrl_channels.get(c), int))
+        if not permits and isinstance(control.get("modelRequests"), int):
+            permits = int(control["modelRequests"])
+        own_limit = row.get("rpm_limit") if (isinstance(row.get("rpm_limit"), int) and row.get("rpm_limit") > 0) else None
+        item_rpm_limit = own_limit if own_limit is not None else (total_rpm_limit if len(alloc_names) == 1 and name in alloc_set else None)
+        item_rpm = None
+        if realtime_rpm is not None and total_gw > 0:
+            if name not in alloc_set:
+                item_rpm = 0.0
+            elif alloc_weight_sum > 0:
+                weight = own_limit if all_have_own_limit else 1
+                item_rpm = round(realtime_rpm * (weight / alloc_weight_sum), 1)
+        item_util = round(item_rpm / item_rpm_limit, 4) if (item_rpm is not None and item_rpm_limit) else None
+        gateway_items.append({
+            "name": name,
+            "host": row.get("host") or name,
+            "url": row.get("url") or f"http://{name}/v1",
+            "channels": ch_list,
+            "ok": ok,
+            "healthy": bool(row.get("healthy")),
+            "metrics": bool(row.get("metrics")),
+            "code": row.get("code"),
+            "latency_ms": row.get("latency_ms"),
+            "models": row.get("models") or [],
+            "workload": row.get("workload"),
+            "rpm": item_rpm,
+            "rpm_limit": item_rpm_limit,
+            "rpm_utilization": item_util,
+            "rpm_source": row.get("rpm_source") or ("none" if not item_rpm_limit else "runtime"),
+            "rpm_window": row.get("rpm_window"),
+            "tpm_limit": row.get("tpm_limit"),
+            "permits": permits or None,
+            "concurrency": control.get("concurrency"),
+            "active_writers": active_worker_cnt,
+            "active_replicas": eff_replicas,
+            "last_active": row.get("last_active"),
+            "active_ago_s": row.get("active_ago_s"),
+            "cooldown": bool(row.get("cooldown")),
+            "running": int(row.get("running", 0)),
+            "waiting": int(row.get("waiting", 0)),
+            "tps": row.get("tps"),
+        })
+
     with _LOCK:
         _STATE["ok"] = True
         _STATE["error"] = ""
@@ -2266,12 +2413,13 @@ def _pg_payload() -> dict:
             "attr_1h": eval_rate_1h,
             "compact_1h": comp_rate_1h,
             "cluster_1h": cl_rate_1h,
-            "window_seconds": 300,
+            "window_seconds": rpm_window_s,
             "parts_attr": None,
             "parts_compact": None,
             "parts_window_seconds": None,
-            "realtime_rpm": None,
-            "rpm_window_seconds": None,
+            "realtime_rpm": realtime_rpm,
+            "rpm_1h": rpm_1h,
+            "rpm_window_seconds": rpm_window_s,
             "active_writers": active_worker_cnt,
             "newest_part_age_s": round(max(0.0, now - last_eval_ts), 1) if last_eval_ts else None,
         },
@@ -2283,7 +2431,7 @@ def _pg_payload() -> dict:
             "running": total_claimed,
             "failed": total_failed,
             "locks": locks,
-            "active_replicas": active_worker_cnt or None,
+            "active_replicas": eff_replicas,
             "eta_minutes": eta,
             "updated_at": iso,
         },
@@ -2328,27 +2476,43 @@ def _pg_payload() -> dict:
             "series": series,
         },
         "gateways": {
-            "count": 0,
-            "healthy": 0,
-            "realtime_rpm": None,
-            "rpm_method": "pg_db",
-            "rpm_window_seconds": None,
-            "rpm_limit": None,
-            "rpm_source": "none",
-            "rpm_utilization": None,
+            "count": total_gw,
+            "healthy": healthy_count,
+            "realtime_rpm": realtime_rpm,
+            "rpm_1h": rpm_1h,
+            "rpm_method": "pg_estimate",
+            "rpm_window_seconds": rpm_window_s,
+            "rpm_limit": total_rpm_limit,
+            "rpm_source": total_rpm_source,
+            "rpm_utilization": rpm_util,
             "parts_attr_rate": None,
             "parts_compact_rate": None,
             "active_writers": active_worker_cnt,
-            "newest_part_age_s": None,
-            "active_replicas": active_worker_cnt or None,
-            "control": {"paused": False},
+            "newest_part_age_s": round(max(0.0, now - last_eval_ts), 1) if last_eval_ts else None,
+            "active_replicas": eff_replicas,
+            "control": {
+                "model_requests": control.get("modelRequests"),
+                "concurrency": control.get("concurrency"),
+                "task_concurrency": control.get("taskConcurrency"),
+                "heavy_concurrency": control.get("heavyConcurrency"),
+                "heavy_model_requests": control.get("heavyModelRequests"),
+                "compact_backlog": control.get("compactBacklog"),
+                "paused": bool(control.get("paused", False)),
+                "auto_tune_at": rpm_limit_info.get("updated_at"),
+                "rpm_limit": rt_rpm,
+                "target_rpm": rpm_limit_info.get("target_rpm"),
+                "daily_target_rpm": rpm_limit_info.get("daily_target_rpm"),
+                "human_read_target_rpm": rpm_limit_info.get("human_read_target_rpm"),
+                "rpm_source": "runtime" if rt_rpm else "none",
+                "permits": rpm_limit_info.get("permits"),
+            },
             "running": total_claimed,
             "waiting": total_pending,
             "output_tps": None,
-            "items": [],
+            "items": gateway_items,
         },
         "history": pg_history,
-        "rpm_history": [],
+        "rpm_history": pg_rpm_history,
     }
     with _PG_CACHE_LOCK:
         _PG_CACHE["ts"] = now
@@ -2577,6 +2741,7 @@ def payload() -> dict:
             "workload": row.get("workload"),
             "rpm": item_rpm,
             "rpm_limit": item_rpm_limit,
+            "rpm_utilization": round(item_rpm / item_rpm_limit, 4) if (item_rpm is not None and item_rpm_limit) else None,
             "rpm_source": row.get("rpm_source") or ("none" if not item_rpm_limit else "runtime"),
             "rpm_window": row.get("rpm_window"),
             "tpm_limit": row.get("tpm_limit"),
@@ -2714,6 +2879,7 @@ def start(cache_dir: str | Path, overrides: dict | None = None,
     if os.environ.get("EVAL_STORAGE_BACKEND", "").strip().lower() in ("pg", "postgres", "postgresql"):
         with _LOCK:
             _STARTED = True
+            _CONFIG = load_config(overrides)
             _STATE["mode"] = "pg"
             _STATE["available"] = True
             _STATE["ok"] = True

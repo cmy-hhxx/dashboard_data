@@ -65,13 +65,28 @@
 .sp-ov-sub { color: var(--muted); font-size: var(--fs-meta); }
 .sp-ov-sub b { color: var(--ink-2); font-weight: var(--w-medium); }
 
-/* 3-up speed cards */
+/* 4-up speed & gateway RPM cards */
+.sp-rate-card { display: flex; flex-direction: column; align-self: stretch; }
 .sp-rate-card .sp-rate { display: flex; align-items: baseline; gap: var(--sp-1); }
 .sp-rate-card.is-rate-attr .big { color: var(--accent); }
 .sp-rate-card.is-rate-comp .big { color: var(--loc-vir); }
 .sp-rate-card.is-rate-cl .big { color: var(--loc-ulq); }
-.sp-rate-sub { color: var(--muted); font-size: var(--fs-meta); margin-top: var(--sp-3); }
+.sp-rate-card.is-rate-rpm .big { color: var(--accent); }
+.sp-rate-sub { color: var(--muted); font-size: var(--fs-meta); margin-top: auto; padding-top: var(--sp-3); }
 .sp-rate-sub b { color: var(--ink-2); font-weight: var(--w-medium); }
+.sp-rate-meter { margin-top: var(--sp-3); }
+.sp-rate-meter + .sp-rate-sub { padding-top: var(--sp-2); }
+.sp-util-pill {
+  margin-left: auto; padding: 2px 8px; border-radius: 999px;
+  background: color-mix(in oklab, var(--accent) 12%, transparent); color: var(--accent);
+  font-size: var(--fs-meta); font-weight: var(--w-medium); line-height: 1.3; white-space: nowrap;
+}
+.sp-util-pill.is-hot {
+  background: color-mix(in oklab, var(--sev-2) 15%, transparent); color: var(--sev-2);
+}
+.sp-util-pill.is-full {
+  background: color-mix(in oklab, var(--sev-0) 15%, transparent); color: var(--sev-0);
+}
 
 /* Speed trend chart */
 .sp-chart-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-left: auto; }
@@ -127,6 +142,24 @@
 .sp-gw-meter { height: 5px; border-radius: 999px; background: var(--well-2); overflow: hidden; margin-top: 2px; }
 .sp-gw-meter i { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width 420ms cubic-bezier(0.16, 1, 0.3, 1); }
 .sp-gw-meter.is-hot i { background: var(--sev-2); }
+.sp-gw-meter.is-full i { background: var(--sev-0); }
+
+.sp-util-cell { display: inline-flex; align-items: center; gap: 8px; }
+.sp-util-bar {
+  width: 56px; height: 5px; border-radius: 999px; background: var(--well-2); overflow: hidden; flex: none;
+}
+.sp-util-bar i { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width 420ms cubic-bezier(0.16, 1, 0.3, 1); }
+.sp-util-cell b { min-width: 44px; text-align: right; color: var(--ink); font-weight: var(--w-medium); }
+.sp-util-cell.is-hot .sp-util-bar i { background: var(--sev-2); }
+.sp-util-cell.is-hot b { color: var(--sev-2); }
+.sp-util-cell.is-full .sp-util-bar i { background: var(--sev-0); }
+.sp-util-cell.is-full b { color: var(--sev-0); }
+
+.sp-workers-wrap {
+  margin-top: var(--sp-5); padding-top: var(--sp-4);
+  border-top: 1px solid color-mix(in oklab, var(--ink) 7%, transparent);
+}
+.sp-workers-wrap[hidden] { display: none; }
 
 /* Tables */
 .sp-table table { font-size: var(--fs-small); }
@@ -426,7 +459,7 @@ button.sp-bar-col:hover .sp-bar-track { transform: scaleY(1.02); transform-origi
 
 @media (max-width: 1180px) {
   .sp-gw-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .sp-rate-card { grid-column: span 4 !important; }
+  .sp-rate-card { grid-column: span 6 !important; }
 }
 @media (max-width: 960px) {
   .sp-date-stage.has-detail { grid-template-columns: minmax(0, 1fr); }

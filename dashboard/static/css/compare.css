@@ -28,7 +28,9 @@ html[data-compare="1"] .compare-standalone-head .compare-top-count { margin-left
   border-radius: 6px; color: var(--muted); font-size: var(--fs-meta); white-space: nowrap;
   transition: background var(--snap), color var(--snap);
 }
-.compare-back.compare-to-ab { padding: 0 8px 0 4px; background: var(--well); color: var(--ink-2); font-weight: var(--w-medium); }
+.compare-back.compare-to-ab,
+.compare-back.compare-to-tl { padding: 0 8px 0 4px; background: var(--well); color: var(--ink-2); font-weight: var(--w-medium); }
+.compare-back.compare-to-tl { height: 28px; border-radius: var(--r-ctl); padding: 0 10px 0 6px; }
 .compare-back:hover { background: var(--hover); color: var(--ink); }
 .compare-back svg { width: 14px; height: 14px; flex: none; }
 .compare-rail-ab {
@@ -275,152 +277,207 @@ html[data-compare-full="1"], html[data-compare-full="1"] body { overflow: hidden
 }
 
 /* ---------------------------------------------------------------- testset timeline */
-/* 首屏就是一条横贯整页的发布轴：release 日期落在时间标尺上，节点就是唯一的入口。
-   只有一个 round 时，时间窗前后留出余量，节点落在中间偏右；贯穿高度的淡竖线把这一天钉在轴上。
-   轴线从左画出，刻度淡入，节点错峰 spring 入场；?still / reduced-motion 由 base.css 统一关掉。 */
+/* 全宽版本发布时间轴：横轴按发布日期标尺排布，节点卡片上下交替，呈现核心变化数据。 */
 .compare-tl {
-  display: grid; align-content: center;
-  min-height: min(78vh, calc(100vh - 120px));
-  padding: clamp(24px, 3vw, 40px) clamp(20px, 3vw, 44px) clamp(12px, 2vw, 20px);
+  display: grid; grid-template-rows: auto minmax(0, 1fr); align-items: center;
+  min-height: min(76vh, calc(100vh - 120px));
+  padding: var(--card-py) var(--card-px);
   background: var(--card); border-radius: var(--r-card); box-shadow: var(--shadow);
 }
-.compare-tl-empty { padding: 0; min-height: 0; }
+.compare-tl-head { margin-bottom: 0; align-items: baseline; }
+.compare-tl-total {
+  padding: 2px 8px; border-radius: 999px; background: var(--well);
+  color: var(--muted); font-size: var(--fs-meta); font-weight: var(--w-medium);
+}
+.compare-tl-empty { padding: 0; min-height: 0; grid-template-rows: auto; }
 .compare-tl-empty .empty { padding: 72px 0; }
-.compare-tl-plot { --axis: 50%; position: relative; height: clamp(260px, 31vh, 320px); }
+.compare-tl-plot {
+  --axis: 50%; position: relative; width: 100%; height: clamp(320px, 44vh, 430px);
+}
 .compare-tl-plot::before {
-  content: ""; position: absolute; z-index: 0; left: 50%; top: var(--axis); width: min(52%, 680px); aspect-ratio: 2.4;
+  content: ""; position: absolute; z-index: 0; left: 50%; top: var(--axis); width: min(56%, 740px); aspect-ratio: 2.6;
   transform: translate(-50%, -50%); pointer-events: none;
   background: radial-gradient(closest-side, color-mix(in oklab, var(--release) 5%, transparent), transparent);
 }
-/* 单节点时轴略低于中线，标签卡片上方留出呼吸，轴下的标尺也不至于把整页压空。 */
-.compare-tl.is-single .compare-tl-plot { --axis: 62%; }
+.compare-tl.is-single .compare-tl-plot { --axis: 64%; }
 
 .compare-tl-axis {
   position: absolute; z-index: 0; top: var(--axis); left: 0; right: 0; height: 1px; transform-origin: left;
-  background: linear-gradient(90deg, transparent, var(--t4) 5%, var(--t4) 95%, transparent);
-  animation: tl-axis 900ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  background: linear-gradient(90deg, transparent, var(--t4) 4%, var(--t4) 96%, transparent);
+  animation: tl-axis 760ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 @keyframes tl-axis { from { transform: scaleX(0); } }
 @keyframes tl-axis-y { from { transform: scaleY(0); } }
+
+/* 首尾版本之间的高亮发布区段，让迭代节奏在标尺上一眼成形。 */
+.compare-tl-span {
+  position: absolute; z-index: 1; top: calc(var(--axis) - 0.5px);
+  left: var(--x0); width: max(2px, calc(var(--x1) - var(--x0))); height: 2px;
+  border-radius: 999px; transform-origin: left;
+  background: linear-gradient(90deg, color-mix(in oklab, var(--release) 34%, transparent), var(--release));
+  animation: tl-axis 560ms cubic-bezier(0.16, 1, 0.3, 1) 180ms both;
+}
 
 /* 唯一一个 round 时，一条从顶到底的极淡竖线把节点钉在轴上。 */
 .compare-tl-guide {
   position: absolute; z-index: 0; left: var(--x); top: 8%; bottom: 8%; width: 1px;
   background: linear-gradient(180deg, transparent, color-mix(in oklab, var(--release) 22%, var(--t4)) 14%, color-mix(in oklab, var(--release) 22%, var(--t4)) 86%, transparent);
   transform: translateX(-50%);
-  animation: tl-tick 700ms cubic-bezier(0.16, 1, 0.3, 1) 120ms both;
+  animation: tl-tick 640ms cubic-bezier(0.16, 1, 0.3, 1) 120ms both;
 }
 .compare-tl-plot:has(.compare-tl-node:hover) .compare-tl-guide,
 .compare-tl-plot:has(.compare-tl-node:focus-visible) .compare-tl-guide {
-  background: linear-gradient(180deg, transparent, color-mix(in oklab, var(--release) 42%, var(--t4)) 14%, color-mix(in oklab, var(--release) 42%, var(--t4)) 86%, transparent);
+  background: linear-gradient(180deg, transparent, color-mix(in oklab, var(--release) 44%, var(--t4)) 14%, color-mix(in oklab, var(--release) 44%, var(--t4)) 86%, transparent);
 }
 
-/* 月份标尺：细刻度压在轴上，年月标签贴着轴的下方，轴穿过时淡淡浮出。 */
+/* 月份标尺：细刻度压在轴上，年月标签贴着轴的下方。 */
 .compare-tl-ruler { position: absolute; z-index: 2; inset: 0; pointer-events: none; }
 .compare-tl-tick {
   position: absolute; left: var(--x); top: calc(var(--axis) - 3px); transform: translateX(-50%);
   display: grid; justify-items: center;
-  animation: tl-tick 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
-  animation-delay: calc(140ms + var(--i) * 45ms);
+  animation: tl-tick 480ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: calc(120ms + var(--i) * 40ms);
 }
 .compare-tl-tick i { width: 1px; height: 7px; background: var(--t4); }
 .compare-tl-tick b {
-  margin-top: 3px; padding: 0 6px; border-radius: 999px; background: var(--card);
+  margin-top: 4px; padding: 0 6px; border-radius: 999px; background: var(--card);
   color: var(--faint); font-size: var(--fs-meta); font-weight: var(--w-body); line-height: 16px; white-space: nowrap;
 }
 .compare-tl-tick b[hidden] { display: none; }
 @keyframes tl-tick { from { opacity: 0; } }
 
-/* 节点：点落在轴上，标签在上 / 下交替，茎把两者连起来。 */
+/* 节点：点落在轴上，浮雕卡片在上 / 下交替，发丝茎连起卡片与轴点。 */
 .compare-tl-nodes { position: absolute; z-index: 3; inset: 0; }
 .compare-tl-node {
   position: absolute; left: var(--x); display: flex; flex-direction: column; align-items: center;
   transform: translateX(-50%); color: var(--ink); border-radius: var(--r-well);
   animation: tl-node-in var(--spring) both;
-  animation-delay: calc(260ms + var(--i) * 110ms);
+  animation-delay: calc(220ms + var(--i) * 95ms);
 }
 @keyframes tl-node-in {
-  from { opacity: 0; transform: translateX(-50%) translateY(calc(var(--dir) * 10px)) scale(0.97); }
+  from { opacity: 0; transform: translateX(-50%) translateY(calc(var(--dir) * 12px)) scale(0.96); }
 }
-.compare-tl-node[data-side="up"] { bottom: calc(100% - var(--axis) - 4px); }
-.compare-tl-node[data-side="down"] { top: calc(var(--axis) - 4px); flex-direction: column-reverse; }
+.compare-tl-node[data-side="up"] { bottom: calc(100% - var(--axis) - 5px); }
+.compare-tl-node[data-side="down"] { top: calc(var(--axis) - 5px); flex-direction: column-reverse; }
+
 .compare-tl-body {
-  display: grid; justify-items: center; gap: 2px; max-width: 200px; padding: 8px 12px;
-  border-radius: var(--r-well); background: transparent;
-  transition: background var(--snap), box-shadow var(--snap), transform var(--snap);
+  display: grid; gap: 6px; min-width: 176px; max-width: 236px; padding: 12px 16px;
+  border-radius: var(--r-well); background: var(--lift); box-shadow: var(--shadow);
+  text-align: left;
+  transition: background var(--snap), box-shadow var(--snap), transform var(--spring);
 }
-.compare-tl-node[data-side="up"] .compare-tl-body { margin-bottom: 8px; }
-.compare-tl-node[data-side="down"] .compare-tl-body { margin-top: 8px; }
-.compare-tl-name { font-size: var(--fs-title); font-weight: var(--w-medium); letter-spacing: -0.01em; line-height: 1.2; }
-.compare-tl-date { color: var(--muted); font-size: var(--fs-meta); line-height: 1.3; }
-.compare-tl-meta { color: var(--faint); font-size: var(--fs-meta); line-height: 1.3; }
-.compare-tl-name, .compare-tl-date, .compare-tl-meta {
-  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+.compare-tl-node[data-side="up"] .compare-tl-body { margin-bottom: 10px; }
+.compare-tl-node[data-side="down"] .compare-tl-body { margin-top: 10px; }
+
+.compare-tl-top {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0;
 }
-/* 单个 round 是这一页的主角：标签浮成一张小卡片，字号升一档。 */
-.compare-tl.is-single .compare-tl-body {
-  padding: 14px 20px; background: var(--lift); box-shadow: var(--shadow);
+.compare-tl-name {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--fs-title); font-weight: var(--w-title); letter-spacing: -0.015em; line-height: 1.2;
+  color: var(--ink); transition: color var(--snap);
 }
-.compare-tl.is-single .compare-tl-name { font-size: var(--fs-num-s); font-weight: var(--w-light); letter-spacing: -0.02em; }
-.compare-tl.is-single .compare-tl-dot { width: 11px; height: 11px; }
+.compare-tl-model {
+  flex: none; padding: 1px 6px; border-radius: var(--r-chip);
+  background: var(--well); color: var(--muted);
+  font-size: var(--fs-micro); font-weight: var(--w-medium); line-height: 1.5; white-space: nowrap;
+}
+.compare-tl-metric {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px; min-width: 0;
+}
+.compare-tl-pct {
+  font-size: var(--fs-num-s); font-weight: var(--w-medium); letter-spacing: -0.02em; line-height: 1.1;
+  color: var(--ink); white-space: nowrap;
+}
+.compare-tl-pct.is-better { color: var(--accent); }
+.compare-tl-pct.is-worse { color: var(--sev-1); }
+.compare-tl-io {
+  color: var(--muted); font-size: var(--fs-meta); line-height: 1.2; white-space: nowrap;
+}
+.compare-tl-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding-top: 6px; border-top: 1px solid color-mix(in oklab, var(--ink) 6%, transparent);
+  color: var(--faint); font-size: var(--fs-meta); line-height: 1.25; white-space: nowrap;
+}
+.compare-tl-date { color: var(--muted); }
+.compare-tl-qcount { color: var(--faint); }
+
+/* 单节点时放大一级视觉重心 */
+.compare-tl.is-single .compare-tl-body { min-width: 224px; max-width: 280px; padding: 16px 20px; gap: 8px; }
+.compare-tl.is-single .compare-tl-name { font-size: var(--fs-num-s); }
+.compare-tl.is-single .compare-tl-pct { font-size: var(--fs-num-m); font-weight: var(--w-light); }
+.compare-tl.is-single .compare-tl-dot { width: 12px; height: 12px; }
+
 .compare-tl-stem {
-  width: 1px; height: 30px; background: color-mix(in oklab, var(--release) 22%, var(--t4));
-  transition: background var(--snap);
+  width: 1px; height: 34px;
+  background: color-mix(in oklab, var(--release) 26%, var(--t4));
+  transition: background var(--snap), height var(--spring);
 }
 .compare-tl-dot {
-  width: 9px; height: 9px; border-radius: 50%; background: var(--release);
+  position: relative; width: 10px; height: 10px; border-radius: 50%; background: var(--release);
   box-shadow: 0 0 0 4px var(--card);
   transition: box-shadow var(--snap), transform var(--spring);
 }
-/* hover / focus: 标签轻轻抬离轴线，发版点亮起一圈同色光晕；键盘焦点仍用 accent 描边。 */
+.compare-tl-node.is-latest .compare-tl-dot {
+  box-shadow: 0 0 0 4px var(--card), 0 0 0 8px color-mix(in oklab, var(--release) 14%, transparent);
+}
+
+/* hover / focus: 卡片轻抬，发版点亮起同色光晕，茎线提亮。 */
 .compare-tl-node:hover .compare-tl-body,
 .compare-tl-node:focus-visible .compare-tl-body {
-  background: var(--lift); box-shadow: var(--shadow-pop); transform: translateY(calc(var(--dir) * 3px));
+  background: var(--lift); box-shadow: var(--shadow-pop); transform: translateY(calc(var(--dir) * 4px));
 }
 .compare-tl-node:hover .compare-tl-name,
 .compare-tl-node:focus-visible .compare-tl-name { color: var(--release); }
+.compare-tl-node:hover .compare-tl-model,
+.compare-tl-node:focus-visible .compare-tl-model {
+  background: color-mix(in oklab, var(--release) 10%, var(--well)); color: var(--release);
+}
 .compare-tl-node:hover .compare-tl-stem,
-.compare-tl-node:focus-visible .compare-tl-stem { background: color-mix(in oklab, var(--release) 34%, var(--t4)); }
+.compare-tl-node:focus-visible .compare-tl-stem { background: color-mix(in oklab, var(--release) 52%, var(--t4)); }
 .compare-tl-node:hover .compare-tl-dot,
 .compare-tl-node:focus-visible .compare-tl-dot {
-  box-shadow: 0 0 0 4px var(--card), 0 0 0 10px color-mix(in oklab, var(--release) 13%, transparent);
+  transform: scale(1.18);
+  box-shadow: 0 0 0 4px var(--card), 0 0 0 11px color-mix(in oklab, var(--release) 18%, transparent);
 }
 .compare-tl-node:focus-visible { outline: none; }
 .compare-tl-node:focus-visible .compare-tl-body { outline: 2px solid var(--accent); outline-offset: 2px; }
-.compare-tl-node:active .compare-tl-body { transform: translateY(calc(var(--dir) * 3px)) scale(0.99); }
-/* 数据轮询刷新时换掉 DOM 不该重播入场。 */
+.compare-tl-node:active .compare-tl-body { transform: translateY(calc(var(--dir) * 2px)) scale(0.985); }
+
 .compare-tl.is-still .compare-tl-axis,
+.compare-tl.is-still .compare-tl-span,
 .compare-tl.is-still .compare-tl-guide,
 .compare-tl.is-still .compare-tl-tick,
 .compare-tl.is-still .compare-tl-node { animation: none; }
 
 /* ---------------------------------------------------------------- responsive */
-/* 窄屏不硬挤横向标尺：退化成一根纵向时间轴，日期直接标在节点里。 */
+/* 窄屏退化成纵向时间轴，保持卡片信息密度与完整触控面积。 */
 @media (max-width: 720px) {
-  .compare-tl { padding: 16px 16px 8px; min-height: 0; align-content: start; }
+  .compare-tl { padding: var(--sp-5); min-height: 0; align-items: start; gap: var(--sp-4); }
   .compare-tl-plot { height: auto; }
   .compare-tl-axis {
-    top: 8px; bottom: 8px; left: 4px; right: auto; width: 1px; height: auto;
-    background: linear-gradient(180deg, transparent, var(--t4) 6%, var(--t4) 94%, transparent);
+    top: 12px; bottom: 12px; left: 5px; right: auto; width: 1px; height: auto;
+    background: linear-gradient(180deg, transparent, var(--t4) 5%, var(--t4) 95%, transparent);
     transform-origin: top; animation-name: tl-axis-y;
   }
-  .compare-tl-guide, .compare-tl-ruler, .compare-tl-plot::before { display: none; }
-  .compare-tl-nodes { position: static; display: grid; gap: 2px; }
+  .compare-tl-span, .compare-tl-guide, .compare-tl-ruler, .compare-tl-plot::before { display: none; }
+  .compare-tl-nodes { position: static; display: grid; gap: var(--sp-3); }
   .compare-tl-nodes > .compare-tl-node {
     position: relative; left: auto; right: auto; top: auto; bottom: auto; transform: none; width: 100%;
-    display: grid; grid-template-columns: 9px minmax(0, 1fr); grid-template-areas: "dot body";
-    column-gap: 14px; align-items: center; padding: 10px 0;
+    display: grid; grid-template-columns: 11px minmax(0, 1fr); grid-template-areas: "dot body";
+    column-gap: 14px; align-items: center; padding: 0;
     animation: tl-node-v var(--spring) both;
-    animation-delay: calc(120ms + var(--i) * 60ms);
+    animation-delay: calc(100ms + var(--i) * 55ms);
   }
-  .compare-tl-node .compare-tl-dot { grid-area: dot; align-self: start; margin-top: 5px; }
-  .compare-tl.is-single .compare-tl-node .compare-tl-dot { margin-top: 9px; }
+  .compare-tl-node .compare-tl-dot { grid-area: dot; align-self: center; }
   .compare-tl-node .compare-tl-stem { display: none; }
-  .compare-tl .compare-tl-node .compare-tl-body {
-    grid-area: body; margin: 0; padding: 0; max-width: none; justify-items: start;
-    background: transparent; box-shadow: none; transform: none;
+  .compare-tl .compare-tl-node .compare-tl-body,
+  .compare-tl.is-single .compare-tl-node .compare-tl-body {
+    grid-area: body; margin: 0; min-width: 0; max-width: none; width: 100%; padding: 12px 14px;
+    transform: none;
   }
-  .compare-tl.is-single .compare-tl-node .compare-tl-body { padding: 0; background: transparent; box-shadow: none; }
+  .compare-tl-node:hover .compare-tl-body,
+  .compare-tl-node:focus-visible .compare-tl-body { transform: none; }
   .compare-tl-node:focus-visible .compare-tl-body { outline-offset: 1px; }
 }
-@keyframes tl-node-v { from { opacity: 0; } }
+@keyframes tl-node-v { from { opacity: 0; transform: translateY(6px); } }

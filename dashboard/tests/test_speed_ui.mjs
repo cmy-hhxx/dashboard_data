@@ -4,7 +4,7 @@ import test from "node:test";
 
 globalThis.location = { search: "" };
 globalThis.window = {};
-const { deriveEvalStatus, shellHTML, modelRowsHTML, buildMonthlySeries, monthBarHTML, dateChartHTML, dateDetailHTML, applyData, buildPgSpeedSamples } = await import("../static/js/speed.js");
+const { deriveEvalStatus, shellHTML, modelRowsHTML, buildMonthlySeries, monthBarHTML, dateChartHTML, dateDetailHTML, applyData, buildPgSpeedSamples, buildPgRpmSamples } = await import("../static/js/speed.js");
 const speedCss = fs.readFileSync(new URL("../static/css/speed.css", import.meta.url), "utf8");
 const systemCss = fs.readFileSync(new URL("../static/css/system.css", import.meta.url), "utf8");
 const speedJs = fs.readFileSync(new URL("../static/js/speed.js", import.meta.url), "utf8");
@@ -277,4 +277,50 @@ test("applyData updates concentric rings and KPI counters from real numbers", ()
   });
   assert.equal(pgClRun.label, "进行中");
   assert.equal(pgClRun.running, true);
+
+  // PG mode: live gateway RPM & utilization in top card, gateway KPI/table, and RPM chart bucketing
+  const pgRpmBuilt = buildPgRpmSamples([[nowTs - 120, 225, 10, 10], [nowTs - 60, 240, 11, 11]], 300, nowTs);
+  assert.equal(pgRpmBuilt.step, 60);
+  assert.ok(pgRpmBuilt.samples.some((s) => s.v1 === 225 && s.pa === 10));
+
+  applyData(root, {
+    ...PAYLOAD,
+    mode: "pg",
+    pg_pipeline: {
+      now_epoch: nowTs,
+      eval_rate_5m: 9.8,
+      eval_rate_1h: 7.2,
+      eval_24h: 12000,
+      compact_rate_5m: 9.8,
+      cluster_rate_5m: 14.0,
+      cluster_24h: 320,
+      cluster_prob_rate_5m: 42.0,
+      cluster_pending_problems: 80,
+      cluster_eta_minutes: 5.7,
+      last_eval_ago_s: 2,
+      last_cluster_ago_s: 15,
+      expired_leases: 0,
+      active_workers: [{ worker: "va-0", model: "aime_fast", claimed: 25, expired: 0, age_s: 3 }],
+      series: pgSeries,
+    },
+    gateways: {
+      count: 1, healthy: 1, realtime_rpm: 221.4, rpm_1h: 175.0, rpm_limit: 300, rpm_source: "key",
+      rpm_utilization: 0.738, active_replicas: 3, active_writers: 3, control: { paused: false, model_requests: 200, concurrency: 150 },
+      items: [{
+        name: "evaluation-gateway", url: "http://gw/v1", ok: true, healthy: true, code: 200,
+        models: ["deepseek-v4.1-flash"], rpm: 221.4, rpm_limit: 300, rpm_utilization: 0.738,
+        permits: 200, concurrency: 150, latency_ms: 28.4, active_ago_s: 1,
+      }],
+    },
+    rpm_history: [[nowTs - 120, 225, 10, 10], [nowTs - 60, 240, 11, 11]],
+  });
+  assert.equal(byId.get("spTopGwRpm").textContent, "221.4");
+  assert.equal(byId.get("spTopGwUtil").textContent, "73.8%");
+  assert.ok(byId.get("spTopGwSub").textContent.includes("配额 300"));
+  assert.equal(byId.get("spGwRpm").textContent, "221.4");
+  assert.ok(byId.get("spGwRpmSub").textContent.includes("利用率 73.8%"));
+  assert.ok(byId.get("spGateways").innerHTML.includes("73.8%"));
+  assert.ok(byId.get("spGateways").innerHTML.includes("evaluation-gateway"));
+  assert.equal(byId.get("spWorkersWrap").hidden, false);
+  assert.ok(byId.get("spWorkers").innerHTML.includes("va-0"));
 });
