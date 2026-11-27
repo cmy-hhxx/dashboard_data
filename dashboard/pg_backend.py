@@ -31,7 +31,7 @@ import build
 import json_compat as json
 from daytime import iso_now, local_day
 
-PG_BACKEND_VERSION = "2026-11-27.1"
+PG_BACKEND_VERSION = "2026-11-27.2"
 SLUG_RE = re.compile(r"^[0-9a-f]{10}$")
 AB_REF_RE = re.compile(r"^(?:(before|after|candidate_model_\d+)-)?(\d+)$")
 FS_CLOCK_SLACK_NS = 20_000_000
@@ -1494,6 +1494,13 @@ def build_from_pg(datasets: Path, out_dir: Path, log=print):
                     ),
                 })
 
+        hr_oids = {
+            int(r["output_id"])
+            for r in conn.execute(
+                "SELECT DISTINCT output_id FROM public.human_read_overlays WHERE status = 'done'"
+            ).fetchall()
+        }
+
         samples_list: list[tuple[str, dict[str, Any], dict[str, Any], dict[str, Any]]] = []
         slug_seen: dict[str, str] = {}
         slug_map: dict[str, list[int]] = {}
@@ -1583,6 +1590,8 @@ def build_from_pg(datasets: Path, out_dir: Path, log=print):
                     row["uid"] = inp["user_id"]
                 if inp["is_lost"]:
                     row["ul"] = 1
+                if oid in hr_oids:
+                    row["hr"] = 1
 
                 ev_tot = sum(p["ev_s"][0] for p in plist)
                 ev_loc = sum(p["ev_s"][1] for p in plist)
@@ -1962,8 +1971,10 @@ class PGDetailBuilder:
                 if row["hrc_path"] and row["hrc_len"]
                 else None
             )
+            hr_applied = False
             if hr_attr or hr_comp:
-                _overlay_pg_human_read_detail(detail, hr_attr, hr_comp)
+                hr_applied = _overlay_pg_human_read_detail(detail, hr_attr, hr_comp)
+            detail["human_read"] = bool(hr_applied)
 
             detail["slug"] = slug
             build.write_json(path, detail)

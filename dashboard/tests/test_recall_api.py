@@ -45,7 +45,7 @@ class RecallIndexUnitTests(unittest.TestCase):
                 # Multi-round session sharing sid across two models -> peer models `pm`
                 {"s": "s0001", "sid": "sess-shared", "tid": "t-1", "sp": "daily", "m": "aime_fast", "d": "2026-11-18",
                  "q": "茅台财报", "w": "P1", "n": 2, "tr": 1, "sv": [0, 2, 0, 0, 0], "st": ["S1"], "pt": ["S1.M1.1"],
-                 "task": "财报分析", "sub": "个股财报", "ut": "real", "r": ["planner"]},
+                 "task": "财报分析", "sub": "个股财报", "ut": "real", "r": ["planner"], "hr": 1},
                 {"s": "s0002", "sid": "sess-shared", "tid": "t-2", "sp": "daily", "m": "aime_fast", "d": "2026-11-19",
                  "q": "茅台财报追问", "w": "P0", "n": 1, "tr": 1, "sv": [1, 0, 0, 0, 0], "st": ["S2"], "pt": ["S2.M2.1"],
                  "task": "财报分析", "sub": "个股财报", "ut": "real", "r": ["planner"]},
@@ -127,6 +127,17 @@ class RecallIndexUnitTests(unittest.TestCase):
             lost = entry.query_sessions({"split": "lost"})
             self.assertEqual(lost["matched"], 1)
             self.assertEqual(lost["rows"][0]["sid"], "sess-lost")
+
+            # human_read / raw filter and proportion stats (stats stay over pre-hr slice)
+            self.assertEqual(p1["hr_stats"], {"hr": 1, "raw": 702, "total": 703, "hr_total": 1})
+            self.assertEqual(p1["rows"][0].get("hr"), 1)
+            hr_only = entry.query_sessions({"hr": "human_read"})
+            self.assertEqual(hr_only["matched"], 1)
+            self.assertEqual(hr_only["rows"][0]["sid"], "sess-shared")
+            self.assertEqual(hr_only["hr_stats"], {"hr": 1, "raw": 702, "total": 703, "hr_total": 1})
+            raw_only = entry.query_sessions({"hr": "raw"})
+            self.assertEqual(raw_only["matched"], 702)
+            self.assertEqual(raw_only["hr_stats"], {"hr": 1, "raw": 702, "total": 703, "hr_total": 1})
 
             # Galaxy slice stratifies and caps at 500 while reporting exact total & severity parts
             gx = entry.query_galaxy({"card": "vol", "model": "aime_fast"})

@@ -117,6 +117,7 @@ def _group_sessions(rows: list[dict]) -> tuple[list[dict], dict[str, dict], dict
                 "uid": "",
                 "ut": "",
                 "ul": 0,
+                "hr": 0,
             }
             groups[key] = g
         g["rows"].append(r)
@@ -159,6 +160,8 @@ def _group_sessions(rows: list[dict]) -> tuple[list[dict], dict[str, dict], dict
             g["ut"] = r["ut"]
         if r.get("ul"):
             g["ul"] = 1
+        if r.get("hr"):
+            g["hr"] = 1
 
     sessions: list[dict] = []
     by_key: dict[str, dict] = {}
@@ -213,6 +216,7 @@ def _group_sessions(rows: list[dict]) -> tuple[list[dict], dict[str, dict], dict
             "sc": g["sc"],
             "ut": g["ut"],
             "ul": g["ul"],
+            "hr": g["hr"],
             "lang": g["lang"],
             "pm": peer_models if len(peer_models) > 1 else None,
             "rows": [
@@ -223,6 +227,7 @@ def _group_sessions(rows: list[dict]) -> tuple[list[dict], dict[str, dict], dict
                     **({"tr": x["tr"]} if x.get("tr") and x.get("tr") != 1 else {}),
                     **({"w": x["w"]} if x.get("w") and x.get("w") != "none" else {}),
                     **({"sv": x["sv"]} if isinstance(x.get("sv"), list) and any(x["sv"]) else {}),
+                    **({"hr": 1} if x.get("hr") else {}),
                 }
                 for x in g_rows
             ],
@@ -265,6 +270,8 @@ def _public_session(sess: dict) -> dict:
         "lang": sess["lang"],
         "rows": sess["rows"],
     }
+    if sess.get("hr"):
+        out["hr"] = 1
     if sess.get("pm"):
         out["pm"] = sess["pm"]
     return out
@@ -322,6 +329,11 @@ def _list_hit(sess: dict, f: dict, omit: frozenset[str] = frozenset()) -> bool:
         return False
     if f["ut"] and sess["_ut"] != f["ut"]:
         return False
+    if "hr" not in omit and f.get("hr"):
+        if f["hr"] == "human_read" and not sess.get("hr"):
+            return False
+        if f["hr"] == "raw" and sess.get("hr"):
+            return False
     return _cascade_hit(sess, f, omit)
 
 
@@ -449,22 +461,23 @@ class RecallEntry:
 
         self.sorted_dates = sorted(self.by_date.keys())
         self.sessions, self.session_by_key, self.session_by_slug = _group_sessions(rows)
+        self.hr_total = sum(1 for s in self.sessions if s.get("hr"))
         self.session_pos: dict[str, int] = {s["key"]: i for i, s in enumerate(self.sessions)}
         self._query_lock = threading.Lock()
         self._order_cache: OrderedDict[tuple, list[dict]] = OrderedDict()
         self._facet_cache: OrderedDict[tuple, dict] = OrderedDict()
-        empty_f = {k: "" for k in ("q", "w", "split", "model", "ut", "date", "scene", "sub", "stage", "mech", "pattern")}
+        empty_f = {k: "" for k in ("q", "w", "split", "model", "ut", "date", "scene", "sub", "stage", "mech", "pattern", "hr")}
         self.default_facets = _compute_facets(self.sessions, empty_f)
 
     def _ordered_sessions(self, f: dict[str, str], sort_by: str) -> list[dict]:
         sort_key = sort_by if sort_by in ("n", "date") else "sev"
         needle = f["q"].lower()
-        has_filter = bool(needle or any(f[k] for k in ("w", "split", "model", "ut", "date", "scene", "sub", "stage", "mech", "pattern")))
+        has_filter = bool(needle or any(f[k] for k in ("w", "split", "model", "ut", "date", "scene", "sub", "stage", "mech", "pattern", "hr")))
         if not has_filter and sort_key == "sev":
             return self.sessions
         cache_key = (
             needle, f["w"], f["split"], f["model"], f["ut"], f["date"],
-            f["scene"], f["sub"], f["stage"], f["mech"], f["pattern"], sort_key,
+            f["scene"], f["sub"], f["stage"], f["mech"], f["pattern"], f["hr"], sort_key,
         )
         with self._query_lock:
             hit = self._order_cache.get(cache_key)
@@ -498,7 +511,7 @@ class RecallEntry:
         return ordered
 
     def _facets_for(self, f: dict[str, str]) -> dict:
-        cache_key = (f["w"], f["split"], f["model"], f["ut"], f["scene"], f["sub"])
+        cache_key = (f["w"], f["split"], f["model"], f["ut"], f["scene"], f["sub"], f["hr"])
         if not any(cache_key):
             return self.default_facets
         with self._query_lock:
@@ -516,6 +529,8 @@ class RecallEntry:
         return facets
 
     def query_sessions(self, q: dict[str, str]) -> dict:
+        raw_hr = (q.get("hr") or "").strip().lower()
+        hr_filter = raw_hr if raw_hr in ("human_read", "raw") else ""
         f = {
             "q": (q.get("q") or "").strip(),
             "w": q.get("w") or "",
@@ -528,6 +543,7 @@ class RecallEntry:
             "stage": q.get("stage") or "",
             "mech": q.get("mech") or "",
             "pattern": q.get("pattern") or "",
+            "hr": hr_filter,
         }
         sort_by = q.get("sort") or "sev"
         try:
@@ -546,6 +562,14 @@ class RecallEntry:
         matched_total = len(ordered)
         recalled = matched_total
         pages = max(1, math.ceil(matched_total / size))
+        # Proportion for the sidebar mini ring is computed over the current slice BEFORE the hr filter,
+        # so selecting human_read or raw keeps showing the true split rather than snapping to 100%.
+        if f["hr"]:
+            base_pool = self._ordered_sessions({**f, "hr": ""}, "sev")
+        else:
+            base_pool = ordered
+        base_total = len(base_pool)
+        hr_cnt = sum(1 for s in base_pool if s.get("hr")) if base_pool is not self.sessions else self.hr_total
 
         target_sess = None
         target_page = None
@@ -583,6 +607,12 @@ class RecallEntry:
             "page": page,
             "size": size,
             "pages": pages,
+            "hr_stats": {
+                "hr": hr_cnt,
+                "raw": max(0, base_total - hr_cnt),
+                "total": base_total,
+                "hr_total": self.hr_total,
+            },
             "rows": page_rows,
         }
         if target_sess is not None:

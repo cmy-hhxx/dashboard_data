@@ -353,13 +353,15 @@ class DetailBuilder:
                     return None
             finally:
                 reader.close()
+            hr_applied = False
             if product == "aime":
                 attr_rel = hro.daily_rel_path(output)
                 comp_rel = hro.daily_rel_path(pair["compact"][0]) if pair["compact"] else None
                 try:
-                    self._human_read.overlay_detail(detail, attr_rel, attr, comp_rel, comp)
+                    hr_applied = bool(self._human_read.overlay_detail(detail, attr_rel, attr, comp_rel, comp))
                 except Exception as exc:  # noqa: BLE001 - human_read is best-effort overlay
                     build.debug(f"detail {slug}: human_read overlay failed: {exc}")
+            detail["human_read"] = hr_applied
             detail["slug"] = slug
             build.write_json(path, detail)
             return path

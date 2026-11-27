@@ -10,7 +10,7 @@ const VIEW_NAME = { data: "数据看板", speed: "评测速度", system: "评测
 // across views, or a stale deep link would reopen the previous drill on the next page.
 const SAMPLE_PARAMS = {
   detail: null, ed: null, em: null, ep: null, edp: null, p: null, q: null, w: null, split: null,
-  model: null, scene: null, sub: null, stage: null, mech: null, pattern: null, date: null, case: null, trace: null,
+  model: null, ut: null, hr: null, scene: null, sub: null, stage: null, mech: null, pattern: null, date: null, case: null, trace: null,
   res: null, cls: null, typ: null, cause: null,
 };
 const COMPARE_PARAMS = { pair: null, round: null, face: null };

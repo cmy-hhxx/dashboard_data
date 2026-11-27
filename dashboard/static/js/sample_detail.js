@@ -249,6 +249,7 @@ function withRounds(part) {
     turn: i,
     compact: i,
     tid: d.attribution?.turns?.[i]?.trace_id || "",
+    hr: Boolean(d.human_read),
   }));
   return d;
 }
@@ -263,6 +264,7 @@ export function mergeSessionDetails(parts, session, product) {
     question: session.q,
     question_zh: parts[0].detail.question_zh,
     lang: parts[0].detail.lang,
+    human_read: parts.some((p) => Boolean(p.detail?.human_read)),
     ids: { session: session.sid, trace: "" },
     session_meta: { ...(parts[parts.length - 1].detail.session_meta || {}) },
     meta: { ...(parts[parts.length - 1].detail.meta || {}) },
@@ -316,6 +318,7 @@ export function mergeSessionDetails(parts, session, product) {
         turn: D.attribution.turns.length - 1,
         compact: D.compact.turns.length - 1,
         tid: turn?.trace_id || "",
+        hr: Boolean(d.human_read),
       });
     }
 
@@ -412,6 +415,7 @@ export function buildLazyRoundDetail(detail, rows, roundIndex, session, product)
     trace: idx === roundIndex ? 0 : -1,
     turn: idx === roundIndex ? 0 : -1,
     compact: idx === roundIndex ? 0 : -1,
+    hr: idx === roundIndex ? Boolean(D.human_read) : Boolean(row.hr),
     loaded: idx === roundIndex,
   }));
   return D;
@@ -839,8 +843,22 @@ function renderIn() {
       ? `<span class="cg${cls ? ` ${cls}` : ""}"><span class="cg-k">${k}</span>${shown.map((v) => `<span class="pill">${esc(v)}</span>`).join("")}</span>`
       : "";
   };
+  const currentHrState = (D) => {
+    if (!D) return false;
+    if (S.sessionView) return Boolean(D.human_read || (D.rounds || []).some((r) => r.hr));
+    const rd = D.rounds?.[S.round];
+    if (rd && typeof rd.hr === "boolean") return rd.hr;
+    return Boolean(D.human_read);
+  };
+  const hrPillHTML = (D) => {
+    if (ctx.forecast || !D) return "";
+    const isHr = currentHrState(D);
+    if ((D.product || S.product) === "wencai" && !isHr) return "";
+    return `<span class="pill ${isHr ? "is-hr" : "is-raw"}">${isHr ? "human_read" : "raw"}</span>`;
+  };
   const fullQ = questionOf(D) || "（无提问）";
   const shortQ = fullQ.length > 80 ? `${fullQ.slice(0, 80)}…` : fullQ;
+  const hrBadge = hrPillHTML(D);
   $(`#${prefix}shead`, root).innerHTML = `<div class="sample-head${compareHead ? " is-compare" : ""}">
       ${compareHead ? headExtra : `<div class="headline">
         <h2 title="${esc(fullQ)}">${esc(shortQ)}</h2>
@@ -848,6 +866,7 @@ function renderIn() {
       </div>
       <div class="chip-groups">
         ${isLostRow(session) ? `<span class="cg"><span class="pill lost">流失用户</span></span>` : ""}
+        ${hrBadge ? `<span class="cg is-hr-cg" id="${prefix}hrTag">${hrBadge}</span>` : ""}
         ${group("会话模型", "is-model", [sessionLabel])}
         ${group("当前 trace", "is-model", [traceLabel])}
         ${group("日期", "is-plain", [D.date])}
@@ -937,6 +956,14 @@ function renderTrace() {
   $(`#${prefix}sanatomy`, root)?.classList.remove("is-focus");
   $(`#${prefix}sanatomy`, root)?.classList.toggle("is-session", session);
   $(`#${prefix}shead`, root)?.classList.toggle("is-session", session);
+  const hrTag = $(`#${prefix}hrTag`, root);
+  if (hrTag && D && !ctx.forecast) {
+    const rd = D.rounds?.[S.round];
+    const isHr = session
+      ? Boolean(D.human_read || (D.rounds || []).some((r) => r.hr))
+      : (rd && typeof rd.hr === "boolean" ? rd.hr : Boolean(D.human_read));
+    hrTag.innerHTML = `<span class="pill ${isHr ? "is-hr" : "is-raw"}">${isHr ? "human_read" : "raw"}</span>`;
+  }
   renderIdline();
   const tabPage = Math.floor(S.round / TABS_PER_PAGE);
   if (S.tabPage !== tabPage) {

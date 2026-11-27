@@ -10,7 +10,7 @@ const CHEV_DOWN = `<svg class="chev" viewBox="0 0 12 12" width="11" height="11" 
 const PAGE = 50;
 const S = {
   product: null, all: [], rows: [], pageRows: [], page: 1, slug: null, refocusList: false, listOff: false,
-  serverMode: false, pages: 1, total: 0, matched: 0,
+  serverMode: false, pages: 1, total: 0, matched: 0, hrStats: null,
   facets: null, lastFilterSig: "", reqSeq: 0,
 };
 let ctx;
@@ -23,12 +23,12 @@ const F = () => {
   const q = params();
   return {
     q: q.get("q") || "", w: q.get("w") || "", split: q.get("split") || "", model: q.get("model") || "",
-    ut: q.get("ut") || "", date: q.get("date") || "",
+    ut: q.get("ut") || "", hr: q.get("hr") || "", date: q.get("date") || "",
     scene: q.get("scene") || "", sub: q.get("sub") || "", stage: q.get("stage") || "", mech: q.get("mech") || "", pattern: q.get("pattern") || "", sort: q.get("sort") || "sev",
     res: q.get("res") || "", cls: q.get("cls") || "", typ: q.get("typ") || "", cause: q.get("cause") || "",
   };
 };
-const NO_FILTER = { q: "", w: "", split: "", model: "", ut: "", scene: "", sub: "", stage: "", mech: "", pattern: "", date: "", res: "", cls: "", typ: "", cause: "" };
+const NO_FILTER = { q: "", w: "", split: "", model: "", ut: "", hr: "", scene: "", sub: "", stage: "", mech: "", pattern: "", date: "", res: "", cls: "", typ: "", cause: "" };
 const dirty = () => Object.entries(F()).some(([k, v]) => k !== "sort" && v);
 // `sc` is a legacy override kept for old payloads; scene is task, never skill.
 const sceneOf = (r) => r.sc || r.task || "未接入分类体系";
@@ -57,12 +57,15 @@ const dateHit = (r, f) => !f.date || r.rows.some((x) => x.d === f.date);
 /* A date-filtered list reads as that day's slice, so the row shows the day that matched
    instead of the session's last date. */
 const rowDate = (r, f) => (f.date && (r.rows.find((x) => x.d === f.date) || {}).d) || r.d;
-const listHit = (r, f, omit = "") =>
-  severityHit(r, f.w) &&
-  (!f.split || (f.split === "lost" ? isLostRow(r) : r.sp === f.split)) &&
-  (!f.model || r.m === f.model) &&
-  (!f.ut || utOf(r) === f.ut) &&
-  cascadeHit(r, f, omit);
+const listHit = (r, f, omit = "") => {
+  const skip = new Set(omit ? omit.split(",") : []);
+  return severityHit(r, f.w) &&
+    (!f.split || (f.split === "lost" ? isLostRow(r) : r.sp === f.split)) &&
+    (!f.model || r.m === f.model) &&
+    (!f.ut || utOf(r) === f.ut) &&
+    (skip.has("hr") || !f.hr || (f.hr === "human_read" ? Boolean(r.hr) : !r.hr)) &&
+    cascadeHit(r, f, omit);
+};
 
 /* One list row is one session (per model); traces that were evaluated separately stay
    as rounds of that session instead of separate rows. */
@@ -76,7 +79,7 @@ function groupSessions(rows) {
         key, s: key, rows: [], sid: r.sid, m: r.m, sp: r.sp,
         w: "none", n: 0, tr: 0, sv: [0, 0, 0, 0, 0], hasSv: true, pt: new Set(), st: new Set(), tg: new Set(), lb: new Set(),
         q: "", d: "", tid: "", case: "", task: "", sub: "", skill: "", sc: "", lang: r.lang,
-        uid: "", ut: "", ul: 0,
+        uid: "", ut: "", ul: 0, hr: 0,
       };
       groups.set(key, g);
     }
@@ -100,6 +103,7 @@ function groupSessions(rows) {
     g.uid = g.uid || r.uid || "";
     g.ut = g.ut || r.ut || "";
     if (r.ul) g.ul = 1;
+    if (r.hr) g.hr = 1;
   });
   return [...groups.values()].map((g) => {
     const rowsByDate = g.rows.slice().sort((a, b) =>
@@ -113,7 +117,7 @@ function groupSessions(rows) {
       q: last.q, d: last.d, w: countedW, n: g.n, tr: g.tr, sv: g.hasSv ? g.sv : (Array.isArray(last.sv) ? last.sv : null),
       pt: [...g.pt], st: [...g.st], tg: [...g.tg], lb: [...g.lb].join("｜"),
       tid: g.tid, case: g.case, task: g.task, sub: g.sub, skill: g.skill, sc: g.sc,
-      uid: g.uid, ut: g.ut, ul: g.ul,
+      uid: g.uid, ut: g.ut, ul: g.ul, hr: g.hr,
     };
   });
 }
@@ -178,12 +182,12 @@ async function addForecastSession(slug) {
 }
 
 function filterSig(f) {
-  return [f.q, f.w, f.split, f.model, f.ut, f.date, f.scene, f.sub, f.stage, f.mech, f.pattern, f.sort].join("\u0001");
+  return [f.q, f.w, f.split, f.model, f.ut, f.hr, f.date, f.scene, f.sub, f.stage, f.mech, f.pattern, f.sort].join("\u0001");
 }
 
 function buildRecallQuery(f, { page = 1, wanted = "", locate = false, facets = true } = {}) {
   return {
-    q: f.q, w: f.w, split: f.split, model: f.model, ut: f.ut, date: f.date,
+    q: f.q, w: f.w, split: f.split, model: f.model, ut: f.ut, hr: f.hr, date: f.date,
     scene: f.scene, sub: f.sub, stage: f.stage, mech: f.mech, pattern: f.pattern,
     sort: f.sort || "sev", page, size: PAGE,
     case: wanted || "", locate: locate ? "1" : "", facets: facets ? "1" : "0",
@@ -197,6 +201,7 @@ function applyServerPage(res, f) {
   S.pages = Math.max(1, Number(res.pages) || 1);
   S.total = Number(res.total_sessions) || 0;
   S.matched = Number(res.matched) || 0;
+  S.hrStats = res.hr_stats || null;
   if (res.facets) S.facets = res.facets;
   S.pageRows = Array.isArray(res.rows) ? res.rows : [];
   S.rows = S.pageRows;
@@ -206,7 +211,7 @@ function applyServerPage(res, f) {
   S.lastFilterSig = filterSig(f);
 }
 
-const FACET_KEYS = new Set(["w", "split", "model", "ut", "scene", "sub"]);
+const FACET_KEYS = new Set(["w", "split", "model", "ut", "hr", "scene", "sub"]);
 
 function prefetchNextServerPage(f, dir = 1) {
   if (!S.serverMode || !ctx?.recallPage) return;
@@ -408,6 +413,7 @@ function skeleton() {
           <button type="button" class="fmore-btn" id="smore" data-more aria-expanded="false" aria-controls="sfmore"><span>筛选</span><b class="num" id="smore-cnt" hidden></b>${CHEV_DOWN}</button>
           <button type="button" class="reset-btn" id="sreset" hidden>重置</button>
         </div>
+        <div class="hr-bar" id="shr" hidden></div>
         <div class="filters" id="sf" hidden></div>`}
       </div>
       <div class="pane-scroll" id="slist" tabindex="0" aria-label="样本"></div>
@@ -737,6 +743,49 @@ function syncFilters() {
   sfEl.hidden = !chips.length && !open;
 }
 
+function computeHrStats(f) {
+  if (S.serverMode && S.hrStats) return S.hrStats;
+  const needle = (f.q || "").toLowerCase();
+  const hit = (r) =>
+    !needle ||
+    [r.q, r.lb, r.s, r.sid, r.tid, r.case, r.task, r.sub, r.skill].some((x) => x && String(x).toLowerCase().includes(needle)) ||
+    (r.rows || []).some((x) => [x.q, x.sid, x.tid, x.case, x.task, x.sub, x.skill].some((v) => v && String(v).toLowerCase().includes(needle)));
+  const pool = S.all.filter((r) => listHit(r, f, "hr") && dateHit(r, f) && hit(r));
+  const hr = pool.filter((r) => r.hr).length;
+  const hrTotal = S.all.filter((r) => r.hr).length;
+  return { hr, raw: Math.max(0, pool.length - hr), total: pool.length, hr_total: hrTotal };
+}
+
+function shouldShowHr(stats) {
+  return !ctx.forecast && (S.product === "aime" || (stats && stats.hr_total > 0));
+}
+
+function renderHrBar(f, stats) {
+  const el = $("#shr", root);
+  if (!el) return;
+  const show = shouldShowHr(stats);
+  el.hidden = !show;
+  if (!show) {
+    el.innerHTML = "";
+    return;
+  }
+  const total = Number(stats?.total || 0);
+  const hr = Number(stats?.hr || 0);
+  const raw = Math.max(0, Number(stats?.raw ?? (total - hr)));
+  const pct = total > 0 ? Math.round((1000 * hr) / total) / 10 : 0;
+  const rawPct = total > 0 ? Math.round((100 - pct) * 10) / 10 : 0;
+  const fmtPct = (v) => `${v % 1 === 0 ? v.toFixed(0) : v.toFixed(1)}%`;
+  const arc = total > 0 ? Math.max(hr > 0 ? 1.5 : 0, Math.min(100, (100 * hr) / total)) : 0;
+  el.innerHTML = `<span class="hr-ring" title="human_read ${fmt(hr)} · raw ${fmt(raw)}">
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <circle class="hr-ring-track" cx="10" cy="10" r="7.5" pathLength="100"></circle>
+        <circle class="hr-ring-arc" cx="10" cy="10" r="7.5" pathLength="100" stroke-dasharray="${arc.toFixed(2)} 100"></circle>
+      </svg>
+    </span>
+    <button type="button" class="hr-stat is-hr" data-k="hr" data-v="human_read" aria-pressed="${f.hr === "human_read"}" title="human_read ${fmt(hr)} / ${fmt(total)}"><i aria-hidden="true"></i><span>human_read</span><b class="num">${fmtPct(pct)}</b></button>
+    <button type="button" class="hr-stat is-raw" data-k="hr" data-v="raw" aria-pressed="${f.hr === "raw"}" title="raw ${fmt(raw)} / ${fmt(total)}"><i aria-hidden="true"></i><span>raw</span><b class="num">${fmtPct(rawPct)}</b></button>`;
+}
+
 function renderList() {
   const f = F();
   let questionTotal = 0;
@@ -806,6 +855,9 @@ function renderList() {
     countForPager = S.prod.head ? total : S.rows.length;
   }
   $("#slist", root).removeAttribute("aria-busy");
+  const hrStats = computeHrStats(f);
+  const showHr = shouldShowHr(hrStats);
+  renderHrBar(f, hrStats);
   const resColor = { correct: "var(--accent)", wrong: "var(--sev-1)", pending: "var(--muted)" };
   $("#slist", root).innerHTML = S.pageRows.length
     ? S.pageRows
@@ -819,7 +871,7 @@ function renderList() {
       <span class="bar"></span><span class="srow-body"><span class="q">${esc(r.q || "（无提问）")}</span>
       <span class="m num"><span class="srow-model">${esc(label(r.m))}</span><span>${rowDate(r, f).slice(5)}</span>${r.tr > 1 ? `<span>${r.tr} 轮</span>` : ""}<span class="srow-sev" style="color:${r.w === "none" ? "var(--muted)" : sevColor(r.w)}">${r.w === "none" ? "无问题" : r.w}</span>${
             isLostRow(r) ? '<span class="tag-lost">流失</span>' : ""
-          }</span></span></button>`,
+          }${showHr ? `<span class="tag-hr ${r.hr ? "is-hr" : "is-raw"}">${r.hr ? "human_read" : "raw"}</span>` : ""}</span></span></button>`,
         )
         .join("")
     : `<div class="empty">没有符合条件的会话<br><button type="button" class="link" id="sclear">清除筛选</button></div>`;
