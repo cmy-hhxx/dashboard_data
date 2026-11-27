@@ -843,22 +843,8 @@ function renderIn() {
       ? `<span class="cg${cls ? ` ${cls}` : ""}"><span class="cg-k">${k}</span>${shown.map((v) => `<span class="pill">${esc(v)}</span>`).join("")}</span>`
       : "";
   };
-  const currentHrState = (D) => {
-    if (!D) return false;
-    if (S.sessionView) return Boolean(D.human_read || (D.rounds || []).some((r) => r.hr));
-    const rd = D.rounds?.[S.round];
-    if (rd && typeof rd.hr === "boolean") return rd.hr;
-    return Boolean(D.human_read);
-  };
-  const hrPillHTML = (D) => {
-    if (ctx.forecast || !D) return "";
-    const isHr = currentHrState(D);
-    if ((D.product || S.product) === "wencai" && !isHr) return "";
-    return `<span class="pill ${isHr ? "is-hr" : "is-raw"}">${isHr ? "human_read" : "raw"}</span>`;
-  };
   const fullQ = questionOf(D) || "（无提问）";
   const shortQ = fullQ.length > 80 ? `${fullQ.slice(0, 80)}…` : fullQ;
-  const hrBadge = hrPillHTML(D);
   $(`#${prefix}shead`, root).innerHTML = `<div class="sample-head${compareHead ? " is-compare" : ""}">
       ${compareHead ? headExtra : `<div class="headline">
         <h2 title="${esc(fullQ)}">${esc(shortQ)}</h2>
@@ -868,7 +854,6 @@ function renderIn() {
         ${isLostRow(session) ? `<span class="cg"><span class="pill lost">流失用户</span></span>` : ""}
         ${group("会话模型", "is-model", [sessionLabel])}
         ${group("当前 trace", "is-model", [traceLabel])}
-        ${hrBadge ? `<span class="cg is-hr-cg" id="${prefix}hrTag">${hrBadge}</span>` : ""}
         ${group("日期", "is-plain", [D.date])}
         ${group("App", "is-plain", [m.app])}
         ${group("来源", "is-plain", [m.comefrom])}
@@ -959,14 +944,6 @@ function renderTrace() {
   $(`#${prefix}sanatomy`, root)?.classList.remove("is-focus");
   $(`#${prefix}sanatomy`, root)?.classList.toggle("is-session", session);
   $(`#${prefix}shead`, root)?.classList.toggle("is-session", session);
-  const hrTag = $(`#${prefix}hrTag`, root);
-  if (hrTag && D && !ctx.forecast) {
-    const rd = D.rounds?.[S.round];
-    const isHr = session
-      ? Boolean(D.human_read || (D.rounds || []).some((r) => r.hr))
-      : (rd && typeof rd.hr === "boolean" ? rd.hr : Boolean(D.human_read));
-    hrTag.innerHTML = `<span class="pill ${isHr ? "is-hr" : "is-raw"}">${isHr ? "human_read" : "raw"}</span>`;
-  }
   renderIdline();
   const tabPage = Math.floor(S.round / TABS_PER_PAGE);
   if (S.tabPage !== tabPage) {

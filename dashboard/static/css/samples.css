@@ -342,9 +342,6 @@
 .cg.is-model .pill { background: var(--accent-soft); color: var(--accent); font-weight: var(--w-medium); }
 .cg.is-scene .pill { background: var(--well-2); color: var(--ink); font-weight: var(--w-medium); }
 .cg.is-scale .pill { color: var(--muted); }
-.cg.is-hr-cg .pill { font-family: var(--mono); font-size: var(--fs-micro); letter-spacing: 0.01em; }
-.cg.is-hr-cg .pill.is-hr { background: var(--accent-soft); color: var(--accent); font-weight: var(--w-medium); }
-.cg.is-hr-cg .pill.is-raw { background: var(--well); color: var(--muted); }
 .pill.lost, .cg .pill.lost {
   height: 20px; padding: 0 7px; border-radius: var(--r-chip); font-weight: var(--w-medium);
   background: color-mix(in oklab, var(--sev-2) 15%, transparent); color: var(--sev-1);
