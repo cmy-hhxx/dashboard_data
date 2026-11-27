@@ -1837,10 +1837,21 @@ def _input_loop() -> None:
 
 _PG_CACHE_LOCK = threading.Lock()
 _PG_CACHE: dict = {"ts": 0.0, "payload": None}
+# Initial bulk PG migration completed before 2026-11-27T03:30:00Z; live cluster
+# timestamps after this cutoff reflect real-time incremental clustering throughput.
+_PG_LIVE_CUTOFF_ISO = "2026-11-27T03:30:00Z"
+
+
+def _dt_to_epoch(val) -> float | None:
+    if val is None:
+        return None
+    if hasattr(val, "timestamp"):
+        return float(val.timestamp())
+    return None
 
 
 def _pg_payload() -> dict:
-    """Serve live evaluation throughput and backlog directly from PostgreSQL 16."""
+    """Serve live evaluation & clustering throughput directly from PostgreSQL 16."""
     now = time.time()
     ttl = max(5.0, float(_CONFIG.get("refresh_seconds", 15)))
     with _PG_CACHE_LOCK:
@@ -1915,17 +1926,91 @@ def _pg_payload() -> dict:
                 )
                 lost_row = cur.fetchone() or {}
 
+                # Fast partial-index scan (idx_eval_problems_unclustered) for pending cluster traces & problems
                 cur.execute(
                     """
                     SELECT
                         p.model,
-                        COUNT(DISTINCT p.output_id) FILTER (WHERE p.cluster_code IS NULL)::BIGINT AS pending_traces
+                        p.biz_day,
+                        COUNT(DISTINCT p.output_id)::BIGINT AS pending_traces,
+                        COUNT(*)::BIGINT AS pending_problems
                     FROM public.eval_problems p
                     JOIN public.eval_outputs o ON o.output_id = p.output_id AND o.is_latest = TRUE
-                    GROUP BY p.model
+                    WHERE p.cluster_code IS NULL
+                    GROUP BY p.model, p.biz_day
                     """
                 )
-                cluster_pending_map = {str(r["model"]): int(r["pending_traces"] or 0) for r in cur.fetchall()}
+                uncl_rows = cur.fetchall()
+
+                # 48h minute-bucket evaluation throughput (uses idx_eval_outputs_evaluated_at)
+                cur.execute(
+                    """
+                    SELECT
+                        FLOOR(EXTRACT(EPOCH FROM date_trunc('minute', evaluated_at)))::BIGINT AS b_s,
+                        COUNT(*)::BIGINT AS attr_cnt,
+                        COUNT(*) FILTER (WHERE compact_file_id IS NOT NULL)::BIGINT AS comp_cnt
+                    FROM public.eval_outputs
+                    WHERE is_latest = TRUE
+                      AND evaluated_at IS NOT NULL
+                      AND evaluated_at >= now() - interval '48 hours'
+                    GROUP BY 1
+                    ORDER BY 1 ASC
+                    """
+                )
+                eval_bucket_rows = cur.fetchall()
+
+                cur.execute(
+                    """
+                    SELECT MAX(evaluated_at) AS max_eval
+                    FROM public.eval_outputs
+                    WHERE is_latest = TRUE AND evaluated_at IS NOT NULL
+                    """
+                )
+                max_eval_row = cur.fetchone() or {}
+
+                # 48h minute-bucket live clustering throughput (post-migration cutoff avoids ETL spike)
+                cur.execute(
+                    """
+                    SELECT
+                        FLOOR(EXTRACT(EPOCH FROM date_trunc('minute', p.clustered_at)))::BIGINT AS b_s,
+                        COUNT(DISTINCT p.output_id)::BIGINT AS cl_traces,
+                        COUNT(*)::BIGINT AS cl_probs
+                    FROM public.eval_problems p
+                    JOIN public.eval_outputs o ON o.output_id = p.output_id AND o.is_latest = TRUE
+                    WHERE p.clustered_at IS NOT NULL
+                      AND p.clustered_at >= GREATEST(now() - interval '48 hours', %s::timestamptz)
+                    GROUP BY 1
+                    ORDER BY 1 ASC
+                    """,
+                    (_PG_LIVE_CUTOFF_ISO,),
+                )
+                cl_bucket_rows = cur.fetchall()
+
+                cur.execute(
+                    """
+                    SELECT MAX(clustered_at) AS max_cl
+                    FROM public.eval_problems
+                    WHERE clustered_at IS NOT NULL
+                    """
+                )
+                max_cl_row = cur.fetchone() or {}
+
+                # Active PG Step 2 leases / workers (uses idx_eval_inputs_claim)
+                cur.execute(
+                    """
+                    SELECT
+                        model,
+                        COALESCE(NULLIF(claimed_by, ''), 'worker') AS worker,
+                        COUNT(*)::BIGINT AS claimed_cnt,
+                        COUNT(*) FILTER (WHERE lease_expires_at IS NOT NULL AND lease_expires_at <= now())::BIGINT AS expired_cnt,
+                        MAX(updated_at) AS last_upd
+                    FROM public.eval_inputs
+                    WHERE NOT is_deleted AND eval_status = 'claimed'
+                    GROUP BY 1, 2
+                    ORDER BY claimed_cnt DESC, worker ASC
+                    """
+                )
+                worker_rows = cur.fetchall()
     except Exception as exc:  # noqa: BLE001
         return {
             "available": True,
@@ -1936,6 +2021,19 @@ def _pg_payload() -> dict:
             "updated_at": _to_iso(now),
             "models": [],
         }
+
+    cluster_pending_map: dict[str, int] = collections.defaultdict(int)
+    day_uncl_map: dict[tuple[str, str], int] = {}
+    unclustered_probs_total = 0
+    for r in uncl_rows:
+        m_name = str(r["model"])
+        bd = r["biz_day"]
+        day_str = bd.isoformat() if hasattr(bd, "isoformat") else str(bd)
+        pt = int(r["pending_traces"] or 0)
+        pp = int(r["pending_problems"] or 0)
+        cluster_pending_map[m_name] += pt
+        day_uncl_map[(m_name, day_str)] = pt
+        unclustered_probs_total += pp
 
     by_model: dict[str, list[dict]] = collections.defaultdict(list)
     total_pending = total_claimed = total_failed = 0
@@ -1959,6 +2057,7 @@ def _pg_payload() -> dict:
             cv = int(row["compact_cnt"] or 0)
             items_sum += int(row["items_cnt"] or 0)
             rem = max(0, itr - atr)
+            day_uncl = min(atr, day_uncl_map.get((name, day_str), 0))
             inp_tr_sum += itr
             attr_tr_sum += atr
             compact_sum += cv
@@ -1971,6 +2070,7 @@ def _pg_payload() -> dict:
                 "attr": atr,
                 "attr_sessions": asess,
                 "attr_traces": atr,
+                "clustered": max(0, atr - day_uncl),
                 "compact": cv,
                 "remaining": rem,
                 "remaining_sessions": max(0, isess - asess),
@@ -2001,23 +2101,6 @@ def _pg_payload() -> dict:
     remaining_sessions = max(0, input_sessions - attr_sessions)
     remaining_traces = sum(m["remaining"] for m in models)
 
-    with _LOCK:
-        hist = _STATE["history"]
-        hist.append({"t": now, "a": attr_total, "c": compact_total, "k": attr_total})
-        cutoff = now - float(_CONFIG.get("history_seconds", 172800))
-        while len(hist) > 1 and hist[0]["t"] < cutoff:
-            hist.popleft()
-        history = [dict(p) for p in hist]
-        _STATE["ok"] = True
-        _STATE["error"] = ""
-        _STATE["updated_at"] = now
-        _STATE["last_success"] = now
-        _STATE["input_updated_at"] = now
-
-    a_rate, a_span = _window_rate(history, "a", int(_CONFIG.get("rate_window_seconds", 300)))
-    c_rate, _ = _window_rate(history, "c", int(_CONFIG.get("rate_window_seconds", 300)))
-    eta = 0 if remaining_traces == 0 else ((remaining_traces / a_rate) if (a_rate and a_rate > 0) else None)
-
     cluster_models = []
     for m in models:
         landed = int(m["output_traces"])
@@ -2028,6 +2111,130 @@ def _pg_payload() -> dict:
             "output_traces": landed,
             "pending": pending,
         })
+    cluster_traces_total = sum(cm["traces"] for cm in cluster_models)
+    cluster_pending_total = sum(cm["pending"] for cm in cluster_models)
+
+    # Merge 48h minute buckets for eval & cluster speed charts + rolling window KPIs
+    buckets: dict[int, list[int]] = {}
+    for r in eval_bucket_rows:
+        ts = int(r["b_s"])
+        buckets[ts] = [int(r["attr_cnt"] or 0), int(r["comp_cnt"] or 0), 0, 0]
+    for r in cl_bucket_rows:
+        ts = int(r["b_s"])
+        rec = buckets.get(ts)
+        if rec is None:
+            buckets[ts] = [0, 0, int(r["cl_traces"] or 0), int(r["cl_probs"] or 0)]
+        else:
+            rec[2] = int(r["cl_traces"] or 0)
+            rec[3] = int(r["cl_probs"] or 0)
+
+    series = [[ts, v[0], v[1], v[2], v[3]] for ts, v in sorted(buckets.items())]
+
+    cut_5m = now - 300.0
+    cut_1h = now - 3600.0
+    cut_24h = now - 86400.0
+    ev_5m = cp_5m = cl_5m = clp_5m = 0
+    ev_1h = cp_1h = cl_1h = 0
+    ev_24h = cp_24h = cl_24h = clp_24h = 0
+    for ts, ea, ec, ct, cp in series:
+        if ts >= cut_24h:
+            ev_24h += ea
+            cp_24h += ec
+            cl_24h += ct
+            clp_24h += cp
+            if ts >= cut_1h:
+                ev_1h += ea
+                cp_1h += ec
+                cl_1h += ct
+                if ts >= cut_5m:
+                    ev_5m += ea
+                    cp_5m += ec
+                    cl_5m += ct
+                    clp_5m += cp
+
+    eval_rate_5m = round(ev_5m / 5.0, 2)
+    comp_rate_5m = round(cp_5m / 5.0, 2)
+    cl_rate_5m = round(cl_5m / 5.0, 2)
+    cl_prob_rate_5m = round(clp_5m / 5.0, 2)
+    eval_rate_1h = round(ev_1h / 60.0, 2)
+    comp_rate_1h = round(cp_1h / 60.0, 2)
+    cl_rate_1h = round(cl_1h / 60.0, 2)
+
+    if remaining_traces == 0:
+        eta = 0
+    elif eval_rate_5m >= 0.05:
+        eta = round(remaining_traces / eval_rate_5m, 1)
+    elif eval_rate_1h >= 0.05:
+        eta = round(remaining_traces / eval_rate_1h, 1)
+    else:
+        eta = None
+
+    if cluster_pending_total == 0:
+        cl_eta = 0
+    elif cl_rate_5m >= 0.05:
+        cl_eta = round(cluster_pending_total / cl_rate_5m, 1)
+    elif cl_rate_1h >= 0.05:
+        cl_eta = round(cluster_pending_total / cl_rate_1h, 1)
+    else:
+        cl_eta = None
+
+    # Build backward-cumulative `history` from 48h buckets for legacy compatibility
+    tot_48h_a = sum(s[1] for s in series)
+    tot_48h_c = sum(s[2] for s in series)
+    cur_a = max(0, attr_total - tot_48h_a)
+    cur_c = max(0, compact_total - tot_48h_c)
+    pg_history: list[list[int]] = []
+    if series:
+        pg_history.append([max(0, series[0][0] - 60), cur_a, cur_c])
+        for ts, ea, ec, _ct, _cp in series:
+            cur_a += ea
+            cur_c += ec
+            pg_history.append([ts, cur_a, cur_c])
+        if now - series[-1][0] > 60:
+            pg_history.append([round(now), attr_total, compact_total])
+    else:
+        pg_history = [[round(now), attr_total, compact_total]]
+
+    last_eval_ts = _dt_to_epoch(max_eval_row.get("max_eval"))
+    last_cl_ts = _dt_to_epoch(max_cl_row.get("max_cl"))
+
+    active_workers = []
+    locks = []
+    expired_leases = 0
+    active_worker_names: set[str] = set()
+    for wr in worker_rows:
+        w_name = str(wr["worker"])
+        m_name = str(wr["model"])
+        c_cnt = int(wr["claimed_cnt"] or 0)
+        e_cnt = int(wr["expired_cnt"] or 0)
+        upd_ts = _dt_to_epoch(wr.get("last_upd"))
+        age_s = round(max(0.0, now - upd_ts), 1) if upd_ts else None
+        expired_leases += e_cnt
+        if c_cnt > e_cnt:
+            active_worker_names.add(w_name)
+        active_workers.append({
+            "worker": w_name,
+            "model": m_name,
+            "claimed": c_cnt,
+            "expired": e_cnt,
+            "updated_at": _to_iso(upd_ts),
+            "age_s": age_s,
+        })
+        locks.append({
+            "owner": w_name,
+            "model": m_name,
+            "claimed": c_cnt,
+            "heartbeat_age_s": age_s,
+        })
+
+    active_worker_cnt = len(active_worker_names)
+
+    with _LOCK:
+        _STATE["ok"] = True
+        _STATE["error"] = ""
+        _STATE["updated_at"] = now
+        _STATE["last_success"] = now
+        _STATE["input_updated_at"] = now
 
     iso = _to_iso(now)
     result = {
@@ -2052,16 +2259,21 @@ def _pg_payload() -> dict:
         "progress": (attr_traces / input_traces) if input_traces else None,
         "session_progress": (attr_sessions / input_sessions) if input_sessions else None,
         "rates": {
-            "attr": a_rate,
-            "compact": c_rate,
-            "window_seconds": int(a_span) if a_span else None,
+            "attr": eval_rate_5m,
+            "compact": comp_rate_5m,
+            "cluster": cl_rate_5m,
+            "cluster_problems": cl_prob_rate_5m,
+            "attr_1h": eval_rate_1h,
+            "compact_1h": comp_rate_1h,
+            "cluster_1h": cl_rate_1h,
+            "window_seconds": 300,
             "parts_attr": None,
             "parts_compact": None,
             "parts_window_seconds": None,
             "realtime_rpm": None,
             "rpm_window_seconds": None,
-            "active_writers": total_claimed,
-            "newest_part_age_s": None,
+            "active_writers": active_worker_cnt,
+            "newest_part_age_s": round(max(0.0, now - last_eval_ts), 1) if last_eval_ts else None,
         },
         "eta_minutes": eta,
         "queue": {
@@ -2070,8 +2282,8 @@ def _pg_payload() -> dict:
             "pending": total_pending,
             "running": total_claimed,
             "failed": total_failed,
-            "locks": [],
-            "active_replicas": None,
+            "locks": locks,
+            "active_replicas": active_worker_cnt or None,
             "eta_minutes": eta,
             "updated_at": iso,
         },
@@ -2084,9 +2296,36 @@ def _pg_payload() -> dict:
             "attr_items": int(lost_row.get("attr_items") or 0),
         },
         "cluster": {
-            "traces": sum(cm["traces"] for cm in cluster_models),
-            "pending": sum(cm["pending"] for cm in cluster_models),
+            "traces": cluster_traces_total,
+            "pending": cluster_pending_total,
+            "pending_problems": unclustered_probs_total,
+            "rate_5m": cl_rate_5m,
+            "rate_1h": cl_rate_1h,
+            "eta_minutes": cl_eta,
             "models": cluster_models,
+        },
+        "pg_pipeline": {
+            "now_epoch": round(now),
+            "eval_rate_5m": eval_rate_5m,
+            "eval_rate_1h": eval_rate_1h,
+            "eval_24h": ev_24h,
+            "compact_rate_5m": comp_rate_5m,
+            "compact_rate_1h": comp_rate_1h,
+            "compact_24h": cp_24h,
+            "cluster_rate_5m": cl_rate_5m,
+            "cluster_rate_1h": cl_rate_1h,
+            "cluster_24h": cl_24h,
+            "cluster_prob_rate_5m": cl_prob_rate_5m,
+            "cluster_probs_24h": clp_24h,
+            "cluster_pending_problems": unclustered_probs_total,
+            "cluster_eta_minutes": cl_eta,
+            "last_eval_at": _to_iso(last_eval_ts),
+            "last_eval_ago_s": round(max(0.0, now - last_eval_ts), 1) if last_eval_ts else None,
+            "last_cluster_at": _to_iso(last_cl_ts),
+            "last_cluster_ago_s": round(max(0.0, now - last_cl_ts), 1) if last_cl_ts else None,
+            "expired_leases": expired_leases,
+            "active_workers": active_workers,
+            "series": series,
         },
         "gateways": {
             "count": 0,
@@ -2099,16 +2338,16 @@ def _pg_payload() -> dict:
             "rpm_utilization": None,
             "parts_attr_rate": None,
             "parts_compact_rate": None,
-            "active_writers": total_claimed,
+            "active_writers": active_worker_cnt,
             "newest_part_age_s": None,
-            "active_replicas": None,
+            "active_replicas": active_worker_cnt or None,
             "control": {"paused": False},
             "running": total_claimed,
             "waiting": total_pending,
             "output_tps": None,
             "items": [],
         },
-        "history": [[round(p["t"]), p["a"], p["c"]] for p in history],
+        "history": pg_history,
         "rpm_history": [],
     }
     with _PG_CACHE_LOCK:

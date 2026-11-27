@@ -4,7 +4,7 @@ import test from "node:test";
 
 globalThis.location = { search: "" };
 globalThis.window = {};
-const { deriveEvalStatus, shellHTML, modelRowsHTML, buildMonthlySeries, monthBarHTML, dateChartHTML, dateDetailHTML, applyData } = await import("../static/js/speed.js");
+const { deriveEvalStatus, shellHTML, modelRowsHTML, buildMonthlySeries, monthBarHTML, dateChartHTML, dateDetailHTML, applyData, buildPgSpeedSamples } = await import("../static/js/speed.js");
 const speedCss = fs.readFileSync(new URL("../static/css/speed.css", import.meta.url), "utf8");
 const systemCss = fs.readFileSync(new URL("../static/css/system.css", import.meta.url), "utf8");
 const speedJs = fs.readFileSync(new URL("../static/js/speed.js", import.meta.url), "utf8");
@@ -254,4 +254,27 @@ test("applyData updates concentric rings and KPI counters from real numbers", ()
   assert.equal(zeroSpeed.running, false);
   assert.equal(zeroSpeed.label, "中断中");
   assert.ok(speedCss.includes(".sp-danmu") && systemCss.includes(".fx-pool-danmu"));
+
+  // PG mode: eval & cluster speed bucketing, idle status, and cluster-rate card rendering
+  const nowTs = 1795759200;
+  const pgSeries = [
+    [nowTs - 180, 12, 12, 8, 24],
+    [nowTs - 120, 18, 18, 10, 30],
+    [nowTs - 60, 15, 15, 6, 18],
+  ];
+  const pgBuilt = buildPgSpeedSamples(pgSeries, 300, nowTs, "eval_cluster");
+  assert.equal(pgBuilt.step, 60);
+  assert.ok(pgBuilt.samples.some((s) => s.v1 === 18 && s.v2 === 10));
+  const pgIdle = deriveEvalStatus({
+    ok: true, mode: "pg", input_traces: 100, remaining_traces: 5, cluster: { pending: 0 },
+    rates: { attr: 0, cluster: 0, active_writers: 0 }, queue: { running: 0, locks: [] }, gateways: { control: {} },
+  });
+  assert.equal(pgIdle.label, "空闲中");
+  assert.equal(pgIdle.detail, "待评测 5");
+  const pgClRun = deriveEvalStatus({
+    ok: true, mode: "pg", input_traces: 100, remaining_traces: 0, cluster: { pending: 20 },
+    rates: { attr: 0, cluster: 12.5, active_writers: 0 }, queue: { running: 0, locks: [] }, gateways: { control: {} },
+  });
+  assert.equal(pgClRun.label, "进行中");
+  assert.equal(pgClRun.running, true);
 });

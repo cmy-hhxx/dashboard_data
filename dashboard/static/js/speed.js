@@ -24,6 +24,7 @@ const S = {
   selectedMonth: "",
   selectedDate: "",
   range: 300,
+  userPickedRange: false,
   chartMode: "landing",
   chartSamples: [],
   chartPlotStart: 0,
@@ -152,6 +153,7 @@ export function deriveEvalStatus(data) {
   const partsRate = (Number(rates.parts_attr) || 0) + (Number(rates.parts_compact) || 0);
   const attrRate = Number(rates.attr) || 0;
   const compactRate = Number(rates.compact) || 0;
+  const clusterRate = Number(rates.cluster) || 0;
   const partAge = rates.newest_part_age_s;
   const freshPart = partAge != null && Number(partAge) <= 180;
   const freshLock = locks.some((l) => l.heartbeat_age_s == null || Number(l.heartbeat_age_s) <= 180);
@@ -160,13 +162,19 @@ export function deriveEvalStatus(data) {
   if (ctrl.paused) {
     return { key: "paused", label: "中断中", cls: "is-bad", running: false, detail: "调度暂停" };
   }
-  const hasThroughput = activeWriters > 0 || partsRate >= 0.05 || attrRate >= 0.05 || compactRate >= 0.05 || rpm > 0.5;
+  const hasThroughput = activeWriters > 0 || partsRate >= 0.05 || attrRate >= 0.05 || compactRate >= 0.05 || clusterRate >= 0.05 || rpm > 0.5;
   if (hasThroughput) {
     const workers = data.gateways?.active_replicas || activeWriters || runningJobs;
     return { key: "running", label: "进行中", cls: "is-ok is-live", running: true, detail: workers ? `${workers} 实例` : "" };
   }
   if (inputTraces > 0 && remainingTraces <= 0 && clusterPending <= 0) {
     return { key: "done", label: "已完成", cls: "is-ok", running: false, detail: "" };
+  }
+  if (data.mode === "pg") {
+    const detail = remainingTraces > 0
+      ? `待评测 ${num(remainingTraces)}`
+      : (clusterPending > 0 ? `待聚类 ${num(clusterPending)}` : "");
+    return { key: "idle", label: "空闲中", cls: "is-warn", running: false, detail };
   }
   return { key: "stalled", label: "中断中", cls: "is-warn", running: false, detail: runningJobs > 0 || freshLock || gwFresh ? "速率为 0" : "" };
 }
@@ -232,13 +240,13 @@ export function shellHTML(tax = null, pd = null) {
     </article>
 
     <article class="card sp-rate-card is-rate-attr" style="--span:4">
-      <header class="card-head"><h2>归因速率</h2></header>
+      <header class="card-head"><h2 id="spRateTitle1">归因速率</h2></header>
       <div class="sp-rate"><span class="big num" id="spAttrRate">—</span><span class="unit">trace/分钟</span></div>
       <p class="sp-rate-sub" id="spPartsAttrSub">在途 —</p>
     </article>
 
-    <article class="card sp-rate-card is-rate-comp" style="--span:4">
-      <header class="card-head"><h2>压缩速率</h2></header>
+    <article class="card sp-rate-card is-rate-comp" id="spRateCard2" style="--span:4">
+      <header class="card-head"><h2 id="spRateTitle2">压缩速率</h2></header>
       <div class="sp-rate"><span class="big num" id="spCompactRate">—</span><span class="unit">trace/分钟</span></div>
       <p class="sp-rate-sub" id="spPartsCompactSub">在途 —</p>
     </article>
@@ -256,8 +264,8 @@ export function shellHTML(tax = null, pd = null) {
         <div class="sp-chart-tools">
           <div class="seg" id="spChartMode" role="group" aria-label="趋势指标">
             <span class="seg-knob" aria-hidden="true"></span>
-            <button type="button" data-value="landing">落地速度</button>
-            <button type="button" data-value="rpm">实时 RPM</button>
+            <button type="button" id="spModeBtn1" data-value="landing">落地速度</button>
+            <button type="button" id="spModeBtn2" data-value="rpm">实时 RPM</button>
           </div>
           <div class="seg" id="spRange" role="group" aria-label="历史窗口">
             <span class="seg-knob" aria-hidden="true"></span>
@@ -270,7 +278,7 @@ export function shellHTML(tax = null, pd = null) {
         </div>
       </header>
       <div class="sp-chart-wrap" id="spChartWrap">
-        <svg class="sp-chart" id="spChart" viewBox="0 0 960 256" role="img" aria-label="评测速度与 RPM 实时趋势">
+        <svg class="sp-chart" id="spChart" viewBox="0 0 960 256" role="img" aria-label="评测与聚类速度实时趋势">
           <g class="sp-grid" id="spGrid"></g>
           <path class="sp-area sp-area-attr" id="spArea1" d=""></path>
           <path class="sp-area sp-area-comp" id="spArea2" d=""></path>
@@ -287,35 +295,35 @@ export function shellHTML(tax = null, pd = null) {
 
     <article class="card" style="--span:12">
       <header class="card-head">
-        <h2>网关与实时调度</h2>
+        <h2 id="spSchedTitle">网关与实时调度</h2>
         <span class="sp-conn is-quiet end" id="spGwSummary">—</span>
       </header>
       <div class="sp-gw-kpis">
         <div class="sp-gw-kpi">
-          <span class="sp-gw-kpi-label">实时请求</span>
-          <div class="sp-gw-kpi-val"><b class="mid num" id="spGwRpm">—</b><span class="unit">RPM</span></div>
+          <span class="sp-gw-kpi-label" id="spKpiLbl1">实时请求</span>
+          <div class="sp-gw-kpi-val"><b class="mid num" id="spGwRpm">—</b><span class="unit" id="spKpiUnit1">RPM</span></div>
           <div class="sp-gw-meter" id="spGwMeter"><i id="spGwMeterFill" style="width:0%"></i></div>
           <span class="sp-gw-kpi-sub" id="spGwRpmSub">配额 —</span>
         </div>
         <div class="sp-gw-kpi">
-          <span class="sp-gw-kpi-label">在途吞吐</span>
-          <div class="sp-gw-kpi-val"><b class="mid num" id="spGwPartsAttr">—</b><span class="sp-slash">/</span><b class="mid num" id="spGwPartsComp">—</b><span class="unit">条/分</span></div>
+          <span class="sp-gw-kpi-label" id="spKpiLbl2">在途吞吐</span>
+          <div class="sp-gw-kpi-val"><b class="mid num" id="spGwPartsAttr">—</b><span class="sp-slash" id="spKpiSlash2">/</span><b class="mid num" id="spGwPartsComp">—</b><span class="unit" id="spKpiUnit2">条/分</span></div>
           <span class="sp-gw-kpi-sub" id="spGwPartsSub">写入流 —</span>
         </div>
         <div class="sp-gw-kpi">
-          <span class="sp-gw-kpi-label">并发预算</span>
-          <div class="sp-gw-kpi-val"><b class="mid num" id="spGwPermits">—</b><span class="unit">许可</span></div>
+          <span class="sp-gw-kpi-label" id="spKpiLbl3">并发预算</span>
+          <div class="sp-gw-kpi-val"><b class="mid num" id="spGwPermits">—</b><span class="unit" id="spKpiUnit3">许可</span></div>
           <span class="sp-gw-kpi-sub" id="spGwControlSub">任务并发 —</span>
         </div>
         <div class="sp-gw-kpi">
-          <span class="sp-gw-kpi-label">网关延迟</span>
-          <div class="sp-gw-kpi-val"><b class="mid num" id="spGwLatency">—</b><span class="unit">ms</span></div>
+          <span class="sp-gw-kpi-label" id="spKpiLbl4">网关延迟</span>
+          <div class="sp-gw-kpi-val"><b class="mid num" id="spGwLatency">—</b><span class="unit" id="spKpiUnit4">ms</span></div>
           <span class="sp-gw-kpi-sub" id="spGwProbeSub">—</span>
         </div>
       </div>
-      <div class="md-table sp-table">
+      <div class="md-table sp-table" id="spGwTableWrap">
         <table>
-          <thead>
+          <thead id="spGwThead">
             <tr>
               <th>网关 / 渠道</th><th>状态</th><th>模型</th>
               <th class="num">实时 RPM / 配额</th><th class="num">并发许可</th>
@@ -402,7 +410,96 @@ export function modelRowsHTML(data, { attrCarry = 0, clCarry = 0, selectedModel 
 }
 
 
+function renderPgSchedule(root, data) {
+  const pg = data.pg_pipeline || {};
+  const q = data.queue || {};
+  const workers = pg.active_workers || [];
+  const inTr = Number(data.input_traces) || 0;
+  const attrTr = Number(data.attr_traces) || 0;
+  const remTr = Number(data.remaining_traces) || 0;
+  const clPending = Number(data.cluster?.pending) || 0;
+  const pendingProb = Number(pg.cluster_pending_problems) || 0;
+  const claimed = Number(q.running) || 0;
+  const failed = Number(q.failed) || 0;
+  const expired = Number(pg.expired_leases) || 0;
+  const ratio = inTr > 0 ? Math.max(0, Math.min(1, attrTr / inTr)) : 0;
+
+  setText(root, "spSchedTitle", "评测与聚类调度");
+  setText(root, "spGwSummary", workers.length
+    ? `${num(workers.length)} 活跃 worker · 持有 ${num(claimed)} 条`
+    : "PG 16 · 队列空闲");
+
+  setText(root, "spKpiLbl1", "待评测队列");
+  setText(root, "spGwRpm", num(remTr));
+  setText(root, "spKpiUnit1", "trace");
+  setText(root, "spGwRpmSub", `已评测 ${inTr ? pct(attrTr, inTr, 1) : "—"}${failed > 0 ? ` · 异常 ${num(failed)}` : ""}`);
+  const meter = $("#spGwMeter", root);
+  const meterFill = $("#spGwMeterFill", root);
+  if (meter && meterFill) {
+    meterFill.style.width = `${(ratio * 100).toFixed(1)}%`;
+    meter.classList.toggle("is-hot", remTr > 0 && ratio < 0.85);
+  }
+
+  setText(root, "spKpiLbl2", "在途租约");
+  setText(root, "spGwPartsAttr", num(claimed));
+  const slash2 = $("#spKpiSlash2", root);
+  const comp2 = $("#spGwPartsComp", root);
+  if (slash2) slash2.hidden = true;
+  if (comp2) comp2.hidden = true;
+  setText(root, "spKpiUnit2", "trace");
+  setText(root, "spGwPartsSub", `${num(workers.length)} 个活跃 worker${expired > 0 ? ` · 过期 ${num(expired)}` : ""}`);
+
+  setText(root, "spKpiLbl3", "待聚类池");
+  setText(root, "spGwPermits", num(clPending));
+  setText(root, "spKpiUnit3", "trace");
+  setText(root, "spGwControlSub", `未聚类问题 ${num(pendingProb)} 条 · 24h 聚类 ${num(pg.cluster_24h || 0)}`);
+
+  const lastAgo = pg.last_eval_ago_s != null && pg.last_cluster_ago_s != null
+    ? Math.min(pg.last_eval_ago_s, pg.last_cluster_ago_s)
+    : (pg.last_eval_ago_s ?? pg.last_cluster_ago_s);
+  setText(root, "spKpiLbl4", "最近落库");
+  setText(root, "spGwLatency", agoLabel(lastAgo));
+  setText(root, "spKpiUnit4", "");
+  setText(root, "spGwProbeSub", `评测 ${clock(pg.last_eval_at)} · 聚类 ${clock(pg.last_cluster_at)}`);
+
+  const wrap = $("#spGwTableWrap", root);
+  if (wrap) wrap.hidden = workers.length === 0;
+  if (!workers.length) return;
+  setHTML(root, "spGwThead", `<tr>
+    <th>执行 Worker</th><th>状态</th><th>模型</th>
+    <th class="num">持有租约</th><th class="num">过期租约</th><th class="num">最近活跃</th>
+  </tr>`);
+  const rowsHTML = workers.map((w) => {
+    const ok = (w.claimed || 0) > (w.expired || 0);
+    return `<tr>
+      <td><span class="sp-gw-name">${esc(w.worker)}</span></td>
+      <td><span class="sp-badge ${ok ? "is-ok" : "is-warn"}"><i></i>${ok ? "执行中" : "租约过期"}</span></td>
+      <td><span class="sp-chip">${esc(w.model)}</span></td>
+      <td class="num">${num(w.claimed)} trace</td>
+      <td class="num">${num(w.expired)}</td>
+      <td class="num">${esc(agoLabel(w.age_s))}</td>
+    </tr>`;
+  }).join("");
+  setHTML(root, "spGateways", rowsHTML);
+}
+
+
 function renderGateways(root, gw) {
+  const wrap = $("#spGwTableWrap", root);
+  if (wrap) wrap.hidden = false;
+  const slash2 = $("#spKpiSlash2", root);
+  const comp2 = $("#spGwPartsComp", root);
+  if (slash2) slash2.hidden = false;
+  if (comp2) comp2.hidden = false;
+  setText(root, "spSchedTitle", "网关与实时调度");
+  setText(root, "spKpiLbl1", "实时请求");
+  setText(root, "spKpiUnit1", "RPM");
+  setText(root, "spKpiLbl2", "在途吞吐");
+  setText(root, "spKpiUnit2", "条/分");
+  setText(root, "spKpiLbl3", "并发预算");
+  setText(root, "spKpiUnit3", "许可");
+  setText(root, "spKpiLbl4", "网关延迟");
+  setText(root, "spKpiUnit4", "ms");
   const g = gw || {};
   const items = g.items || [];
   const ctrl = g.control || {};
@@ -953,6 +1050,38 @@ function buildLandingSamples(history, rpmHist, range) {
   return { samples, now, step };
 }
 
+export function buildPgSpeedSamples(series, range, nowTs, mode = "eval_cluster") {
+  const now = Number(nowTs) || Math.floor(Date.now() / 1000);
+  const step = range <= 600 ? 60 : range <= 3600 ? 60 : range <= 21600 ? 300 : range <= 86400 ? 900 : 1800;
+  const alignedEnd = Math.floor(now / step) * step;
+  const count = Math.max(2, Math.round(range / step));
+  const start = alignedEnd - count * step;
+  const bins = Array.from({ length: count + 1 }, (_, i) => ({
+    t: start + i * step,
+    c1: 0,
+    c2: 0,
+    v1: 0,
+    v2: 0,
+  }));
+  const isAttrComp = mode === "attr_compact";
+  for (const row of series || []) {
+    const ts = Number(row[0]) || 0;
+    if (ts < start || ts > alignedEnd + step) continue;
+    const idx = Math.max(0, Math.min(count, Math.floor((ts - start) / step)));
+    const ea = Number(row[1]) || 0;
+    const ec = Number(row[2]) || 0;
+    const ct = Number(row[3]) || 0;
+    bins[idx].c1 += ea;
+    bins[idx].c2 += isAttrComp ? ec : ct;
+  }
+  const perMin = step / 60;
+  for (const b of bins) {
+    b.v1 = b.c1 / perMin;
+    b.v2 = b.c2 / perMin;
+  }
+  return { samples: bins, now: alignedEnd, step };
+}
+
 function drawChart(root) {
   const chart = $("#spChart", root);
   const grid = $("#spGrid", root);
@@ -980,18 +1109,28 @@ function drawChart(root) {
     hoverLine.setAttribute("y1", T);
     hoverLine.setAttribute("y2", H - B);
   }
-  const isRpm = S.chartMode === "rpm";
-  const quota = S.data?.gateways?.rpm_limit || null;
+  const isPg = S.data?.mode === "pg" && Boolean(S.data?.pg_pipeline);
+  const isRpm = !isPg && S.chartMode === "rpm";
+  const isPgAttrComp = isPg && S.chartMode === "rpm";
+  const quota = !isPg ? (S.data?.gateways?.rpm_limit || null) : null;
 
   if (legend) {
-    legend.innerHTML = isRpm
-      ? `<span style="--c:var(--accent)"><i></i>实时请求 (RPM)</span>${quota ? `<span class="is-dashed" style="--c:var(--sev-2)"><i></i>限额 ${num(quota)} RPM</span>` : ""}`
-      : `<span style="--c:var(--accent)"><i></i>Attribution</span><span style="--c:var(--loc-vir)"><i></i>Compact</span>`;
+    if (isPg) {
+      legend.innerHTML = isPgAttrComp
+        ? `<span style="--c:var(--accent)"><i></i>归因 (条/分)</span><span style="--c:var(--loc-vir)"><i></i>压缩 (条/分)</span>`
+        : `<span style="--c:var(--accent)"><i></i>评测速度 (条/分)</span><span style="--c:var(--loc-ulq)"><i></i>聚类速度 (条/分)</span>`;
+    } else {
+      legend.innerHTML = isRpm
+        ? `<span style="--c:var(--accent)"><i></i>实时请求 (RPM)</span>${quota ? `<span class="is-dashed" style="--c:var(--sev-2)"><i></i>限额 ${num(quota)} RPM</span>` : ""}`
+        : `<span style="--c:var(--accent)"><i></i>Attribution</span><span style="--c:var(--loc-vir)"><i></i>Compact</span>`;
+    }
   }
 
-  const built = isRpm
-    ? buildRpmSamples(S.data?.rpm_history || [], S.range)
-    : buildLandingSamples(S.data?.history || [], S.data?.rpm_history || [], S.range);
+  const built = isPg
+    ? buildPgSpeedSamples(S.data.pg_pipeline.series || [], S.range, S.data.pg_pipeline.now_epoch, isPgAttrComp ? "attr_compact" : "eval_cluster")
+    : (isRpm
+      ? buildRpmSamples(S.data?.rpm_history || [], S.range)
+      : buildLandingSamples(S.data?.history || [], S.data?.rpm_history || [], S.range));
   const { samples, now, step } = built;
 
   S.chartSamples = samples;
@@ -1057,6 +1196,9 @@ function drawChart(root) {
     quotaLine.setAttribute("visibility", "hidden");
   }
 
+  const line2Cls = isPg && !isPgAttrComp ? "sp-line-cl" : "sp-line-comp";
+  const area2Cls = isPg && !isPgAttrComp ? "sp-area-cl" : "sp-area-comp";
+  const pt2Cls = isPg && !isPgAttrComp ? "sp-point-cl" : "sp-point-comp";
   const linePath = (key) => samples.map((s, i) => `${i ? "L" : "M"}${x(s.t).toFixed(1)},${y(s[key]).toFixed(1)}`).join("");
   const p1 = linePath("v1");
   line1.setAttribute("class", `sp-line ${isRpm ? "sp-line-rpm" : "sp-line-attr"}`);
@@ -1072,7 +1214,7 @@ function drawChart(root) {
         area2.setAttribute("d", "");
       } else {
         const p2 = linePath("v2");
-        area2.setAttribute("class", "sp-area sp-area-comp");
+        area2.setAttribute("class", `sp-area ${area2Cls}`);
         area2.setAttribute("d", `${p2}L${xEnd},${baseY}L${xBegin},${baseY}Z`);
       }
     }
@@ -1080,11 +1222,11 @@ function drawChart(root) {
     area1.setAttribute("d", "");
     if (area2) area2.setAttribute("d", "");
   }
-  line2.setAttribute("class", "sp-line sp-line-comp");
+  line2.setAttribute("class", `sp-line ${line2Cls}`);
   line2.setAttribute("d", isRpm ? "" : linePath("v2"));
 
   const last = samples[samples.length - 1];
-  const dots = isRpm ? [[last.v1, "sp-point-rpm"]] : [[last.v1, "sp-point-attr"], [last.v2, "sp-point-comp"]];
+  const dots = isRpm ? [[last.v1, "sp-point-rpm"]] : [[last.v1, "sp-point-attr"], [last.v2, pt2Cls]];
   for (const [val, cls] of dots) {
     const cx = x(last.t).toFixed(1);
     const cy = y(val).toFixed(1);
@@ -1136,16 +1278,31 @@ function handleChartMove(event, root) {
   const d = S.range > 21600
     ? `${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")} ${timeStr}`
     : timeStr;
+  const isPg = S.data?.mode === "pg" && Boolean(S.data?.pg_pipeline);
   const quota = S.data?.gateways?.rpm_limit;
-  const html = S.chartMode === "rpm"
-    ? `<div class="t-head">${esc(d)}</div>
-       <div class="t-row"><span>实时请求</span><b class="num">${rate(best.v1)} RPM</b></div>
-       ${quota ? `<div class="t-row"><span>配额占比</span><b class="num">${pct(best.v1, quota, 1)}</b></div>` : ""}
-       <div class="t-row"><span>在途 Attr / Compact</span><b class="num">${rate(best.pa)} / ${rate(best.pc)} 条/分</b></div>`
-    : `<div class="t-head">${esc(d)}</div>
-       <div class="t-row"><span>Attribution</span><b class="num">${rate(best.v1)} 条/分</b></div>
-       <div class="t-row"><span>Compact</span><b class="num">${rate(best.v2)} 条/分</b></div>
-       <div class="t-row"><span>累计</span><b class="num">${num(best.a)} / ${num(best.c)}</b></div>`;
+  let html;
+  if (isPg) {
+    const isAttrComp = S.chartMode === "rpm";
+    html = isAttrComp
+      ? `<div class="t-head">${esc(d)}</div>
+         <div class="t-row"><span>归因速度</span><b class="num">${rate(best.v1)} 条/分</b></div>
+         <div class="t-row"><span>压缩速度</span><b class="num">${rate(best.v2)} 条/分</b></div>
+         <div class="t-row"><span>时段新增</span><b class="num">${num(best.c1)} / ${num(best.c2)}</b></div>`
+      : `<div class="t-head">${esc(d)}</div>
+         <div class="t-row"><span>评测速度</span><b class="num">${rate(best.v1)} 条/分</b></div>
+         <div class="t-row"><span>聚类速度</span><b class="num">${rate(best.v2)} 条/分</b></div>
+         <div class="t-row"><span>时段新增</span><b class="num">${num(best.c1)} / ${num(best.c2)}</b></div>`;
+  } else {
+    html = S.chartMode === "rpm"
+      ? `<div class="t-head">${esc(d)}</div>
+         <div class="t-row"><span>实时请求</span><b class="num">${rate(best.v1)} RPM</b></div>
+         ${quota ? `<div class="t-row"><span>配额占比</span><b class="num">${pct(best.v1, quota, 1)}</b></div>` : ""}
+         <div class="t-row"><span>在途 Attr / Compact</span><b class="num">${rate(best.pa)} / ${rate(best.pc)} 条/分</b></div>`
+      : `<div class="t-head">${esc(d)}</div>
+         <div class="t-row"><span>Attribution</span><b class="num">${rate(best.v1)} 条/分</b></div>
+         <div class="t-row"><span>Compact</span><b class="num">${rate(best.v2)} 条/分</b></div>
+         <div class="t-row"><span>累计</span><b class="num">${num(best.a)} / ${num(best.c)}</b></div>`;
+  }
   showTip(html, event.clientX, event.clientY);
 }
 
@@ -1295,9 +1452,14 @@ export function applyData(root, data) {
   const rawClTr = Number(cl.traces) || 0;
   const rawPendingTr = cl.pending != null ? Math.max(0, Number(cl.pending) || 0) : Math.max(0, rawAttrTr - rawClTr);
   const r = data.rates || {};
+  const isPg = data.mode === "pg" && Boolean(data.pg_pipeline);
+  const pg = data.pg_pipeline || {};
   const attrRate = r.attr == null || (Number(r.attr) === 0 && Number(r.parts_attr) > 0) ? r.parts_attr : r.attr;
   const compactRate = r.compact == null || (Number(r.compact) === 0 && Number(r.parts_compact) > 0) ? r.parts_compact : r.compact;
-  const liveRate = (Number(r.parts_attr) || 0) + (Number(r.parts_compact) || 0) || (Number(attrRate) || 0) + (Number(compactRate) || 0);
+  const clusterRate = isPg ? Number(pg.cluster_rate_5m || 0) : 0;
+  const liveRate = isPg
+    ? (Number(pg.eval_rate_5m || 0) + clusterRate)
+    : ((Number(r.parts_attr) || 0) + (Number(r.parts_compact) || 0) || (Number(attrRate) || 0) + (Number(compactRate) || 0));
 
   const hasPrev = S.prevInputTraces != null;
   const maxCarry = ev.running && liveRate >= 0.05
@@ -1366,12 +1528,50 @@ export function applyData(root, data) {
   setText(root, "spRingPct", inTr ? `${(attrRatio * 100).toFixed(1)}%` : "—");
   setText(root, "spRingClPct", inTr ? `聚类 ${(clInRatio * 100).toFixed(1)}%` : "聚类 —");
 
-  setText(root, "spAttrRate", rate(attrRate));
-  setText(root, "spCompactRate", rate(compactRate));
-  setText(root, "spPartsAttrSub", `在途 ${rate(r.parts_attr)} 条/分钟`);
-  setText(root, "spPartsCompactSub", `在途 ${rate(r.parts_compact)} 条/分钟`);
-  setText(root, "spEta", etaLabel(data.eta_minutes));
-  setText(root, "spEtaSub", `剩余 ${num(remTr)} trace · ${num(remSess)} session`);
+  const rateCard2 = $("#spRateCard2", root);
+  if (isPg) {
+    setText(root, "spRateTitle1", "评测速率");
+    setText(root, "spRateTitle2", "聚类速率");
+    if (rateCard2?.classList) {
+      rateCard2.classList.remove("is-rate-comp");
+      rateCard2.classList.add("is-rate-cl");
+    }
+    setText(root, "spModeBtn1", "评测与聚类");
+    setText(root, "spModeBtn2", "归因与压缩");
+    setText(root, "spAttrRate", rate(pg.eval_rate_5m));
+    setText(root, "spCompactRate", rate(pg.cluster_rate_5m));
+    setText(root, "spPartsAttrSub", `1h 均速 ${rate(pg.eval_rate_1h)} · 24h ${num(pg.eval_24h)} 条 · 压缩 ${rate(pg.compact_rate_5m)}/分`);
+    setText(root, "spPartsCompactSub", `问题 ${rate(pg.cluster_prob_rate_5m)}/分 · 待聚类 ${num(pendingTr)} · 24h ${num(pg.cluster_24h)} 条`);
+    const effEta = remTr > 0 ? data.eta_minutes : (pendingTr > 0 ? pg.cluster_eta_minutes : 0);
+    setText(root, "spEta", etaLabel(effEta));
+    setText(root, "spEtaSub", `待评测 ${num(remTr)} · 待聚类 ${num(pendingTr)}${pg.last_eval_ago_s != null ? ` · 最近 ${agoLabel(pg.last_eval_ago_s)}` : ""}`);
+    if (!S.userPickedRange) {
+      const ser = pg.series || [];
+      const nowEpoch = Number(pg.now_epoch) || Date.now() / 1000;
+      const lastTs = ser.length ? Number(ser[ser.length - 1][0]) : 0;
+      const age = lastTs ? Math.max(0, nowEpoch - lastTs) : Infinity;
+      const ideal = age <= 300 ? 300 : age <= 3600 ? 3600 : age <= 21600 ? 21600 : 86400;
+      if (S.range !== ideal) {
+        S.range = ideal;
+        S.rangeSeg?.set(String(ideal), { silent: true });
+      }
+    }
+  } else {
+    setText(root, "spRateTitle1", "归因速率");
+    setText(root, "spRateTitle2", "压缩速率");
+    if (rateCard2?.classList) {
+      rateCard2.classList.remove("is-rate-cl");
+      rateCard2.classList.add("is-rate-comp");
+    }
+    setText(root, "spModeBtn1", "落地速度");
+    setText(root, "spModeBtn2", "实时 RPM");
+    setText(root, "spAttrRate", rate(attrRate));
+    setText(root, "spCompactRate", rate(compactRate));
+    setText(root, "spPartsAttrSub", `在途 ${rate(r.parts_attr)} 条/分钟`);
+    setText(root, "spPartsCompactSub", `在途 ${rate(r.parts_compact)} 条/分钟`);
+    setText(root, "spEta", etaLabel(data.eta_minutes));
+    setText(root, "spEtaSub", `剩余 ${num(remTr)} trace · ${num(remSess)} session`);
+  }
 
   const evalEl = $("#spEvalState", root);
   if (evalEl) evalEl.className = `sp-conn ${ev.cls}`;
@@ -1395,7 +1595,8 @@ export function applyData(root, data) {
     done: ev.key === "done",
   });
 
-  renderGateways(root, data.gateways);
+  if (isPg) renderPgSchedule(root, data);
+  else renderGateways(root, data.gateways);
   renderDateBoard(root, data);
   setHTML(root, "spModels", modelRowsHTML(data, { attrCarry: S.simAttrCarry, clCarry: S.simClusterCarry, selectedModel: S.selectedModel }));
 
@@ -1419,6 +1620,7 @@ function wireControls(root) {
   }
   if (rangeEl) {
     S.rangeSeg = segmented(rangeEl, (v) => {
+      S.userPickedRange = true;
       S.range = Number(v);
       drawChart(root);
       handleChartLeave(root);
