@@ -108,7 +108,7 @@ UT_ORDER = ("real", "test", "internal", "unknown")
 # index lean matters more than the full aggregate row: it is fetched by every
 # 具体数据 view and can be several MB.
 INDEX_FIELDS = ("s", "q", "m", "sp", "d", "sid", "tid", "w", "n", "tr", "r", "pt", "st", "case", "task", "sub", "skill", "sc",
-                "uid", "ut", "ul")
+                "uid", "ut", "ul", "hr")
 # lb (the joined problem labels) is 4.8MB of the AIME index and only ever feeds
 # search, so it ships as its own file the browser fetches on the first keystroke.
 # Split apart the two compress better (2.71 + 1.53) than they do together (4.73).
