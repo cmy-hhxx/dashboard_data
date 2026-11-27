@@ -42,7 +42,7 @@ retry() {
 #   AIME  @ 弗吉尼亚:  EVAL_DEPLOY_HOST=aime_rsi_data EVAL_DATASETS=/mnt/aime_eval_ssd EVAL_PRODUCTS=aime ./dashboard/deploy.sh
 #   问财  @ 乌兰 5004: EVAL_DEPLOY_REMOTE=/opt/eval_dashboard_2 PORT=5004 STATS_WORKER=0 EVAL_DATASETS=/mnt/fin_bench/code_and_clean_data/datasets EVAL_PRODUCTS=wencai ./dashboard/deploy.sh
 RUN_ENV=""
-for var in PORT STATS_WORKER REFRESH_SECONDS STATS_REFRESH_SECONDS EVAL_DATASETS EVAL_PRODUCTS EVAL_MIN_BUILD_HEADROOM_MB EVAL_BUILD_OOM_SCORE_ADJ EVAL_BUILD_RLIMIT_AS_GB; do
+for var in PORT STATS_WORKER BACKUP_STATS REFRESH_SECONDS STATS_REFRESH_SECONDS EVAL_DATASETS EVAL_PRODUCTS EVAL_STORAGE_BACKEND AIME_DATA_ROOT AIME_PG_SECRETS_FILE PG_DATA_CORE_PATH EVAL_MIN_BUILD_HEADROOM_MB EVAL_BUILD_OOM_SCORE_ADJ EVAL_BUILD_RLIMIT_AS_GB; do
   if [ -n "${!var:-}" ]; then RUN_ENV+="export $var=$(printf '%q' "${!var}")"$'\n'; fi
 done
 # Build outputs live next to the code: every top-level payload (.json and its .gz/.br twins)

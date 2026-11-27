@@ -631,12 +631,21 @@ class PipelineManager:
 
         existing_targets = self.store.get_targets(run_id)
         if not existing_targets:
-            targets, bench_meta = sample_bench_targets(
-                self.cfg.bench_root,
-                model,
-                run["tier"],
-                limit_override=run["requested_count"],
-            )
+            from . import pg_ab_sync
+
+            if pg_ab_sync.is_pg_enabled():
+                targets, bench_meta = pg_ab_sync.sample_bench_targets_pg(
+                    model,
+                    run["tier"],
+                    limit_override=run["requested_count"],
+                )
+            else:
+                targets, bench_meta = sample_bench_targets(
+                    self.cfg.bench_root,
+                    model,
+                    run["tier"],
+                    limit_override=run["requested_count"],
+                )
             dispatch_files = write_targets_and_dispatch_files(
                 run_id=run_id,
                 version=run["version"],
@@ -915,6 +924,36 @@ class PipelineManager:
             stage=final_status,
             finished_at=utc_rfc3339(),
         )
+        from . import pg_ab_sync
+
+        if pg_ab_sync.is_pg_enabled():
+            try:
+                fin_run = self.store.get_run(run_id) or run
+                fin_targets = self.store.get_targets(run_id)
+                fin_before = {c["case_key"]: c for c in self.store.get_side_cases(run_id, side="before")}
+                fin_after = {c["case_key"]: c for c in self.store.get_side_cases(run_id, side="after")}
+                pub = pg_ab_sync.publish_run_to_pg(
+                    run=fin_run,
+                    targets=fin_targets,
+                    before_cases=fin_before,
+                    after_cases=fin_after,
+                    round_dir=round_dir,
+                )
+                self.store.add_event(
+                    run_id,
+                    "finalizing",
+                    "pg_published",
+                    f"已归档写入 PG 16 + 多帧 Zstd（round_id={pub['round_id']}）",
+                    details=pub,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self.store.add_event(
+                    run_id,
+                    "finalizing",
+                    "pg_publish_warn",
+                    f"PG 归档写入告警：{exc}",
+                    level="warn",
+                )
         self.store.add_event(
             run_id,
             "finalizing",

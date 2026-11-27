@@ -364,8 +364,11 @@ def main() -> int:
     ap.add_argument("--no-skip-hex", dest="skip_hex", action="store_false")
     ap.add_argument("--days", type=int, default=0, help="只处理最近 N 天（按文件日期）")
     ap.add_argument("--retry", action="store_true", help="只重查 pending 队列（不扫文件）")
+    ap.add_argument("--pg", action="store_true", help="PG 16 模式：直接读 eval_inputs pending 并更新 PG（零 JSONL 重写）")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(sys.argv[1:])
+    if args.pg:
+        return run_pg_mode(args)
     maybe_reexec(sys.argv[1:], args.root)
     base = Path(args.root)
 
@@ -498,6 +501,123 @@ def main() -> int:
         with open(cache / "api_yield.jsonl", "a") as fh:      # 每轮产出，用来判断上游有没有在补
             fh.write(json.dumps({"at": time.strftime("%F %T"), "since": args.since,
                                  "days": args.days, **summary}, ensure_ascii=False) + "\n")
+    return 0
+
+
+def run_pg_mode(args) -> int:
+    """PG 16 Step 4 category backfill: query pending eval_inputs, fetch API, update PG directly."""
+    t0 = time.time()
+    for p in (os.environ.get("PG_DATA_CORE_PATH") or "", "/opt/pg_data_core", str(Path(__file__).resolve().parent.parent)):
+        if p and os.path.isdir(p) and p not in sys.path:
+            sys.path.insert(0, p)
+    from pg_data_core.config import load_config
+    from pg_data_core.core import DataCore
+    from pg_data_core.db import connect_direct
+
+    cfg = load_config(role="rw")
+    where = [
+        "product = 'aime'",
+        "NOT is_deleted",
+        "category_status = 'pending'",
+        "(task_category IS NULL OR task_category = '')",
+    ]
+    params: list[object] = []
+    if args.since:
+        where.append("biz_day >= %s")
+        params.append(date.fromisoformat(args.since))
+    if args.dates:
+        dlist = [date.fromisoformat(d.strip()) for d in args.dates.split(",") if d.strip()]
+        if dlist:
+            where.append("biz_day = ANY(%s)")
+            params.append(dlist)
+    if args.days:
+        where.append("biz_day >= %s")
+        params.append(date.today() - timedelta(days=int(args.days)))
+
+    with connect_direct(cfg, app_name="step4_category_backfill") as conn:
+        rows = conn.execute(
+            f"""
+            SELECT input_id, model, trace_id, biz_day, turn_index
+            FROM public.eval_inputs
+            WHERE {' AND '.join(where)}
+            ORDER BY biz_day DESC, input_id ASC
+            """,
+            params,
+        ).fetchall()
+
+    todo = []
+    hex_skipped = 0
+    for r in rows:
+        tid = str(r["trace_id"] or "")
+        if args.skip_hex and is_hex32(tid):
+            hex_skipped += 1
+            continue
+        todo.append({
+            "input_id": int(r["input_id"]),
+            "model": r["model"],
+            "trace_id": tid,
+            "day": r["biz_day"].isoformat(),
+            "turn": int(r["turn_index"] or 0),
+        })
+    if args.limit:
+        todo = todo[: int(args.limit)]
+
+    print(f"[pg-cat] pending={len(todo):,} (hex_skipped={hex_skipped:,})", flush=True)
+    if not todo:
+        summary = {"mode": "pg", "todo": 0, "hit": 0, "updated": 0, "seconds": round(time.time() - t0, 1)}
+        if args.json:
+            print(json.dumps(summary, ensure_ascii=False, indent=2))
+        return 0
+
+    by_day: dict[str, list[dict]] = {}
+    for item in todo:
+        by_day.setdefault(item["day"], []).append(item)
+
+    stats = {"batches": 0, "api_rows": 0, "hit": 0, "miss": 0, "null_value": 0, "updated": 0}
+    dc = None if args.dry_run else DataCore(cfg, min_pool=1, max_pool=4)
+    try:
+        for day in sorted(by_day):
+            items = by_day[day]
+            ids = sorted({it["trace_id"] for it in items})
+            win = et_window([date.fromisoformat(day)])
+            api_rows: list[dict] = []
+            for i in range(0, len(ids), args.batch):
+                api_rows.extend(fetch_rows(win, ids[i : i + args.batch]))
+                stats["batches"] += 1
+            stats["api_rows"] += len(api_rows)
+            by_tid: dict[str, list[dict]] = {}
+            for r in api_rows:
+                by_tid.setdefault(str(r.get("trace_id")), []).append(r)
+
+            for it in items:
+                hit = pick_row(by_tid.get(it["trace_id"]) or [], it["turn"])
+                if not hit:
+                    stats["miss"] += 1
+                    continue
+                task, sub = hit.get("task_category"), hit.get("subtask_category")
+                if not task and not sub:
+                    stats["null_value"] += 1
+                    continue
+                stats["hit"] += 1
+                if dc is not None:
+                    if dc.update_category(
+                        model=it["model"],
+                        trace_id=it["trace_id"],
+                        task_category=task,
+                        subtask_category=sub,
+                        overwrite=False,
+                    ):
+                        stats["updated"] += 1
+            print(f"[pg-cat] {day}: ids={len(ids)} api_rows={len(api_rows)} hit={stats['hit']:,} updated={stats['updated']:,}", flush=True)
+    finally:
+        if dc is not None:
+            dc.close()
+
+    summary = {"mode": "pg", "todo": len(todo), "hex_skipped": hex_skipped, **stats, "seconds": round(time.time() - t0, 1)}
+    if args.json:
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+    else:
+        print(f"[pg-cat] done: todo={summary['todo']:,} hit={summary['hit']:,} updated={summary['updated']:,} ({summary['seconds']}s)")
     return 0
 
 

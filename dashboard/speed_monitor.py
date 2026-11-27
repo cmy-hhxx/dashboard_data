@@ -1835,7 +1835,296 @@ def _input_loop() -> None:
         time.sleep(max(15.0, interval - (time.time() - started)))
 
 
+_PG_CACHE_LOCK = threading.Lock()
+_PG_CACHE: dict = {"ts": 0.0, "payload": None}
+
+
+def _pg_payload() -> dict:
+    """Serve live evaluation throughput and backlog directly from PostgreSQL 16."""
+    now = time.time()
+    ttl = max(5.0, float(_CONFIG.get("refresh_seconds", 15)))
+    with _PG_CACHE_LOCK:
+        cached = _PG_CACHE.get("payload")
+        if cached is not None and (now - float(_PG_CACHE.get("ts") or 0.0)) < ttl:
+            return cached
+
+    try:
+        import pg_backend
+
+        _, connect_direct, _, _ = pg_backend._ensure_pg()
+        cfg = pg_backend._load_pg_config()
+        with connect_direct(cfg, app_name="dashboard_speed") as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        i.model,
+                        i.biz_day,
+                        COUNT(*)::BIGINT AS input_traces,
+                        COUNT(DISTINCT NULLIF(i.session_id, ''))::BIGINT AS input_sessions,
+                        COUNT(o.output_id)::BIGINT AS attr_traces,
+                        COUNT(DISTINCT CASE WHEN o.output_id IS NOT NULL THEN NULLIF(i.session_id, '') END)::BIGINT AS attr_sessions,
+                        COUNT(*) FILTER (WHERE o.compact_file_id IS NOT NULL)::BIGINT AS compact_cnt,
+                        COALESCE(SUM(o.problem_count), 0)::BIGINT AS items_cnt,
+                        COUNT(*) FILTER (WHERE i.eval_status = 'pending')::BIGINT AS pending_cnt,
+                        COUNT(*) FILTER (WHERE i.eval_status = 'claimed')::BIGINT AS claimed_cnt,
+                        COUNT(*) FILTER (WHERE i.eval_status = 'failed')::BIGINT AS failed_cnt
+                    FROM public.eval_inputs i
+                    LEFT JOIN public.eval_outputs o
+                        ON o.input_id = i.input_id AND o.is_latest = TRUE
+                    WHERE NOT i.is_deleted
+                    GROUP BY i.model, i.biz_day
+                    ORDER BY i.model, i.biz_day DESC
+                    """
+                )
+                day_rows = cur.fetchall()
+
+                cur.execute(
+                    """
+                    SELECT
+                        i.model,
+                        COUNT(DISTINCT NULLIF(i.session_id, ''))::BIGINT AS input_sessions,
+                        COUNT(DISTINCT CASE WHEN o.output_id IS NOT NULL THEN NULLIF(i.session_id, '') END)::BIGINT AS attr_sessions
+                    FROM public.eval_inputs i
+                    LEFT JOIN public.eval_outputs o
+                        ON o.input_id = i.input_id AND o.is_latest = TRUE
+                    WHERE NOT i.is_deleted
+                    GROUP BY i.model
+                    """
+                )
+                sess_by_model = {
+                    str(r["model"]): (int(r["input_sessions"] or 0), int(r["attr_sessions"] or 0))
+                    for r in cur.fetchall()
+                }
+
+                cur.execute(
+                    """
+                    SELECT
+                        COUNT(DISTINCT NULLIF(i.session_id, ''))::BIGINT AS input_sessions,
+                        COUNT(*)::BIGINT AS input_traces,
+                        COUNT(DISTINCT CASE WHEN o.output_id IS NOT NULL THEN NULLIF(i.session_id, '') END)::BIGINT AS attr_sessions,
+                        COUNT(o.output_id)::BIGINT AS attr_traces,
+                        COALESCE(SUM(o.problem_count), 0)::BIGINT AS attr_items
+                    FROM public.eval_inputs i
+                    LEFT JOIN public.users u ON u.user_id = i.user_id
+                    LEFT JOIN public.eval_outputs o
+                        ON o.input_id = i.input_id AND o.is_latest = TRUE
+                    WHERE NOT i.is_deleted
+                      AND (COALESCE(u.is_lost, FALSE) = TRUE OR i.source = 'feedback')
+                    """
+                )
+                lost_row = cur.fetchone() or {}
+
+                cur.execute(
+                    """
+                    SELECT
+                        p.model,
+                        COUNT(DISTINCT p.output_id) FILTER (WHERE p.cluster_code IS NULL)::BIGINT AS pending_traces
+                    FROM public.eval_problems p
+                    JOIN public.eval_outputs o ON o.output_id = p.output_id AND o.is_latest = TRUE
+                    GROUP BY p.model
+                    """
+                )
+                cluster_pending_map = {str(r["model"]): int(r["pending_traces"] or 0) for r in cur.fetchall()}
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "available": True,
+            "mode": "pg",
+            "ok": False,
+            "error": str(exc)[:240],
+            "input_error": "",
+            "updated_at": _to_iso(now),
+            "models": [],
+        }
+
+    by_model: dict[str, list[dict]] = collections.defaultdict(list)
+    total_pending = total_claimed = total_failed = 0
+    for row in day_rows:
+        by_model[str(row["model"])].append(row)
+        total_pending += int(row["pending_cnt"] or 0)
+        total_claimed += int(row["claimed_cnt"] or 0)
+        total_failed += int(row["failed_cnt"] or 0)
+
+    models = []
+    for name in sorted(by_model):
+        dates = []
+        inp_tr_sum = attr_tr_sum = compact_sum = items_sum = rem_sum = 0
+        for row in by_model[name]:
+            bd = row["biz_day"]
+            day_str = bd.isoformat() if hasattr(bd, "isoformat") else str(bd)
+            itr = int(row["input_traces"] or 0)
+            isess = int(row["input_sessions"] or 0)
+            atr = int(row["attr_traces"] or 0)
+            asess = int(row["attr_sessions"] or 0)
+            cv = int(row["compact_cnt"] or 0)
+            items_sum += int(row["items_cnt"] or 0)
+            rem = max(0, itr - atr)
+            inp_tr_sum += itr
+            attr_tr_sum += atr
+            compact_sum += cv
+            rem_sum += rem
+            dates.append({
+                "date": day_str,
+                "input": itr,
+                "input_sessions": isess,
+                "input_traces": itr,
+                "attr": atr,
+                "attr_sessions": asess,
+                "attr_traces": atr,
+                "compact": cv,
+                "remaining": rem,
+                "remaining_sessions": max(0, isess - asess),
+                "remaining_traces": rem,
+            })
+        ms_in, ms_out = sess_by_model.get(name, (0, 0))
+        models.append({
+            "name": name,
+            "input": inp_tr_sum,
+            "input_sessions": ms_in,
+            "input_traces": inp_tr_sum,
+            "attr": attr_tr_sum,
+            "attr_sessions": ms_out,
+            "attr_traces": attr_tr_sum,
+            "output_traces": attr_tr_sum,
+            "compact": compact_sum or attr_tr_sum,
+            "items": items_sum,
+            "remaining": rem_sum,
+            "dates": dates,
+        })
+
+    attr_total = sum(m["attr"] for m in models)
+    compact_total = sum(m["compact"] for m in models)
+    input_sessions = sum(m["input_sessions"] for m in models)
+    input_traces = sum(m["input_traces"] for m in models)
+    attr_sessions = sum(m["attr_sessions"] for m in models)
+    attr_traces = sum(m["attr_traces"] for m in models)
+    remaining_sessions = max(0, input_sessions - attr_sessions)
+    remaining_traces = sum(m["remaining"] for m in models)
+
+    with _LOCK:
+        hist = _STATE["history"]
+        hist.append({"t": now, "a": attr_total, "c": compact_total, "k": attr_total})
+        cutoff = now - float(_CONFIG.get("history_seconds", 172800))
+        while len(hist) > 1 and hist[0]["t"] < cutoff:
+            hist.popleft()
+        history = [dict(p) for p in hist]
+        _STATE["ok"] = True
+        _STATE["error"] = ""
+        _STATE["updated_at"] = now
+        _STATE["last_success"] = now
+        _STATE["input_updated_at"] = now
+
+    a_rate, a_span = _window_rate(history, "a", int(_CONFIG.get("rate_window_seconds", 300)))
+    c_rate, _ = _window_rate(history, "c", int(_CONFIG.get("rate_window_seconds", 300)))
+    eta = 0 if remaining_traces == 0 else ((remaining_traces / a_rate) if (a_rate and a_rate > 0) else None)
+
+    cluster_models = []
+    for m in models:
+        landed = int(m["output_traces"])
+        pending = min(cluster_pending_map.get(m["name"], 0), landed)
+        cluster_models.append({
+            "name": m["name"],
+            "traces": landed - pending,
+            "output_traces": landed,
+            "pending": pending,
+        })
+
+    iso = _to_iso(now)
+    result = {
+        "available": True,
+        "mode": "pg",
+        "ok": True,
+        "error": "",
+        "input_error": "",
+        "updated_at": iso,
+        "last_success": iso,
+        "input_updated_at": iso,
+        "total": input_traces,
+        "attr": attr_total,
+        "compact": compact_total,
+        "input_sessions": input_sessions,
+        "input_traces": input_traces,
+        "attr_sessions": attr_sessions,
+        "attr_traces": attr_traces,
+        "remaining_sessions": remaining_sessions,
+        "remaining_traces": remaining_traces,
+        "remaining": remaining_traces,
+        "progress": (attr_traces / input_traces) if input_traces else None,
+        "session_progress": (attr_sessions / input_sessions) if input_sessions else None,
+        "rates": {
+            "attr": a_rate,
+            "compact": c_rate,
+            "window_seconds": int(a_span) if a_span else None,
+            "parts_attr": None,
+            "parts_compact": None,
+            "parts_window_seconds": None,
+            "realtime_rpm": None,
+            "rpm_window_seconds": None,
+            "active_writers": total_claimed,
+            "newest_part_age_s": None,
+        },
+        "eta_minutes": eta,
+        "queue": {
+            "total": input_traces,
+            "done": attr_traces,
+            "pending": total_pending,
+            "running": total_claimed,
+            "failed": total_failed,
+            "locks": [],
+            "active_replicas": None,
+            "eta_minutes": eta,
+            "updated_at": iso,
+        },
+        "models": models,
+        "lost_user": {
+            "input_sessions": int(lost_row.get("input_sessions") or 0),
+            "input_traces": int(lost_row.get("input_traces") or 0),
+            "attr_sessions": int(lost_row.get("attr_sessions") or 0),
+            "attr_traces": int(lost_row.get("attr_traces") or 0),
+            "attr_items": int(lost_row.get("attr_items") or 0),
+        },
+        "cluster": {
+            "traces": sum(cm["traces"] for cm in cluster_models),
+            "pending": sum(cm["pending"] for cm in cluster_models),
+            "models": cluster_models,
+        },
+        "gateways": {
+            "count": 0,
+            "healthy": 0,
+            "realtime_rpm": None,
+            "rpm_method": "pg_db",
+            "rpm_window_seconds": None,
+            "rpm_limit": None,
+            "rpm_source": "none",
+            "rpm_utilization": None,
+            "parts_attr_rate": None,
+            "parts_compact_rate": None,
+            "active_writers": total_claimed,
+            "newest_part_age_s": None,
+            "active_replicas": None,
+            "control": {"paused": False},
+            "running": total_claimed,
+            "waiting": total_pending,
+            "output_tps": None,
+            "items": [],
+        },
+        "history": [[round(p["t"]), p["a"], p["c"]] for p in history],
+        "rpm_history": [],
+    }
+    with _PG_CACHE_LOCK:
+        _PG_CACHE["ts"] = now
+        _PG_CACHE["payload"] = result
+    return result
+
+
 def payload() -> dict:
+    with _LOCK:
+        if _STATE.get("mode") == "pg":
+            is_pg_mode = True
+        else:
+            is_pg_mode = False
+    if is_pg_mode:
+        return _pg_payload()
     with _LOCK:
         meta = {
             k: _STATE[k]
@@ -2183,6 +2472,14 @@ def start(cache_dir: str | Path, overrides: dict | None = None,
           persist_path: str | Path | None = None) -> bool:
     """Configure and launch background speed polling if the AIME pipeline is reachable."""
     global _STARTED, _CACHE_FILE, _PERSIST_FILE, _CONFIG, _IDS_DIR
+    if os.environ.get("EVAL_STORAGE_BACKEND", "").strip().lower() in ("pg", "postgres", "postgresql"):
+        with _LOCK:
+            _STARTED = True
+            _STATE["mode"] = "pg"
+            _STATE["available"] = True
+            _STATE["ok"] = True
+            _STATE["error"] = ""
+        return True
     with _LOCK:
         if _STARTED:
             return _STATE["available"]

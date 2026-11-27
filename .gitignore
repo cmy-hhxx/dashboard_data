@@ -53,5 +53,6 @@ dashboard/*.pid
 .claude/
 tmp/
 
-# 网关密钥（只放服务器 $ROOT/human_read.env，不入库）
+# 网关与 PG 密钥（只放服务器，不入库）
 human_read.env
+.pg_secrets.env

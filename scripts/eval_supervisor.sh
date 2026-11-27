@@ -66,5 +66,9 @@ while true; do
     log "snapshot loop missing, starting $SNAPSHOT_LOOP"
     nohup bash "$SNAPSHOT_LOOP" >> "$SNAPSHOT_LOG" 2>&1 &
   fi
+  if [ -f /opt/pg_data_core/scripts/pg_maintenance_loop.sh ] && ! pgrep -f '[p]g_maintenance_loop\.sh' >/dev/null 2>&1; then
+    log "pg_maintenance_loop missing, starting"
+    nohup bash /opt/pg_data_core/scripts/pg_maintenance_loop.sh >> /opt/pg_data_core/maintenance.log 2>&1 &
+  fi
   sleep "$INTERVAL"
 done

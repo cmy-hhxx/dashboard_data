@@ -10,7 +10,7 @@ PORT="${PORT:-5003}"
 
 # 这份部署的设置（数据根、刷新间隔等）写进远端 deploy.env，start.sh 与手动重启都读它。
 RUN_ENV=""
-for var in PORT REFRESH_SECONDS EVAL_DATASETS ANALYSIS_STATE ANALYSIS_DATASET; do
+for var in PORT REFRESH_SECONDS EVAL_DATASETS ANALYSIS_STATE ANALYSIS_DATASET ANALYSIS_BACKEND AIME_DATA_ROOT AIME_PG_SECRETS_FILE PG_DATA_CORE_PATH INTERNAL_EVAL_BACKEND; do
   if [ -n "${!var:-}" ]; then RUN_ENV+="export $var=$(printf '%q' "${!var}")"$'\n'; fi
 done
 
@@ -36,7 +36,7 @@ rsync -az --delete -e "ssh ${SSH_OPTS[*]}" \
 if [ -n "$RUN_ENV" ]; then
   # 没显式传入的变量沿用远端已有取值：漏传不能把数据根 / 刷新间隔改回默认
   EXISTING="$(ssh "$HOST_ALIAS" "cat '${REMOTE}/deploy.env' 2>/dev/null" || true)"
-  for var in PORT REFRESH_SECONDS EVAL_DATASETS ANALYSIS_STATE ANALYSIS_DATASET; do
+  for var in PORT REFRESH_SECONDS EVAL_DATASETS ANALYSIS_STATE ANALYSIS_DATASET ANALYSIS_BACKEND AIME_DATA_ROOT AIME_PG_SECRETS_FILE PG_DATA_CORE_PATH INTERNAL_EVAL_BACKEND; do
     case "$RUN_ENV" in *"export $var="*) continue ;; esac
     line="$(printf '%s\n' "$EXISTING" | grep -E "^export ${var}=" | tail -n 1 || true)"
     if [ -n "$line" ]; then RUN_ENV+="$line"$'\n'; fi

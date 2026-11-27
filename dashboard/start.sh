@@ -16,9 +16,8 @@ done
 PORT="${PORT:-5001}"
 
 # The stats sidecar is independent of the HTTP server and keeps
-# <datasets>/stats.json fresh for the next build.  Start it even when the
-# dashboard is already serving.
-if [ "${STATS_WORKER:-1}" = "0" ]; then
+# <datasets>/stats.json fresh for the next build. Skip in PostgreSQL mode.
+if [ "${EVAL_STORAGE_BACKEND:-}" = "pg" ] || [ "${STATS_WORKER:-1}" = "0" ]; then
   :
 elif [ -f stats.pid ] && kill -0 "$(cat stats.pid 2>/dev/null)" 2>/dev/null; then
   :
@@ -28,9 +27,8 @@ else
   echo $! > stats.pid
 fi
 
-# Hourly backup of the stats/index caches.  The launcher itself skips staging
-# copies and non-AIME deployments, so this is a no-op outside 弗吉尼亚 5001.
-if [ "${BACKUP_STATS:-1}" != "0" ]; then
+# Hourly backup of the stats/index caches. Skip in PostgreSQL mode (PG uses .pg_backup/).
+if [ "${EVAL_STORAGE_BACKEND:-}" != "pg" ] && [ "${BACKUP_STATS:-1}" != "0" ]; then
   ./backup_stats.sh start || true
 fi
 

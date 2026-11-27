@@ -137,6 +137,11 @@ class App:
 
     def load_existing(self, log=print):
         """重启时先用磁盘上的索引对外服务；增量重建在后台跑完后再替换快照。"""
+        from . import pg_store
+
+        if pg_store.is_pg_enabled():
+            # PG 模式启动直接从 PG 16 秒级加载，无需旧 SQLite
+            return
         if not self.db_path.exists():
             return
         try:
@@ -164,13 +169,20 @@ class App:
         self.building = True
         started = time.time()
         try:
-            intent_tree, problem_trees = self._trees(log)
-            summary = store.build(log=log)
-            conn = store.connect(self.db_path)
-            try:
-                snap = snapshot.load(conn, intent_tree, problem_trees, summary)
-            finally:
-                conn.close()
+            from . import pg_store
+
+            if pg_store.is_pg_enabled():
+                intent_tree = load_intent(config.INTENT_TAXONOMY_FILE)
+                snap = pg_store.load_snapshot(intent_tree, log=log)
+                summary = dict(snap.build_summary)
+            else:
+                intent_tree, problem_trees = self._trees(log)
+                summary = store.build(log=log)
+                conn = store.connect(self.db_path)
+                try:
+                    snap = snapshot.load(conn, intent_tree, problem_trees, summary)
+                finally:
+                    conn.close()
             self._fix_app_versions(snap)
             with self.lock:
                 self.snapshot = snap
@@ -229,8 +241,32 @@ class App:
 
 APP = App()
 
-# 可选挂载内部评测与聚类服务（/api/v1/internal-eval/*），默认仅在 AIME 实例且目录存在时启用。
+# 可选挂载内部评测与聚类服务（/api/v1/internal-eval/*）和统一 Data Core 写入网关（/api/v1/data-core/*）。
 INTERNAL_EVAL_APP = None
+DATA_CORE_APP = None
+
+
+def mount_data_core(app=None, log=print):
+    """挂载 5003 Data Core HTTP 网关（/api/v1/data-core/*），仅 PG 模式或显式开启时启用。"""
+    global DATA_CORE_APP
+    if app is not None:
+        DATA_CORE_APP = app
+        return DATA_CORE_APP
+    from . import pg_store
+
+    if not (pg_store.is_pg_enabled() or os.environ.get("DATA_CORE_ENABLED", "").lower() in ("1", "true", "yes")):
+        return None
+    for cand in (Path("/opt/pg_data_core"), config.REPO.parent.parent):
+        if (cand / "pg_data_core").is_dir() and str(cand) not in sys.path:
+            sys.path.insert(0, str(cand))
+    try:
+        from pg_data_core.http_api import build_data_core_http_app  # type: ignore
+
+        DATA_CORE_APP = build_data_core_http_app(data_root=os.environ.get("AIME_DATA_ROOT") or None, log=log)
+    except Exception as exc:  # noqa: BLE001
+        log(f"[data-core] 挂载失败（已降级忽略）：{exc}")
+        DATA_CORE_APP = None
+    return DATA_CORE_APP
 
 
 def mount_internal_eval(app=None, log=print):
@@ -360,9 +396,14 @@ class Handler(BaseHTTPRequestHandler):
         return parsed.path, normalize(params)
 
     def _route(self):
-        # 若请求命中已挂载的内部评测接口前缀，直接交给独立路由模块处理，避免读取/过滤请求体。
+        path_only = urlparse(self.path).path
+        # 若请求命中已挂载的 Data Core 网关或内部评测接口，直接交给独立路由模块处理。
+        dc_app = DATA_CORE_APP
+        if dc_app is not None and dc_app.can_handle(path_only):
+            dc_app.handle_http(self)
+            return
         mounted = INTERNAL_EVAL_APP
-        if mounted is not None and mounted.can_handle(urlparse(self.path).path):
+        if mounted is not None and mounted.can_handle(path_only):
             mounted.handle_http(self)
             return
         request_id = _request_id()
@@ -438,16 +479,23 @@ class Handler(BaseHTTPRequestHandler):
             raise errors.not_found("未知路径", path=path)
 
     def _health(self):
+        from . import pg_store
+
         snap = APP.current()
         with APP.lock:
             build = dict(APP.last_build)
-        hr_stats = human_read.reader_for(config.datasets_root() / config.PRODUCT_DIR).stats()
-        hr_stats["traces"] = snap.human_read_traces if snap else 0
+        if pg_store.is_pg_enabled():
+            hr_stats = {"backend": "pg_delta_zst", "traces": snap.human_read_traces if snap else 0}
+        else:
+            hr_stats = human_read.reader_for(config.datasets_root() / config.PRODUCT_DIR).stats()
+            hr_stats["traces"] = snap.human_read_traces if snap else 0
         _json_response(
             self,
             200,
             {
                 "ok": snap is not None,
+                "backend": "postgresql_16" if pg_store.is_pg_enabled() else "sqlite",
+                "data_core_mounted": DATA_CORE_APP is not None,
                 "dataset": config.DATASET,
                 "started_at": APP.started_at,
                 "built_at": snap.built_at if snap else None,
@@ -741,6 +789,7 @@ class Server(ThreadingHTTPServer):
 def serve(host=None, port=None, log=print):
     host = host or config.HOST
     port = port or config.PORT
+    mount_data_core(log=log)
     mount_internal_eval(log=log)
     server = Server((host, port), Handler)
     thread = threading.Thread(target=APP.refresh_loop, args=(log,), daemon=True)
@@ -751,6 +800,11 @@ def serve(host=None, port=None, log=print):
     except KeyboardInterrupt:
         log("[serve] 退出")
     finally:
+        if DATA_CORE_APP is not None:
+            try:
+                DATA_CORE_APP.dc.close()
+            except Exception:  # noqa: BLE001
+                pass
         if INTERNAL_EVAL_APP is not None:
             try:
                 INTERNAL_EVAL_APP.pipeline.stop()

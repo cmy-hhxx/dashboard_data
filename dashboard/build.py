@@ -4062,6 +4062,9 @@ def input_signature(product_metas):
 
 
 def build(datasets: Path, out_dir: Path, log=print, jobs: int = 0):
+    import pg_backend
+    if pg_backend.is_pg_enabled():
+        return pg_backend.build_from_pg(datasets, out_dir, log=log)
     started = time.time()
     rules = user_rules.load(datasets)
     rules_sig = rules.signature()
@@ -4767,7 +4770,7 @@ def run(args):
     (data, index), stats = build(args.datasets.resolve(), args.out, jobs=args.jobs)
     # A reused build changed nothing, so last round's absence report still holds; rewriting it
     # meant re-parsing the 40+ MB payloads every 10 minutes for the same answer.
-    if not stats.get("reused"):
+    if not stats.get("reused") and stats.get("pairing") != "pg":
         try:
             for product in sorted(ENABLED):
                 write_data_absence(args.datasets.resolve(), product, args.out)

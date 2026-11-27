@@ -17,6 +17,7 @@
 - 部署、守护与排错：`docs/dashboard-deployment.md`
 - 弗吉尼亚数据根、字段与构建：`docs/data-server.md`
 - 弗吉尼亚容器重建恢复：`docs/virginia-restart.md`（脚本 `scripts/virginia/bringup.sh`）
+- AIME PG 16 与多帧 Zstd 数据内核：`docs/pg-data-core.md`（源码 `pg_data_core/`）
 - 内部评测服务：`interfaces/internal_eval_service_interface/README.md`、`docs/数据推理.md`
 - 用户 KYC 库：`docs/用户KYC库.md`
 - 测试与发布：`scripts/run_tests.sh`（服务器上跑）；各服务发布用对应目录 `deploy.sh`。

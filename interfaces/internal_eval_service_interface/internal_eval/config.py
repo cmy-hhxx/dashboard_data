@@ -309,17 +309,25 @@ def load_config(
     else:
         datasets_root = PACKAGE_ROOT.parent.parent / "datasets"
 
+    pg_mode = get("INTERNAL_EVAL_BACKEND").lower() in ("pg", "postgres", "postgresql")
+    default_ab_root = (
+        "/opt/internal_eval_service/work_ab"
+        if pg_mode
+        else str(datasets_root / "1_aime" / "ab_test")
+    )
     ab_test_root = Path(
-        get("INTERNAL_EVAL_AB_TEST_ROOT", str(datasets_root / "1_aime" / "ab_test"))
+        get("INTERNAL_EVAL_AB_TEST_ROOT", default_ab_root)
     ).expanduser()
     bench_root = Path(
         get("INTERNAL_EVAL_BENCH_ROOT", str(datasets_root / "3_dynamic_bench"))
     ).expanduser()
+    default_state_db = (
+        "/opt/internal_eval_service/state/internal_eval.sqlite3"
+        if pg_mode
+        else str(ab_test_root / ".service_state" / "internal_eval.sqlite3")
+    )
     state_db_path = Path(
-        get(
-            "INTERNAL_EVAL_STATE_DB",
-            str(ab_test_root / ".service_state" / "internal_eval.sqlite3"),
-        )
+        get("INTERNAL_EVAL_STATE_DB", default_state_db)
     ).expanduser()
 
     tax_raw = get("INTERNAL_EVAL_TAXONOMY_DIR")

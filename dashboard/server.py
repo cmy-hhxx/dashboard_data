@@ -60,7 +60,7 @@ DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 MODEL_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 # /ab_samples/<roundId>/<side>-<eq>.json: validated before reaching ABDetailBuilder.
 AB_ROUND_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*$")
-AB_DETAIL_RE = re.compile(r"^/ab_samples/([^/]+)/((?:before|after)-\d+|\d+)\.json$")
+AB_DETAIL_RE = re.compile(r"^/ab_samples/([^/]+)/((?:before|after|candidate_model_\d+)-\d+|\d+)\.json$")
 GPT_DETAIL_RE = re.compile(r"^/gpt_samples/([^/]+)/([0-9A-Za-z_-]+)\.json$")
 # /bench/<product>.json: serves schema:1 golden/bad slices or schema:2 dynamic bench views/fields.
 BENCH_RE = re.compile(r"^/bench/([a-z][a-z0-9_]*)\.json$")
@@ -581,8 +581,15 @@ class Handler(SimpleHTTPRequestHandler):
             long_tok = int(((payload.get("manifest") or {}).get("params") or {}).get("long_tokens") or 65536)
             matched = [r for r in rows if bench_dynamic.case_matches_query(r, q_flat, long_tok)]
             sorted_rows = bench_dynamic.sort_case_rows(matched, q_flat.get("sort") or "rank")
-            from build import default_datasets
-            jsonl_bytes = bench_dynamic.export_bench_jsonl(default_datasets(), sorted_rows, summary=payload)
+            import pg_backend
+            if pg_backend.is_pg_enabled() or any(
+                isinstance(r.get("loc"), (list, tuple)) and r["loc"] and r["loc"][0] == "pg"
+                for r in sorted_rows[:1]
+            ):
+                jsonl_bytes = pg_backend.pg_export_bench_jsonl(sorted_rows, summary=payload)
+            else:
+                from build import default_datasets
+                jsonl_bytes = bench_dynamic.export_bench_jsonl(default_datasets(), sorted_rows, summary=payload)
         else:
             up = _bench_upstream()
             if up:
@@ -723,8 +730,13 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_body(404, b'{"error":"bench case not found"}', "application/json")
             return True
         import bench_dynamic
-        from build import default_datasets
-        detail = bench_dynamic.load_bench_case(default_datasets(), row)
+        import pg_backend
+        loc = row.get("loc")
+        if pg_backend.is_pg_enabled() or (isinstance(loc, (list, tuple)) and loc and loc[0] == "pg"):
+            detail = pg_backend.pg_load_bench_case(row)
+        else:
+            from build import default_datasets
+            detail = bench_dynamic.load_bench_case(default_datasets(), row)
         if detail is None:
             self._send_body(404, b'{"error":"bench case unreadable"}', "application/json")
             return True
@@ -1115,8 +1127,10 @@ class Handler(SimpleHTTPRequestHandler):
             self.wfile.write(body)
             return
         if self.path.startswith("/healthz"):
+            import pg_backend
             health = {
                 "ok": _state["error"] == "",
+                "backend": "postgresql_16" if pg_backend.is_pg_enabled() else "sqlite",
                 "running": _state["running"],
                 "last_refresh": _state["last_run"],
                 "refresh_seconds": _state["seconds"],
@@ -1173,7 +1187,7 @@ class Handler(SimpleHTTPRequestHandler):
             ref = None
             if match and AB_ROUND_RE.match(match.group(1)):
                 key = match.group(2)
-                if key.startswith(("before-", "after-")):
+                if key.startswith(("before-", "after-", "candidate_model_")):
                     ref = (match.group(1), key)
                 elif int(key) > 0:
                     ref = (match.group(1), int(key))
@@ -1308,34 +1322,45 @@ def main():
     serving.start()
     print(f"[serve] listening on :{PORT}, warming up", flush=True)
     from build import default_datasets
+    import pg_backend
+    pg_mode = pg_backend.is_pg_enabled()
     try:
-        from detail_builder import DetailBuilder
-        _builder = DetailBuilder(
-            default_datasets(), os.path.join(CACHE, "build.sqlite3"),
-            os.path.join(STATIC, "samples"), CACHE,
-        )
+        if pg_mode:
+            _builder = pg_backend.PGDetailBuilder(os.path.join(STATIC, "samples"), CACHE)
+        else:
+            from detail_builder import DetailBuilder
+            _builder = DetailBuilder(
+                default_datasets(), os.path.join(CACHE, "build.sqlite3"),
+                os.path.join(STATIC, "samples"), CACHE,
+            )
     except Exception as exc:  # noqa: BLE001 - keep serving pre-generated details
         print(f"[serve] lazy detail builder disabled: {exc}", flush=True)
     try:
-        from ab_detail import ABDetailBuilder
-        _ab_builder = ABDetailBuilder(
-            default_datasets(), CACHE, os.path.join(STATIC, "ab_samples"),
-        )
-        threading.Thread(target=_ab_builder.warm, daemon=True).start()
+        if pg_mode:
+            _ab_builder = pg_backend.PGABDetailBuilder(os.path.join(STATIC, "ab_samples"))
+        else:
+            from ab_detail import ABDetailBuilder
+            _ab_builder = ABDetailBuilder(
+                default_datasets(), CACHE, os.path.join(STATIC, "ab_samples"),
+            )
+            threading.Thread(target=_ab_builder.warm, daemon=True).start()
     except Exception as exc:  # noqa: BLE001 - retest details are optional; static files still serve
         print(f"[serve] ab detail builder disabled: {exc}", flush=True)
     try:
-        from input_list import InputLister
-        _lister = InputLister(default_datasets(), os.path.join(CACHE, "build.sqlite3"),
-                              CACHE, STATIC)
-        # 文件清单在弗吉尼亚要 23 秒（rglob 在 ceph 上），启动就后台读一遍，别让第一次点击等它。
-        threading.Thread(target=warm_input_lister, daemon=True).start()
+        if pg_mode:
+            _lister = pg_backend.PGInputLister(CACHE)
+        else:
+            from input_list import InputLister
+            _lister = InputLister(default_datasets(), os.path.join(CACHE, "build.sqlite3"),
+                                  CACHE, STATIC)
+            # 文件清单在弗吉尼亚要 23 秒（rglob 在 ceph 上），启动就后台读一遍，别让第一次点击等它。
+            threading.Thread(target=warm_input_lister, daemon=True).start()
     except Exception as exc:  # noqa: BLE001 - 输入清单不可用时第三级退回旧行为
         print(f"[serve] input lister disabled: {exc}", flush=True)
     try:
         import speed_monitor
-        from build import default_datasets
-        if speed_monitor.start(CACHE, persist_path=os.path.join(str(default_datasets()), "speed_stats.json")):
+        persist = None if pg_mode else os.path.join(str(default_datasets()), "speed_stats.json")
+        if speed_monitor.start(CACHE, persist_path=persist):
             print("[serve] speed monitor enabled", flush=True)
     except Exception as exc:  # noqa: BLE001 - speed monitor is optional
         print(f"[serve] speed monitor disabled: {exc}", flush=True)

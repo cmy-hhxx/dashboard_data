@@ -1112,16 +1112,24 @@ def changes(snap: Snapshot, db_path, dataset: str, since, page_size=100, cursor=
             {"since_seq": since_seq, "latest_seq": latest},
         )
 
-    try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    except sqlite3.Error as exc:
-        raise errors.unavailable("索引不可用，请稍后重试", error=str(exc)) from exc
-    try:
-        rows = _changes_rows(conn, since_seq, head, after, include_human=include_human)
-    except sqlite3.Error as exc:
-        raise errors.unavailable("变更流不可用，请稍后重试", error=str(exc)) from exc
-    finally:
-        conn.close()
+    from . import pg_store as _pg_store
+
+    if _pg_store.is_pg_enabled():
+        try:
+            rows = _pg_store.fetch_changes_rows(since_seq, head, after, include_human=include_human)
+        except Exception as exc:  # noqa: BLE001
+            raise errors.unavailable("PG 变更流不可用，请稍后重试", error=str(exc)) from exc
+    else:
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        except sqlite3.Error as exc:
+            raise errors.unavailable("索引不可用，请稍后重试", error=str(exc)) from exc
+        try:
+            rows = _changes_rows(conn, since_seq, head, after, include_human=include_human)
+        except sqlite3.Error as exc:
+            raise errors.unavailable("变更流不可用，请稍后重试", error=str(exc)) from exc
+        finally:
+            conn.close()
 
     items, deleted = [], []
     last_seq = after
@@ -1223,6 +1231,12 @@ def detail(
     taxonomy_version=None,
     text_mode: str = "raw",
 ):
+    from . import pg_store as _pg_store
+
+    if _pg_store.is_pg_enabled():
+        return _pg_store.load_detail(
+            snap, dataset, trace_id, day, taxonomy_version=taxonomy_version, text_mode=text_mode
+        )
     text_mode = parse_text_mode(text_mode)
     if dataset not in config.DATASET_ALIASES:
         raise errors.unknown_value("dataset", dataset, sorted(config.DATASET_ALIASES))

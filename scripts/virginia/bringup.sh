@@ -44,22 +44,42 @@ check_mount() {
 
 # 输出一行一个缺失项，空表示啥都没丢
 assess() {
-  # 容器重建后 /opt 整目录回滚：代码、deploy.env、看板产物、cache/、5003 索引全没了。
+  # 容器重建后 /opt 整目录回滚：PGDATA、代码、deploy.env、看板产物全没了。
   sshx '
     missing=""
     for f in /opt/eval_supervisor.sh /opt/eval_boot.sh /opt/eval_services.conf \
              /opt/eval_dashboard/deploy.env /opt/eval_analysis/deploy.env; do
       [ -f "$f" ] || missing="$missing config:$f"
     done
-    [ -f /opt/eval_dashboard/server.py ] || missing="$missing code:/opt/eval_dashboard"
-    [ -f /opt/eval_analysis/run.py ]     || missing="$missing code:/opt/eval_analysis"
-    [ -f /opt/page_service/sample_details/server.py ] || missing="$missing code:/opt/page_service"
-    [ -s /opt/eval_dashboard/static/data-aime.json ]  || missing="$missing payload:dashboard-static"
-    [ -s /opt/eval_analysis/state/index.sqlite ]      || missing="$missing payload:analysis-state"
-    [ -s /opt/eval_dashboard/cache/samples.pkl ]      || missing="$missing cache:samples"
-    [ -s /opt/eval_dashboard/cache/build.sqlite3 ]    || missing="$missing cache:build"
+    [ -f /opt/pg_data_core/pg_data_core/core.py ]             || missing="$missing code:/opt/pg_data_core"
+    [ -f /opt/eval_dashboard/server.py ]                      || missing="$missing code:/opt/eval_dashboard"
+    [ -f /opt/eval_analysis/run.py ]                          || missing="$missing code:/opt/eval_analysis"
+    [ -f /opt/internal_eval_service/internal_eval/config.py ] || missing="$missing code:/opt/internal_eval_service"
+    [ -f /opt/page_service/sample_details/server.py ]         || missing="$missing code:/opt/page_service"
+    [ -s /opt/eval_dashboard/static/data-aime.json ]          || missing="$missing payload:dashboard-static"
+    [ -f /opt/pgdata/PG_VERSION ]                             || missing="$missing pgdata:/opt/pgdata"
     printf "%s\n" "$missing"
   '
+}
+
+ensure_postgres() {
+  log "检查 PostgreSQL 16（/opt/pgdata）"
+  sshx 'set -euo pipefail
+    if [ -x /usr/lib/postgresql/16/bin/pg_ctl ] && [ -f /opt/pgdata/PG_VERSION ]; then
+      if su - postgres -c "/usr/lib/postgresql/16/bin/pg_ctl -D /opt/pgdata status" >/dev/null 2>&1; then
+        echo "[pg] already running"
+      else
+        echo "[pg] starting existing /opt/pgdata"
+        AIME_DATA_ROOT=/mnt/aime_eval_ssd/1_aime bash /opt/pg_data_core/scripts/pg_init_cluster.sh
+      fi
+      if ! pgrep -f "[p]g_maintenance_loop\.sh" >/dev/null 2>&1; then
+        nohup bash /opt/pg_data_core/scripts/pg_maintenance_loop.sh >> /opt/pg_data_core/maintenance.log 2>&1 &
+      fi
+    else
+      echo "[pg] /opt/pgdata 或 PG 16 缺失，执行 PITR + reconcile_tails 一键恢复..."
+      AIME_DATA_ROOT=/mnt/aime_eval_ssd/1_aime bash /mnt/aime_eval_ssd/.service_backup/pg_data_core/scripts/pg_rebuild_restore.sh
+    fi
+  ' || die "PostgreSQL 16 恢复/启动失败"
 }
 
 latest_snapshot() {
@@ -115,12 +135,21 @@ start_snapshot_loop() {
 
 deploy_code() {
   log "远端代码缺失，用本地仓库重发（会 rsync 代码 + 重启该服务）"
-  EVAL_DEPLOY_HOST="$HOST" EVAL_DATASETS=/mnt/aime_eval_ssd EVAL_PRODUCTS=aime "$ROOT"/dashboard/deploy.sh \
+  "$ROOT"/pg_data_core/deploy.sh || die "pg_data_core 代码重发失败"
+  EVAL_DEPLOY_HOST="$HOST" EVAL_DATASETS=/mnt/aime_eval_ssd EVAL_PRODUCTS=aime \
+    EVAL_STORAGE_BACKEND=pg AIME_DATA_ROOT=/mnt/aime_eval_ssd/1_aime \
+    AIME_PG_SECRETS_FILE=/opt/pg_data_core/.pg_secrets.env PG_DATA_CORE_PATH=/opt/pg_data_core \
+    STATS_WORKER=0 BACKUP_STATS=0 "$ROOT"/dashboard/deploy.sh \
     || die "dashboard 代码重发失败"
   EVAL_DEPLOY_HOST="$HOST" PORT=5002 "$ROOT"/page_service/sample_details/deploy.sh \
     || die "5002 代码重发失败"
   EVAL_DEPLOY_HOST="$HOST" PORT=5003 REFRESH_SECONDS=3600 EVAL_DATASETS=/mnt/aime_eval_ssd \
-    "$ROOT"/interfaces/eval_data_interface/deploy.sh || die "5003 代码重发失败"
+    ANALYSIS_DATASET=aime_eval ANALYSIS_BACKEND=pg INTERNAL_EVAL_BACKEND=pg \
+    AIME_DATA_ROOT=/mnt/aime_eval_ssd/1_aime AIME_PG_SECRETS_FILE=/opt/pg_data_core/.pg_secrets.env \
+    PG_DATA_CORE_PATH=/opt/pg_data_core "$ROOT"/interfaces/eval_data_interface/deploy.sh \
+    || die "5003 代码重发失败"
+  EVAL_DEPLOY_HOST="$HOST" PORT=5003 "$ROOT"/interfaces/internal_eval_service_interface/deploy.sh \
+    || die "internal_eval 代码重发失败"
 }
 
 start_services() {
@@ -163,19 +192,15 @@ supervisor() {
     || log "supervisor 没起来（不影响服务，只是少了自愈）"
 }
 
-slim_publish() {
-  # 瘦身流水线不在 /opt，代码和状态都在持久盘；start.sh 自带 loop + watchdog 单实例保护。
-  log "拉起瘦身流水线（loop + watchdog）"
-  sshx 'bash /mnt/aime_eval_ssd/code/3_scripts/1_slim_publish/start.sh' \
-    || log "瘦身流水线没起来（不影响看板/接口，稍后手动 start.sh）"
-}
-
 smoke() {
   log "冒烟"
   sshx '
-    printf "5001 看板     "; curl -s -m 8 http://127.0.0.1:5001/healthz | head -c 120; echo
+    printf "PG 16         "; su - postgres -c "/usr/lib/postgresql/16/bin/pg_isready -h 127.0.0.1 -p 5432" || echo "未就绪"
+    printf "5001 看板     "; curl -s -m 8 http://127.0.0.1:5001/healthz | head -c 160; echo
     printf "5002 页面接口 "; curl -s -m 8 -o /dev/null -w "%{http_code}\n" http://127.0.0.1:5002/healthz
     printf "5003 供数     "; curl -s -m 8 http://127.0.0.1:5003/healthz | head -c 200; echo
+    printf "5003 DataCore "; curl -s -m 8 http://127.0.0.1:5003/api/v1/data-core/health | head -c 160; echo
+    printf "5003 IntEval  "; curl -s -m 8 http://127.0.0.1:5003/api/v1/internal-eval/healthz | head -c 160; echo
     printf "5003 severity "; curl -s -m 15 "http://127.0.0.1:5003/api/v1/analysis/severity?dataset=aime_eval" \
       | python3 -c "import json,sys; d=json.load(sys.stdin)[\"data\"][\"total\"]; print(d)" 2>/dev/null || echo "未就绪"
   '
@@ -192,16 +217,19 @@ main() {
   missing=$(assess)
   snap=$(latest_snapshot)
   if [ -z "$missing" ]; then
-    log "/opt 完好，无需回填"
+    log "/opt 与 PG 完好，无需回填"
   else
     log "缺失：$missing"
-    [ -n "$snap" ] || die "没有可用快照（$SNAP_ROOT 为空），只能靠重新 deploy + 冷构建"
-    [ "$STATUS_ONLY" = "1" ] && { log "快照可用：${snap}（--status 模式，不动手）"; exit 0; }
-    restore "$snap" "$missing"
+    if [ "$STATUS_ONLY" = "1" ]; then
+      log "快照可用：${snap:-无}（--status 模式，不动手）"
+      exit 0
+    fi
+    [ -n "$snap" ] && restore "$snap" "$missing"
   fi
   [ "$STATUS_ONLY" = "1" ] && { sshx 'for p in 5001 5002 5003; do printf "  :%s " $p; curl -s -m 5 -o /dev/null -w "%{http_code}\n" http://127.0.0.1:$p/healthz; done'; exit 0; }
 
   install_scripts
+  ensure_postgres
   # 快照里已有代码就不再 deploy（省时间）；回填后仍缺才走远端重发。
   missing=$(assess)
   [ -n "$missing" ] && log "回填后仍缺：$missing"
@@ -213,7 +241,6 @@ main() {
   wait_health || rc=1
   supervisor
   start_snapshot_loop
-  slim_publish
   smoke
   log "===== 完成（wait_health rc=${rc}）====="
 }
