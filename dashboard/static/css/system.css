@@ -299,7 +299,12 @@
 
 /* Idle / paused state on live-controlled pipeline: zero pipeline particles, hub paused, smooth charging surge locked at current progress */
 .fx-diagram.is-idle .fx-w { opacity: 0.52; }
-.fx-diagram.is-idle .fx-orbit { animation-play-state: paused; }
+.fx-diagram.is-idle .fx-orbit,
+.fx-diagram.is-eval-idle .fx-orbit { animation-play-state: paused; }
+.fx-diagram.is-eval-idle .fx-w.in,
+.fx-diagram.is-eval-idle .fx-w.out,
+.fx-diagram.is-eval-idle .fx-w.pool-in { opacity: 0.52; }
+.fx-diagram.is-cluster-idle .fx-w.pool-out { opacity: 0.52; }
 .fx-diagram.is-idle .fx-tn.is-root.is-flowing .fx-wave-back { animation-duration: 4.2s; }
 .fx-diagram.is-idle .fx-tn.is-root.is-flowing .fx-wave-mid { animation-duration: 3.4s; }
 .fx-diagram.is-idle .fx-tn.is-root.is-flowing .fx-wave-front-wrap { animation-duration: 2.6s; }

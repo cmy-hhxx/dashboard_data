@@ -68,13 +68,14 @@ test("speed UI has no chunk, no funnel progress bar, and no verbose meta clutter
   assert.ok(!speedJs.includes("Math.sin(") && !speedJs.includes("Math.cos("), "gateway RPM/latency/rates must never use synthetic sine-wave jitter");
 });
 
-test("overview card uses concentric ring chart with outer/inner labels and shows input, evaluated and clustered traces", () => {
+test("overview card uses concentric ring chart without explanatory ring tags and shows input, evaluated and clustered traces", () => {
   const html = shellHTML(SAMPLE_TAX, SAMPLE_PD);
   const ov = html.slice(0, html.indexOf("评测流水线"));
   for (const id of ["spRingAttr", "spRingCl", "spRingPct", "spRingClPct", "spInputTraces", "spInputSessions", "spAttrTraces", "spClusterTraces", "spEvalState"]) {
     assert.ok(ov.includes(`id="${id}"`), `overview missing ${id}`);
   }
-  assert.ok(ov.includes("外环") && ov.includes("内环"), "overview must clearly label outer & inner rings");
+  assert.ok(!ov.includes("外环") && !ov.includes("内环"), "overview must not contain redundant ring tags");
+  assert.ok(!ov.includes("sp-ring-tag") && !speedCss.includes(".sp-ring-tag"));
   assert.ok(!ov.includes("spAttrSessions"), "evaluated count must be trace-only");
 });
 
@@ -119,12 +120,43 @@ test("pipeline card reuses native horizontal fx-diagram with pending cluster poo
   assert.ok(html.includes('id="spDateView"'));
 });
 
-test("deriveEvalStatus distinguishes 进行中 / 中断中 / 已完成 / 采集中断", () => {
+test("deriveEvalStatus distinguishes 评测中 / 重评中 / 聚类中 / 空闲中 / 中断中 / 已完成 / 采集中断", () => {
   assert.equal(deriveEvalStatus({ ok: false }).label, "采集中断");
   assert.equal(deriveEvalStatus({ ok: true, gateways: { control: { paused: true } }, rates: { active_writers: 2 } }).label, "中断中");
   const running = deriveEvalStatus({ ok: true, input_traces: 10, remaining_traces: 4, rates: { active_writers: 2 }, gateways: { active_replicas: 3, control: {} } });
-  assert.equal(running.label, "进行中");
+  assert.equal(running.label, "评测中");
+  assert.equal(running.evalRunning, true);
   assert.equal(running.detail, "3 实例");
+  const reevalRunning = deriveEvalStatus({
+    ok: true, mode: "pg", input_traces: 100, remaining_traces: 12,
+    new_remaining_traces: 0, reeval_remaining_traces: 12,
+    rates: { attr: 4.5, cluster: 0 },
+    pg_pipeline: { eval_rate_5m: 4.5, cluster_rate_5m: 0, active_workers: [{ worker: "va-0", claimed: 2, expired: 0 }] },
+    queue: { running: 2 }, gateways: { control: {} },
+  });
+  assert.equal(reevalRunning.label, "重评中");
+  assert.equal(reevalRunning.reeval, true);
+  assert.equal(reevalRunning.evalRunning, true);
+  assert.equal(reevalRunning.clusterRunning, false);
+  assert.equal(reevalRunning.detail, "1 实例");
+  const reevalClaimedZeroRate = deriveEvalStatus({
+    ok: true, mode: "pg", input_traces: 100, remaining_traces: 5,
+    new_remaining_traces: 0, reeval_remaining_traces: 5,
+    rates: { attr: 0, cluster: 0 },
+    pg_pipeline: { eval_rate_5m: 0, cluster_rate_5m: 0, active_workers: [{ worker: "va-0", claimed: 5, expired: 0 }] },
+    queue: { running: 5 }, gateways: { control: {} },
+  });
+  assert.equal(reevalClaimedZeroRate.label, "重评中");
+  assert.equal(reevalClaimedZeroRate.evalRunning, true);
+  const mixedRunning = deriveEvalStatus({
+    ok: true, mode: "pg", input_traces: 100, remaining_traces: 15,
+    new_remaining_traces: 3, reeval_remaining_traces: 12,
+    rates: { attr: 5.0, cluster: 0 },
+    pg_pipeline: { eval_rate_5m: 5.0, cluster_rate_5m: 0, active_workers: [{ worker: "va-0", claimed: 3, expired: 0 }] },
+    queue: { running: 3 }, gateways: { control: {} },
+  });
+  assert.equal(mixedRunning.label, "评测中");
+  assert.equal(mixedRunning.reeval, false);
   const stalled = deriveEvalStatus({
     ok: true, input_traces: 10, remaining_traces: 4,
     rates: { active_writers: 0, realtime_rpm: 0, newest_part_age_s: 900, attr: 0, compact: 0 },
@@ -215,13 +247,15 @@ test("applyData updates concentric rings and KPI counters from real numbers", ()
   assert.equal(byId.get("spClusterTraces").textContent, "600");
   assert.equal(byId.get("spRingPct").textContent, "75.0%");
   assert.equal(byId.get("spRingClPct").textContent, "聚类 60.0%");
-  assert.ok(byId.get("spAttrPct").textContent.includes("待评测 250"));
-  assert.ok(byId.get("spClusterPct").textContent.includes("待聚类 150"));
+  assert.equal(byId.get("spAttrPct").textContent, "待评测 250");
+  assert.equal(byId.get("spClusterPct").textContent, "待聚类 150");
+  assert.ok(!byId.get("spAttrPct").textContent.includes("占输入"));
+  assert.ok(!byId.get("spClusterPct").textContent.includes("占输入"));
   const outOff = Number(byId.get("spRingAttr").getAttribute("stroke-dashoffset"));
   const inOff = Number(byId.get("spRingCl").getAttribute("stroke-dashoffset"));
   assert.ok(Math.abs(outOff - 2 * Math.PI * 64 * 0.25) < 0.05);
   assert.ok(Math.abs(inOff - 2 * Math.PI * 49 * 0.40) < 0.05);
-  assert.equal(byId.get("spEvalStateText").textContent, "进行中 · 2 实例");
+  assert.equal(byId.get("spEvalStateText").textContent, "评测中 · 2 实例");
   assert.ok(byId.get("spModels").innerHTML.includes("aime_fast"));
   applyData(root, { ...PAYLOAD, gateways: { ...PAYLOAD.gateways, control: { paused: true } } });
   assert.equal(byId.get("spEvalStateText").textContent, "中断中 · 调度暂停");
@@ -244,6 +278,23 @@ test("applyData updates concentric rings and KPI counters from real numbers", ()
   assert.equal(byId.get("spClusterTraces").dataset.lastDanmu, "+22");
   assert.equal(byId.get("spInputTraces").dataset.lastDanmu, undefined);
   assert.equal(byId.get("spClusterPct").dataset.lastDanmu, undefined);
+  // When requeue drops attr_traces downward, counters sync immediately without fake +n danmu.
+  delete byId.get("spAttrTraces").dataset.lastDanmu;
+  applyData(root, {
+    ...PAYLOAD,
+    mode: "pg",
+    input_traces: 1500,
+    attr_traces: 600,
+    remaining_traces: 900,
+    new_remaining_traces: 0,
+    reeval_remaining_traces: 900,
+    cluster: { traces: 500, pending: 100, models: [{ name: "aime_fast", traces: 500, output_traces: 600, pending: 100 }] },
+    pg_pipeline: { eval_rate_5m: 5.0, cluster_rate_5m: 0, active_workers: [{ worker: "va-0", claimed: 2, expired: 0 }], series: [] },
+  });
+  assert.equal(byId.get("spAttrTraces").textContent, "600");
+  assert.equal(byId.get("spAttrPct").textContent, "待重评 900");
+  assert.equal(byId.get("spEvalStateText").textContent, "重评中 · 1 实例");
+  assert.equal(byId.get("spAttrTraces").dataset.lastDanmu, undefined);
   // Zero throughput must not report running even when locks or gateway probe are fresh.
   const zeroSpeed = deriveEvalStatus({
     ok: true, input_traces: 100, remaining_traces: 40,
@@ -271,12 +322,21 @@ test("applyData updates concentric rings and KPI counters from real numbers", ()
   });
   assert.equal(pgIdle.label, "空闲中");
   assert.equal(pgIdle.detail, "待评测 5");
+  const pgReevalIdle = deriveEvalStatus({
+    ok: true, mode: "pg", input_traces: 100, remaining_traces: 7,
+    new_remaining_traces: 0, reeval_remaining_traces: 7, cluster: { pending: 0 },
+    rates: { attr: 0, cluster: 0, active_writers: 0 }, queue: { running: 0, locks: [] }, gateways: { control: {} },
+  });
+  assert.equal(pgReevalIdle.label, "空闲中");
+  assert.equal(pgReevalIdle.detail, "待重评 7");
   const pgClRun = deriveEvalStatus({
     ok: true, mode: "pg", input_traces: 100, remaining_traces: 0, cluster: { pending: 20 },
     rates: { attr: 0, cluster: 12.5, active_writers: 0 }, queue: { running: 0, locks: [] }, gateways: { control: {} },
   });
-  assert.equal(pgClRun.label, "进行中");
+  assert.equal(pgClRun.label, "聚类中");
   assert.equal(pgClRun.running, true);
+  assert.equal(pgClRun.evalRunning, false);
+  assert.equal(pgClRun.clusterRunning, true);
 
   // PG mode: live gateway RPM & utilization in top card, gateway KPI/table, and RPM chart bucketing
   const pgRpmBuilt = buildPgRpmSamples([[nowTs - 120, 225, 10, 10], [nowTs - 60, 240, 11, 11]], 300, nowTs);
@@ -286,6 +346,8 @@ test("applyData updates concentric rings and KPI counters from real numbers", ()
   applyData(root, {
     ...PAYLOAD,
     mode: "pg",
+    new_remaining_traces: 0,
+    reeval_remaining_traces: 250,
     pg_pipeline: {
       now_epoch: nowTs,
       eval_rate_5m: 9.8,
@@ -293,6 +355,7 @@ test("applyData updates concentric rings and KPI counters from real numbers", ()
       eval_24h: 12000,
       compact_rate_5m: 9.8,
       cluster_rate_5m: 14.0,
+      cluster_rate_1h: 11.5,
       cluster_24h: 320,
       cluster_prob_rate_5m: 42.0,
       cluster_pending_problems: 80,
@@ -316,11 +379,75 @@ test("applyData updates concentric rings and KPI counters from real numbers", ()
   });
   assert.equal(byId.get("spTopGwRpm").textContent, "221.4");
   assert.equal(byId.get("spTopGwUtil").textContent, "73.8%");
-  assert.ok(byId.get("spTopGwSub").textContent.includes("配额 300"));
+  assert.equal(byId.get("spTopGwSub").textContent, "配额 300 · 1h 175.0");
   assert.equal(byId.get("spGwRpm").textContent, "221.4");
-  assert.ok(byId.get("spGwRpmSub").textContent.includes("利用率 73.8%"));
+  assert.equal(byId.get("spGwRpmSub").textContent, "配额 300");
+  assert.equal(byId.get("spPartsAttrSub").textContent, "1h 均速 7.2 · 24h 12,000");
+  assert.equal(byId.get("spPartsCompactSub").textContent, "1h 均速 11.5 · 24h 320");
+  assert.equal(byId.get("spEtaSub").textContent, "待重评 250 · 待聚类 150");
+  assert.equal(byId.get("spGwPartsSub").textContent, "待重评 250");
+  assert.equal(byId.get("spGwControlSub").textContent, "未聚类问题 80");
   assert.ok(byId.get("spGateways").innerHTML.includes("73.8%"));
   assert.ok(byId.get("spGateways").innerHTML.includes("evaluation-gateway"));
   assert.equal(byId.get("spWorkersWrap").hidden, false);
   assert.ok(byId.get("spWorkers").innerHTML.includes("va-0"));
+});
+
+test("reeval date board and decoupled pipeline idle classes stay consistent", async () => {
+  const reevalSeries = buildMonthlySeries({
+    models: [{
+      name: "aime_expert",
+      dates: [{
+        date: "2026-11-27", input_sessions: 40, input_traces: 100,
+        attr_traces: 80, compact: 80, remaining_traces: 15, reeval_remaining: 15,
+      }],
+    }],
+  }, "aime_expert", "2026-11");
+  assert.equal(reevalSeries.totals.remaining_traces, 15);
+  assert.equal(reevalSeries.totals.reeval_remaining, 15);
+  assert.ok(monthBarHTML(reevalSeries).includes("待重评 <b>15</b>"));
+  assert.ok(dateChartHTML(reevalSeries).includes("待重评 15"));
+  const detail = dateDetailHTML(reevalSeries.byDate.get("2026-11-27"), "aime_expert");
+  assert.ok(detail.includes("待重评 15"));
+  assert.ok(detail.includes("<span>待重评</span>"));
+
+  assert.ok(systemCss.includes(".fx-diagram.is-eval-idle") && systemCss.includes(".fx-diagram.is-cluster-idle"));
+
+  // Check mountFxDiagram decoupled evalRunning / clusterRunning classes in headless mode
+  const { mountFxDiagram } = await import("../static/js/system.js");
+  const classes = new Set();
+  const makeEl = () => ({
+    classList: {
+      add: (c) => classes.add(c),
+      remove: (c) => classes.delete(c),
+      toggle: (c, f) => (f ? classes.add(c) : classes.delete(c)),
+      contains: (c) => classes.has(c),
+    },
+    dataset: {},
+    style: { setProperty() {} },
+    setAttribute() {},
+    getBoundingClientRect: () => ({ left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }),
+    querySelector: () => null,
+    querySelectorAll: () => [],
+  });
+  const diagramEl = makeEl();
+  const rootStub = {
+    querySelector: (sel) => (sel === "#spfxDiagram" ? diagramEl : null),
+    querySelectorAll: () => [],
+  };
+  globalThis.document = {
+    documentElement: { hasAttribute: () => true },
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const ctl = mountFxDiagram(rootStub, SAMPLE_TAX, SAMPLE_PD, { horizontal: true, idPrefix: "spfx", liveControl: true });
+  ctl.setLiveProgress({ ratio: 0.8, pending: 20, evalRunning: true, clusterRunning: false, evalRate: 5.0, clusterRate: 0 });
+  assert.equal(classes.has("is-idle"), false);
+  assert.equal(classes.has("is-eval-idle"), false);
+  assert.equal(classes.has("is-cluster-idle"), true);
+  ctl.setLiveProgress({ ratio: 0.8, pending: 20, evalRunning: false, clusterRunning: true, evalRate: 0, clusterRate: 6.0 });
+  assert.equal(classes.has("is-idle"), false);
+  assert.equal(classes.has("is-eval-idle"), true);
+  assert.equal(classes.has("is-cluster-idle"), false);
+  ctl.destroy();
 });

@@ -1892,13 +1892,29 @@ def _pg_payload() -> dict:
                         i.biz_day,
                         COUNT(*)::BIGINT AS input_traces,
                         COUNT(DISTINCT NULLIF(i.session_id, ''))::BIGINT AS input_sessions,
-                        COUNT(o.output_id)::BIGINT AS attr_traces,
-                        COUNT(DISTINCT CASE WHEN o.output_id IS NOT NULL THEN NULLIF(i.session_id, '') END)::BIGINT AS attr_sessions,
-                        COUNT(*) FILTER (WHERE o.compact_file_id IS NOT NULL)::BIGINT AS compact_cnt,
-                        COALESCE(SUM(o.problem_count), 0)::BIGINT AS items_cnt,
-                        COUNT(*) FILTER (WHERE i.eval_status = 'pending')::BIGINT AS pending_cnt,
-                        COUNT(*) FILTER (WHERE i.eval_status = 'claimed')::BIGINT AS claimed_cnt,
-                        COUNT(*) FILTER (WHERE i.eval_status = 'failed')::BIGINT AS failed_cnt
+                        COUNT(*) FILTER (WHERE i.eval_status = 'evaluated' AND o.output_id IS NOT NULL)::BIGINT AS attr_traces,
+                        COUNT(DISTINCT CASE WHEN i.eval_status = 'evaluated' AND o.output_id IS NOT NULL THEN NULLIF(i.session_id, '') END)::BIGINT AS attr_sessions,
+                        COUNT(*) FILTER (WHERE i.eval_status = 'evaluated' AND o.compact_file_id IS NOT NULL)::BIGINT AS compact_cnt,
+                        COALESCE(SUM(o.problem_count) FILTER (WHERE i.eval_status = 'evaluated'), 0)::BIGINT AS items_cnt,
+                        COUNT(*) FILTER (
+                            WHERE i.eval_status = 'pending'
+                               OR (i.eval_status = 'claimed' AND (i.lease_expires_at IS NULL OR i.lease_expires_at < now()))
+                        )::BIGINT AS pending_cnt,
+                        COUNT(*) FILTER (
+                            WHERE i.eval_status = 'claimed'
+                              AND i.claimed_by IS NOT NULL
+                              AND i.claimed_by <> ''
+                              AND i.lease_expires_at >= now()
+                        )::BIGINT AS claimed_cnt,
+                        COUNT(*) FILTER (
+                            WHERE i.eval_status = 'claimed'
+                              AND (i.claimed_by IS NULL OR i.claimed_by = '')
+                              AND i.lease_expires_at >= now()
+                        )::BIGINT AS retrying_cnt,
+                        COUNT(*) FILTER (WHERE i.eval_status IN ('pending', 'claimed') AND o.output_id IS NULL)::BIGINT AS pending_new_cnt,
+                        COUNT(*) FILTER (WHERE i.eval_status IN ('pending', 'claimed') AND o.output_id IS NOT NULL)::BIGINT AS pending_reeval_cnt,
+                        COUNT(*) FILTER (WHERE i.eval_status = 'failed')::BIGINT AS failed_cnt,
+                        COUNT(*) FILTER (WHERE i.eval_status = 'skipped')::BIGINT AS skipped_cnt
                     FROM public.eval_inputs i
                     LEFT JOIN public.eval_outputs o
                         ON o.input_id = i.input_id AND o.is_latest = TRUE
@@ -1914,7 +1930,7 @@ def _pg_payload() -> dict:
                     SELECT
                         i.model,
                         COUNT(DISTINCT NULLIF(i.session_id, ''))::BIGINT AS input_sessions,
-                        COUNT(DISTINCT CASE WHEN o.output_id IS NOT NULL THEN NULLIF(i.session_id, '') END)::BIGINT AS attr_sessions
+                        COUNT(DISTINCT CASE WHEN i.eval_status = 'evaluated' AND o.output_id IS NOT NULL THEN NULLIF(i.session_id, '') END)::BIGINT AS attr_sessions
                     FROM public.eval_inputs i
                     LEFT JOIN public.eval_outputs o
                         ON o.input_id = i.input_id AND o.is_latest = TRUE
@@ -1932,9 +1948,9 @@ def _pg_payload() -> dict:
                     SELECT
                         COUNT(DISTINCT NULLIF(i.session_id, ''))::BIGINT AS input_sessions,
                         COUNT(*)::BIGINT AS input_traces,
-                        COUNT(DISTINCT CASE WHEN o.output_id IS NOT NULL THEN NULLIF(i.session_id, '') END)::BIGINT AS attr_sessions,
-                        COUNT(o.output_id)::BIGINT AS attr_traces,
-                        COALESCE(SUM(o.problem_count), 0)::BIGINT AS attr_items
+                        COUNT(DISTINCT CASE WHEN i.eval_status = 'evaluated' AND o.output_id IS NOT NULL THEN NULLIF(i.session_id, '') END)::BIGINT AS attr_sessions,
+                        COUNT(*) FILTER (WHERE i.eval_status = 'evaluated' AND o.output_id IS NOT NULL)::BIGINT AS attr_traces,
+                        COALESCE(SUM(o.problem_count) FILTER (WHERE i.eval_status = 'evaluated'), 0)::BIGINT AS attr_items
                     FROM public.eval_inputs i
                     LEFT JOIN public.users u ON u.user_id = i.user_id
                     LEFT JOIN public.eval_outputs o
@@ -1955,6 +1971,7 @@ def _pg_payload() -> dict:
                         COUNT(*)::BIGINT AS pending_problems
                     FROM public.eval_problems p
                     JOIN public.eval_outputs o ON o.output_id = p.output_id AND o.is_latest = TRUE
+                    JOIN public.eval_inputs i ON i.input_id = o.input_id AND NOT i.is_deleted AND i.eval_status = 'evaluated'
                     WHERE p.cluster_code IS NULL
                     GROUP BY p.model, p.biz_day
                     """
@@ -2039,12 +2056,15 @@ def _pg_payload() -> dict:
                     """
                     SELECT
                         model,
-                        COALESCE(NULLIF(claimed_by, ''), 'worker') AS worker,
+                        claimed_by AS worker,
                         COUNT(*)::BIGINT AS claimed_cnt,
                         COUNT(*) FILTER (WHERE lease_expires_at IS NOT NULL AND lease_expires_at <= now())::BIGINT AS expired_cnt,
                         MAX(updated_at) AS last_upd
                     FROM public.eval_inputs
-                    WHERE NOT is_deleted AND eval_status = 'claimed'
+                    WHERE NOT is_deleted
+                      AND eval_status = 'claimed'
+                      AND claimed_by IS NOT NULL
+                      AND claimed_by <> ''
                     GROUP BY 1, 2
                     ORDER BY claimed_cnt DESC, worker ASC
                     """
@@ -2078,17 +2098,21 @@ def _pg_payload() -> dict:
         unclustered_probs_total += pp
 
     by_model: dict[str, list[dict]] = collections.defaultdict(list)
-    total_pending = total_claimed = total_failed = 0
+    total_pending = total_claimed = total_retrying = total_failed = total_skipped = 0
+    new_remaining_traces = reeval_remaining_traces = 0
     for row in day_rows:
         by_model[str(row["model"])].append(row)
-        total_pending += int(row["pending_cnt"] or 0)
-        total_claimed += int(row["claimed_cnt"] or 0)
-        total_failed += int(row["failed_cnt"] or 0)
+        total_pending += int(row.get("pending_cnt") or 0)
+        total_claimed += int(row.get("claimed_cnt") or 0)
+        total_retrying += int(row.get("retrying_cnt") or 0)
+        total_failed += int(row.get("failed_cnt") or 0)
+        total_skipped += int(row.get("skipped_cnt") or 0)
 
     models = []
     for name in sorted(by_model):
         dates = []
         inp_tr_sum = attr_tr_sum = compact_sum = items_sum = rem_sum = 0
+        new_rem_sum = reeval_rem_sum = failed_sum = skipped_sum = 0
         for row in by_model[name]:
             bd = row["biz_day"]
             day_str = bd.isoformat() if hasattr(bd, "isoformat") else str(bd)
@@ -2098,12 +2122,27 @@ def _pg_payload() -> dict:
             asess = int(row["attr_sessions"] or 0)
             cv = int(row["compact_cnt"] or 0)
             items_sum += int(row["items_cnt"] or 0)
-            rem = max(0, itr - atr)
+            if "pending_new_cnt" in row or "pending_reeval_cnt" in row:
+                d_new = int(row.get("pending_new_cnt") or 0)
+                d_reeval = int(row.get("pending_reeval_cnt") or 0)
+                rem = d_new + d_reeval
+            elif any(k in row for k in ("pending_cnt", "claimed_cnt", "retrying_cnt")):
+                rem = int(row.get("pending_cnt") or 0) + int(row.get("claimed_cnt") or 0) + int(row.get("retrying_cnt") or 0)
+                d_new = rem
+                d_reeval = 0
+            else:
+                rem = max(0, itr - atr)
+                d_new = rem
+                d_reeval = 0
+            failed_sum += int(row.get("failed_cnt") or 0)
+            skipped_sum += int(row.get("skipped_cnt") or 0)
             day_uncl = min(atr, day_uncl_map.get((name, day_str), 0))
             inp_tr_sum += itr
             attr_tr_sum += atr
             compact_sum += cv
             rem_sum += rem
+            new_rem_sum += d_new
+            reeval_rem_sum += d_reeval
             dates.append({
                 "date": day_str,
                 "input": itr,
@@ -2117,8 +2156,12 @@ def _pg_payload() -> dict:
                 "remaining": rem,
                 "remaining_sessions": max(0, isess - asess),
                 "remaining_traces": rem,
+                "new_remaining": d_new,
+                "reeval_remaining": d_reeval,
             })
         ms_in, ms_out = sess_by_model.get(name, (0, 0))
+        new_remaining_traces += new_rem_sum
+        reeval_remaining_traces += reeval_rem_sum
         models.append({
             "name": name,
             "input": inp_tr_sum,
@@ -2128,9 +2171,13 @@ def _pg_payload() -> dict:
             "attr_sessions": ms_out,
             "attr_traces": attr_tr_sum,
             "output_traces": attr_tr_sum,
-            "compact": compact_sum or attr_tr_sum,
+            "compact": compact_sum,
             "items": items_sum,
             "remaining": rem_sum,
+            "new_remaining": new_rem_sum,
+            "reeval_remaining": reeval_rem_sum,
+            "failed": failed_sum,
+            "skipped": skipped_sum,
             "dates": dates,
         })
 
@@ -2327,7 +2374,7 @@ def _pg_payload() -> dict:
         for n in alloc_names
     )
     alloc_weight_sum = sum(gateway_rows[n]["rpm_limit"] for n in alloc_names) if all_have_own_limit else len(alloc_names)
-    eff_replicas = rpm_limit_info.get("replicas") or active_worker_cnt or None
+    eff_replicas = active_worker_cnt or (rpm_limit_info.get("replicas") if eval_rate_5m >= 0.05 else None)
 
     gateway_items = []
     for name, row in sorted_gws:
@@ -2403,6 +2450,11 @@ def _pg_payload() -> dict:
         "remaining_sessions": remaining_sessions,
         "remaining_traces": remaining_traces,
         "remaining": remaining_traces,
+        "new_remaining_traces": new_remaining_traces,
+        "reeval_remaining_traces": reeval_remaining_traces,
+        "retrying_traces": total_retrying,
+        "failed_traces": total_failed,
+        "skipped_traces": total_skipped,
         "progress": (attr_traces / input_traces) if input_traces else None,
         "session_progress": (attr_sessions / input_sessions) if input_sessions else None,
         "rates": {
@@ -2429,7 +2481,12 @@ def _pg_payload() -> dict:
             "done": attr_traces,
             "pending": total_pending,
             "running": total_claimed,
+            "retrying": total_retrying,
             "failed": total_failed,
+            "skipped": total_skipped,
+            "new_pending": new_remaining_traces,
+            "reeval_pending": reeval_remaining_traces,
+            "active_workers": active_worker_cnt,
             "locks": locks,
             "active_replicas": eff_replicas,
             "eta_minutes": eta,
@@ -2473,6 +2530,11 @@ def _pg_payload() -> dict:
             "last_cluster_ago_s": round(max(0.0, now - last_cl_ts), 1) if last_cl_ts else None,
             "expired_leases": expired_leases,
             "active_workers": active_workers,
+            "active_worker_count": active_worker_cnt,
+            "new_remaining": new_remaining_traces,
+            "reeval_remaining": reeval_remaining_traces,
+            "retrying": total_retrying,
+            "skipped": total_skipped,
             "series": series,
         },
         "gateways": {

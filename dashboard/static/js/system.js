@@ -2386,10 +2386,28 @@ export function mountFxDiagram(root, tax, pd, {
     }
     return {
       redraw: draw,
-      setLiveProgress({ ratio, pending = 0, attrTraces = 0, clusterTraces = 0, running = false } = {}) {
+      setLiveProgress({
+        ratio,
+        pending = 0,
+        attrTraces = 0,
+        clusterTraces = 0,
+        running = false,
+        evalRunning,
+        clusterRunning,
+        evalRate,
+        clusterRate,
+        rate = 0,
+      } = {}) {
         if (ratio != null) updateProgress(Math.max(0, Math.min(1, Number(ratio))) * 1000, 1000);
         updatePool({ pending, attrTraces, clusterTraces, flushing: false });
-        diagram.classList.toggle("is-idle", !running);
+        const eRate = evalRate != null ? Math.max(0, Number(evalRate) || 0) : Math.max(0, Number(rate) || 0);
+        const cRate = clusterRate != null ? Math.max(0, Number(clusterRate) || 0) : Math.max(0, Number(rate) || 0);
+        const eRun = evalRunning != null ? Boolean(evalRunning) && eRate >= 0.05 : Boolean(running) && eRate >= 0.05;
+        const cRun = clusterRunning != null ? Boolean(clusterRunning) && cRate >= 0.05 : Boolean(running) && cRate >= 0.05;
+        const anyRun = eRun || cRun;
+        diagram.classList.toggle("is-idle", !anyRun);
+        diagram.classList.toggle("is-eval-idle", !eRun);
+        diagram.classList.toggle("is-cluster-idle", !cRun);
       },
       destroy() { ro?.disconnect(); timers.forEach(clearTimeout); },
     };
@@ -2556,6 +2574,7 @@ export function mountFxDiagram(root, tax, pd, {
 
     if (ev.delta > 0) {
       if (liveControl) {
+        if (!liveCtl.clusterRunning) return;
         let gain = ev.delta;
         if (!ev.skipOverviewTick && typeof onLiveTick === "function") {
           const applied = onLiveTick({ kind: "cluster", delta: gain, pending: liveCtl.simPending, leaf: lf });
@@ -2706,7 +2725,11 @@ export function mountFxDiagram(root, tax, pd, {
   const liveCtl = {
     ratio: 0,
     running: false,
+    evalRunning: false,
+    clusterRunning: false,
     rate: 0,
+    evalRate: 0,
+    clusterRate: 0,
     rateInterval: 0,
     nextRateAt: 0,
     clusterInterval: 0,
@@ -2811,26 +2834,30 @@ export function mountFxDiagram(root, tax, pd, {
     if (!accent) refreshColors();
 
     if (liveControl) {
-      if (liveCtl.running && liveCtl.rateInterval > 0 && now >= liveCtl.nextRateAt && sparks.length < 5 && tree.leaves.length) {
+      if (liveCtl.evalRunning && liveCtl.rateInterval > 0 && now >= liveCtl.nextRateAt && sparks.length < 5 && tree.leaves.length) {
         liveCtl.nextRateAt = now + liveCtl.rateInterval;
         const lf = nextLiveLeaf();
-        const n = liveBatchDelta(liveCtl.rate, liveCtl.rateInterval / 1000);
+        const n = liveBatchDelta(liveCtl.evalRate, liveCtl.rateInterval / 1000);
         if (lf) spawn(null, { leaf: lf, delta: n, poolDelta: n, isNew: false }, null, 0, poolEl ? "attr" : "full");
       }
-      if (liveCtl.running && poolEl && liveCtl.simPending > 0 && liveCtl.clusterInterval > 0 && now >= liveCtl.nextClusterAt && sparks.length < 5 && tree.leaves.length) {
+      if (liveCtl.clusterRunning && poolEl && liveCtl.simPending > 0 && liveCtl.clusterInterval > 0 && now >= liveCtl.nextClusterAt && sparks.length < 5 && tree.leaves.length) {
         liveCtl.nextClusterAt = now + liveCtl.clusterInterval;
         const lf = nextLiveLeaf();
-        const n = Math.min(liveCtl.simPending, liveBatchDelta(liveCtl.rate, liveCtl.clusterInterval / 1000));
+        const n = Math.min(liveCtl.simPending, liveBatchDelta(liveCtl.clusterRate, liveCtl.clusterInterval / 1000));
         if (lf && n > 0) spawn(0, { leaf: lf, delta: n, isNew: false }, 0, 0, "cluster");
       }
-      if (!liveCtl.running && !sparks.length) {
+      const hasEvalSpark = sparks.some((s) => s.kind !== "cluster");
+      const hasClusterSpark = sparks.some((s) => s.kind === "cluster");
+      diagram.classList.toggle("is-eval-idle", !(liveCtl.evalRunning || hasEvalSpark));
+      diagram.classList.toggle("is-cluster-idle", !(liveCtl.clusterRunning || hasClusterSpark));
+      if (!liveCtl.evalRunning && !liveCtl.clusterRunning && !sparks.length) {
         poolEl?.classList.remove("is-flushing");
         diagram.classList.add("is-idle");
         ctx.setTransform(geo.dpr, 0, 0, geo.dpr, 0, 0);
         ctx.clearRect(0, 0, geo.w, geo.h);
         return;
       }
-      if (poolEl && !sparks.some((s) => s.kind === "cluster")) {
+      if (poolEl && !hasClusterSpark) {
         poolEl.classList.remove("is-flushing");
       }
     } else {
@@ -2902,7 +2929,7 @@ export function mountFxDiagram(root, tax, pd, {
             if (s.kind === "attr") {
               land(poolEl, 520);
               let gain = Math.max(0, Number(s.ev?.poolDelta) || 0);
-              if (liveControl && liveCtl.running && gain > 0) {
+              if (liveControl && liveCtl.evalRunning && gain > 0) {
                 if (typeof onLiveTick === "function") {
                   const applied = onLiveTick({ kind: "attr", delta: gain, pending: liveCtl.simPending + gain });
                   if (typeof applied === "number") gain = applied;
@@ -2978,7 +3005,7 @@ export function mountFxDiagram(root, tax, pd, {
   };
 
   const kick = () => {
-    if (liveControl && !liveCtl.running && !sparks.length) return;
+    if (liveControl && !liveCtl.evalRunning && !liveCtl.clusterRunning && !sparks.length) return;
     if (!raf && !paused && visible && !document.hidden && diagram.isConnected) {
       lastFrame = 0;
       raf = requestAnimationFrame(frame);
@@ -3032,6 +3059,10 @@ export function mountFxDiagram(root, tax, pd, {
       attrTraces = 0,
       clusterTraces = 0,
       running = false,
+      evalRunning,
+      clusterRunning,
+      evalRate,
+      clusterRate,
       rate = 0,
       deltaAttr = 0,
       deltaCluster = 0,
@@ -3039,9 +3070,18 @@ export function mountFxDiagram(root, tax, pd, {
       done = false,
     } = {}) {
       const clamped = Math.max(0, Math.min(1, Number(ratio) || 0));
-      const wasRunning = liveCtl.running;
+      const wasEvalRunning = liveCtl.evalRunning;
+      const wasClusterRunning = liveCtl.clusterRunning;
+      const eRate = evalRate != null ? Math.max(0, Number(evalRate) || 0) : Math.max(0, Number(rate) || 0);
+      const cRate = clusterRate != null ? Math.max(0, Number(clusterRate) || 0) : Math.max(0, Number(rate) || 0);
+      const eRun = evalRunning != null ? Boolean(evalRunning) && eRate >= 0.05 : Boolean(running) && eRate >= 0.05;
+      const cRun = clusterRunning != null ? Boolean(clusterRunning) && cRate >= 0.05 : Boolean(running) && cRate >= 0.05;
+      const anyRun = eRun || cRun;
+
       liveCtl.ratio = clamped;
-      liveCtl.running = !!running;
+      liveCtl.running = anyRun;
+      liveCtl.evalRunning = eRun;
+      liveCtl.clusterRunning = cRun;
       liveCtl.done = !!done;
       updateProgress(clamped * 1000, 1000);
 
@@ -3062,41 +3102,47 @@ export function mountFxDiagram(root, tax, pd, {
         flushing: dCl > 0 || sparks.some((s) => s.kind === "cluster"),
       });
 
-      const r = Math.max(0, Number(rate) || 0);
-      liveCtl.rate = r;
-      liveCtl.rateInterval = running && r > 0 ? LIVE_ATTR_CADENCE_MS : 0;
-      liveCtl.clusterInterval = running && r > 0 ? LIVE_CLUSTER_CADENCE_MS : 0;
+      liveCtl.rate = Math.max(0, Number(rate) || eRate + cRate);
+      liveCtl.evalRate = eRate;
+      liveCtl.clusterRate = cRate;
+      liveCtl.rateInterval = eRun ? LIVE_ATTR_CADENCE_MS : 0;
+      liveCtl.clusterInterval = cRun ? LIVE_CLUSTER_CADENCE_MS : 0;
 
-      if (!running) {
-        for (let i = sparks.length - 1; i >= 0; i--) {
-          if (!sparks[i].launched) sparks.splice(i, 1);
-        }
+      for (let i = sparks.length - 1; i >= 0; i--) {
+        if (sparks[i].launched) continue;
+        const isCl = sparks[i].kind === "cluster";
+        if ((isCl && !cRun) || (!isCl && !eRun)) sparks.splice(i, 1);
       }
 
-      if (running && !wasRunning && r > 0 && tree.leaves.length) {
-        // 固定节拍起拍：第 0.4s 发出首波归因，错开 2.4s 发出首波聚类，之后严格按 4s / 6s 交替推进
+      if (eRun && !wasEvalRunning && tree.leaves.length) {
+        // 左半段（评测/重评流）独立起拍
         const lf1 = nextLiveLeaf();
-        const n1 = liveBatchDelta(r, LIVE_ATTR_CADENCE_MS / 1000);
+        const n1 = liveBatchDelta(eRate, LIVE_ATTR_CADENCE_MS / 1000);
         if (lf1) spawn(0, { leaf: lf1, delta: n1, poolDelta: n1, isNew: false }, 0, 400, poolEl ? "attr" : "full");
-        if (poolEl && rawP > 0) {
-          const lf2 = nextLiveLeaf();
-          const n2 = Math.min(rawP, liveBatchDelta(r, LIVE_CLUSTER_CADENCE_MS / 1000));
-          if (lf2 && n2 > 0) spawn(0, { leaf: lf2, delta: n2, isNew: false }, 0, 2400, "cluster");
-        }
         liveCtl.nextRateAt = simNow + LIVE_ATTR_CADENCE_MS;
-        liveCtl.nextClusterAt = simNow + LIVE_CLUSTER_CADENCE_MS + 1400;
+      }
+      if (cRun && !wasClusterRunning && poolEl && rawP > 0 && tree.leaves.length) {
+        // 右半段（聚类流）独立起拍
+        const lf2 = nextLiveLeaf();
+        const n2 = Math.min(rawP, liveBatchDelta(cRate, LIVE_CLUSTER_CADENCE_MS / 1000));
+        if (lf2 && n2 > 0) spawn(0, { leaf: lf2, delta: n2, isNew: false }, 0, 600, "cluster");
+        liveCtl.nextClusterAt = simNow + LIVE_CLUSTER_CADENCE_MS;
       }
 
-      const active = liveCtl.running || sparks.length > 0;
+      const hasEvalSpark = sparks.some((s) => s.kind !== "cluster");
+      const hasClusterSpark = sparks.some((s) => s.kind === "cluster");
+      const active = anyRun || sparks.length > 0;
       diagram.classList.toggle("is-idle", !active);
+      diagram.classList.toggle("is-eval-idle", !(eRun || hasEvalSpark));
+      diagram.classList.toggle("is-cluster-idle", !(cRun || hasClusterSpark));
       if (!active) {
         if (raf) { cancelAnimationFrame(raf); raf = 0; }
         ctx.setTransform(geo.dpr, 0, 0, geo.dpr, 0, 0);
         ctx.clearRect(0, 0, geo.w, geo.h);
         return;
       }
-      if (liveCtl.running && liveCtl.nextRateAt < simNow) liveCtl.nextRateAt = simNow + LIVE_ATTR_CADENCE_MS;
-      if (liveCtl.running && liveCtl.nextClusterAt < simNow) liveCtl.nextClusterAt = simNow + LIVE_CLUSTER_CADENCE_MS;
+      if (eRun && liveCtl.nextRateAt < simNow) liveCtl.nextRateAt = simNow + LIVE_ATTR_CADENCE_MS;
+      if (cRun && liveCtl.nextClusterAt < simNow) liveCtl.nextClusterAt = simNow + LIVE_CLUSTER_CADENCE_MS;
       kick();
     },
     destroy() {

@@ -20,6 +20,9 @@ const S = {
   lastSyncDelta: 0,
   inflight: false,
   liveRunning: false,
+  evalRunning: false,
+  clusterRunning: false,
+  pendWord: "待评测",
   selectedModel: "__all__",
   selectedMonth: "",
   selectedDate: "",
@@ -38,6 +41,8 @@ const S = {
   prevAttrTraces: null,
   prevClusterTraces: null,
   prevPendingTraces: null,
+  prevRawAttrTraces: null,
+  prevRawClusterTraces: null,
   prevAttrRate: null,
   prevCompactRate: null,
   prevGwRpm: null,
@@ -134,18 +139,26 @@ function setHTML(root, id, html) {
   }
 }
 
-/* Derive overall pipeline run state (`进行中` / `中断中` / `已完成` / `采集中断`) from live telemetry. */
+/* Derive overall pipeline run state (`评测中` / `重评中` / `聚类中` / `空闲中` / `中断中` / `已完成` / `采集中断`). */
 export function deriveEvalStatus(data) {
   if (!data || data.ok === false) {
-    return { key: "error", label: "采集中断", cls: "is-bad", running: false, detail: "" };
+    return { key: "error", label: "采集中断", cls: "is-bad", running: false, evalRunning: false, clusterRunning: false, reeval: false, detail: "" };
   }
+  const isPg = data.mode === "pg";
   const ctrl = data.gateways?.control || {};
   const rates = data.rates || {};
+  const pg = data.pg_pipeline || {};
   const queue = data.queue || {};
   const locks = queue.locks || [];
   const cluster = data.cluster || {};
   const inputTraces = Number(data.input_traces) || 0;
   const remainingTraces = Number(data.remaining_traces) || 0;
+  const reevalRem = Number(data.reeval_remaining_traces ?? queue.reeval_pending ?? pg.reeval_remaining) || 0;
+  const newRem = data.new_remaining_traces != null
+    ? (Number(data.new_remaining_traces) || 0)
+    : Math.max(0, remainingTraces - reevalRem);
+  const pureReeval = reevalRem > 0 && newRem === 0;
+  const pendWord = pureReeval ? "待重评" : "待评测";
   const clusterPending = Number(cluster.pending) || 0;
   const activeWriters = Number(rates.active_writers) || 0;
   const runningJobs = Number(queue.running) || 0;
@@ -153,30 +166,46 @@ export function deriveEvalStatus(data) {
   const partsRate = (Number(rates.parts_attr) || 0) + (Number(rates.parts_compact) || 0);
   const attrRate = Number(rates.attr) || 0;
   const compactRate = Number(rates.compact) || 0;
-  const clusterRate = Number(rates.cluster) || 0;
-  const partAge = rates.newest_part_age_s;
-  const freshPart = partAge != null && Number(partAge) <= 180;
+  const clusterRate = isPg ? (Number(pg.cluster_rate_5m ?? rates.cluster) || 0) : (Number(rates.cluster) || 0);
+  const evalRate = isPg
+    ? (Number(pg.eval_rate_5m ?? rates.attr) || 0)
+    : Math.max(attrRate, Number(rates.parts_attr) || 0, compactRate, Number(rates.parts_compact) || 0);
+  const pgWorkers = pg.active_workers || [];
+  const pgActiveWorkers = pgWorkers.length
+    ? pgWorkers.filter((w) => (Number(w.claimed) || 0) > (Number(w.expired) || 0)).length
+    : (Number(pg.active_worker_count ?? queue.active_workers ?? activeWriters) || 0);
   const freshLock = locks.some((l) => l.heartbeat_age_s == null || Number(l.heartbeat_age_s) <= 180);
   const gwFresh = (data.gateways?.items || []).some((g) => g.ok && g.active_ago_s != null && Number(g.active_ago_s) <= 90);
 
   if (ctrl.paused) {
-    return { key: "paused", label: "中断中", cls: "is-bad", running: false, detail: "调度暂停" };
+    return { key: "paused", label: "中断中", cls: "is-bad", running: false, evalRunning: false, clusterRunning: false, reeval: pureReeval, detail: "调度暂停" };
   }
-  const hasThroughput = activeWriters > 0 || partsRate >= 0.05 || attrRate >= 0.05 || compactRate >= 0.05 || clusterRate >= 0.05 || rpm > 0.5;
-  if (hasThroughput) {
-    const workers = data.gateways?.active_replicas || activeWriters || runningJobs;
-    return { key: "running", label: "进行中", cls: "is-ok is-live", running: true, detail: workers ? `${workers} 实例` : "" };
+  const evalRunning = isPg
+    ? (evalRate >= 0.05 || pgActiveWorkers > 0 || runningJobs > 0 || (remainingTraces > 0 && rpm > 0.5))
+    : (activeWriters > 0 || partsRate >= 0.05 || attrRate >= 0.05 || compactRate >= 0.05 || (remainingTraces > 0 && rpm > 0.5));
+  const clusterRunning = clusterRate >= 0.05 || (isPg && !evalRunning && remainingTraces <= 0 && clusterPending > 0 && rpm > 0.5);
+  if (evalRunning || clusterRunning) {
+    const workers = isPg
+      ? (pgActiveWorkers || data.gateways?.active_replicas || 0)
+      : (data.gateways?.active_replicas || activeWriters || runningJobs);
+    if (evalRunning && pureReeval) {
+      return { key: "reeval", label: "重评中", cls: "is-ok is-live", running: true, evalRunning: true, clusterRunning, reeval: true, detail: workers ? `${workers} 实例` : "" };
+    }
+    if (evalRunning) {
+      return { key: "running", label: "评测中", cls: "is-ok is-live", running: true, evalRunning: true, clusterRunning, reeval: false, detail: workers ? `${workers} 实例` : "" };
+    }
+    return { key: "clustering", label: "聚类中", cls: "is-ok is-live", running: true, evalRunning: false, clusterRunning: true, reeval: false, detail: "" };
   }
   if (inputTraces > 0 && remainingTraces <= 0 && clusterPending <= 0) {
-    return { key: "done", label: "已完成", cls: "is-ok", running: false, detail: "" };
+    return { key: "done", label: "已完成", cls: "is-ok", running: false, evalRunning: false, clusterRunning: false, reeval: false, detail: "" };
   }
-  if (data.mode === "pg") {
+  if (isPg) {
     const detail = remainingTraces > 0
-      ? `待评测 ${num(remainingTraces)}`
+      ? `${pendWord} ${num(remainingTraces)}`
       : (clusterPending > 0 ? `待聚类 ${num(clusterPending)}` : "");
-    return { key: "idle", label: "空闲中", cls: "is-warn", running: false, detail };
+    return { key: "idle", label: "空闲中", cls: "is-warn", running: false, evalRunning: false, clusterRunning: false, reeval: pureReeval, detail };
   }
-  return { key: "stalled", label: "中断中", cls: "is-warn", running: false, detail: runningJobs > 0 || freshLock || gwFresh ? "速率为 0" : "" };
+  return { key: "stalled", label: "中断中", cls: "is-warn", running: false, evalRunning: false, clusterRunning: false, reeval: false, detail: runningJobs > 0 || freshLock || gwFresh ? "速率为 0" : "" };
 }
 
 function ctxTax(c) {
@@ -199,7 +228,7 @@ export function shellHTML(tax = null, pd = null) {
         </div>
       </header>
       <div class="sp-ov-wrap">
-        <div class="sp-ov-ring" role="img" aria-label="外环已评测、内环已聚类占评测输入比例">
+        <div class="sp-ov-ring" role="img" aria-label="已评测、已聚类占评测输入比例">
           <svg viewBox="0 0 156 156" aria-hidden="true">
             <g transform="rotate(-90 78 78)">
               <circle class="sp-ring-track" cx="78" cy="78" r="64"/>
@@ -221,12 +250,12 @@ export function shellHTML(tax = null, pd = null) {
             <span class="sp-ov-sub"><b class="num" id="spInputSessions">—</b> session</span>
           </div>
           <div class="sp-ov-stat" style="--c:var(--accent)">
-            <span class="sp-ov-lbl">已完成评测<i class="sp-ring-tag is-attr">外环</i></span>
+            <span class="sp-ov-lbl">已完成评测</span>
             <div class="sp-ov-val"><span class="big num" id="spAttrTraces">—</span><span class="unit">trace</span></div>
             <span class="sp-ov-sub" id="spAttrPct">—</span>
           </div>
           <div class="sp-ov-stat" style="--c:var(--loc-ulq)">
-            <span class="sp-ov-lbl">已聚类<i class="sp-ring-tag is-cl">内环</i></span>
+            <span class="sp-ov-lbl">已聚类</span>
             <div class="sp-ov-val"><span class="big num" id="spClusterTraces">—</span><span class="unit">trace</span></div>
             <span class="sp-ov-sub" id="spClusterPct">—</span>
           </div>
@@ -410,7 +439,10 @@ export function modelRowsHTML(data, { attrCarry = 0, clCarry = 0, selectedModel 
     const isActiveModel = !carryAssigned && isPreferred;
     if (isActiveModel && (attrCarry > 0 || clCarry > 0)) carryAssigned = true;
     const attrTr = isActiveModel ? Math.min(inTr || Infinity, rawAttr + attrCarry) : rawAttr;
-    const remTr = Math.max(0, inTr - attrTr);
+    const rawRem = m.remaining != null ? Math.max(0, Number(m.remaining) || 0) : Math.max(0, inTr - rawAttr);
+    const remTr = isActiveModel ? Math.max(0, rawRem - attrCarry) : rawRem;
+    const reevalRem = Number(m.reeval_remaining) || 0;
+    const pendLbl = remTr > 0 && reevalRem >= remTr ? "待重评" : "待评测";
     const hasCl = cl.has(m.name);
     const rawCl = cl.get(m.name) || 0;
     const clTr = isActiveModel && hasCl ? Math.min(attrTr, rawCl + clCarry) : rawCl;
@@ -420,7 +452,7 @@ export function modelRowsHTML(data, { attrCarry = 0, clCarry = 0, selectedModel 
       <div class="t-row"><span>评测输入</span><b class="num">${num(inTr)} trace · ${num(m.input_sessions)} sess</b></div>
       <div class="t-row"><span>已完成评测</span><b class="num">${num(attrTr)} (${inTr ? pct(attrTr, inTr, 1) : "—"})</b></div>
       ${hasCl ? `<div class="t-row"><span>已聚类</span><b class="num">${num(clTr)} (${inTr ? pct(clTr, inTr, 1) : "—"})</b></div>` : ""}
-      <div class="t-row"><span>待评测</span><b class="num">${done ? "已完成" : `${num(remTr)} trace`}</b></div>`;
+      <div class="t-row"><span>${pendLbl}</span><b class="num">${done ? "已完成" : `${num(remTr)} trace`}</b></div>`;
     const isSel = activeSel === m.name;
     pills.push(`<button type="button" class="sp-model-pill${isSel ? " is-active" : ""}${done ? " is-done" : ""}${isPreferred || remTr > 0 ? " is-active-model" : ""}" role="tab" aria-selected="${isSel}" data-sp-model="${esc(m.name)}" data-sp-mattr="${attrTr}" data-sp-min="${inTr}" data-sp-mrem="${remTr}" data-sp-mcl="${clTr}" data-tip="1" data-tip-html="${esc(tip)}">
       <i class="sp-mp-dot" aria-hidden="true"></i>
@@ -503,10 +535,8 @@ function renderTopGatewayCard(root, gw) {
     meter.classList?.toggle("is-hot", util != null && util >= 0.85 && util < 0.98);
     meter.classList?.toggle("is-full", util != null && util >= 0.98);
   }
-  const parts = [];
-  parts.push(limit ? `配额 ${num(limit)}` : "配额 —");
+  const parts = [limit ? `配额 ${num(limit)}` : "配额 —"];
   if (g.rpm_1h != null && Number.isFinite(Number(g.rpm_1h))) parts.push(`1h ${rate(g.rpm_1h)}`);
-  if (lead?.latency_ms != null) parts.push(`${fmt(lead.latency_ms, 0)} ms`);
   setText(root, "spTopGwSub", parts.join(" · "));
 }
 
@@ -518,9 +548,13 @@ function renderPgSchedule(root, data) {
   const ctrl = g.control || {};
   const workers = pg.active_workers || [];
   const remTr = Number(data.remaining_traces) || 0;
+  const reevalRem = Number(data.reeval_remaining_traces ?? q.reeval_pending ?? pg.reeval_remaining) || 0;
+  const newRem = data.new_remaining_traces != null ? (Number(data.new_remaining_traces) || 0) : Math.max(0, remTr - reevalRem);
+  const pendWord = reevalRem > 0 && newRem === 0 ? "待重评" : "待评测";
   const clPending = Number(data.cluster?.pending) || 0;
   const pendingProb = Number(pg.cluster_pending_problems) || 0;
   const claimed = Number(q.running) || 0;
+  const retrying = Number(q.retrying ?? pg.retrying) || 0;
   const failed = Number(q.failed) || 0;
   const expired = Number(pg.expired_leases) || 0;
   const liveRpm = g.realtime_rpm;
@@ -537,9 +571,7 @@ function renderPgSchedule(root, data) {
   setText(root, "spKpiLbl1", "网关 RPM");
   setText(root, "spGwRpm", liveRpm == null ? "—" : rate(liveRpm));
   setText(root, "spKpiUnit1", "RPM");
-  setText(root, "spGwRpmSub", limit
-    ? `利用率 ${utilPctText(util)} · 配额 ${num(limit)}`
-    : `1h 均速 ${rate(g.rpm_1h)}`);
+  setText(root, "spGwRpmSub", limit ? `配额 ${num(limit)}` : `1h 均速 ${rate(g.rpm_1h)}`);
   const meter = $("#spGwMeter", root);
   const meterFill = $("#spGwMeterFill", root);
   if (meter && meterFill) {
@@ -555,12 +587,12 @@ function renderPgSchedule(root, data) {
   if (slash2) slash2.hidden = true;
   if (comp2) comp2.hidden = true;
   setText(root, "spKpiUnit2", "trace");
-  setText(root, "spGwPartsSub", `待评测 ${num(remTr)}${failed > 0 ? ` · 异常 ${num(failed)}` : ""}${expired > 0 ? ` · 过期 ${num(expired)}` : ""}`);
+  setText(root, "spGwPartsSub", `${pendWord} ${num(remTr)}${retrying > 0 ? ` · 重试 ${num(retrying)}` : ""}${failed > 0 ? ` · 异常 ${num(failed)}` : ""}${expired > 0 ? ` · 过期 ${num(expired)}` : ""}`);
 
   setText(root, "spKpiLbl3", "待聚类池");
   setText(root, "spGwPermits", num(clPending));
   setText(root, "spKpiUnit3", "trace");
-  setText(root, "spGwControlSub", `未聚类问题 ${num(pendingProb)} 条 · 24h 聚类 ${num(pg.cluster_24h || 0)}`);
+  setText(root, "spGwControlSub", `未聚类问题 ${num(pendingProb)}`);
 
   if (lead) {
     setText(root, "spKpiLbl4", "网关延迟");
@@ -728,6 +760,7 @@ export function buildMonthlySeries(data, selectedModel = "__all__", preferredMon
           compact: 0,
           hasCompact: false,
           remaining_traces: 0,
+          reeval_remaining: 0,
           models: [],
         };
         byDate.set(ds, rec);
@@ -737,6 +770,7 @@ export function buildMonthlySeries(data, selectedModel = "__all__", preferredMon
       const attrTr = Number(d.attr_traces) || 0;
       const compTr = d.compact != null ? (Number(d.compact) || 0) : null;
       const remTr = d.remaining_traces != null ? Math.max(0, Number(d.remaining_traces) || 0) : Math.max(0, inTr - attrTr);
+      const reevTr = Math.max(0, Number(d.reeval_remaining) || 0);
       rec.input_traces += inTr;
       rec.input_sessions += inSess;
       rec.attr_traces += attrTr;
@@ -745,6 +779,7 @@ export function buildMonthlySeries(data, selectedModel = "__all__", preferredMon
         rec.hasCompact = true;
       }
       rec.remaining_traces += remTr;
+      rec.reeval_remaining += reevTr;
       rec.models.push({
         name: m.name,
         input_traces: inTr,
@@ -752,6 +787,7 @@ export function buildMonthlySeries(data, selectedModel = "__all__", preferredMon
         attr_traces: attrTr,
         compact: compTr,
         remaining_traces: remTr,
+        reeval_remaining: reevTr,
       });
     }
   }
@@ -763,7 +799,7 @@ export function buildMonthlySeries(data, selectedModel = "__all__", preferredMon
     : (months[months.length - 1] || "");
 
   const days = [];
-  const totals = { input_traces: 0, input_sessions: 0, attr_traces: 0, compact: 0, remaining_traces: 0, activeDays: 0 };
+  const totals = { input_traces: 0, input_sessions: 0, attr_traces: 0, compact: 0, remaining_traces: 0, reeval_remaining: 0, activeDays: 0 };
   let maxVal = 0;
 
   if (activeMonth) {
@@ -784,6 +820,7 @@ export function buildMonthlySeries(data, selectedModel = "__all__", preferredMon
         totals.attr_traces += rec.attr_traces;
         totals.compact += rec.hasCompact ? rec.compact : 0;
         totals.remaining_traces += rec.remaining_traces;
+        totals.reeval_remaining += rec.reeval_remaining;
         if (topVal > 0) totals.activeDays += 1;
         if (topVal > maxVal) maxVal = topVal;
       }
@@ -818,6 +855,7 @@ export function monthBarHTML(series) {
     return `<button type="button" class="sp-mchip${active ? " is-active" : ""}" data-sp-month="${esc(ym)}" aria-pressed="${active}">${esc(label)}</button>`;
   }).join("");
   const donePct = totals.input_traces > 0 ? pct(totals.attr_traces, totals.input_traces, 1) : "—";
+  const pendLbl = totals.reeval_remaining > 0 && totals.reeval_remaining >= totals.remaining_traces ? "待重评" : "待测";
   return `<div class="sp-mbar-left">
       <div class="sp-mnav">
         <button type="button" class="sp-mnav-btn" data-sp-month="${esc(prevYm)}"${prevYm ? "" : " disabled"} aria-label="上个月">‹</button>
@@ -830,7 +868,7 @@ export function monthBarHTML(series) {
       <span>输入 <b>${num(totals.input_traces)}</b></span>
       <span>已测 <b class="is-attr">${num(totals.attr_traces)}</b><em>${esc(donePct)}</em></span>
       ${totals.remaining_traces > 0
-        ? `<span>待测 <b>${num(totals.remaining_traces)}</b></span>`
+        ? `<span>${pendLbl} <b>${num(totals.remaining_traces)}</b></span>`
         : (totals.input_traces > 0 ? `<span class="is-done">本月已完成</span>` : "")}
     </div>`;
 }
@@ -853,7 +891,9 @@ export function dateChartHTML(series, selectedDate = "") {
     const inTr = rec.input_traces;
     const attrTr = rec.attr_traces;
     const compTr = rec.hasCompact ? rec.compact : null;
-    const remTr = Math.max(0, inTr - attrTr);
+    const remTr = rec.remaining_traces != null ? Math.max(0, Number(rec.remaining_traces) || 0) : Math.max(0, inTr - attrTr);
+    const reevTr = Number(rec.reeval_remaining) || 0;
+    const pendLbl = remTr > 0 && reevTr >= remTr ? "待重评" : "待测";
     const totalPct = Math.max(5, Math.min(100, (topVal / maxY) * 100));
     const aRatio = inTr > 0 ? Math.min(1, attrTr / inTr) : 0;
     const attrPct = topVal > 0 ? Math.max(attrTr > 0 ? 4 : 0, Math.min(100, (attrTr / topVal) * 100)) : 0;
@@ -864,7 +904,7 @@ export function dateChartHTML(series, selectedDate = "") {
       <div class="t-row"><span>评测输入</span><b class="num">${num(inTr)} trace · ${num(rec.input_sessions)} sess</b></div>
       <div class="t-row"><span>已完成评测</span><b class="num">${num(attrTr)} (${inTr ? pct(attrTr, inTr, 1) : "—"})</b></div>
       ${compTr != null ? `<div class="t-row"><span>已完成压缩</span><b class="num">${num(compTr)} (${inTr ? pct(Math.min(inTr, compTr), inTr, 1) : "—"})</b></div>` : ""}
-      <div class="t-row"><span>状态</span><b class="num">${done ? "已完成" : `待测 ${num(remTr)}`}</b></div>`;
+      <div class="t-row"><span>状态</span><b class="num">${done ? "已完成" : `${pendLbl} ${num(remTr)}`}</b></div>`;
     return `<button type="button" class="sp-bar-col${isSel ? " is-selected" : ""}${done ? " is-done" : " is-pending"}" data-sp-day="${esc(date)}" aria-pressed="${isSel}" data-tip="1" data-tip-html="${esc(tip)}">
       <div class="sp-bar-well">
         <span class="sp-bar-track" style="height:${totalPct.toFixed(1)}%">
@@ -896,9 +936,13 @@ export function dateDetailHTML(rec, modelName = "__all__", prevDate = "", nextDa
   const inSess = Number(rec.input_sessions) || 0;
   const attrTr = Number(rec.attr_traces) || 0;
   const compTr = rec.hasCompact ? Number(rec.compact) || 0 : null;
-  const remTr = Math.max(0, inTr - attrTr);
+  const remTr = rec.remaining_traces != null ? Math.max(0, Number(rec.remaining_traces) || 0) : Math.max(0, inTr - attrTr);
+  const reevTr = Number(rec.reeval_remaining) || 0;
+  const isPureReeval = remTr > 0 && reevTr >= remTr;
+  const pendShort = isPureReeval ? "待重评" : "待测";
+  const pendTitle = isPureReeval ? "待重评" : "待评测";
   const aRatio = inTr > 0 ? Math.min(1, attrTr / inTr) : 0;
-  const cRatio = inTr > 0 && compTr != null ? Math.min(1, Math.max(aRatio, compTr / inTr)) : null;
+  const cRatio = inTr > 0 && compTr != null ? Math.min(1, compTr / inTr) : null;
   const outerRatio = cRatio != null ? cRatio : aRatio;
   const outerCls = cRatio != null ? "is-comp" : "is-attr";
   const outOff = (DETAIL_OUT_C * (1 - outerRatio)).toFixed(2);
@@ -923,7 +967,7 @@ export function dateDetailHTML(rec, modelName = "__all__", prevDate = "", nextDa
   return `<div class="sp-dd-head">
       <div class="sp-dd-title">
         <b class="num">${esc(rec.date)}</b>
-        <span class="sp-rc-tag${done ? " is-done" : ""}">${done ? "已完成" : `待测 ${num(remTr)}`}</span>
+        <span class="sp-rc-tag${done ? " is-done" : ""}">${done ? "已完成" : `${pendShort} ${num(remTr)}`}</span>
       </div>
       <div class="sp-dd-actions">
         <button type="button" class="sp-mnav-btn" data-sp-day="${esc(prevDate)}"${prevDate ? "" : " disabled"} aria-label="前一天">‹</button>
@@ -953,7 +997,7 @@ export function dateDetailHTML(rec, modelName = "__all__", prevDate = "", nextDa
       <div class="sp-dd-kv"><span>评测输入</span><b class="num">${num(inTr)}</b><small class="num">${num(inSess)} sess</small></div>
       <div class="sp-dd-kv"><span>已完成评测</span><b class="num is-attr">${num(attrTr)}</b><small class="num">${inTr ? pct(attrTr, inTr, 1) : "—"}</small></div>
       <div class="sp-dd-kv"><span>已完成压缩</span><b class="num is-comp">${compTr != null ? num(compTr) : "—"}</b><small class="num">${cRatio != null ? pct(Math.min(inTr, compTr), inTr, 1) : "—"}</small></div>
-      <div class="sp-dd-kv"><span>待评测</span><b class="num">${num(remTr)}</b><small>${done ? "已全部完成" : "trace"}</small></div>
+      <div class="sp-dd-kv"><span>${pendTitle}</span><b class="num">${num(remTr)}</b><small>${done ? "已全部完成" : "trace"}</small></div>
     </div>
     ${modelList}`;
 }
@@ -1459,11 +1503,14 @@ function handleChartLeave(root) {
 function handleLiveTick(root, evt) {
   if (!root || !S.data || !S.liveRunning || !evt) return 0;
   const inTr = Number(S.data.input_traces) || 0;
+  const isPg = S.data.mode === "pg";
   const d = Math.max(0, Math.round(Number(evt.delta) || 0));
   if (d <= 0) return 0;
   if (evt.kind === "attr") {
+    if (!S.evalRunning) return 0;
     const cap = S.simMaxCarry > 0 ? S.simMaxCarry : 30;
-    const remainSpace = inTr > 0 ? Math.max(0, inTr - S.shownAttrTraces) : d;
+    const baseRem = Number(S.data.remaining_traces) || 0;
+    const remainSpace = inTr > 0 ? Math.max(0, inTr - S.shownAttrTraces) : baseRem;
     const allowed = Math.max(0, Math.min(d, cap - S.simAttrCarry, remainSpace));
     if (allowed <= 0) return 0;
     S.simAttrCarry += allowed;
@@ -1471,16 +1518,18 @@ function handleLiveTick(root, evt) {
     S.shownPendingTraces = Math.max(0, S.shownAttrTraces - S.shownClusterTraces);
     const attrRatio = inTr > 0 ? Math.min(1, S.shownAttrTraces / inTr) : 0;
     const clInRatio = inTr > 0 ? Math.min(attrRatio, S.shownClusterTraces / inTr) : 0;
-    const liveRemTr = Math.max(0, inTr - S.shownAttrTraces);
+    const liveRemTr = Math.max(0, baseRem - S.simAttrCarry);
     const remSess = Number(S.data.remaining_sessions) || 0;
     setText(root, "spAttrTraces", num(S.shownAttrTraces));
     setText(root, "spAttrPct", inTr
-      ? `占输入 ${(attrRatio * 100).toFixed(1)}% · ${liveRemTr > 0 ? `待评测 ${num(liveRemTr)}` : "已全部评测"}`
+      ? (liveRemTr > 0 ? `${S.pendWord} ${num(liveRemTr)}` : "已全部评测")
       : "—");
     setText(root, "spClusterPct", inTr
-      ? `占输入 ${(clInRatio * 100).toFixed(1)}% · ${S.shownPendingTraces > 0 ? `待聚类 ${num(S.shownPendingTraces)}` : "已全部聚类"}`
+      ? (S.shownPendingTraces > 0 ? `待聚类 ${num(S.shownPendingTraces)}` : "已全部聚类")
       : "—");
-    setText(root, "spEtaSub", `剩余 ${num(liveRemTr)} trace · ${num(remSess)} session`);
+    setText(root, "spEtaSub", isPg
+      ? `${S.pendWord} ${num(liveRemTr)} · 待聚类 ${num(S.shownPendingTraces)}`
+      : `剩余 ${num(liveRemTr)} trace · ${num(remSess)} session`);
     setRing($("#spRingAttr", root), RING_OUT_C, attrRatio);
     setText(root, "spRingPct", inTr ? `${(attrRatio * 100).toFixed(1)}%` : "—");
     spawnDanmu(root, "spAttrTraces", `+${num(allowed)}`, { tone: "attr" });
@@ -1488,14 +1537,16 @@ function handleLiveTick(root, evt) {
     if (activePill) {
       const mIn = Number(activePill.dataset.spMin) || 0;
       const nextAttr = Math.min(mIn || Infinity, (Number(activePill.dataset.spMattr) || 0) + allowed);
+      const nextRem = Math.max(0, (Number(activePill.dataset.spMrem) || 0) - allowed);
       activePill.dataset.spMattr = String(nextAttr);
-      activePill.dataset.spMrem = String(Math.max(0, mIn - nextAttr));
+      activePill.dataset.spMrem = String(nextRem);
       const pctEl = $("[data-sp-mpct]", activePill);
-      if (pctEl && mIn > 0) pctEl.textContent = nextAttr >= mIn ? "100%" : pct(nextAttr, mIn, 0);
+      if (pctEl && mIn > 0) pctEl.textContent = nextRem <= 0 ? "100%" : pct(nextAttr, mIn, 0);
     }
     return allowed;
   }
   if (evt.kind === "cluster") {
+    if (!S.clusterRunning) return 0;
     const avail = Math.max(0, S.shownAttrTraces - S.shownClusterTraces);
     const allowed = Math.max(0, Math.min(d, avail));
     if (allowed <= 0) return 0;
@@ -1504,10 +1555,12 @@ function handleLiveTick(root, evt) {
     S.shownPendingTraces = Math.max(0, S.shownAttrTraces - S.shownClusterTraces);
     const attrRatio = inTr > 0 ? Math.min(1, S.shownAttrTraces / inTr) : 0;
     const clInRatio = inTr > 0 ? Math.min(attrRatio, S.shownClusterTraces / inTr) : 0;
+    const liveRemTr = Math.max(0, (Number(S.data.remaining_traces) || 0) - S.simAttrCarry);
     setText(root, "spClusterTraces", num(S.shownClusterTraces));
     setText(root, "spClusterPct", inTr
-      ? `占输入 ${(clInRatio * 100).toFixed(1)}% · ${S.shownPendingTraces > 0 ? `待聚类 ${num(S.shownPendingTraces)}` : "已全部聚类"}`
+      ? (S.shownPendingTraces > 0 ? `待聚类 ${num(S.shownPendingTraces)}` : "已全部聚类")
       : "—");
+    if (isPg) setText(root, "spEtaSub", `${S.pendWord} ${num(liveRemTr)} · 待聚类 ${num(S.shownPendingTraces)}`);
     setRing($("#spRingCl", root), RING_IN_C, clInRatio);
     setText(root, "spRingClPct", inTr ? `聚类 ${(clInRatio * 100).toFixed(1)}%` : "聚类 —");
     spawnDanmu(root, "spClusterTraces", `+${num(allowed)}`, { tone: "cl" });
@@ -1549,11 +1602,16 @@ export function applyData(root, data) {
     S.fx?.destroy();
     S.fx = null;
     S.liveRunning = false;
+    S.evalRunning = false;
+    S.clusterRunning = false;
+    S.pendWord = "待评测";
     S.prevInputTraces = null;
     S.prevInputSessions = null;
     S.prevAttrTraces = null;
     S.prevClusterTraces = null;
     S.prevPendingTraces = null;
+    S.prevRawAttrTraces = null;
+    S.prevRawClusterTraces = null;
     S.prevAttrRate = null;
     S.prevCompactRate = null;
     S.prevGwRpm = null;
@@ -1581,6 +1639,9 @@ export function applyData(root, data) {
 
   const ev = deriveEvalStatus(data);
   S.liveRunning = Boolean(ev.running);
+  S.evalRunning = Boolean(ev.evalRunning);
+  S.clusterRunning = Boolean(ev.clusterRunning);
+  S.pendWord = ev.reeval ? "待重评" : "待评测";
   const bCard = $(".sp-bento", root);
   if (bCard && bCard.classList) bCard.classList.toggle("is-eval-running", S.liveRunning);
 
@@ -1599,27 +1660,34 @@ export function applyData(root, data) {
   const pg = data.pg_pipeline || {};
   const attrRate = r.attr == null || (Number(r.attr) === 0 && Number(r.parts_attr) > 0) ? r.parts_attr : r.attr;
   const compactRate = r.compact == null || (Number(r.compact) === 0 && Number(r.parts_compact) > 0) ? r.parts_compact : r.compact;
-  const clusterRate = isPg ? Number(pg.cluster_rate_5m || 0) : 0;
-  const liveRate = isPg
-    ? (Number(pg.eval_rate_5m || 0) + clusterRate)
+  const evalFlowRate = isPg
+    ? Number(pg.eval_rate_5m || 0)
     : ((Number(r.parts_attr) || 0) + (Number(r.parts_compact) || 0) || (Number(attrRate) || 0) + (Number(compactRate) || 0));
+  const clusterFlowRate = isPg ? Number(pg.cluster_rate_5m || 0) : Number(r.cluster || 0);
+  const evalFlowActive = ev.evalRunning && evalFlowRate >= 0.05;
+  const clusterFlowActive = ev.clusterRunning && clusterFlowRate >= 0.05;
 
   const hasPrev = S.prevInputTraces != null;
-  const maxCarry = ev.running && liveRate >= 0.05
-    ? Math.min(rawRemTr, Math.max(12, Math.round((liveRate / 60) * 45)))
+  const attrDropped = S.prevRawAttrTraces != null && rawAttrTr < S.prevRawAttrTraces;
+  const clDropped = S.prevRawClusterTraces != null && rawClTr < S.prevRawClusterTraces;
+  const maxCarry = evalFlowActive
+    ? Math.min(rawRemTr, Math.max(12, Math.round((evalFlowRate / 60) * 45)))
     : 0;
   S.simMaxCarry = maxCarry;
-  if (isBrowser() && hasPrev && ev.running && liveRate >= 0.05) {
-    // 固定 4s/6s 节拍负责实时推进，30s 轮询只与真实落盘对齐，不额外叠波
+  if (isBrowser() && hasPrev && evalFlowActive && !attrDropped) {
+    // 固定 4s 节拍负责实时推进，30s 轮询只与真实落盘对齐；若发生重评回落则立刻清零
     S.simAttrCarry = rawAttrTr >= S.shownAttrTraces
       ? 0
       : Math.min(maxCarry, Math.max(0, S.shownAttrTraces - rawAttrTr));
-    const nextAttr = Math.min(rawInTr || Infinity, rawAttrTr + S.simAttrCarry);
+  } else {
+    S.simAttrCarry = 0;
+  }
+  const nextAttr = Math.min(rawInTr || Infinity, rawAttrTr + S.simAttrCarry);
+  if (isBrowser() && hasPrev && clusterFlowActive && !clDropped && !attrDropped) {
     S.simClusterCarry = rawClTr >= S.shownClusterTraces
       ? 0
       : Math.min(Math.max(0, nextAttr - rawClTr), Math.max(0, S.shownClusterTraces - rawClTr));
   } else {
-    S.simAttrCarry = 0;
     S.simClusterCarry = 0;
   }
 
@@ -1627,7 +1695,7 @@ export function applyData(root, data) {
   const inSess = rawInSess;
   const attrTr = Math.min(inTr || Infinity, rawAttrTr + S.simAttrCarry);
   const clTr = Math.min(attrTr, rawClTr + S.simClusterCarry);
-  const pendingTr = hasPrev && isBrowser() && ev.running && liveRate >= 0.05
+  const pendingTr = hasPrev && isBrowser() && (evalFlowActive || clusterFlowActive) && !attrDropped && !clDropped
     ? Math.max(0, attrTr - clTr)
     : rawPendingTr;
   const remTr = Math.max(0, rawRemTr - S.simAttrCarry);
@@ -1636,8 +1704,8 @@ export function applyData(root, data) {
 
   const prevShownAttr = hasPrev ? S.shownAttrTraces : attrTr;
   const prevShownCluster = hasPrev ? S.shownClusterTraces : clTr;
-  const deltaAttr = hasPrev ? Math.max(0, attrTr - prevShownAttr) : 0;
-  const deltaCluster = hasPrev ? Math.max(0, clTr - prevShownCluster) : 0;
+  const deltaAttr = hasPrev && !attrDropped ? Math.max(0, attrTr - prevShownAttr) : 0;
+  const deltaCluster = hasPrev && !clDropped ? Math.max(0, clTr - prevShownCluster) : 0;
   const numAttrRate = Number(attrRate) || 0;
   const numCompRate = Number(compactRate) || 0;
   const numGwRpm = Number(data.gateways?.realtime_rpm);
@@ -1647,6 +1715,8 @@ export function applyData(root, data) {
   S.prevAttrTraces = attrTr;
   S.prevClusterTraces = clTr;
   S.prevPendingTraces = pendingTr;
+  S.prevRawAttrTraces = rawAttrTr;
+  S.prevRawClusterTraces = rawClTr;
   S.prevAttrRate = numAttrRate;
   S.prevCompactRate = numCompRate;
   S.prevGwRpm = Number.isFinite(numGwRpm) ? numGwRpm : null;
@@ -1660,11 +1730,11 @@ export function applyData(root, data) {
   setText(root, "spInputSessions", ready ? num(inSess) : "—");
   setText(root, "spAttrTraces", num(attrTr));
   setText(root, "spAttrPct", inTr
-    ? `占输入 ${(attrRatio * 100).toFixed(1)}% · ${remTr > 0 ? `待评测 ${num(remTr)}` : "已全部评测"}`
+    ? (remTr > 0 ? `${S.pendWord} ${num(remTr)}` : "已全部评测")
     : "—");
   setText(root, "spClusterTraces", num(clTr));
   setText(root, "spClusterPct", inTr
-    ? `占输入 ${(clInRatio * 100).toFixed(1)}% · ${pendingTr > 0 ? `待聚类 ${num(pendingTr)}` : "已全部聚类"}`
+    ? (pendingTr > 0 ? `待聚类 ${num(pendingTr)}` : "已全部聚类")
     : "—");
   setRing($("#spRingAttr", root), RING_OUT_C, attrRatio);
   setRing($("#spRingCl", root), RING_IN_C, clInRatio);
@@ -1686,11 +1756,11 @@ export function applyData(root, data) {
     S.modeSeg?.set(S.chartMode, { silent: true });
     setText(root, "spAttrRate", rate(pg.eval_rate_5m));
     setText(root, "spCompactRate", rate(pg.cluster_rate_5m));
-    setText(root, "spPartsAttrSub", `1h 均速 ${rate(pg.eval_rate_1h)} · 24h ${num(pg.eval_24h)} 条 · 压缩 ${rate(pg.compact_rate_5m)}/分`);
-    setText(root, "spPartsCompactSub", `问题 ${rate(pg.cluster_prob_rate_5m)}/分 · 待聚类 ${num(pendingTr)} · 24h ${num(pg.cluster_24h)} 条`);
+    setText(root, "spPartsAttrSub", `1h 均速 ${rate(pg.eval_rate_1h)} · 24h ${num(pg.eval_24h)}`);
+    setText(root, "spPartsCompactSub", `1h 均速 ${rate(pg.cluster_rate_1h)} · 24h ${num(pg.cluster_24h)}`);
     const effEta = remTr > 0 ? data.eta_minutes : (pendingTr > 0 ? pg.cluster_eta_minutes : 0);
     setText(root, "spEta", etaLabel(effEta));
-    setText(root, "spEtaSub", `待评测 ${num(remTr)} · 待聚类 ${num(pendingTr)}${pg.last_eval_ago_s != null ? ` · 最近 ${agoLabel(pg.last_eval_ago_s)}` : ""}`);
+    setText(root, "spEtaSub", `${S.pendWord} ${num(remTr)} · 待聚类 ${num(pendingTr)}`);
     if (!S.userPickedRange) {
       const ser = pg.series || [];
       const nowEpoch = Number(pg.now_epoch) || Date.now() / 1000;
@@ -1737,8 +1807,12 @@ export function applyData(root, data) {
     pending: pendingTr,
     attrTraces: attrTr,
     clusterTraces: clTr,
-    running: ev.running && liveRate >= 0.05,
-    rate: liveRate,
+    running: evalFlowActive || clusterFlowActive,
+    evalRunning: evalFlowActive,
+    clusterRunning: clusterFlowActive,
+    evalRate: evalFlowRate,
+    clusterRate: clusterFlowRate,
+    rate: evalFlowRate + clusterFlowRate,
     deltaAttr,
     deltaCluster,
     windowMs: POLL_MS * 0.92,

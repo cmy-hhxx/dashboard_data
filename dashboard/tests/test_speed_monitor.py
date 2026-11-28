@@ -505,7 +505,9 @@ class SpeedMonitorTests(unittest.TestCase):
                                 "input_traces": 100, "input_sessions": 50,
                                 "attr_traces": 80, "attr_sessions": 40,
                                 "compact_cnt": 80, "items_cnt": 160,
-                                "pending_cnt": 15, "claimed_cnt": 5, "failed_cnt": 0,
+                                "pending_cnt": 15, "claimed_cnt": 5, "retrying_cnt": 0,
+                                "pending_new_cnt": 20, "pending_reeval_cnt": 0,
+                                "failed_cnt": 0, "skipped_cnt": 0,
                             }]
                         elif "GROUP BY i.model" in s:
                             self._rows = [{"model": "aime_fast", "input_sessions": 50, "attr_sessions": 40}]
@@ -575,6 +577,118 @@ class SpeedMonitorTests(unittest.TestCase):
         finally:
             gw.shutdown()
             gw.server_close()
+
+    def test_pg_payload_reeval_and_edge_statuses_consistency(self):
+        from unittest import mock
+
+        now = time.time()
+        cur_min = (int(now) // 60) * 60
+        seen_sql: list[str] = []
+
+        class _FakeCursor:
+            def __init__(self):
+                self._rows = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def execute(self, sql, params=None):
+                s = " ".join(sql.split())
+                seen_sql.append(s)
+                if "GROUP BY i.model, i.biz_day" in s:
+                    # 100 input = 80 evaluated + 15 pending_reeval (10 pending + 3 claimed + 2 retrying) + 2 failed + 1 skipped (Wait: 80+15+2+3=100)
+                    self._rows = [{
+                        "model": "aime_expert", "biz_day": "2026-11-27",
+                        "input_traces": 100, "input_sessions": 40,
+                        "attr_traces": 80, "attr_sessions": 32,
+                        "compact_cnt": 80, "items_cnt": 120,
+                        "pending_cnt": 10, "claimed_cnt": 3, "retrying_cnt": 2,
+                        "pending_new_cnt": 0, "pending_reeval_cnt": 15,
+                        "failed_cnt": 2, "skipped_cnt": 3,
+                    }]
+                elif "GROUP BY i.model" in s:
+                    self._rows = [{"model": "aime_expert", "input_sessions": 40, "attr_sessions": 32}]
+                elif "COALESCE(u.is_lost" in s:
+                    self._rows = [{"input_sessions": 0, "input_traces": 0, "attr_sessions": 0, "attr_traces": 0, "attr_items": 0}]
+                elif "WHERE p.cluster_code IS NULL" in s:
+                    self._rows = [{"model": "aime_expert", "biz_day": "2026-11-27", "pending_traces": 10, "pending_problems": 18}]
+                elif "probs_g1" in s:
+                    self._rows = [
+                        {"b_s": cur_min - 120, "attr_cnt": 5, "comp_cnt": 5, "probs_g1": 10},
+                        {"b_s": cur_min - 60, "attr_cnt": 5, "comp_cnt": 5, "probs_g1": 10},
+                    ]
+                elif "MAX(evaluated_at)" in s:
+                    self._rows = [{"max_eval": None}]
+                elif "clustered_at" in s and "GROUP BY 1" in s:
+                    self._rows = []
+                elif "MAX(clustered_at)" in s:
+                    self._rows = [{"max_cl": None}]
+                elif "human_read_overlays" in s:
+                    self._rows = []
+                elif "eval_status = 'claimed'" in s:
+                    self._rows = [{"model": "aime_expert", "worker": "va-1", "claimed_cnt": 3, "expired_cnt": 0, "last_upd": None}]
+                else:
+                    self._rows = []
+
+            def fetchall(self):
+                return list(self._rows)
+
+            def fetchone(self):
+                return self._rows[0] if self._rows else None
+
+        class _FakeConn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def cursor(self):
+                return _FakeCursor()
+
+        fake_pg = mock.MagicMock()
+        fake_pg._ensure_pg.return_value = (None, lambda cfg, app_name="": _FakeConn(), None, None)
+        fake_pg._load_pg_config.return_value = {}
+
+        speed_monitor.reset_for_test(overrides={"runtime_root": "", "conf_ini": ""})
+        with speed_monitor._PG_CACHE_LOCK:
+            speed_monitor._PG_CACHE["ts"] = 0.0
+            speed_monitor._PG_CACHE["payload"] = None
+        with mock.patch.dict(sys.modules, {"pg_backend": fake_pg}):
+            data = speed_monitor._pg_payload()
+
+        self.assertEqual(data["input_traces"], 100)
+        self.assertEqual(data["attr_traces"], 80)
+        self.assertEqual(data["remaining_traces"], 15)
+        self.assertEqual(data["new_remaining_traces"], 0)
+        self.assertEqual(data["reeval_remaining_traces"], 15)
+        self.assertEqual(data["retrying_traces"], 2)
+        self.assertEqual(data["failed_traces"], 2)
+        self.assertEqual(data["skipped_traces"], 3)
+        self.assertGreater(data["eta_minutes"], 0)
+        self.assertEqual(data["cluster"]["traces"], 70)
+        self.assertEqual(data["cluster"]["pending"], 10)
+        self.assertEqual(data["cluster"]["traces"] + data["cluster"]["pending"], data["attr_traces"])
+        self.assertEqual(data["queue"]["running"], 3)
+        self.assertEqual(data["queue"]["retrying"], 2)
+        self.assertEqual(data["queue"]["reeval_pending"], 15)
+        self.assertEqual(len(data["pg_pipeline"]["active_workers"]), 1)
+        self.assertEqual(data["pg_pipeline"]["active_workers"][0]["worker"], "va-1")
+        day = data["models"][0]["dates"][0]
+        self.assertEqual(day["remaining_traces"], 15)
+        self.assertEqual(day["reeval_remaining"], 15)
+        self.assertEqual(day["new_remaining"], 0)
+
+        day_sql = next(s for s in seen_sql if "GROUP BY i.model, i.biz_day" in s)
+        self.assertIn("i.eval_status = 'evaluated' AND o.output_id IS NOT NULL", day_sql)
+        self.assertIn("pending_reeval_cnt", day_sql)
+        uncl_sql = next(s for s in seen_sql if "WHERE p.cluster_code IS NULL" in s)
+        self.assertIn("i.eval_status = 'evaluated'", uncl_sql)
+        worker_sql = next(s for s in seen_sql if "eval_status = 'claimed'" in s and "GROUP BY 1, 2" in s)
+        self.assertIn("claimed_by IS NOT NULL", worker_sql)
 
 
 if __name__ == "__main__":
