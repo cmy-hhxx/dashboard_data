@@ -52,7 +52,16 @@ const predDot = (it) =>
           ? "var(--muted)"
           : "var(--faint)";
 
-const inputDot = (it) => (it.ev ? "var(--accent)" : "var(--muted)");
+const INPUT_STATE_META = {
+  evaluated: { dot: "var(--accent)", short: "已评" },
+  reeval: { dot: "var(--sev-2)", short: "重评" },
+  pending: { dot: "var(--muted)", short: "待评" },
+  failed: { dot: "var(--sev-1)", short: "失败" },
+  skipped: { dot: "var(--faint)", short: "跳过" },
+};
+const inputStateOf = (it) => (it && INPUT_STATE_META[it.es] ? it.es : (it?.ev ? "evaluated" : "pending"));
+const inputDot = (it) => INPUT_STATE_META[inputStateOf(it)].dot;
+const inputShort = (it) => INPUT_STATE_META[inputStateOf(it)].short;
 
 export function ledger(
   groups,
@@ -71,10 +80,10 @@ export function ledger(
   const parts = Array.isArray(rawParts) && !pred && !isInput
     ? WORST.map((_, i) => ({ n: Number(rawParts[i]) || 0, c: sevColor(i) }))
     : isInput
-      ? [
-          { n: all.filter((it) => it.ev).length, c: "var(--accent)" },
-          { n: all.filter((it) => !it.ev).length, c: "var(--muted)" },
-        ]
+      ? ["evaluated", "reeval", "pending", "failed", "skipped"].map((k) => ({
+          n: all.filter((it) => inputStateOf(it) === k).length,
+          c: INPUT_STATE_META[k].dot,
+        }))
       : pred
         ? ["correct", "wrong", "mixed", "pending", "undetermined"].map((r) => ({
             n: all.filter((it) => (r === "undetermined" ? !["correct", "wrong", "mixed", "pending"].includes(it.r) : it.r === r)).length,
@@ -87,7 +96,7 @@ export function ledger(
     const badge = pred
       ? esc(RESULT[it.r] || "")
       : isInput
-        ? (it.ev ? "已评" : "待评")
+        ? inputShort(it)
         : it.n ? fmt(it.n) : "—";
     return `<button type="button" class="gl-r${pred && !it.s ? " is-inert" : ""}" data-i="${k}" style="--i:${Math.min(k, 14)};--c:${col}" title="${esc(it.q || "（无提问）")}"><i></i><span>${esc(it.q || "（无提问）")}</span>${count ? `<b class="num">${badge}</b>` : ""}</button>`;
   };

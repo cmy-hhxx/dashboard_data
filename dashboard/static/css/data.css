@@ -1247,8 +1247,11 @@ body.is-mxp-full { overflow: hidden; }
 .ed-input-note { text-align: center; font-size: var(--fs-small); color: var(--muted); font-variant-numeric: tabular-nums; }
 .ed-input-note b { color: var(--ink-2); font-weight: var(--w-medium); }
 .ed-table td.out, .ed-table th.out { text-align: center; }
-.ed-out { font-size: var(--fs-body); color: var(--faint); }
+.ed-out { font-size: var(--fs-small); color: var(--muted); white-space: nowrap; }
 .ed-out.is-yes { color: #2f9e63; font-weight: var(--w-medium); }
+.ed-out.is-reeval { color: var(--sev-2); font-weight: var(--w-medium); }
+.ed-out.is-fail { color: var(--sev-1); font-weight: var(--w-medium); }
+.ed-out.is-skip { color: var(--faint); }
 .ed-table td.act, .ed-table th.act { text-align: right; white-space: nowrap; }
 
 /* P0–P4 分布：五档固定列宽，零值压暗，所以每行的位置都一样 */
@@ -1277,7 +1280,11 @@ body.is-modal { overflow: hidden; }
 .ed-modal-main { flex: 1 1 auto; min-width: 0; display: grid; gap: 6px; }
 .ed-modal-title { font-size: var(--fs-title); font-weight: var(--w-title); line-height: 1.45; color: var(--ink); }
 .ed-modal-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: var(--fs-small); color: var(--muted); }
-.ed-modal-meta .ok { color: #2f9e63; }
+.ed-modal-meta .ok,
+.ed-modal-meta .is-yes { color: #2f9e63; }
+.ed-modal-meta .is-reeval { color: var(--sev-2); }
+.ed-modal-meta .is-fail { color: var(--sev-1); }
+.ed-modal-meta .is-skip { color: var(--faint); }
 .ed-id {
   padding: 1px 6px; border-radius: 5px; font-size: var(--fs-meta); font-family: var(--mono);
   color: var(--muted); background: var(--well);

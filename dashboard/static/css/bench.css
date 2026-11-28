@@ -1076,6 +1076,8 @@ button.bn-scell[aria-pressed="true"] { background: color-mix(in oklab, var(--acc
   font-size: var(--fs-micro); font-variant-numeric: tabular-nums; white-space: nowrap;
 }
 .bn-mtag.is-dup { background: color-mix(in oklab, var(--sev-2) 15%, var(--well)); color: var(--sev-1); font-weight: var(--w-medium); }
+.bn-mtag.is-reeval { background: color-mix(in oklab, var(--sev-2) 16%, var(--well)); color: var(--sev-2); font-weight: var(--w-medium); }
+.bn-mtag.is-fail { background: color-mix(in oklab, var(--sev-1) 14%, var(--well)); color: var(--sev-1); font-weight: var(--w-medium); }
 .bn-mtag.is-long { background: color-mix(in oklab, var(--loc-vir) 15%, var(--well)); color: var(--loc-vir); font-weight: var(--w-medium); }
 .bn-mtag.is-path { background: var(--well-2); color: var(--ink); }
 .bn-cell-meta { font-size: var(--fs-meta); color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }

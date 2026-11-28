@@ -2241,12 +2241,16 @@ export async function render(root, ctx) {
               const attrMain = !stName ? (pr.label && pr.label !== "goldencase" ? pr.label : "无问题")
                 : (patName && patName !== stName ? (patName.startsWith(`${stName} ·`) ? patName : `${stName} · ${patName}`) : stName);
               const extraLbl = pr.label && pr.label !== "goldencase" && pr.label !== patName && pr.label !== attrMain ? pr.label : "";
-              const hasFlags = (st.dup_question || 1) >= 2 || isLongCase;
+              const isReeval = c.eval_status === "reeval";
+              const isFail = c.eval_status === "failed";
+              const hasFlags = (st.dup_question || 1) >= 2 || isLongCase || isReeval || isFail;
               return `<button type="button" class="bn-lrow" data-trace="${esc(c.trace_id)}" aria-current="${S.trace === c.trace_id}" style="--c:${col}">
                 <span class="bn-sev-tag" style="--c:${col}">${esc(sevLabel(c.severity))}</span>
                 <div class="bn-lq">
                   <span class="bn-lq-txt" title="${esc(c.question)}">${esc(c.question)}</span>
                   ${hasFlags ? `<span class="bn-lq-flags">
+                    ${isReeval ? `<span class="bn-mtag is-reeval">重评中</span>` : ""}
+                    ${isFail ? `<span class="bn-mtag is-fail">失败</span>` : ""}
                     ${(st.dup_question || 1) >= 2 ? `<span class="bn-mtag is-dup">×${st.dup_question} 重问</span>` : ""}
                     ${isLongCase ? `<span class="bn-mtag is-long">≥64K</span>` : ""}
                   </span>` : ""}
@@ -2468,6 +2472,7 @@ export async function render(root, ctx) {
             ${sc.severity ? `<span class="bn-sev-tag" style="--c:${sTone}">${esc(sevLabel(sc.severity))}</span>` : ""}
             <span class="bn-badge is-accent">${esc(modelLabel(sc.model || S.model))}</span>
             <span class="bn-tier-tag">${tierTagLabel(sb.long_tier || sb.min_tier || sb.tier || S.tier, !!sb.long_tier)}</span>
+            ${sc.eval_status === "reeval" ? `<span class="bn-badge is-warn"><i></i>重评中</span>` : sc.eval_status === "failed" ? `<span class="bn-badge is-warn"><i></i>失败</span>` : ""}
           </div>
           <div class="bn-sh-acts">
             <button type="button" class="bn-btn bn-btn-icon" id="bn-sh-close" title="关闭">✕</button>
@@ -2517,6 +2522,7 @@ export async function render(root, ctx) {
           <span class="bn-sev-tag" style="--c:${c}">${esc(sevLabel(full.severity))}</span>
           <span class="bn-badge is-accent">${esc(modelLabel(full.model || S.model))}</span>
           <span class="bn-tier-tag">${tierTagLabel(b.long_tier || b.min_tier || b.tier || S.tier, !!b.long_tier)}</span>
+          ${full.eval_status === "reeval" ? `<span class="bn-badge is-warn"><i></i>重评中</span>` : full.eval_status === "failed" ? `<span class="bn-badge is-warn"><i></i>失败</span>` : ""}
         </div>
         <div class="bn-sh-acts">
           <button type="button" class="bn-btn bn-btn-icon" id="bn-sh-prev" ${prevCase ? "" : "disabled"} title="上一条">↑</button>
@@ -2524,7 +2530,7 @@ export async function render(root, ctx) {
           <button type="button" class="bn-btn" id="bn-sh-copyurl">复制现场链接</button>
           ${sampleHref
             ? `<a class="bn-btn is-primary" href="${esc(sampleHref)}" data-samplejump="1">在具体数据中查看 ↗</a>`
-            : `<span class="bn-btn is-disabled">暂未关联样本库</span>`}
+            : `<span class="bn-btn is-disabled">${full.eval_status === "reeval" ? "重评中" : "暂未关联样本库"}</span>`}
           <button type="button" class="bn-btn bn-btn-icon" id="bn-sh-close" title="关闭">✕</button>
         </div>
       </div>

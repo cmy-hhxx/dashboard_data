@@ -858,9 +858,18 @@ const splitOfModel = (key) => {
 let inputAll = [];      // 当前分组的全部输入行（未过滤）
 let inputView = null;   // { day, model, split, ep }
 const inputSeq = { n: 0 };
-// 筛选条件：问句 / Trace ID / Session ID 文本 + 类别 + 评测量状态 + 问题分布
+// 筛选条件：问句 / Trace ID / Session ID 文本 + 类别 + 评测状态 + 问题分布
 const inputF = { q: "", cat: "", state: "", dist: "" };
 const emptyFilter = () => Object.assign(inputF, { q: "", cat: "", state: "", dist: "" });
+
+const INPUT_STATE = {
+  evaluated: { label: "已评测", short: "已评", cls: "is-yes", tone: "var(--accent)" },
+  reeval: { label: "重评中", short: "重评", cls: "is-reeval", tone: "var(--sev-2)" },
+  pending: { label: "待评测", short: "待评", cls: "", tone: "var(--muted)" },
+  failed: { label: "失败", short: "失败", cls: "is-fail", tone: "var(--sev-1)" },
+  skipped: { label: "跳过", short: "跳过", cls: "is-skip", tone: "var(--faint)" },
+};
+const inputStateOf = (r) => (r && INPUT_STATE[r.es] ? r.es : (r?.ev ? "evaluated" : "pending"));
 
 const inputHit = (r) => {
   if (inputF.q) {
@@ -868,10 +877,20 @@ const inputHit = (r) => {
     if (![r.q, r.sid, r.tid].some((v) => String(v || "").toLowerCase().includes(q))) return false;
   }
   if (inputF.cat && (r.cat || "") !== inputF.cat) return false;
-  if (inputF.state === "yes" && !r.ev) return false;
-  if (inputF.state === "no" && r.ev) return false;
+  const st = inputStateOf(r);
+  if (inputF.state) {
+    if (inputF.state === "yes" || inputF.state === "evaluated") {
+      if (st !== "evaluated") return false;
+    } else if (inputF.state === "no" || inputF.state === "pending") {
+      if (st !== "pending") return false;
+    } else if (inputF.state === "failed") {
+      if (st !== "failed" && st !== "skipped") return false;
+    } else if (st !== inputF.state) {
+      return false;
+    }
+  }
   if (inputF.dist) {
-    if (!r.ev) return false;
+    if (st !== "evaluated") return false;
     const sv = Array.isArray(r.sv) ? r.sv : null;
     if (inputF.dist === "none") return !sv || !sv.some((n) => n > 0);
     const i = WORST.indexOf(inputF.dist);
@@ -890,7 +909,7 @@ const sevDist = (sv) => {
     : "")).join("");
 };
 
-const ED_INPUT_COLS = '<colgroup><col><col style="width:116px"><col style="width:52px"><col style="width:224px"><col style="width:56px"><col style="width:72px"></colgroup>';
+const ED_INPUT_COLS = '<colgroup><col><col style="width:116px"><col style="width:52px"><col style="width:224px"><col style="width:72px"><col style="width:72px"></colgroup>';
 
 function renderInputTable() {
   if (!inputView) return;
@@ -899,11 +918,22 @@ function renderInputTable() {
   const pager = $("#edPager");
   if (!table) return;
   const rows = inputAll.filter(inputHit);
-  const covered = inputAll.reduce((n, r) => n + (r.ev ? 1 : 0), 0);
+  const counts = { evaluated: 0, reeval: 0, pending: 0, failed: 0 };
+  inputAll.forEach((r) => {
+    const st = inputStateOf(r);
+    if (st === "evaluated") counts.evaluated += 1;
+    else if (st === "reeval") counts.reeval += 1;
+    else if (st === "failed" || st === "skipped") counts.failed += 1;
+    else counts.pending += 1;
+  });
   if (note) {
     const filtering = inputF.q || inputF.cat || inputF.state || inputF.dist;
-    note.innerHTML = `输入 <b class="num">${fmt(inputAll.length)}</b> · 已输出 <b class="num">${fmt(covered)}</b>`
-      + (filtering ? ` · 命中 <b class="num">${fmt(rows.length)}</b>` : "");
+    const parts = [`输入 <b class="num">${fmt(inputAll.length)}</b>`, `已评测 <b class="num">${fmt(counts.evaluated)}</b>`];
+    if (counts.reeval) parts.push(`重评中 <b class="num">${fmt(counts.reeval)}</b>`);
+    if (counts.pending) parts.push(`待评测 <b class="num">${fmt(counts.pending)}</b>`);
+    if (counts.failed) parts.push(`失败 <b class="num">${fmt(counts.failed)}</b>`);
+    if (filtering) parts.push(`命中 <b class="num">${fmt(rows.length)}</b>`);
+    note.innerHTML = parts.join(" · ");
   }
   if (!rows.length) {
     table.innerHTML = `<div class="empty">${inputAll.length ? "没有匹配的输入。" : "该分组当天没有评测输入。"}</div>`;
@@ -913,17 +943,21 @@ function renderInputTable() {
   const pages = Math.max(1, Math.ceil(rows.length / ES_PAGE));
   const page = Math.min(Math.max(1, inputView.ep || 1), pages);
   inputView.ep = page;
-  const body = rows.slice((page - 1) * ES_PAGE, page * ES_PAGE).map((r, i) => `<tr class="ed-session" style="--i:${Math.min(i, 30)}"
+  const body = rows.slice((page - 1) * ES_PAGE, page * ES_PAGE).map((r, i) => {
+    const st = inputStateOf(r);
+    const meta = INPUT_STATE[st] || INPUT_STATE.pending;
+    return `<tr class="ed-session" style="--i:${Math.min(i, 30)}"
       data-ref="${esc(r.r)}" data-d="${esc(inputView.day)}" data-m="${esc(inputView.model)}" data-sp="${esc(inputView.split)}"${r.s ? ` data-slug="${esc(r.s)}"` : ""}>
       <td class="first"><span class="ed-q">${esc(r.q || "（无提问）")}</span></td>
       <td class="cat"><span class="ed-cat" title="${esc(r.cat || "")}">${esc(r.cat || "—")}</span></td>
       <td class="num">${fmt(r.tr)}</td>
-      <td class="dist">${r.ev ? sevDist(r.sv) : `<span class="ed-dist-none">—</span>`}</td>
-      <td class="out">${r.ev ? `<span class="ed-out is-yes" title="已有评测输出">✓</span>` : `<span class="ed-out" title="尚无评测输出">—</span>`}</td>
+      <td class="dist">${st === "evaluated" ? sevDist(r.sv) : `<span class="ed-dist-none">—</span>`}</td>
+      <td class="out"><span class="ed-out${meta.cls ? ` ${meta.cls}` : ""}">${meta.label}</span></td>
       <td class="act"><button type="button" class="ed-open">查看</button></td>
-    </tr>`).join("");
+    </tr>`;
+  }).join("");
   table.innerHTML = `<div class="md-table ed-table is-session"><table>${ED_INPUT_COLS}
-      <thead><tr><th class="first">样本</th><th class="cat">类别</th><th class="num">轮</th><th class="dist">问题分布 P0–P4</th><th class="out">输出</th><th class="act">操作</th></tr></thead>
+      <thead><tr><th class="first">样本</th><th class="cat">类别</th><th class="num">轮</th><th class="dist">问题分布 P0–P4</th><th class="out">状态</th><th class="act">操作</th></tr></thead>
       <tbody>${body}</tbody></table></div>`;
   if (pager) pager.innerHTML = edPager(page, pages, rows.length, "条输入", "edpg");
 }
@@ -941,7 +975,7 @@ async function fillEvalInputs(root, state) {
         <input class="ed-search" id="edSearch" type="search" placeholder="搜索 Trace ID / Session ID / 问句" autocomplete="off" aria-label="搜索评测输入">
         <select class="ed-filter" id="edCat" aria-label="按类别筛选"><option value="">全部类别</option></select>
         <select class="ed-filter" id="edState" aria-label="按评测状态筛选">
-          <option value="">全部状态</option><option value="yes">有评测输出</option><option value="no">无评测输出</option>
+          <option value="">全部状态</option><option value="evaluated">已评测</option><option value="reeval">重评中</option><option value="pending">待评测</option><option value="failed">失败</option>
         </select>
         <select class="ed-filter" id="edDist" aria-label="按问题分布筛选">
           <option value="">全部分布</option><option value="P0">含 P0</option><option value="P1">含 P1</option>
@@ -1045,7 +1079,8 @@ function modalMeta(row, D) {
   if (row.d || D?.date) bits.push(esc(row.d || D.date));
   if (row.m || D?.model) bits.push(esc(row.m || D.model));
   bits.push(`第 ${fmt(row.tr || (D?.input?.traces || []).length || 1)} 轮`);
-  bits.push(row.ev ? `<b class="ok">已有评测输出</b>` : `尚无评测输出`);
+  const stMeta = INPUT_STATE[inputStateOf(row)] || INPUT_STATE.pending;
+  bits.push(stMeta.cls ? `<b class="${stMeta.cls}">${stMeta.label}</b>` : stMeta.label);
   const sid = row.sid || D?.ids?.session;
   const tid = row.tid || D?.ids?.trace;
   return `<span>${bits.join(" · ")}</span>${sid ? `<button type="button" class="ed-id" data-copy="${esc(sid)}" title="复制 Session ID">Session ${esc(String(sid).slice(0, 8))}…</button>` : ""}${tid ? `<button type="button" class="ed-id" data-copy="${esc(tid)}" title="复制 Trace ID">Trace ${esc(String(tid).slice(0, 8))}…</button>` : ""}`;
@@ -3228,6 +3263,7 @@ function pushPull(bento, p, tax, u) {
               q: it.q || "",
               tr: it.tr || 1,
               ev: it.ev ? 1 : 0,
+              es: inputStateOf(it),
               cat: it.cat || "",
               w: it.ev ? 4 : 5,
               n: 0,
@@ -3318,13 +3354,20 @@ function pushPull(bento, p, tax, u) {
 
   const caseTip = (it) => `<div class="t-head">${esc(it.q || "（无提问）")}</div>
     <div class="t-row"><span class="sev" style="--c:${sevColor(it.w)}"><i></i>${SEV_NAME[WORST[it.w]]}</span><span>${esc(modelName(p, it.m))} · ${esc((it.d || "").slice(5))}</span><b class="num">${it.n ? `${fmt(it.n)} 个问题` : "无问题"}</b></div>`;
-  const inputTip = (it) => `<div class="t-head">${esc(it.q || "（无提问）")}</div>
-    <div class="t-row"><span class="sev" style="--c:${it.ev ? "var(--accent)" : "var(--muted)"}"><i></i>${it.ev ? "已评测" : "待评测"}</span><span>${esc(modelName(p, it.m))}${it.d ? ` · ${esc(String(it.d).slice(5))}` : ""}</span><b class="num">第 ${fmt(it.tr || 1)} 轮</b></div>`;
+  const inputTip = (it) => {
+    const st = inputStateOf(it);
+    const meta = INPUT_STATE[st] || INPUT_STATE.pending;
+    return `<div class="t-head">${esc(it.q || "（无提问）")}</div>
+    <div class="t-row"><span class="sev" style="--c:${meta.tone}"><i></i>${meta.label}</span><span>${esc(modelName(p, it.m))}${it.d ? ` · ${esc(String(it.d).slice(5))}` : ""}</span><b class="num">第 ${fmt(it.tr || 1)} 轮</b></div>`;
+  };
   const predTip = (it) => `<div class="t-head">${esc(it.q || "")}</div>
     <div class="t-row"><span>${esc(it.c || "其他")} · ${esc(it.t || "")}${it.d ? ` · ${esc(String(it.d).slice(5))}` : ""}</span></div>
     ${(it.vers || []).map((x) => `<div class="t-row"><span>${esc(modelName(p, x.v))}</span>${x.e ? `<span class="dim">${esc(x.e)}</span>` : ""}<b>${esc(RESULT[x.r] || x.r || "")}</b></div>`).join("")}`;
   const predColor = (it, c) => (it.r === "correct" ? c.accent : it.r === "wrong" ? c.sev[1] : it.r === "mixed" ? c.sev[3] : it.r === "pending" ? c.muted : c.faint);
-  const inputColor = (it, c) => (it.ev ? c.accent : c.muted);
+  const inputColor = (it, c) => {
+    const st = inputStateOf(it);
+    return st === "evaluated" ? c.accent : st === "reeval" ? c.sev[2] : st === "failed" ? c.sev[1] : st === "skipped" ? c.faint : c.muted;
+  };
 
   async function paintGalaxy(k, gx, spec) {
     if (maps[k] && maps[k].id === spec.id) return maps[k].map.focus(spec.focus);

@@ -31,7 +31,7 @@ import build
 import json_compat as json
 from daytime import iso_now, local_day
 
-PG_BACKEND_VERSION = "2026-11-27.2"
+PG_BACKEND_VERSION = "2026-11-28.1"
 SLUG_RE = re.compile(r"^[0-9a-f]{10}$")
 AB_REF_RE = re.compile(r"^(?:(before|after|candidate_model_\d+)-)?(\d+)$")
 FS_CLOCK_SLACK_NS = 20_000_000
@@ -102,6 +102,104 @@ def _infer_role(component: str | None, family: str | None, l1_stage: str | None,
     if comp.startswith("答案合成") or comp in ("交付", "图表", "render") or st in ("S9", "S11"):
         return "delivery"
     return "tool" if comp else "other"
+
+
+_BENCH_SEV_ORDER = {"P0": 0, "P1": 1, "P2": 2, "P3": 3, "P4": 4}
+_BENCH_VALID_SEVS = frozenset(("P0", "P1", "P2", "P3", "P4", "GOLD"))
+
+
+def _trace_lifecycle_state(eval_status: str | None, has_output: bool) -> str:
+    """Map (eval_inputs.eval_status, has_latest_output) to one canonical lifecycle state."""
+    st = (eval_status or "").strip().lower()
+    if not st:
+        return "evaluated" if has_output else "pending"
+    if st == "evaluated":
+        return "evaluated" if has_output else "pending"
+    if st in ("pending", "claimed"):
+        return "reeval" if has_output else "pending"
+    if st in ("failed", "skipped"):
+        return st
+    return "evaluated" if has_output else "pending"
+
+
+def _derive_bench_eval_fields(
+    row_sev: str | None,
+    row_primary_cluster: str | None,
+    row_extra: dict[str, Any] | None,
+    live_oid: int | None,
+    live_max_sev: str | None,
+    live_prob_count: int | None,
+    probs: list[dict[str, Any]],
+    pat_names: dict[str, str],
+) -> tuple[str, dict[str, Any], int, str]:
+    """Derive coherent (severity, primary, probs_count, probs_search) for a Bench case."""
+    bex = row_extra if isinstance(row_extra, dict) else {}
+    prim_raw = bex.get("primary") if isinstance(bex.get("primary"), dict) else {}
+    if live_oid is None:
+        pcode = row_primary_cluster or prim_raw.get("l3") or prim_raw.get("path") or ""
+        parts = pcode.split(".") if pcode else []
+        l1 = (prim_raw.get("l1") or (parts[0] if len(parts) >= 1 else "")) or "NA"
+        l2 = (prim_raw.get("l2") or (parts[1] if len(parts) >= 2 else "")) or "NA"
+        l3 = pcode or "NA"
+        sev = row_sev or "GOLD"
+        prim_label = pat_names.get(l3, "") if l3 != "NA" else ("goldencase" if sev == "GOLD" else "")
+        primary = {
+            "l1": l1,
+            "l2": l2,
+            "l3": l3,
+            "label": bench_dynamic._clip(prim_label, 120),
+            "path": pcode,
+            "path_source": "none" if sev == "GOLD" else ("join" if pcode else "none"),
+        }
+        return sev, primary, 0, ""
+
+    norm_max = (live_max_sev or "").strip()
+    if norm_max in _BENCH_VALID_SEVS:
+        sev = norm_max
+    elif not probs and int(live_prob_count or 0) == 0:
+        sev = "GOLD"
+    else:
+        sev = row_sev or "GOLD"
+
+    probs_count = int(live_prob_count if live_prob_count is not None else len(probs))
+    probs_search = bench_dynamic._clip(
+        " | ".join(f"{p.get('label') or ''} {p.get('cluster_code') or ''}".strip() for p in probs),
+        360,
+    )
+    if sev == "GOLD" or not probs:
+        primary = {
+            "l1": "NA",
+            "l2": "NA",
+            "l3": "NA",
+            "label": "goldencase" if sev == "GOLD" else "",
+            "path": "",
+            "path_source": "none",
+        }
+        return sev, primary, 0 if sev == "GOLD" and not probs else probs_count, probs_search
+
+    best_p = min(
+        probs,
+        key=lambda p: (
+            _BENCH_SEV_ORDER.get(str(p.get("severity") or ""), 5),
+            0 if (p.get("cluster_code") or "") else 1,
+        ),
+    )
+    pcode = best_p.get("cluster_code") or ""
+    parts = pcode.split(".") if pcode else []
+    l1 = (best_p.get("l1_stage") or (parts[0] if len(parts) >= 1 else "")) or "NA"
+    l2_raw = str(best_p.get("l2_mechanism") or "")
+    l2 = (l2_raw.split(".")[-1] if l2_raw else (parts[1] if len(parts) >= 2 else "")) or "NA"
+    l3 = pcode or "NA"
+    prim_label = best_p.get("label") or (pat_names.get(l3, "") if l3 != "NA" else "")
+    primary = {
+        "l1": l1,
+        "l2": l2,
+        "l3": l3,
+        "label": bench_dynamic._clip(prim_label, 120),
+        "path": pcode,
+        "path_source": "join" if pcode else "none",
+    }
+    return sev, primary, probs_count, probs_search
 
 
 def _assign_pg_slug(product: str, model: str, trace_id: str, seen: dict[str, str]) -> str:
@@ -845,16 +943,48 @@ def _build_pg_bench(
                 """
                 SELECT bi.severity, bi.turn_type, bi.session_round, bi.primary_cluster,
                        bi.extra->>'batch_id' AS batch_id, bi.extra->>'group' AS grp,
-                       i.biz_day, i.total_tokens
+                       i.biz_day, i.total_tokens,
+                       o.output_id, o.max_severity, o.problem_count
                 FROM public.bench_items bi
                 LEFT JOIN public.eval_inputs i ON i.input_id = bi.input_id
+                LEFT JOIN public.eval_outputs o ON o.input_id = bi.input_id AND o.is_latest
                 WHERE bi.bench_id = %s
+                  AND NOT COALESCE(i.is_deleted, FALSE)
                 """,
                 (pool_set["bench_id"],),
             ).fetchall()
+            pool_size = len(p_rows)
+            pool_oids = [int(r["output_id"]) for r in p_rows if r["output_id"] is not None]
+            pool_prim_by_oid: dict[int, str] = {}
+            if pool_oids:
+                for pr in conn.execute(
+                    """
+                    SELECT DISTINCT ON (output_id) output_id, cluster_code
+                    FROM public.eval_problems
+                    WHERE output_id = ANY(%s)
+                    ORDER BY output_id,
+                             CASE severity
+                                 WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2
+                                 WHEN 'P3' THEN 3 WHEN 'P4' THEN 4 ELSE 5
+                             END,
+                             (cluster_code IS NULL OR cluster_code = ''),
+                             turn_index, problem_index
+                    """,
+                    (pool_oids,),
+                ).fetchall():
+                    pool_prim_by_oid[int(pr["output_id"])] = pr["cluster_code"] or ""
             day_cnt = Counter()
             for r in p_rows:
-                sev = r["severity"] or "GOLD"
+                oid = int(r["output_id"]) if r["output_id"] is not None else None
+                if oid is not None:
+                    norm_max = (r["max_severity"] or "").strip()
+                    sev = norm_max if norm_max in _BENCH_VALID_SEVS else (
+                        "GOLD" if int(r["problem_count"] or 0) == 0 else (r["severity"] or "GOLD")
+                    )
+                    pcode = "" if sev == "GOLD" else (pool_prim_by_oid.get(oid) or "")
+                else:
+                    sev = r["severity"] or "GOLD"
+                    pcode = "" if sev == "GOLD" else (r["primary_cluster"] or "")
                 trn = r["turn_type"] or "single"
                 tok = int(r["total_tokens"] or 0)
                 if tok >= long_threshold:
@@ -871,7 +1001,6 @@ def _build_pg_bench(
                 pool_dim_counts["round"][bench_dynamic.round_bucket(r["session_round"])] += 1
                 if r["grp"]:
                     pool_dim_counts["group"][r["grp"]] += 1
-                pcode = r["primary_cluster"] or ""
                 if pcode:
                     parts = pcode.split(".")
                     pool_defects += 1
@@ -930,12 +1059,13 @@ def _build_pg_bench(
                        bi.session_round, bi.severity, bi.dup_question_cnt, bi.question_text,
                        bi.primary_cluster, bi.extra,
                        i.biz_day, i.request_time, i.turn_index, i.total_tokens, i.input_tokens,
-                       i.tool_count, i.latency_ms, i.source,
-                       o.output_id, o.problem_count
+                       i.tool_count, i.latency_ms, i.source, i.eval_status,
+                       o.output_id, o.max_severity, o.problem_count
                 FROM public.bench_items bi
                 LEFT JOIN public.eval_inputs i ON i.input_id = bi.input_id
                 LEFT JOIN public.eval_outputs o ON o.input_id = bi.input_id AND o.is_latest
                 WHERE bi.bench_id = %s
+                  AND NOT COALESCE(i.is_deleted, FALSE)
                 ORDER BY bi.rank ASC
                 """,
                 (max_set["bench_id"],),
@@ -943,36 +1073,37 @@ def _build_pg_bench(
 
             # Load primary problem labels for output_ids in one query
             oids = [int(r["output_id"]) for r in rows if r["output_id"] is not None]
-            prob_by_oid: dict[int, list[tuple[str, str]]] = defaultdict(list)
+            prob_by_oid: dict[int, list[dict[str, Any]]] = defaultdict(list)
             if oids:
                 for pr in conn.execute(
                     """
-                    SELECT output_id, label, cluster_code
+                    SELECT output_id, severity, label, cluster_code, l1_stage, l2_mechanism
                     FROM public.eval_problems
                     WHERE output_id = ANY(%s)
                     ORDER BY output_id, turn_index, problem_index
                     """,
                     (oids,),
                 ).fetchall():
-                    prob_by_oid[int(pr["output_id"])].append((pr["label"] or "", pr["cluster_code"] or ""))
+                    prob_by_oid[int(pr["output_id"])].append(dict(pr))
 
             out_cases = []
             for idx, r in enumerate(rows):
                 tid = r["trace_id"]
                 mt = min_tier_by_tid.get(tid, max_tnum)
                 bex = r["extra"] if isinstance(r["extra"], dict) else {}
-                prim_raw = bex.get("primary") if isinstance(bex.get("primary"), dict) else {}
-                pcode = r["primary_cluster"] or prim_raw.get("l3") or prim_raw.get("path") or ""
-                parts = pcode.split(".") if pcode else []
-                l1 = (prim_raw.get("l1") or (parts[0] if len(parts) >= 1 else "")) or "NA"
-                l2 = (prim_raw.get("l2") or (parts[1] if len(parts) >= 2 else "")) or "NA"
-                l3 = pcode or "NA"
                 oid = int(r["output_id"]) if r["output_id"] is not None else None
                 plist = prob_by_oid.get(oid, []) if oid is not None else []
-                sev = r["severity"] or "GOLD"
-                prim_label = next((lb for lb, pc in plist if pc == pcode and lb), plist[0][0] if plist else "")
-                if not prim_label:
-                    prim_label = pat_names.get(l3, "") if l3 != "NA" else ("goldencase" if sev == "GOLD" else "")
+                sev, primary, probs_count, probs_search = _derive_bench_eval_fields(
+                    r["severity"],
+                    r["primary_cluster"],
+                    bex,
+                    oid,
+                    r["max_severity"],
+                    r["problem_count"],
+                    plist,
+                    pat_names,
+                )
+                es = _trace_lifecycle_state(r["eval_status"], oid is not None)
                 day_str = r["biz_day"].isoformat() if r["biz_day"] else str(bex.get("batch_id") or "")[:10]
                 req_str = _iso_dt(r["request_time"]) or str(bex.get("request_time") or "")
                 ref = trace_refs.get(tid)
@@ -989,16 +1120,10 @@ def _build_pg_bench(
                     "session_round": int(r["session_round"] or 1),
                     "turn_index": int(r["turn_index"] or 1),
                     "severity": sev,
-                    "primary": {
-                        "l1": l1,
-                        "l2": l2,
-                        "l3": l3,
-                        "label": bench_dynamic._clip(prim_label, 120),
-                        "path": pcode,
-                        "path_source": "none" if sev == "GOLD" else ("join" if pcode else "none"),
-                    },
-                    "probs_count": int(r["problem_count"] or len(plist)),
-                    "probs_search": bench_dynamic._clip(" | ".join(f"{lb} {pc}".strip() for lb, pc in plist), 360),
+                    "eval_status": es,
+                    "primary": primary,
+                    "probs_count": probs_count,
+                    "probs_search": probs_search,
                     "stats": {
                         "total_tokens": int(r["total_tokens"] or 0),
                         "input_tokens": int(r["input_tokens"] or 0),
@@ -1108,7 +1233,7 @@ def _pg_watermark(conn, datasets: Path) -> str:
     parts: list[Any] = [PG_BACKEND_VERSION, build.PAYLOAD_VERSION, build.release_signature(datasets)]
     for sql in (
         "SELECT COALESCE(MAX(seq), 0), COUNT(*) FROM public.changes",
-        "SELECT COUNT(*), COALESCE(MAX(updated_at), '1970-01-01'::timestamptz) FROM public.eval_inputs WHERE product='aime' AND NOT is_deleted",
+        "SELECT COUNT(*), COUNT(*) FILTER (WHERE eval_status = 'evaluated'), COALESCE(MAX(updated_at), '1970-01-01'::timestamptz) FROM public.eval_inputs WHERE product='aime' AND NOT is_deleted",
         "SELECT COUNT(*), COALESCE(MAX(updated_at), '1970-01-01'::timestamptz) FROM public.eval_outputs WHERE product='aime' AND is_latest",
         "SELECT COUNT(*) FILTER (WHERE cluster_code IS NOT NULL), COALESCE(MAX(clustered_at), '1970-01-01'::timestamptz) FROM public.eval_problems",
         "SELECT COUNT(*), COALESCE(MAX(updated_at), '1970-01-01'::timestamptz) FROM public.users",
@@ -1147,6 +1272,7 @@ def _sample_goldens_and_sevr(
             FROM public.eval_outputs o
             JOIN public.eval_inputs i ON i.input_id = o.input_id
             WHERE o.product='aime' AND o.is_latest AND o.max_severity = %s
+              AND NOT i.is_deleted AND i.eval_status = 'evaluated'
               AND i.has_input_blob AND o.attr_file_id IS NOT NULL
               AND i.n_messages BETWEEN 12 AND 36
               AND o.problem_count BETWEEN 1 AND 6
@@ -1318,7 +1444,7 @@ def build_from_pg(datasets: Path, out_dir: Path, log=print):
                        runtime_mode, biz_day, request_time, question_text,
                        n_messages, total_tokens, input_tokens, output_tokens,
                        cache_read_tokens, tool_count, latency_ms, has_visual,
-                       task_category, subtask_category, has_input_blob
+                       task_category, subtask_category, has_input_blob, eval_status
                 FROM public.eval_inputs
                 WHERE product = 'aime' AND NOT is_deleted
                 """
@@ -1370,6 +1496,7 @@ def build_from_pg(datasets: Path, out_dir: Path, log=print):
                     "task": task,
                     "sub": sub,
                     "has_blob": has_blob,
+                    "eval_status": r["eval_status"] or "",
                 }
 
                 if has_blob:
@@ -1466,7 +1593,9 @@ def build_from_pg(datasets: Path, out_dir: Path, log=print):
                        p.tags, p.extra->>'role' AS explicit_role
                 FROM public.eval_problems p
                 JOIN public.eval_outputs o ON o.output_id = p.output_id
+                JOIN public.eval_inputs i ON i.input_id = o.input_id
                 WHERE o.product = 'aime' AND o.is_latest
+                  AND NOT i.is_deleted AND i.eval_status = 'evaluated'
                 ORDER BY p.output_id, CASE WHEN p.scope='turn' THEN 0 ELSE 1 END, p.turn_index, p.problem_index
                 """
             )
@@ -1512,19 +1641,21 @@ def build_from_pg(datasets: Path, out_dir: Path, log=print):
             cur.itersize = 20000
             cur.execute(
                 """
-                SELECT output_id, input_id, model, trace_id, biz_day, max_severity,
-                       p0_cnt, p1_cnt, p2_cnt, p3_cnt, p4_cnt, problem_count,
-                       is_correct, compact_file_id IS NOT NULL AS has_compact
-                FROM public.eval_outputs
-                WHERE product = 'aime' AND is_latest
-                ORDER BY output_id ASC
+                SELECT o.output_id, o.input_id, o.model, o.trace_id, o.biz_day, o.max_severity,
+                       o.p0_cnt, o.p1_cnt, o.p2_cnt, o.p3_cnt, o.p4_cnt, o.problem_count,
+                       o.is_correct, o.compact_file_id IS NOT NULL AS has_compact
+                FROM public.eval_outputs o
+                JOIN public.eval_inputs i ON i.input_id = o.input_id
+                WHERE o.product = 'aime' AND o.is_latest
+                  AND NOT i.is_deleted AND i.eval_status = 'evaluated'
+                ORDER BY o.output_id ASC
                 """
             )
             for r in cur:
                 oid = int(r["output_id"])
                 iid = int(r["input_id"])
                 inp = inputs_by_id.get(iid)
-                if inp is None:
+                if inp is None or inp.get("eval_status") != "evaluated":
                     continue
                 m = r["model"]
                 tid = r["trace_id"]
@@ -1881,15 +2012,16 @@ class PGDetailBuilder:
         ids = self._lookup_ids(slug)
         if not ids:
             return None
-        input_id, output_id = ids
+        input_id, _pinned_oid = ids
         path = self.sample_dir / f"{slug}.json"
         with self._lock_for(slug):
             with self._connect_direct(self._cfg, app_name="dashboard_detail") as conn:
                 row = conn.execute(
                     """
                     SELECT i.input_id, i.product, i.model, i.biz_day, i.updated_at AS in_upd,
+                           i.eval_status,
                            ipf.rel_path AS in_path, i.input_offset, i.input_len,
-                           o.output_id, o.updated_at AS out_upd,
+                           o.output_id, o.updated_at AS out_upd, o.evaluated_at AS out_eval_at,
                            apf.rel_path AS attr_path, o.attr_offset, o.attr_len,
                            cpf.rel_path AS comp_path, o.compact_offset, o.compact_len,
                            hra.updated_at AS hra_upd, hrapf.rel_path AS hra_path, hra.hr_offset AS hra_off, hra.hr_len AS hra_len,
@@ -1903,12 +2035,13 @@ class PGDetailBuilder:
                     LEFT JOIN public.pack_files hrapf ON hrapf.file_id = hra.hr_file_id
                     LEFT JOIN public.human_read_overlays hrc ON hrc.output_id = o.output_id AND hrc.target_kind = 'compact' AND hrc.status = 'done'
                     LEFT JOIN public.pack_files hrcpf ON hrcpf.file_id = hrc.hr_file_id
-                    WHERE o.output_id = %s AND i.input_id = %s
+                    WHERE i.input_id = %s AND NOT i.is_deleted AND o.is_latest
                     """,
-                    (output_id, input_id),
+                    (input_id,),
                 ).fetchone()
                 if not row or not row["attr_path"]:
                     return None
+                live_oid = int(row["output_id"])
                 probs = [
                     dict(r)
                     for r in conn.execute(
@@ -1918,7 +2051,7 @@ class PGDetailBuilder:
                         WHERE output_id = %s
                         ORDER BY CASE WHEN scope='turn' THEN 0 ELSE 1 END, turn_index, problem_index
                         """,
-                        (output_id,),
+                        (live_oid,),
                     ).fetchall()
                 ]
 
@@ -1926,6 +2059,7 @@ class PGDetailBuilder:
                 int(self.version_stamp * 1_000_000_000),
                 _dt_to_ns(row["in_upd"]),
                 _dt_to_ns(row["out_upd"]),
+                _dt_to_ns(row["out_eval_at"]),
                 _dt_to_ns(row["hra_upd"]),
                 _dt_to_ns(row["hrc_upd"]),
                 max((_dt_to_ns(p.get("clustered_at")) for p in probs), default=0),
@@ -1977,6 +2111,7 @@ class PGDetailBuilder:
             detail["human_read"] = bool(hr_applied)
 
             detail["slug"] = slug
+            detail["eval_status"] = row["eval_status"] or ""
             build.write_json(path, detail)
             return path
 
@@ -2241,7 +2376,7 @@ class PGInputLister:
         self._cfg = _load_pg_config()
         _, self._connect_direct, _, self._pread_json = _ensure_pg()
         self._slug_lock = threading.Lock()
-        self._oid_to_slug: dict[int, str] = {}
+        self._iid_to_slug: dict[int, str] = {}
         self._slug_mtime = 0.0
 
     def warm(self, products) -> None:
@@ -2250,7 +2385,7 @@ class PGInputLister:
     def prewarm_listings(self, products, days: int = 1) -> None:
         return None
 
-    def _slug_by_oid(self) -> dict[int, str]:
+    def _slug_by_iid(self) -> dict[int, str]:
         p = self.cache_dir / "pg-slug-map.json"
         try:
             mt = p.stat().st_mtime
@@ -2260,20 +2395,20 @@ class PGInputLister:
             if mt != self._slug_mtime:
                 try:
                     raw = json.loads(p.read_text(encoding="utf-8"))
-                    self._oid_to_slug = {int(v[1]): k for k, v in raw.items() if isinstance(v, list) and len(v) == 2}
+                    self._iid_to_slug = {int(v[0]): k for k, v in raw.items() if isinstance(v, list) and len(v) == 2}
                     self._slug_mtime = mt
                 except (OSError, ValueError):
                     pass
-            return self._oid_to_slug
+            return self._iid_to_slug
 
     def listing(self, product: str, day: str, model: str, split: str) -> dict[str, Any]:
         lost_clause = "AND COALESCE(u.is_lost, FALSE)" if split == "lost" else ""
-        slug_by_oid = self._slug_by_oid()
+        slug_by_iid = self._slug_by_iid()
         with self._connect_direct(self._cfg, app_name="dashboard_inputs") as conn:
             rows = conn.execute(
                 f"""
                 SELECT i.input_id, i.trace_id, i.session_id, i.question_text,
-                       i.task_category, i.request_time,
+                       i.task_category, i.request_time, i.eval_status,
                        o.output_id, o.p0_cnt, o.p1_cnt, o.p2_cnt, o.p3_cnt, o.p4_cnt
                 FROM public.eval_inputs i
                 LEFT JOIN public.eval_outputs o ON o.input_id = i.input_id AND o.is_latest
@@ -2292,7 +2427,9 @@ class PGInputLister:
             if iid > max_id:
                 max_id = iid
             oid = int(r["output_id"]) if r["output_id"] is not None else None
-            slug = slug_by_oid.get(oid) if oid is not None else None
+            es = _trace_lifecycle_state(r["eval_status"], oid is not None)
+            is_ev = es == "evaluated"
+            slug = slug_by_iid.get(iid) if is_ev else None
             item: dict[str, Any] = {
                 "r": f"pg:{iid}",
                 "q": (r["question_text"] or "")[:200],
@@ -2301,14 +2438,15 @@ class PGInputLister:
                 "cat": r["task_category"] or "",
                 "tr": 1,
                 "rq": _iso_dt(r["request_time"]) or "",
-                "ev": 1 if oid is not None else 0,
+                "ev": 1 if is_ev else 0,
+                "es": es,
             }
             if slug:
                 item["s"] = slug
-            if oid is not None:
+            if is_ev:
                 item["sv"] = [int(r["p0_cnt"]), int(r["p1_cnt"]), int(r["p2_cnt"]), int(r["p3_cnt"]), int(r["p4_cnt"])]
             out.append(item)
-        return {"version": 5, "sig": [product, day, model, split, len(out), max_id], "files": 1, "rows": out}
+        return {"version": 6, "sig": [product, day, model, split, len(out), max_id], "files": 1, "rows": out}
 
     def detail(self, product: str, day: str, model: str, split: str, ref: str) -> dict[str, Any] | None:
         m = re.match(r"^pg:(\d+)$", str(ref or "").strip())
@@ -2380,13 +2518,13 @@ class PGInputLister:
             params.append(list(others_set))
 
         clause = " AND ".join(where)
-        slug_by_oid = self._slug_by_oid()
+        slug_by_iid = self._slug_by_iid()
         with self._connect_direct(self._cfg, app_name="dashboard_input_slice") as conn:
             total = int(conn.execute(f"SELECT COUNT(*) AS c FROM public.eval_inputs i WHERE {clause}", params).fetchone()["c"])
             rows = conn.execute(
                 f"""
                 SELECT i.input_id, i.model, i.biz_day, i.question_text,
-                       i.task_category, i.subtask_category, o.output_id
+                       i.task_category, i.subtask_category, i.eval_status, o.output_id
                 FROM public.eval_inputs i
                 LEFT JOIN public.eval_outputs o ON o.input_id = i.input_id AND o.is_latest
                 WHERE {clause}
@@ -2400,16 +2538,20 @@ class PGInputLister:
         for r in rows:
             rtask = (r["task_category"] or "").strip() or build.NO_SCENE
             rsub = (r["subtask_category"] or "").strip()
+            iid = int(r["input_id"])
             oid = int(r["output_id"]) if r["output_id"] is not None else None
+            es = _trace_lifecycle_state(r["eval_status"], oid is not None)
+            is_ev = es == "evaluated"
             collected.append({
                 "q": (r["question_text"] or "")[:200],
                 "m": r["model"],
                 "sp": "daily",
                 "d": r["biz_day"].isoformat(),
-                "r": f"pg:{r['input_id']}",
+                "r": f"pg:{iid}",
                 "tr": 1,
-                "ev": 1 if oid is not None else 0,
-                "s": slug_by_oid.get(oid, "") if oid is not None else "",
+                "ev": 1 if is_ev else 0,
+                "es": es,
+                "s": slug_by_iid.get(iid, "") if is_ev else "",
                 "cat": rtask,
                 "_grp": (rsub or rtask) if (task or others_set) else rtask,
             })
@@ -2425,8 +2567,11 @@ class PGInputLister:
 
         grouped: dict[str, list[dict[str, Any]]] = {}
         ev_done = ev_pending = 0
+        status_counts: Counter[str] = Counter()
         for it in collected:
             gkey = it.pop("_grp", None) or build.NO_SCENE
+            st = it.get("es") or ("evaluated" if it["ev"] else "pending")
+            status_counts[st] += 1
             if it["ev"]:
                 ev_done += 1
             else:
@@ -2445,6 +2590,7 @@ class PGInputLister:
             "cap": cap,
             "capped": total > len(collected),
             "eval_counts": [ev_done, ev_pending],
+            "status_counts": dict(status_counts),
             "groups": groups,
         }
 
@@ -2456,7 +2602,7 @@ def pg_load_bench_case(row: dict[str, Any]) -> dict[str, Any] | None:
     loc = row.get("loc")
     if not isinstance(loc, (list, tuple)) or len(loc) != 3 or loc[0] != "pg":
         return None
-    input_id, output_id = int(loc[1] or 0), int(loc[2] or 0)
+    input_id, _pinned_oid = int(loc[1] or 0), int(loc[2] or 0)
     if input_id <= 0:
         return None
     cfg = _load_pg_config()
@@ -2467,15 +2613,20 @@ def pg_load_bench_case(row: dict[str, Any]) -> dict[str, Any] | None:
             SELECT ipf.rel_path AS in_path, i.input_offset, i.input_len,
                    i.question_text, i.source, i.session_round, i.turn_index,
                    i.total_tokens, i.input_tokens, i.tool_count, i.latency_ms,
+                   i.eval_status,
+                   o.output_id, o.max_severity, o.problem_count,
                    apf.rel_path AS attr_path, o.attr_offset, o.attr_len
             FROM public.eval_inputs i
             LEFT JOIN public.pack_files ipf ON ipf.file_id = i.input_file_id
-            LEFT JOIN public.eval_outputs o ON o.output_id = %s
+            LEFT JOIN public.eval_outputs o ON o.input_id = i.input_id AND o.is_latest
             LEFT JOIN public.pack_files apf ON apf.file_id = o.attr_file_id
-            WHERE i.input_id = %s
+            WHERE i.input_id = %s AND NOT i.is_deleted
             """,
-            (output_id or -1, input_id),
+            (input_id,),
         ).fetchone()
+        if not r:
+            return None
+        live_oid = int(r["output_id"]) if r["output_id"] is not None else None
         probs = (
             [
                 dict(p)
@@ -2484,14 +2635,12 @@ def pg_load_bench_case(row: dict[str, Any]) -> dict[str, Any] | None:
                     SELECT severity, label, cluster_code, l1_stage, l2_mechanism, l3_leaf, component
                     FROM public.eval_problems WHERE output_id = %s ORDER BY turn_index, problem_index
                     """,
-                    (output_id,),
+                    (live_oid,),
                 ).fetchall()
             ]
-            if output_id > 0
+            if live_oid is not None
             else []
         )
-    if not r:
-        return None
     inp = pread_json(cfg.data_root / r["in_path"], int(r["input_offset"]), int(r["input_len"])) if r["in_path"] and r["input_len"] else {}
     traces = inp.get("traces") if isinstance(inp, dict) and isinstance(inp.get("traces"), list) else []
     t0 = traces[0] if traces and isinstance(traces[0], dict) else (inp if isinstance(inp, dict) else {})
@@ -2500,6 +2649,17 @@ def pg_load_bench_case(row: dict[str, Any]) -> dict[str, Any] | None:
         inp.get("message_pool") if isinstance(inp, dict) and isinstance(inp.get("message_pool"), list) else []
     )
     imeta = inp.get("meta") if isinstance(inp, dict) and isinstance(inp.get("meta"), dict) else {}
+    sev, primary, probs_count, _ = _derive_bench_eval_fields(
+        row.get("severity"),
+        (row.get("primary") or {}).get("path") if isinstance(row.get("primary"), dict) else None,
+        {"primary": row.get("primary")} if isinstance(row.get("primary"), dict) else None,
+        live_oid,
+        r["max_severity"],
+        r["problem_count"],
+        probs,
+        {},
+    )
+    es = _trace_lifecycle_state(r["eval_status"], live_oid is not None)
     rec = {
         "trace_id": row.get("trace_id") or "",
         "session_id": row.get("session_id") or "",
@@ -2512,11 +2672,13 @@ def pg_load_bench_case(row: dict[str, Any]) -> dict[str, Any] | None:
         "turn": row.get("turn") or "single",
         "session_round": int(r["session_round"] or row.get("session_round") or 1),
         "turn_index": int(r["turn_index"] or row.get("turn_index") or 1),
-        "severity": row.get("severity") or "GOLD",
-        "primary": row.get("primary") or {},
+        "severity": sev,
+        "eval_status": es,
+        "primary": primary,
+        "probs_count": probs_count,
         "problems": [
             {
-                "severity": p["severity"] or row.get("severity") or "",
+                "severity": p["severity"] or sev or "",
                 "label": p["label"] or "",
                 "path": p["cluster_code"] or "",
                 "l1": p["l1_stage"] or "",
@@ -2536,8 +2698,8 @@ def pg_load_bench_case(row: dict[str, Any]) -> dict[str, Any] | None:
             "skill_names": [],
         },
         "bench": row.get("bench") or {},
-        "slug": row.get("slug"),
-        "case_key": row.get("case_key"),
+        "slug": row.get("slug") if es == "evaluated" else None,
+        "case_key": row.get("case_key") if es == "evaluated" else None,
     }
     return rec
 
