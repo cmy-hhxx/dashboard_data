@@ -37,7 +37,7 @@ EXCLUDES=(
 ITEMS=(
   eval_dashboard eval_analysis page_service internal_eval_service pg_data_core
   eval_services.conf eval_supervisor.sh eval_boot.sh
-  snapshot_remote.sh snapshot_loop.sh
+  snapshot_remote.sh snapshot_loop.sh 检验任务.py
 )
 for item in "${ITEMS[@]}"; do
   if [ ! -e "/opt/$item" ]; then

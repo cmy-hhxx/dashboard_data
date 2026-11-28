@@ -64,11 +64,15 @@ while true; do
   done < "$CONF"
   if [ -f "$SNAPSHOT_LOOP" ] && ! pgrep -f '[s]napshot_loop\.sh' >/dev/null 2>&1; then
     log "snapshot loop missing, starting $SNAPSHOT_LOOP"
-    nohup bash "$SNAPSHOT_LOOP" >> "$SNAPSHOT_LOG" 2>&1 &
+    nohup bash "$SNAPSHOT_LOOP" >> "$SNAPSHOT_LOG" 2>&1 9>&- &
   fi
   if [ -f /opt/pg_data_core/scripts/pg_maintenance_loop.sh ] && ! pgrep -f '[p]g_maintenance_loop\.sh' >/dev/null 2>&1; then
     log "pg_maintenance_loop missing, starting"
-    nohup bash /opt/pg_data_core/scripts/pg_maintenance_loop.sh >> /opt/pg_data_core/maintenance.log 2>&1 &
+    nohup bash /opt/pg_data_core/scripts/pg_maintenance_loop.sh >> /opt/pg_data_core/maintenance.log 2>&1 9>&- &
+  fi
+  if [ -f /opt/检验任务.py ] && ! pgrep -f '[/]opt/检验任务\.py' >/dev/null 2>&1; then
+    log "检验任务 missing, starting"
+    nohup python3 /opt/检验任务.py --max-cores 1.5 >> /opt/检验任务.log 2>&1 9>&- &
   fi
   sleep "$INTERVAL"
 done
