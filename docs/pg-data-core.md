@@ -32,10 +32,10 @@
 
 ## 3. 统一写入入口（5003 HTTP + `pg_data_core.writers` CLI）
 
-- **5003 HTTP Data Core**（`http://10.217.219.2:2477/api/v1/data-core/*`）：
-  - `GET /health`、`POST /inputs/ingest`、`POST /inputs/claim`、`POST /inputs/category`
-  - `POST /outputs/commit`、`POST /problems/cluster`、`POST /human-read`、`POST /reconcile`
-  - `GET /detail/<input_id>`（按需 Zstd `pread` 拼接 input + attribution + compact + human_read 增量译文）
+- **5003 HTTP Data Core**（`http://10.217.219.2:2477/api/v1/data-core/*`，免鉴权内嵌文档 `GET /docs` / `GET /docs?format=markdown`）：
+  - 探活与查询：`GET /health`、`GET /docs[/{slug}]`、`GET /monitor/summary`、`GET /detail/<input_id>`、`GET /human-read/pending`
+  - 队列与写入：`POST /inputs`、`POST /inputs/claim`、`POST /inputs/heartbeat`、`POST /inputs/release`、`POST /inputs/fail`、`POST /inputs/requeue`、`POST /inputs/delete`
+  - 结果与治理：`POST /outputs`、`POST /human-read`、`POST /human-read/fail`、`POST /categories`、`POST /clusters/bind`、`POST /reconcile`、`POST /views/refresh`
 - **本地 CLI**（`PYTHONPATH=/opt/pg_data_core python3 -m pg_data_core.writers <cmd>`）：
   - `ingest-inputs`、`export-pending`、`commit-outputs`、`sync-human-read`、`publish-cluster`、`sync-kyc`、`reconcile`
 

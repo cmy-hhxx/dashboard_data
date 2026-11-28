@@ -418,14 +418,146 @@ class TestLivePostgresDataCore(unittest.TestCase):
                         conn.execute("DELETE FROM public.pack_files WHERE model = ANY(%s)", ([m_fast, m_exp],))
                         conn.execute("DELETE FROM public.users WHERE user_id = ANY(%s)", ([uid_lost, "10001"],))
 
+    @unittest.skipUnless(os.environ.get("AIME_RUN_PG_TESTS") == "1", "Set AIME_RUN_PG_TESTS=1 to run PG integration tests")
+    def test_requeue_and_soft_delete_live(self) -> None:
+        from pg_data_core.config import load_config
+        from pg_data_core.core import DataCore
+
+        m_ut = "__ut_rq_del__"
+        day = date(2026, 11, 26)
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = load_config(role="rw", data_root=tmp)
+            with DataCore(cfg) as dc:
+                try:
+                    def _mk(tid: str) -> dict:
+                        return {
+                            "trace_id": tid,
+                            "request_time": f"{day.isoformat()}T15:00:00Z",
+                            "meta": {"trace_id": tid, "session_id": f"s_{tid}", "user_id": "10002", "question_text": tid},
+                            "traces": [{"meta": {"trace_id": tid, "timestamp": f"{day.isoformat()}T15:00:00Z"}}],
+                        }
+
+                    r_eval = dc.ingest_daily_input(_mk("__ut_rq_eval__"), m_ut)
+                    r_skip = dc.ingest_daily_input(_mk("__ut_rq_skip__"), m_ut)
+                    id_eval = r_eval["input_id"]
+                    id_skip = r_skip["input_id"]
+
+                    # Commit an initial output for id_eval so eval_status='evaluated' & is_latest=TRUE
+                    attr = {
+                        "session_meta": {"trace_id": "__ut_rq_eval__", "session_id": "s___ut_rq_eval__", "user_id": "10002"},
+                        "turns": [{"meta": {"trace_id": "__ut_rq_eval__"}, "summary": "v1", "problem": []}],
+                    }
+                    oids1 = dc.commit_daily_output(attr, m_ut, evaluator_version="v1", input_id=id_eval, fallback_day=day.isoformat())
+                    self.assertEqual(len(oids1), 1)
+
+                    # Mark id_skip as skipped with oversized error
+                    claimed = dc.claim_pending_inputs(model=m_ut, worker_id="w_ut", limit=5)
+                    self.assertEqual([c["input_id"] for c in claimed], [id_skip])
+                    dc.fail_inputs("w_ut", [{"input_id": id_skip, "status": "skipped", "error": "message_too_large: 3MiB"}])
+
+                    # 1. Requeue id_eval -> eval_status becomes pending, old eval_outputs(is_latest=TRUE) untouched!
+                    dry_rq = dc.requeue_inputs(items=[{"model": m_ut, "trace_id": "__ut_rq_eval__"}], reason="reeval_r533", dry_run=True)
+                    self.assertEqual(dry_rq["requeued"], 1)
+                    rq = dc.requeue_inputs(items=[{"model": m_ut, "trace_id": "__ut_rq_eval__"}], reason="reeval_r533")
+                    self.assertEqual(rq["requeued"], 1)
+                    self.assertEqual(rq["requeued_ids"], [id_eval])
+
+                    with dc.db.connection() as conn:
+                        inp_row = conn.execute(
+                            "SELECT eval_status, eval_attempts, extra FROM public.eval_inputs WHERE input_id = %s",
+                            (id_eval,),
+                        ).fetchone()
+                        out_row = conn.execute(
+                            "SELECT output_id, is_latest, evaluator_version FROM public.eval_outputs WHERE output_id = %s",
+                            (oids1[0],),
+                        ).fetchone()
+                    self.assertEqual(inp_row["eval_status"], "pending")
+                    self.assertEqual(inp_row["eval_attempts"], 0)
+                    self.assertEqual(inp_row["extra"].get("requeue_reason"), "reeval_r533")
+                    self.assertTrue(out_row["is_latest"])
+
+                    # 2. Re-claim & commit r533 output -> atomically flips old output is_latest=FALSE
+                    reclaimed = dc.claim_pending_inputs(model=m_ut, worker_id="w_ut", limit=5)
+                    self.assertEqual([c["input_id"] for c in reclaimed], [id_eval])
+                    oids2 = dc.commit_daily_output(attr, m_ut, evaluator_version="r533", input_id=id_eval, fallback_day=day.isoformat())
+                    with dc.db.connection() as conn:
+                        outs = conn.execute(
+                            "SELECT output_id, evaluator_version, is_latest FROM public.eval_outputs WHERE input_id = %s ORDER BY output_id ASC",
+                            (id_eval,),
+                        ).fetchall()
+                    self.assertEqual([(o["output_id"], o["evaluator_version"], o["is_latest"]) for o in outs], [
+                        (oids1[0], "v1", False),
+                        (oids2[0], "r533", True),
+                    ])
+
+                    # 3. Soft-delete id_skip via filter mode -> sets is_deleted, deleted_at, emits changes(op='delete')
+                    del_dry = dc.delete_inputs(status="skipped", models=[m_ut], error_prefix="message_too_large", dry_run=True)
+                    self.assertEqual(del_dry["deleted"], 1)
+                    del_res = dc.delete_inputs(
+                        status="skipped",
+                        models=[m_ut],
+                        error_prefix="message_too_large",
+                        reason="drop_oversized_skipped",
+                        refresh_views=False,
+                    )
+                    self.assertEqual(del_res["deleted"], 1)
+                    self.assertEqual(del_res["deleted_ids"], [id_skip])
+
+                    with dc.db.connection() as conn:
+                        s_row = conn.execute(
+                            "SELECT is_deleted, deleted_at, extra FROM public.eval_inputs WHERE input_id = %s",
+                            (id_skip,),
+                        ).fetchone()
+                        chg = conn.execute(
+                            "SELECT op, entity_type, output_id FROM public.changes WHERE input_id = %s AND op = 'delete'",
+                            (id_skip,),
+                        ).fetchone()
+                    self.assertTrue(s_row["is_deleted"])
+                    self.assertIsNotNone(s_row["deleted_at"])
+                    self.assertEqual(s_row["extra"].get("delete_reason"), "drop_oversized_skipped")
+                    self.assertIsNotNone(chg)
+                    self.assertIsNone(chg["output_id"])
+
+                    # 4. Re-ingesting the soft-deleted poison pill stays deduplicated & deleted
+                    reing = dc.ingest_daily_input(_mk("__ut_rq_skip__"), m_ut)
+                    self.assertTrue(reing["deduplicated"])
+                    with dc.db.connection() as conn:
+                        still_del = conn.execute("SELECT is_deleted FROM public.eval_inputs WHERE input_id = %s", (id_skip,)).fetchone()
+                    self.assertTrue(still_del["is_deleted"])
+
+                    # 5. Guardrail: deleting id_eval with allow_with_outputs=False skips it
+                    guard = dc.delete_inputs(input_ids=[id_eval], allow_with_outputs=False)
+                    self.assertEqual(guard["deleted"], 0)
+                    self.assertEqual(guard["skipped_with_outputs"], 1)
+                finally:
+                    with dc.db.transaction() as conn:
+                        conn.execute("DELETE FROM public.changes WHERE model = %s", (m_ut,))
+                        conn.execute("DELETE FROM public.eval_inputs WHERE model = %s", (m_ut,))
+                        conn.execute("DELETE FROM public.pack_files WHERE model = %s", (m_ut,))
+                        conn.execute("DELETE FROM public.users WHERE user_id = %s", ("10002",))
+
 
 class _FakeHTTPHandler:
-    def __init__(self, method: str, path: str, body: dict | None = None):
+    def __init__(
+        self,
+        method: str,
+        path: str,
+        body: dict | None = None,
+        *,
+        raw_body: bytes | None = None,
+        headers: dict[str, str] | None = None,
+        client_ip: str = "127.0.0.1",
+    ):
         self.command = method
         self.path = path
-        self.client_address = ("127.0.0.1", 12345)
-        raw = json.dumps(body).encode("utf-8") if body is not None else b""
-        self.headers = {"Content-Length": str(len(raw))} if raw else {}
+        self.client_address = (client_ip, 12345)
+        if raw_body is not None:
+            raw = raw_body
+        else:
+            raw = json.dumps(body).encode("utf-8") if body is not None else b""
+        self.headers = dict(headers or {})
+        if raw and "Content-Length" not in self.headers:
+            self.headers["Content-Length"] = str(len(raw))
         self.rfile = io.BytesIO(raw)
         self.wfile = io.BytesIO()
         self.status: int | None = None
@@ -440,8 +572,11 @@ class _FakeHTTPHandler:
     def end_headers(self) -> None:
         pass
 
+    def text(self) -> str:
+        return self.wfile.getvalue().decode("utf-8")
+
     def json(self) -> dict:
-        return json.loads(self.wfile.getvalue().decode("utf-8"))
+        return json.loads(self.text())
 
 
 class TestDataCoreHTTPRouting(unittest.TestCase):
@@ -575,6 +710,333 @@ class TestDataCoreHTTPRouting(unittest.TestCase):
         app.handle_http(h)
         self.assertEqual(h.status, 422)
         self.assertEqual(h.json()["error"]["code"], "INVALID_PARAM")
+        self.assertIn("/docs/inputs-claim", h.json()["error"]["hint"])
+
+    def test_post_requeue_and_delete_routing(self) -> None:
+        app = self._make_app()
+        app.dc.requeue_inputs.return_value = {
+            "requested": 2,
+            "requeued": 1,
+            "requeued_ids": [101],
+            "skipped_missing": 0,
+            "skipped_deleted": 0,
+            "skipped_no_blob": 0,
+            "skipped_status": 1,
+            "dry_run": True,
+        }
+        h_rq = _FakeHTTPHandler(
+            "POST",
+            "/api/v1/data-core/inputs/requeue",
+            {
+                "items": [
+                    {"model": "aime_expert", "trace_id": "t1"},
+                    {"model": "aime_fast", "trace_id": "t2"},
+                ],
+                "only_statuses": ["evaluated", "retrying"],
+                "require_blob": True,
+                "reset_attempts": False,
+                "reason": "reeval_r533",
+                "dry_run": True,
+            },
+        )
+        app.handle_http(h_rq)
+        self.assertEqual(h_rq.status, 200)
+        self.assertEqual(h_rq.json()["data"]["requeued"], 1)
+        app.dc.requeue_inputs.assert_called_once_with(
+            items=[
+                {"model": "aime_expert", "trace_id": "t1"},
+                {"model": "aime_fast", "trace_id": "t2"},
+            ],
+            input_ids=None,
+            only_statuses=["evaluated", "retrying"],
+            require_blob=True,
+            reset_attempts=False,
+            reason="reeval_r533",
+            dry_run=True,
+        )
+
+        # Delete with refresh_views=True triggers admin refresh when deleted > 0
+        app.dc.delete_inputs.return_value = {
+            "deleted": 58,
+            "deleted_ids": [101, 102],
+            "skipped_with_outputs": 0,
+            "skipped_missing": 0,
+            "skipped_deleted": 0,
+            "views_refreshed": False,
+            "dry_run": False,
+        }
+        with mock.patch.object(app, "_refresh_stats_views_admin", return_value={"stats_daily_overview": 0.1}) as m_ref:
+            h_del = _FakeHTTPHandler(
+                "POST",
+                "/api/v1/data-core/inputs/delete",
+                {
+                    "status": "skipped",
+                    "models": ["aime_fast", "aime_expert"],
+                    "error_prefix": "message_too_large",
+                    "allow_with_outputs": False,
+                    "reason": "drop_oversized_skipped",
+                    "refresh_views": True,
+                },
+            )
+            app.handle_http(h_del)
+            self.assertEqual(h_del.status, 200)
+            self.assertTrue(h_del.json()["data"]["views_refreshed"])
+            m_ref.assert_called_once_with(concurrently=True)
+
+        # Delete view refresh failure degrades gracefully (still 200 because delete committed)
+        app.dc.delete_inputs.return_value = {
+            "deleted": 2,
+            "deleted_ids": [10, 11],
+            "skipped_with_outputs": 0,
+            "skipped_missing": 0,
+            "skipped_deleted": 0,
+            "views_refreshed": False,
+            "dry_run": False,
+        }
+        with mock.patch.object(app, "_refresh_stats_views_admin", side_effect=RuntimeError("view busy")):
+            h_del2 = _FakeHTTPHandler("POST", "/api/v1/data-core/inputs/delete", {"input_ids": [10, 11]})
+            app.handle_http(h_del2)
+            self.assertEqual(h_del2.status, 200)
+            self.assertFalse(h_del2.json()["data"]["views_refreshed"])
+            self.assertIn("view busy", h_del2.json()["data"]["views_refresh_error"])
+
+        # dry_run=True never refreshes views
+        app.dc.delete_inputs.return_value = {
+            "deleted": 5,
+            "deleted_ids": [1, 2, 3, 4, 5],
+            "skipped_with_outputs": 0,
+            "skipped_missing": 0,
+            "skipped_deleted": 0,
+            "views_refreshed": False,
+            "dry_run": True,
+        }
+        with mock.patch.object(app, "_refresh_stats_views_admin") as m_ref_dry:
+            h_dry = _FakeHTTPHandler("POST", "/api/v1/data-core/inputs/delete", {"status": "skipped", "dry_run": True})
+            app.handle_http(h_dry)
+            self.assertEqual(h_dry.status, 200)
+            self.assertTrue(h_dry.json()["data"]["dry_run"])
+            m_ref_dry.assert_not_called()
+
+    def test_embedded_docs_public_and_ergonomics(self) -> None:
+        app = self._make_app()
+        app.tokens = {"secret-tok"}
+        app.allow_localhost = False
+
+        # Public docs accessible WITHOUT token from remote IP
+        h_root = _FakeHTTPHandler("GET", "/api/v1/data-core", client_ip="10.0.0.5")
+        app.handle_http(h_root)
+        self.assertEqual(h_root.status, 200)
+        doc_data = h_root.json()["data"]
+        slugs = {ep["slug"] for ep in doc_data["endpoints"]}
+        self.assertIn("inputs-requeue", slugs)
+        self.assertIn("inputs-delete", slugs)
+        self.assertIn("docs", slugs)
+
+        # Markdown view via query param & Accept header
+        h_md = _FakeHTTPHandler("GET", "/api/v1/data-core/docs?format=markdown", client_ip="10.0.0.5")
+        app.handle_http(h_md)
+        self.assertEqual(h_md.status, 200)
+        self.assertIn("text/markdown", h_md.resp_headers["Content-Type"])
+        self.assertIn("/inputs/requeue", h_md.text())
+        self.assertIn("/inputs/delete", h_md.text())
+
+        # Single endpoint lookup by slug and by ?path=
+        h_ep = _FakeHTTPHandler("GET", "/api/v1/data-core/docs/inputs-requeue", client_ip="10.0.0.5")
+        app.handle_http(h_ep)
+        self.assertEqual(h_ep.status, 200)
+        self.assertEqual(h_ep.json()["data"]["path"], "/api/v1/data-core/inputs/requeue")
+
+        h_ep_md = _FakeHTTPHandler("GET", "/api/v1/data-core/docs?path=/inputs/delete&format=md", client_ip="10.0.0.5")
+        app.handle_http(h_ep_md)
+        self.assertEqual(h_ep_md.status, 200)
+        self.assertIn("POST /api/v1/data-core/inputs/delete", h_ep_md.text())
+
+        # Unknown doc slug returns 404 with hint
+        h_bad_doc = _FakeHTTPHandler("GET", "/api/v1/data-core/docs/nope", client_ip="10.0.0.5")
+        app.handle_http(h_bad_doc)
+        self.assertEqual(h_bad_doc.status, 404)
+        self.assertIn("/docs", h_bad_doc.json()["error"]["hint"])
+
+        # Auth header compatibility: X-API-Key accepted; missing token returns 401 with hint
+        h_unauth = _FakeHTTPHandler("GET", "/api/v1/data-core/monitor/summary", client_ip="10.0.0.5")
+        app.handle_http(h_unauth)
+        self.assertEqual(h_unauth.status, 401)
+        self.assertIn("X-API-Key", h_unauth.json()["error"]["hint"])
+
+        app.dc.get_monitor_summary.return_value = {"db_epoch": "e1"}
+        h_xkey = _FakeHTTPHandler(
+            "GET",
+            "/api/v1/data-core/monitor/summary",
+            headers={"X-API-Key": "secret-tok"},
+            client_ip="10.0.0.5",
+        )
+        app.handle_http(h_xkey)
+        self.assertEqual(h_xkey.status, 200)
+
+        # 405 on wrong method returns Allow header and hint
+        h_405 = _FakeHTTPHandler(
+            "GET",
+            "/api/v1/data-core/inputs/requeue",
+            headers={"X-API-Key": "secret-tok"},
+            client_ip="10.0.0.5",
+        )
+        app.handle_http(h_405)
+        self.assertEqual(h_405.status, 405)
+        self.assertEqual(h_405.resp_headers.get("Allow"), "POST")
+        self.assertIn("POST /api/v1/data-core/inputs/requeue", h_405.json()["error"]["hint"])
+
+        # 404 on mistyped path suggests close match
+        h_404 = _FakeHTTPHandler(
+            "POST",
+            "/api/v1/data-core/inputs/requeu",
+            {},
+            headers={"X-API-Key": "secret-tok"},
+            client_ip="10.0.0.5",
+        )
+        app.handle_http(h_404)
+        self.assertEqual(h_404.status, 404)
+        self.assertIn("/inputs/requeue", h_404.json()["error"]["hint"])
+
+        # Malformed JSON & non-integer detail id return 422 (not 500)
+        h_bad_json = _FakeHTTPHandler(
+            "POST",
+            "/api/v1/data-core/inputs/requeue",
+            raw_body=b"{not-json",
+            headers={"X-API-Key": "secret-tok"},
+            client_ip="10.0.0.5",
+        )
+        app.handle_http(h_bad_json)
+        self.assertEqual(h_bad_json.status, 422)
+        self.assertEqual(h_bad_json.json()["error"]["code"], "INVALID_PARAM")
+
+        h_bad_id = _FakeHTTPHandler(
+            "GET",
+            "/api/v1/data-core/detail/not_an_int",
+            headers={"X-API-Key": "secret-tok"},
+            client_ip="10.0.0.5",
+        )
+        app.handle_http(h_bad_id)
+        self.assertEqual(h_bad_id.status, 422)
+
+
+class TestDataCoreRequeueAndDeleteLogic(unittest.TestCase):
+    """Offline SQL & validation unit tests for `DataCore.requeue_inputs` and `DataCore.delete_inputs`."""
+
+    def _make_dc(self, fetch_side_effects: list[list[dict]]):
+        from contextlib import contextmanager
+        from types import SimpleNamespace
+        from pg_data_core.core import DataCore
+
+        dc = object.__new__(DataCore)
+        dc.cfg = SimpleNamespace(product="aime")
+        dc.db_epoch = "epoch_ut"
+        executed: list[tuple[str, Any]] = []
+        queue = list(fetch_side_effects)
+
+        class _FakeConn:
+            def execute(self, sql, params=None):
+                executed.append((sql, params))
+                rows = queue.pop(0) if queue else []
+                res = mock.MagicMock()
+                res.fetchall.return_value = rows
+                return res
+
+        fake_conn = _FakeConn()
+
+        @contextmanager
+        def _ctx():
+            yield fake_conn
+
+        dc.db = SimpleNamespace(transaction=_ctx, connection=_ctx)
+        return dc, executed
+
+    def test_requeue_validation_and_buckets(self) -> None:
+        dc, _ = self._make_dc([])
+        with self.assertRaises(ValueError):
+            dc.requeue_inputs()
+        with self.assertRaises(ValueError):
+            dc.requeue_inputs(input_ids=[1], items=[{"model": "m", "trace_id": "t"}])
+        with self.assertRaises(ValueError):
+            dc.requeue_inputs(input_ids=[1], only_statuses=["claimed"])
+        with self.assertRaises(ValueError):
+            dc.requeue_inputs(input_ids=[1], only_statuses=["bogus"])
+
+        # Bucket classification + dedup + retrying support
+        rows = [
+            {"input_id": 1, "model": "m", "trace_id": "t1", "eval_status": "evaluated", "claimed_by": None, "has_input_blob": True, "is_deleted": False},
+            {"input_id": 2, "model": "m", "trace_id": "t2", "eval_status": "claimed", "claimed_by": None, "has_input_blob": True, "is_deleted": False},
+            {"input_id": 3, "model": "m", "trace_id": "t3", "eval_status": "claimed", "claimed_by": "va-1", "has_input_blob": True, "is_deleted": False},
+            {"input_id": 4, "model": "m", "trace_id": "t4", "eval_status": "evaluated", "claimed_by": None, "has_input_blob": False, "is_deleted": False},
+            {"input_id": 5, "model": "m", "trace_id": "t5", "eval_status": "evaluated", "claimed_by": None, "has_input_blob": True, "is_deleted": True},
+        ]
+        dc2, execs = self._make_dc([rows, [{"input_id": 1}, {"input_id": 2}]])
+        res = dc2.requeue_inputs(
+            input_ids=[1, 1, 2, 3, 4, 5, 999],
+            only_statuses=["evaluated", "retrying"],
+            reason="reeval_r533",
+        )
+        self.assertEqual(res["requested"], 6)
+        self.assertEqual(res["requeued"], 2)
+        self.assertEqual(res["requeued_ids"], [1, 2])
+        self.assertEqual(res["skipped_missing"], 1)
+        self.assertEqual(res["skipped_deleted"], 1)
+        self.assertEqual(res["skipped_no_blob"], 1)
+        self.assertEqual(res["skipped_status"], 1)  # input_id=3 active claimed skipped!
+        self.assertFalse(res["dry_run"])
+        self.assertEqual(len(execs), 2)
+        self.assertNotIn("next_retry_at", execs[1][0])
+        self.assertNotIn("eval_outputs", execs[1][0])
+
+        # dry_run executes only SELECT, never UPDATE
+        dc3, execs_dry = self._make_dc([rows])
+        res_dry = dc3.requeue_inputs(input_ids=[1, 2, 3], only_statuses=["evaluated"], dry_run=True)
+        self.assertTrue(res_dry["dry_run"])
+        self.assertEqual(res_dry["requeued_ids"], [1])
+        self.assertEqual(len(execs_dry), 1)
+        self.assertNotIn("FOR UPDATE", execs_dry[0][0])
+
+    def test_delete_validation_guardrails_and_changes_cte(self) -> None:
+        dc, _ = self._make_dc([])
+        with self.assertRaises(ValueError):
+            dc.delete_inputs()
+        with self.assertRaises(ValueError):
+            dc.delete_inputs(status="evaluated")
+        with self.assertRaises(ValueError):
+            dc.delete_inputs(status="pending")
+        with self.assertRaises(ValueError):
+            dc.delete_inputs(status="claimed")
+        with self.assertRaises(ValueError):
+            dc.delete_inputs(status="skipped", input_ids=[1])
+
+        # Filter mode skips rows with latest outputs when allow_with_outputs=False
+        cand_rows = [
+            {"input_id": 10, "is_deleted": False, "has_latest_output": False},
+            {"input_id": 11, "is_deleted": False, "has_latest_output": True},
+        ]
+        dc2, execs = self._make_dc([cand_rows, [{"input_id": 10}]])
+        res = dc2.delete_inputs(
+            status="skipped",
+            models=["aime_fast"],
+            error_prefix="message_too_large",
+            allow_with_outputs=False,
+            reason="drop_oversized_skipped",
+        )
+        self.assertEqual(res["deleted"], 1)
+        self.assertEqual(res["deleted_ids"], [10])
+        self.assertEqual(res["skipped_with_outputs"], 1)
+        self.assertFalse(res["views_refreshed"])
+        self.assertIn("starts_with(", execs[0][0])
+        self.assertIn("deleted_at = now()", execs[1][0])
+        self.assertIn("INSERT INTO public.changes", execs[1][0])
+        self.assertIn("'delete'", execs[1][0])
+
+        # dry_run does not mutate or emit changes
+        dc3, execs_dry = self._make_dc([cand_rows])
+        res_dry = dc3.delete_inputs(status="failed", dry_run=True)
+        self.assertTrue(res_dry["dry_run"])
+        self.assertEqual(res_dry["deleted_ids"], [10])
+        self.assertEqual(res_dry["skipped_with_outputs"], 1)
+        self.assertEqual(len(execs_dry), 1)
 
 
 if __name__ == "__main__":

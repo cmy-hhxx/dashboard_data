@@ -92,6 +92,27 @@ def _normalize_id_list(input_ids: Any, *, max_len: int = 500) -> list[int]:
     return [_strict_int(x, "input_id") for x in input_ids]
 
 
+def _normalize_trace_items(items: Any, *, max_len: int = 5000) -> list[tuple[str, str]]:
+    if not isinstance(items, list) or not items:
+        raise ValueError("items must be a non-empty list of {model, trace_id}")
+    if len(items) > max_len:
+        raise ValueError(f"items length exceeds max {max_len}")
+    out: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for raw in items:
+        if not isinstance(raw, dict):
+            raise ValueError("each item must be an object with model and trace_id")
+        model = str(raw.get("model") or "").strip()
+        trace_id = str(raw.get("trace_id") or "").strip()
+        if not model or not trace_id:
+            raise ValueError("each item requires non-empty model and trace_id")
+        key = (model, trace_id)
+        if key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
+
+
 def emit_trace_changes(conn: psycopg.Connection, db_epoch: str, output_ids: list[int]) -> int:
     """Emit deduplicated `trace` upsert change events for latest, non-deleted outputs."""
     if not output_ids:
@@ -763,6 +784,348 @@ class DataCore:
                     entry["next_retry_at"] = lease_exp.isoformat()
                 results.append(entry)
         return results
+
+    def requeue_inputs(
+        self,
+        *,
+        items: list[dict[str, Any]] | None = None,
+        input_ids: list[int] | None = None,
+        only_statuses: list[str] | None = None,
+        require_blob: bool = True,
+        reset_attempts: bool = True,
+        reason: str = "",
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Re-enqueue existing `eval_inputs` back to `pending` without touching `eval_outputs`."""
+        has_items = items is not None
+        has_ids = input_ids is not None
+        if has_items == has_ids:
+            raise ValueError("exactly one of items or input_ids is required")
+
+        unique_ids: list[int] = []
+        unique_keys: list[tuple[str, str]] = []
+        if has_ids:
+            parsed_ids = _normalize_id_list(input_ids, max_len=5000)
+            if not parsed_ids:
+                raise ValueError("input_ids must be a non-empty list of integers")
+            unique_ids = list(dict.fromkeys(parsed_ids))
+        else:
+            unique_keys = _normalize_trace_items(items, max_len=5000)
+
+        allowed_statuses = {"pending", "evaluated", "failed", "skipped", "retrying"}
+        if only_statuses is None:
+            norm_statuses = ["evaluated", "failed", "skipped"]
+        else:
+            if not isinstance(only_statuses, list) or not only_statuses:
+                raise ValueError("only_statuses must be a non-empty list of status names")
+            norm_statuses = list(dict.fromkeys(str(s).strip() for s in only_statuses if s is not None and str(s).strip()))
+            if not norm_statuses:
+                raise ValueError("only_statuses must be a non-empty list of status names")
+            if "claimed" in norm_statuses:
+                raise ValueError(
+                    "only_statuses cannot include 'claimed' (protects active worker leases); use 'retrying' for backoff rows"
+                )
+            bad = [s for s in norm_statuses if s not in allowed_statuses]
+            if bad:
+                raise ValueError(f"Unsupported only_statuses={bad!r}; allowed={sorted(allowed_statuses)}")
+
+        db_status_set = {s for s in norm_statuses if s != "retrying"}
+        include_retrying = "retrying" in norm_statuses
+        clean_reason = str(reason or "").strip()[:500]
+        req_blob = bool(require_blob)
+        rst_attempts = bool(reset_attempts)
+        is_dry = bool(dry_run)
+
+        def _status_ok(row: dict[str, Any]) -> bool:
+            st = row["eval_status"]
+            if st in db_status_set:
+                return True
+            if include_retrying and st == "claimed" and row["claimed_by"] is None:
+                return True
+            return False
+
+        lock_sql = "" if is_dry else " FOR UPDATE"
+        ctx = self.db.connection() if is_dry else self.db.transaction()
+        with ctx as conn:
+            if has_ids:
+                rows = conn.execute(
+                    f"""
+                    SELECT input_id, model, trace_id, eval_status, claimed_by, has_input_blob, is_deleted
+                    FROM public.eval_inputs
+                    WHERE input_id = ANY(%s)
+                    ORDER BY input_id ASC{lock_sql}
+                    """,
+                    (unique_ids,),
+                ).fetchall()
+                by_id = {int(r["input_id"]): r for r in rows}
+                requested_count = len(unique_ids)
+                lookup_seq = [by_id.get(iid) for iid in unique_ids]
+            else:
+                key_payload = [{"model": m, "trace_id": t} for m, t in unique_keys]
+                rows = conn.execute(
+                    f"""
+                    WITH req AS (
+                        SELECT x.model, x.trace_id
+                        FROM jsonb_to_recordset(%s::jsonb) AS x(model TEXT, trace_id TEXT)
+                    )
+                    SELECT i.input_id, i.model, i.trace_id, i.eval_status, i.claimed_by, i.has_input_blob, i.is_deleted
+                    FROM public.eval_inputs i
+                    JOIN req r ON i.product = %s AND i.model = r.model AND i.trace_id = r.trace_id
+                    ORDER BY i.input_id ASC{lock_sql}
+                    """,
+                    (Jsonb(key_payload), self.cfg.product),
+                ).fetchall()
+                by_key = {(r["model"], r["trace_id"]): r for r in rows}
+                requested_count = len(unique_keys)
+                lookup_seq = [by_key.get(k) for k in unique_keys]
+
+            skipped_missing = 0
+            skipped_deleted = 0
+            skipped_no_blob = 0
+            skipped_status = 0
+            eligible_ids: list[int] = []
+            for row in lookup_seq:
+                if row is None:
+                    skipped_missing += 1
+                elif row["is_deleted"]:
+                    skipped_deleted += 1
+                elif req_blob and not row["has_input_blob"]:
+                    skipped_no_blob += 1
+                elif not _status_ok(row):
+                    skipped_status += 1
+                else:
+                    eligible_ids.append(int(row["input_id"]))
+
+            if eligible_ids and not is_dry:
+                updated = conn.execute(
+                    """
+                    UPDATE public.eval_inputs
+                    SET eval_status = 'pending',
+                        claimed_by = NULL,
+                        lease_expires_at = NULL,
+                        eval_attempts = CASE WHEN %s THEN 0 ELSE eval_attempts END,
+                        eval_error = NULL,
+                        extra = extra || jsonb_strip_nulls(jsonb_build_object(
+                            'requeue_reason', NULLIF(%s, ''),
+                            'requeued_at', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+                        )),
+                        updated_at = now()
+                    WHERE input_id = ANY(%s)
+                      AND NOT is_deleted
+                    RETURNING input_id
+                    """,
+                    (rst_attempts, clean_reason, eligible_ids),
+                ).fetchall()
+                requeued_ids = sorted(int(r["input_id"]) for r in updated)
+            else:
+                requeued_ids = sorted(eligible_ids)
+
+        return {
+            "requested": requested_count,
+            "requeued": len(requeued_ids),
+            "requeued_ids": requeued_ids,
+            "skipped_missing": skipped_missing,
+            "skipped_deleted": skipped_deleted,
+            "skipped_no_blob": skipped_no_blob,
+            "skipped_status": skipped_status,
+            "dry_run": is_dry,
+        }
+
+    def delete_inputs(
+        self,
+        *,
+        status: str | None = None,
+        models: list[str] | None = None,
+        error_prefix: str = "",
+        input_ids: list[int] | None = None,
+        items: list[dict[str, Any]] | None = None,
+        allow_with_outputs: bool = False,
+        reason: str = "",
+        dry_run: bool = False,
+        refresh_views: bool = False,
+    ) -> dict[str, Any]:
+        """Soft-delete (`is_deleted = TRUE`) permanently unevaluable or unwanted `eval_inputs`."""
+        st = str(status).strip() if status is not None else ""
+        has_status = bool(st)
+        has_ids = input_ids is not None
+        has_items = items is not None
+        mode_count = int(has_status) + int(has_ids) + int(has_items)
+        if mode_count != 1:
+            raise ValueError("exactly one of status, input_ids, or items is required")
+
+        unique_ids: list[int] = []
+        unique_keys: list[tuple[str, str]] = []
+        filter_models: list[str] | None = None
+        clean_prefix = ""
+
+        if has_status:
+            if st not in ("skipped", "failed"):
+                raise ValueError(
+                    f"Unsupported status={st!r}; filter-mode delete only allows 'skipped' or 'failed'"
+                )
+            if models is not None:
+                if not isinstance(models, list):
+                    raise ValueError("models must be a list of strings")
+                cleaned_m = list(dict.fromkeys(str(m).strip() for m in models if m is not None and str(m).strip()))
+                filter_models = cleaned_m or None
+            clean_prefix = str(error_prefix or "").strip()
+        elif has_ids:
+            parsed_ids = _normalize_id_list(input_ids, max_len=5000)
+            if not parsed_ids:
+                raise ValueError("input_ids must be a non-empty list of integers")
+            unique_ids = list(dict.fromkeys(parsed_ids))
+        else:
+            unique_keys = _normalize_trace_items(items, max_len=5000)
+
+        allow_out = bool(allow_with_outputs)
+        clean_reason = str(reason or "").strip()[:500]
+        is_dry = bool(dry_run)
+        lock_sql = "" if is_dry else " FOR UPDATE OF i"
+        ctx = self.db.connection() if is_dry else self.db.transaction()
+
+        skipped_missing = 0
+        skipped_deleted = 0
+        skipped_with_outputs = 0
+        deleted_ids: list[int] = []
+
+        with ctx as conn:
+            if has_status:
+                clauses = ["i.product = %s", "NOT i.is_deleted", "i.eval_status = %s"]
+                params: list[Any] = [self.cfg.product, st]
+                if filter_models:
+                    clauses.append("i.model = ANY(%s)")
+                    params.append(filter_models)
+                if clean_prefix:
+                    clauses.append("starts_with(COALESCE(i.eval_error, ''), %s)")
+                    params.append(clean_prefix)
+                rows = conn.execute(
+                    f"""
+                    SELECT i.input_id, i.is_deleted,
+                           EXISTS (
+                               SELECT 1 FROM public.eval_outputs o
+                               WHERE o.input_id = i.input_id AND o.is_latest = TRUE
+                           ) AS has_latest_output
+                    FROM public.eval_inputs i
+                    WHERE {' AND '.join(clauses)}
+                    ORDER BY i.input_id ASC{lock_sql}
+                    """,
+                    params,
+                ).fetchall()
+                lookup_seq = rows
+            elif has_ids:
+                rows = conn.execute(
+                    f"""
+                    SELECT i.input_id, i.is_deleted,
+                           EXISTS (
+                               SELECT 1 FROM public.eval_outputs o
+                               WHERE o.input_id = i.input_id AND o.is_latest = TRUE
+                           ) AS has_latest_output
+                    FROM public.eval_inputs i
+                    WHERE i.input_id = ANY(%s)
+                    ORDER BY i.input_id ASC{lock_sql}
+                    """,
+                    (unique_ids,),
+                ).fetchall()
+                by_id = {int(r["input_id"]): r for r in rows}
+                lookup_seq = [by_id.get(iid) for iid in unique_ids]
+            else:
+                key_payload = [{"model": m, "trace_id": t} for m, t in unique_keys]
+                rows = conn.execute(
+                    f"""
+                    WITH req AS (
+                        SELECT x.model, x.trace_id
+                        FROM jsonb_to_recordset(%s::jsonb) AS x(model TEXT, trace_id TEXT)
+                    )
+                    SELECT i.input_id, i.model, i.trace_id, i.is_deleted,
+                           EXISTS (
+                               SELECT 1 FROM public.eval_outputs o
+                               WHERE o.input_id = i.input_id AND o.is_latest = TRUE
+                           ) AS has_latest_output
+                    FROM public.eval_inputs i
+                    JOIN req r ON i.product = %s AND i.model = r.model AND i.trace_id = r.trace_id
+                    ORDER BY i.input_id ASC{lock_sql}
+                    """,
+                    (Jsonb(key_payload), self.cfg.product),
+                ).fetchall()
+                by_key = {(r["model"], r["trace_id"]): r for r in rows}
+                lookup_seq = [by_key.get(k) for k in unique_keys]
+
+            eligible_ids: list[int] = []
+            for row in lookup_seq:
+                if row is None:
+                    skipped_missing += 1
+                elif row["is_deleted"]:
+                    skipped_deleted += 1
+                elif not allow_out and row["has_latest_output"]:
+                    skipped_with_outputs += 1
+                else:
+                    eligible_ids.append(int(row["input_id"]))
+
+            if eligible_ids and not is_dry:
+                del_rows = conn.execute(
+                    """
+                    WITH deleted_rows AS (
+                        UPDATE public.eval_inputs i
+                        SET is_deleted = TRUE,
+                            deleted_at = now(),
+                            claimed_by = NULL,
+                            lease_expires_at = NULL,
+                            extra = i.extra || jsonb_strip_nulls(jsonb_build_object(
+                                'delete_reason', NULLIF(%s, ''),
+                                'deleted_at', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+                            )),
+                            updated_at = now()
+                        WHERE i.input_id = ANY(%s)
+                          AND NOT i.is_deleted
+                          AND (
+                              %s
+                              OR NOT EXISTS (
+                                  SELECT 1 FROM public.eval_outputs o
+                                  WHERE o.input_id = i.input_id AND o.is_latest = TRUE
+                              )
+                          )
+                        RETURNING i.input_id, i.product, i.model, i.app_version, i.biz_day, i.trace_id
+                    ),
+                    emitted AS (
+                        INSERT INTO public.changes(
+                            db_epoch, entity_type, op, human_only,
+                            input_id, output_id, product, model, app_version, biz_day, trace_id
+                        )
+                        SELECT
+                            %s, 'trace', 'delete', FALSE,
+                            d.input_id, NULL, d.product, d.model, d.app_version, d.biz_day, d.trace_id
+                        FROM deleted_rows d
+                        RETURNING input_id
+                    )
+                    SELECT input_id FROM emitted ORDER BY input_id ASC
+                    """,
+                    (clean_reason, eligible_ids, allow_out, self.db_epoch),
+                ).fetchall()
+                deleted_ids = [int(r["input_id"]) for r in del_rows]
+            else:
+                deleted_ids = sorted(eligible_ids)
+
+        views_refreshed = False
+        views_refresh_error: str | None = None
+        if refresh_views and not is_dry and deleted_ids:
+            try:
+                self.refresh_stats_views(concurrently=True)
+                views_refreshed = True
+            except Exception as exc:  # noqa: BLE001
+                views_refresh_error = str(exc)
+
+        out: dict[str, Any] = {
+            "deleted": len(deleted_ids),
+            "deleted_ids": deleted_ids,
+            "skipped_with_outputs": skipped_with_outputs,
+            "skipped_missing": skipped_missing,
+            "skipped_deleted": skipped_deleted,
+            "views_refreshed": views_refreshed,
+            "dry_run": is_dry,
+        }
+        if views_refresh_error:
+            out["views_refresh_error"] = views_refresh_error
+        return out
 
     def _lookup_eval_input(
         self,
